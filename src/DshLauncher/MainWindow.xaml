@@ -178,6 +178,7 @@
                             <Button Grid.Column="1"
                                     HorizontalAlignment="Right"
                                     Click="RefreshNode_Click"
+                                    IsEnabled="{Binding CanRefreshNode}"
                                     Padding="14,9">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="↻" FontSize="18" Margin="0,0,6,0" />
@@ -364,7 +365,7 @@
 
             <Border Grid.Row="2" Background="#E7F0FA" CornerRadius="0,0,17,17">
                 <Grid Margin="22,0">
-                    <TextBlock Text="DSH Launcher · Core 0.1.0" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                    <TextBlock Text="DSH Launcher · Core 0.1.1" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                     <TextBlock Text="检测结果仅描述外部运行环境，不代表 DSh 已安装" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                 </Grid>
             </Border>

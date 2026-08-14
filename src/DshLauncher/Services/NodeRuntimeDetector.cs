@@ -6,16 +6,18 @@ namespace DshLauncher.Services;
 
 public sealed class NodeRuntimeDetector
 {
-    public NodeRuntimeInfo Detect()
+    public async Task<NodeRuntimeInfo> DetectAsync(CancellationToken cancellationToken = default)
     {
         foreach (var candidate in GetCandidates())
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (!File.Exists(candidate))
             {
                 continue;
             }
 
-            var version = ReadVersion(candidate);
+            var version = await ReadVersionAsync(candidate, cancellationToken);
             if (version is not null)
             {
                 return new NodeRuntimeInfo(true, candidate, version, null);
@@ -49,12 +51,12 @@ public sealed class NodeRuntimeDetector
         {
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs")
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
         };
 
         foreach (var directory in commonDirectories.Where(static value => !string.IsNullOrWhiteSpace(value)))
         {
-            var candidate = Path.Combine(directory, "nodejs", "node.exe");
+            var candidate = Path.Combine(directory, "Programs", "nodejs", "node.exe");
             if (seen.Add(candidate))
             {
                 yield return candidate;
@@ -62,11 +64,11 @@ public sealed class NodeRuntimeDetector
         }
     }
 
-    private static string? ReadVersion(string executablePath)
+    private static async Task<string?> ReadVersionAsync(string executablePath, CancellationToken cancellationToken)
     {
-        try
+        using var process = new Process
         {
-            using var process = Process.Start(new ProcessStartInfo
+            StartInfo = new ProcessStartInfo
             {
                 FileName = executablePath,
                 Arguments = "--version",
@@ -74,25 +76,102 @@ public sealed class NodeRuntimeDetector
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8
-            });
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8
+            }
+        };
 
-            if (process is null || !process.WaitForExit(2000))
+        try
+        {
+            if (!process.Start())
             {
                 return null;
             }
 
-            var output = process.StandardOutput.ReadToEnd().Trim();
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            var exitTask = process.WaitForExitAsync();
+            var completionTask = Task.WhenAll(exitTask, outputTask, errorTask);
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            var completedTask = await Task.WhenAny(completionTask, timeoutTask);
+
+            if (completedTask != completionTask)
+            {
+                TryKill(process);
+                await WaitForExitSafelyAsync(completionTask);
+                cancellationToken.ThrowIfCancellationRequested();
+                return null;
+            }
+
+            await completionTask;
+            var output = outputTask.Result.Trim();
             if (string.IsNullOrWhiteSpace(output))
             {
                 return null;
             }
 
-            return output.StartsWith('v') ? output[1..] : output;
+            var firstLine = output
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault()
+                ?.Trim();
+
+            if (string.IsNullOrWhiteSpace(firstLine))
+            {
+                return null;
+            }
+
+            return firstLine.StartsWith('v') ? firstLine[1..] : firstLine;
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            await WaitForExitSafelyAsync(process);
+            throw;
         }
         catch
         {
+            TryKill(process);
+            await WaitForExitSafelyAsync(process);
             return null;
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Detection must never take down the Launcher because a candidate is broken.
+        }
+    }
+
+    private static async Task WaitForExitSafelyAsync(Process process)
+    {
+        try
+        {
+            await process.WaitForExitAsync();
+        }
+        catch
+        {
+            // The process may have already exited or refused a second wait.
+        }
+    }
+
+    private static async Task WaitForExitSafelyAsync(Task completionTask)
+    {
+        try
+        {
+            await completionTask;
+        }
+        catch
+        {
+            // The process may have failed while being terminated.
         }
     }
 }

@@ -8,9 +8,9 @@
     <AssemblyName>DSH Launcher</AssemblyName>
     <RootNamespace>DshLauncher</RootNamespace>
     <ApplicationTitle>DSH Launcher</ApplicationTitle>
-    <Version>0.1.0</Version>
-    <FileVersion>0.1.0.0</FileVersion>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <Version>0.1.1</Version>
+    <FileVersion>0.1.1.0</FileVersion>
+    <AssemblyVersion>0.1.1.0</AssemblyVersion>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
