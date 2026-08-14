@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-按构建提示词继续实现 Windows x64 的独立 DSH Launcher；当前已完成 DSh 运行时识别、已安装实例注册与隔离、Source 项目识别与依赖/构建/运行链路、installed DSh 生命周期，以及第一版生态和对话管理入口。
+按构建提示词继续维护 Windows x64 的独立 DSH Launcher；0.1.3 已完成第一版生态和对话管理入口，并已提交、推送和发布。
 
 ## 已完成内容
 
@@ -23,8 +23,9 @@
 - 已实现 `ConversationService` 与对话窗口：按 DSh JSONL 会话目录列出有效和压缩日志，支持未压缩会话导入、导出、备份和删除，并校验 sessions 根、文件名和重解析点；打开会话通过 Chat 的 `localStorage` 预选 session ID，实例未运行或会话头部无效时拒绝打开。
 - 已补充用户操作回归保护：空实例入口、实例运行中修改、Skill/Preset 自包含目录复制、MCP serverName 注入、模型配置无关段落保留、API Key 不落盘、会话路径穿越、压缩会话和重复导入均有自测覆盖。
 - 已添加无外部 NuGet 依赖的 `DshLauncher.SelfTest` 控制台测试项目，覆盖注册往返、重复目录拒绝、隔离 HOME、Source 检查、当前机器 DSh 检测、安装缺失环境保护、Source 直接启动保护、启动/健康检查/重复启动/跨 Runner 拒绝/停止/重启/接管，以及生态/模型/会话边界。
-- 当前功能分支为 `agent/harden-node-detection`，远端基线为已推送的实例注册提交；GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`。
+- 当前功能分支为 `agent/harden-node-detection`，GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`；0.1.3 代码提交为 `fe820889bd79548169f1b38195d92678bf23cf66`，标签为 `v0.1.3`。
 - 本次 0.1.3 已生成同名发布目录 `publish\\DSH Launcher\\DSH Launcher.exe`；文件版本为 `0.1.3.0`，SHA-256 为 `7A20C3789738A264B5BC2FC30D5DA42BAC5972845BAB5CE751B9BA0052307395`。仓库工作目录中的旧版 `DSH Launcher\\DSH Launcher.exe` 当前仍被用户原有 Launcher 进程占用，因此没有强制结束进程或覆盖该锁定文件。
+- GitHub Release `v0.1.3` 已正式发布，资产已上传并核对为 1 个 Windows EXE；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.3`。
 
 ## 当前主要相关文件
 
@@ -61,12 +62,12 @@
 
 - 当前自动化测试尚未覆盖 Node.js 检测的超时/取消、DSh 检测超时、Source 异常 `package.json`、DSh 安装命令的真实联网执行和所有 UI 错误提示边界。
 - 本次未对真实网络 Plugin 执行安装/更新/删除，避免修改用户实例；服务和临时 UI 窗口已验证。压缩会话仍不能导入或通过 Chat 预选打开。
-- 当前分支仍是 Draft PR，尚未合并到 `main`；下一版 Release 尚未创建。
+- 当前分支仍是 Draft PR，尚未合并到 `main`；这不影响已发布的 `v0.1.3` Release。
 
 ## 尚未完成内容
 
 - 仓库工作目录中的旧版顶层文件尚未覆盖，因为它仍被用户原有 Launcher 锁定；当前版本已在独立同名发布目录生成并核对。
-- 当前分支的提交、推送和 GitHub Release 尚未完成。
+- `v0.1.3` 的提交、分支推送、标签推送和 GitHub Release 已完成；工作树仍保留一个因用户进程锁定而无法覆盖的旧版顶层 EXE 差异。
 
 ## 已尝试但已放弃的方案
 
@@ -74,4 +75,4 @@
 
 ## 下一步最直接的任务
 
-- 使用已核对的 `publish\\DSH Launcher\\DSH Launcher.exe`，提交代码和本版发布产物，推送当前分支并创建对应 GitHub Release；不要强制结束用户原有 Launcher 进程。
+- 下一版优先补齐 Zstandard 会话的读取/打开能力，并继续覆盖真实 UI 的错误提示边界；处理顶层旧版 EXE 前仍不要强制结束用户原有 Launcher 进程。
