@@ -15,8 +15,13 @@ public sealed class LauncherPaths
 
     public string InstancesDirectory => Path.Combine(RootDirectory, "instances");
 
+    public string BackupsDirectory => Path.Combine(RootDirectory, "backups");
+
     public string GetInstanceDshHome(string instanceId) =>
         Path.Combine(InstancesDirectory, instanceId, "dsh-home");
+
+    public string GetInstanceBackupDirectory(string instanceId) =>
+        Path.Combine(BackupsDirectory, instanceId);
 
     private static string GetDefaultRoot()
     {

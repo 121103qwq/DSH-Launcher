@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO;
+using System.Text.RegularExpressions;
 using DshLauncher.Models;
 
 namespace DshLauncher.Services;
@@ -34,8 +35,33 @@ public sealed class InstanceRegistry
         try
         {
             var json = File.ReadAllText(StoragePath, Encoding.UTF8);
-            var entries = JsonSerializer.Deserialize<List<ManagerInstance>>(json, JsonOptions);
-            return entries ?? new List<ManagerInstance>();
+            var entries = JsonSerializer.Deserialize<List<ManagerInstance>>(json, JsonOptions)
+                ?? new List<ManagerInstance>();
+            var seenIds = new HashSet<string>(StringComparer.Ordinal);
+            var seenRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var validated = new List<ManagerInstance>(entries.Count);
+            foreach (var entry in entries)
+            {
+                if (entry is null)
+                {
+                    throw new InvalidDataException("实例注册文件包含空实例记录。");
+                }
+
+                var safe = ValidateStoredEntry(entry);
+                if (!seenIds.Add(safe.Id))
+                {
+                    throw new InvalidDataException($"实例注册文件包含重复 ID：{safe.Id}");
+                }
+
+                if (!seenRoots.Add(safe.RootPath))
+                {
+                    throw new InvalidDataException($"实例注册文件包含重复目录：{safe.RootPath}");
+                }
+
+                validated.Add(safe);
+            }
+
+            return validated;
         }
         catch (JsonException ex)
         {
@@ -53,6 +79,11 @@ public sealed class InstanceRegistry
         string? dshHome = null)
     {
         var normalizedName = NormalizeName(name);
+        if (!Enum.IsDefined(typeof(InstanceKind), kind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind), "实例类型无效。");
+        }
+
         var normalizedRoot = NormalizeDirectory(rootPath, "实例目录");
         var entries = Load().ToList();
 
@@ -62,8 +93,18 @@ public sealed class InstanceRegistry
         }
 
         var id = Guid.NewGuid().ToString("N");
-        var home = Path.GetFullPath(dshHome ?? _paths.GetInstanceDshHome(id));
+        var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(id));
+        var home = Path.GetFullPath(dshHome ?? expectedHome);
+        if (!string.Equals(home, expectedHome, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("实例 DSH_HOME 必须位于 Launcher 自己的隔离目录中。");
+        }
+
         Directory.CreateDirectory(home);
+        if (IsReparsePoint(home))
+        {
+            throw new IOException("实例 DSH_HOME 不能是符号链接或重解析点。");
+        }
         var normalizedExecutable = NormalizeOptionalFile(dshExecutablePath);
 
         var entry = new ManagerInstance(
@@ -99,7 +140,14 @@ public sealed class InstanceRegistry
 
     public ManagerInstance Update(ManagerInstance updated)
     {
+        updated = ValidateStoredEntry(updated);
         var entries = Load().ToList();
+        if (entries.Any(entry => !string.Equals(entry.Id, updated.Id, StringComparison.Ordinal)
+            && string.Equals(entry.RootPath, updated.RootPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("更新后的实例目录已经被另一个 DSh 实例注册。");
+        }
+
         var index = entries.FindIndex(entry => string.Equals(entry.Id, updated.Id, StringComparison.Ordinal));
         if (index < 0)
         {
@@ -133,6 +181,74 @@ public sealed class InstanceRegistry
         }
     }
 
+    private ManagerInstance ValidateStoredEntry(ManagerInstance entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Id)
+            || string.IsNullOrWhiteSpace(entry.RootPath)
+            || string.IsNullOrWhiteSpace(entry.DshHome))
+        {
+            throw new InvalidDataException("实例注册文件包含缺少 ID、根目录或 DSH_HOME 的记录。");
+        }
+
+        if (!Regex.IsMatch(entry.Id, "^[A-Za-z0-9_-]{8,80}$", RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException($"实例 ID 不符合格式：{entry.Id}");
+        }
+
+        if (!Enum.IsDefined(typeof(InstanceKind), entry.Kind)
+            || !Enum.IsDefined(typeof(InstanceRuntimeStatus), entry.RuntimeStatus))
+        {
+            throw new InvalidDataException($"实例 {entry.Id} 包含未知的枚举状态。");
+        }
+
+        var rootPath = Path.GetFullPath(entry.RootPath);
+        var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(entry.Id));
+        var dshHome = Path.GetFullPath(entry.DshHome);
+        if (!string.Equals(dshHome, expectedHome, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"实例 {entry.Id} 的 DSH_HOME 不在 Launcher 隔离目录中。");
+        }
+
+        if (IsReparsePoint(dshHome))
+        {
+            throw new InvalidDataException($"实例 {entry.Id} 的 DSH_HOME 不能是符号链接或重解析点。");
+        }
+
+        var executable = NormalizeOptionalFile(entry.DshExecutablePath);
+        var status = entry.RuntimeStatus;
+        var error = entry.LastError;
+        if (entry.Kind == InstanceKind.Installed && executable is null && status == InstanceRuntimeStatus.Ready)
+        {
+            status = InstanceRuntimeStatus.Unknown;
+            error ??= "DSh 可执行入口当前不可用。";
+        }
+
+        return entry with
+        {
+            RootPath = rootPath,
+            DshHome = dshHome,
+            DshExecutablePath = executable,
+            RuntimeStatus = status,
+            LastError = error
+        };
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
     private static string NormalizeName(string name)
     {
         var normalized = name.Trim();
@@ -162,6 +278,11 @@ public sealed class InstanceRegistry
             throw new DirectoryNotFoundException($"{label}不存在：{normalized}");
         }
 
+        if (IsReparsePoint(normalized))
+        {
+            throw new IOException($"{label}不能是符号链接或重解析点：{normalized}");
+        }
+
         return normalized.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
@@ -173,6 +294,6 @@ public sealed class InstanceRegistry
         }
 
         var normalized = Path.GetFullPath(path.Trim());
-        return File.Exists(normalized) ? normalized : null;
+        return File.Exists(normalized) && !IsReparsePoint(normalized) ? normalized : null;
     }
 }

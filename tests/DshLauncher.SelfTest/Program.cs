@@ -7,6 +7,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Instance registry round-trip", TestInstanceRegistryRoundTrip),
     ("Instance registry rejects duplicate roots", TestInstanceRegistryRejectsDuplicate),
     ("Instance registry rejects missing executable state", TestInstanceRegistryRejectsMissingExecutableState),
+    ("Instance registry rejects unsafe homes and corrupt records", TestInstanceRegistryRejectsUnsafeData),
     ("Source project inspection", TestSourceProjectInspection),
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
@@ -15,7 +16,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
     ("Source runner lifecycle", TestSourceRunnerLifecycle),
     ("DSh early exit cleanup", TestDshEarlyExitCleanup),
-    ("DSh instance lifecycle", TestDshInstanceLifecycle)
+    ("DSh instance lifecycle", TestDshInstanceLifecycle),
+    ("Extension ecosystem isolation", TestExtensionEcosystemIsolation),
+    ("Model settings round-trip", TestModelSettingsRoundTrip),
+    ("Conversation file management", TestConversationFileManagement)
 };
 
 var failures = 0;
@@ -103,6 +107,34 @@ static Task TestInstanceRegistryRejectsMissingExecutableState()
 
     Assert(instance.DshExecutablePath is null, "不存在的可执行入口不能写入注册记录。");
     Assert(instance.RuntimeStatus == InstanceRuntimeStatus.Unknown, "缺少可执行入口的实例不能标记为可用。");
+    return Task.CompletedTask;
+}
+
+static Task TestInstanceRegistryRejectsUnsafeData()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var root = Path.Combine(temporary.Path, "installed");
+    Directory.CreateDirectory(root);
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var outsideHome = Path.Combine(temporary.Path, "outside-home");
+
+    var rejectedHome = false;
+    try
+    {
+        registry.Register("越界 HOME", root, InstanceKind.Installed, dshHome: outsideHome);
+    }
+    catch (InvalidOperationException)
+    {
+        rejectedHome = true;
+    }
+
+    Assert(rejectedHome, "注册实例不能把 DSH_HOME 指向 Launcher 隔离目录之外。");
+    Assert(!Directory.Exists(outsideHome), "拒绝越界 DSH_HOME 后不能创建外部目录。");
+
+    Directory.CreateDirectory(launcherRoot);
+    File.WriteAllText(registry.StoragePath, "[null]", new UTF8Encoding(false));
+    AssertThrows<InvalidDataException>(() => registry.Load(), "注册文件中的空记录必须被拒绝。");
     return Task.CompletedTask;
 }
 
@@ -397,6 +429,229 @@ static async Task TestDshInstanceLifecycle()
     var takeover = await competingRunner.StartAsync(instance, cancellation.Token);
     Assert(takeover.IsSuccess, takeover.Error ?? "首个 Runner 停止后，实例应允许被另一个 Runner 接管。");
     await competingRunner.StopAsync(instance.Id, cancellation.Token);
+}
+
+static async Task TestExtensionEcosystemIsolation()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "workspace");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(home);
+    var instance = CreateTestInstance("ecosystem-test", root, home);
+
+    var profile = Path.Combine(home, "profiles", "web");
+    Directory.CreateDirectory(profile);
+    File.WriteAllText(
+        Path.Combine(profile, "package.json"),
+        "{\"dependencies\":{\"@deepseek-ai/dsh-base\":\"1.0.0\",\"demo-plugin\":\"1.2.3\",\"@deepseek-ai/dsh-mcp-client\":\"1.0.0\"},\"dsh\":{\"profile\":{\"bundles\":[\"@deepseek-ai/dsh-base\",\"demo-plugin\"]}}}",
+        new UTF8Encoding(false));
+
+    var service = new ExtensionService();
+    var initial = await service.ListAsync(instance);
+    var plugin = initial.Single(entry => entry.Kind == ExtensionKind.Plugin && entry.Name == "demo-plugin");
+    Assert(plugin.Enabled, "profile bundles 中的 Plugin 应被列为已启用。");
+
+    await service.SetPluginEnabledAsync(instance, plugin, false);
+    var profileAfterDisable = File.ReadAllText(Path.Combine(profile, "package.json"));
+    Assert(!profileAfterDisable.Contains("\"demo-plugin\"],", StringComparison.Ordinal), "禁用 Plugin 不能继续留在 bundles 中。");
+    await service.SetPluginEnabledAsync(instance, plugin, true);
+
+    var skillSource = Path.Combine(temporary.Path, "skill-source");
+    Directory.CreateDirectory(skillSource);
+    File.WriteAllText(
+        Path.Combine(skillSource, "SKILL.md"),
+        "---\nname: demo-skill\ndescription: A test skill\n---\n# Demo\n",
+        new UTF8Encoding(false));
+    var skill = await service.ImportSkillAsync(instance, skillSource);
+    Assert(File.Exists(skill.Location), "导入 Skill 后必须存在 SKILL.md。");
+    Assert((await service.ListAsync(instance)).Any(entry => entry.Id == skill.Id), "导入 Skill 后应能从 DSH_HOME 列出。");
+
+    await AssertThrowsAsync<InvalidOperationException>(
+        () => service.ImportSkillAsync(instance, Path.Combine(home, "skills")),
+        "不能把包含 skills 根目录的目录复制到它的子目录。");
+
+    var fakeDsh = Path.Combine(temporary.Path, "dsh.cmd");
+    File.WriteAllText(fakeDsh, "@echo off\r\nexit /b 0\r\n", new UTF8Encoding(false));
+    var installedInstance = instance with { DshExecutablePath = fakeDsh };
+    await service.AddMcpAsync(
+        installedInstance,
+        new McpServerDefinition("auto-enable", "stdio", "node", Array.Empty<string>(), null, new Dictionary<string, string>(), null),
+        null);
+    var profileAfterMcp = File.ReadAllText(Path.Combine(profile, "package.json"));
+    Assert(profileAfterMcp.Contains("  \"@deepseek-ai/dsh-mcp-client\"", StringComparison.Ordinal), "添加 MCP 时应自动启用已安装但被禁用的 MCP Plugin。");
+
+    await service.AddMcpConfigurationAsync(
+        instance,
+        new McpServerDefinition(
+            "local-test",
+            "stdio",
+            "node",
+            new[] { "server.js" },
+            null,
+            new Dictionary<string, string> { ["TEST_TOKEN"] = "redacted" },
+            root));
+    var patchPath = service.GetLauncherPatchPath(instance);
+    Assert(File.ReadAllText(patchPath).Contains("local-test", StringComparison.Ordinal), "MCP 配置必须写入 Launcher patch。");
+    await service.SetMcpEnabledAsync(instance, "local-test", false);
+    var patchAfterLocalDisable = File.ReadAllText(patchPath);
+    Assert(!patchAfterLocalDisable.Contains("local-test", StringComparison.Ordinal)
+        && patchAfterLocalDisable.Contains("auto-enable", StringComparison.Ordinal), "禁用 MCP 只能移除选中的 server，不能影响其它 server。");
+    await service.SetMcpEnabledAsync(instance, "auto-enable", false);
+    Assert(File.ReadAllText(patchPath).Trim() == "[]", "禁用全部 MCP 后 patch 不应继续加载 server。");
+    await AssertThrowsAsync<ArgumentException>(
+        () => service.AddMcpConfigurationAsync(
+            instance,
+            new McpServerDefinition("bad/name", "stdio", "node", Array.Empty<string>(), null, new Dictionary<string, string>(), null)),
+        "MCP serverName 不能通过路径分隔符注入。");
+
+    var presetSource = Path.Combine(temporary.Path, "preset-source");
+    Directory.CreateDirectory(presetSource);
+    File.WriteAllText(Path.Combine(presetSource, "agent.cordis.yml"), "[]\n", new UTF8Encoding(false));
+    var preset = await service.ImportPresetAsync(instance, presetSource);
+    Assert(File.Exists(Path.Combine(preset.Location, "agent.cordis.yml")), "导入 Agent Preset 必须复制其 agent.cordis.yml。");
+    await service.RemovePresetAsync(instance, preset);
+    Assert(!Directory.Exists(preset.Location), "删除 Agent Preset 只能删除实例自己的导入目录。");
+
+    var guarded = new ExtensionService(_ => true);
+    await AssertThrowsAsync<InvalidOperationException>(
+        () => guarded.ImportSkillAsync(instance, skillSource),
+        "实例运行时不能导入 Skill。");
+    await service.RemoveSkillAsync(instance, skill);
+}
+
+static async Task TestModelSettingsRoundTrip()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "workspace");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(home);
+    var instance = CreateTestInstance("model-test", root, home);
+    var settings = Path.Combine(home, "settings.yaml");
+    File.WriteAllText(
+        settings,
+        "unrelated:\n  keep: true\nllm-pi-ai:\n  providers:\n    existing:\n      apiKeyEnv: EXISTING_KEY\n      baseURL: https://existing.example/v1\nllm-deepseek:\n  apiKeyEnv: OLD_KEY\n  baseURL: https://old.example\n",
+        new UTF8Encoding(false));
+
+    var service = new ModelService();
+    await service.SaveDeepSeekAsync(instance, "DEEPSEEK_API_KEY", "https://api.deepseek.com", new[] { "deepseek-chat", "deepseek-reasoner" });
+    await service.SaveOpenAiCompatibleAsync(instance, "gateway", "GATEWAY_KEY", "http://127.0.0.1:8080/v1", new[] { "model-a" });
+    var document = File.ReadAllText(settings);
+    Assert(document.Contains("keep: true", StringComparison.Ordinal), "模型保存不能删除无关顶层设置。");
+    Assert(document.Contains("existing:", StringComparison.Ordinal), "新增 Provider 不能删除已有 Provider。");
+    Assert(document.Contains("gateway:", StringComparison.Ordinal), "OpenAI-compatible Provider 必须写入 providers。");
+    Assert(!document.Contains("sk-", StringComparison.Ordinal), "模型设置文件不能包含 API Key 明文。");
+    var bytes = File.ReadAllBytes(settings);
+    Assert(bytes.Length < 3 || bytes[0] != 0xEF || bytes[1] != 0xBB || bytes[2] != 0xBF, "settings.yaml 不应写入 BOM。");
+
+    var providers = service.Read(instance);
+    var deepseek = providers.Single(provider => provider.SettingsNamespace == "llm-deepseek");
+    Assert(deepseek.ApiKeyEnvironment == "DEEPSEEK_API_KEY", "读取 DeepSeek Provider 应返回环境变量名。");
+    Assert(deepseek.Models.SequenceEqual(new[] { "deepseek-chat", "deepseek-reasoner" }), "读取模型列表应保持顺序。");
+    Assert(providers.Any(provider => provider.Provider == "existing"), "读取时应保留既有 Provider。");
+    Assert(providers.Any(provider => provider.Provider == "gateway" && provider.Models.Contains("model-a")), "读取时应识别新 Provider 的模型。");
+
+    await AssertThrowsAsync<ArgumentException>(
+        () => service.SaveDeepSeekAsync(instance, "BAD-NAME", "https://api.deepseek.com", Array.Empty<string>()),
+        "API Key 环境变量名中的连字符必须被拒绝。");
+    var guarded = new ModelService(_ => true);
+    await AssertThrowsAsync<InvalidOperationException>(
+        () => guarded.SaveDeepSeekAsync(instance, "DEEPSEEK_API_KEY", null, Array.Empty<string>()),
+        "实例运行时不能修改模型 settings。");
+}
+
+static Task TestConversationFileManagement()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "workspace");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    var importedHome = Path.Combine(temporary.Path, "imported-home");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(home);
+    Directory.CreateDirectory(importedHome);
+    var instance = CreateTestInstance("conversation-test", root, home);
+    var importedInstance = CreateTestInstance("conversation-import", root, importedHome);
+
+    var sourceDirectory = Path.Combine(home, "sessions", "--C-work-demo--", "session-1");
+    Directory.CreateDirectory(sourceDirectory);
+    var sourcePath = Path.Combine(sourceDirectory, "session.jsonl");
+    File.WriteAllText(
+        sourcePath,
+        "{\"type\":\"session\",\"version\":1,\"id\":\"session-1\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\"}\n{\"type\":\"message\"}\n",
+        new UTF8Encoding(false));
+    var compressedDirectory = Path.Combine(home, "sessions", "--C-work-demo--", "session-2");
+    Directory.CreateDirectory(compressedDirectory);
+    var compressedPath = Path.Combine(compressedDirectory, "session.jsonl.zstd");
+    File.WriteAllBytes(compressedPath, new byte[] { 1, 2, 3 });
+
+    var service = new ConversationService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var entries = service.List(instance);
+    var session = entries.Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
+    Assert(session.HasValidHeader && session.SessionId == "session-1", "应读取 JSONL 首行会话头部。");
+    Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader), "压缩会话应列出但标记为未解析头部。");
+
+    var backup = service.Backup(instance, session);
+    Assert(File.Exists(backup), "备份对话必须生成独立文件。");
+    var exportPath = Path.Combine(temporary.Path, "exported-session.jsonl");
+    service.Export(instance, session, exportPath);
+    Assert(File.Exists(exportPath), "导出对话必须生成用户指定的文件。");
+    var importedPath = service.Import(importedInstance, exportPath);
+    Assert(File.Exists(importedPath), "导入对话必须按 DSh projectKey 和 session ID 落位。");
+
+    var outside = Path.Combine(temporary.Path, "outside.jsonl");
+    File.WriteAllText(outside, "not a managed session\n", new UTF8Encoding(false));
+    var forged = session with { FullPath = outside };
+    AssertThrows<InvalidOperationException>(() => service.Delete(instance, forged), "会话操作不能通过 FullPath 逃出 sessions 根目录。");
+    service.Delete(instance, session);
+    Assert(!File.Exists(sourcePath), "删除操作应只删除明确选中的 session 文件。");
+
+    var guarded = new ConversationService(isRunning: _ => true);
+    AssertThrows<InvalidOperationException>(() => guarded.Export(importedInstance, entries[0], Path.Combine(temporary.Path, "blocked.jsonl")), "实例运行时不能导出可能正在写入的会话快照。");
+    return Task.CompletedTask;
+}
+
+static ManagerInstance CreateTestInstance(string id, string root, string home) => new(
+    Id: id,
+    Name: id,
+    RootPath: root,
+    Kind: InstanceKind.Installed,
+    DshHome: home,
+    DshExecutablePath: null,
+    DetectedVersion: "test",
+    RuntimeStatus: InstanceRuntimeStatus.Ready,
+    PackageManager: "npm",
+    LastError: null,
+    RegisteredAt: DateTimeOffset.UtcNow);
+
+static void AssertThrows<TException>(Action action, string message)
+    where TException : Exception
+{
+    try
+    {
+        action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
+}
+
+static async Task AssertThrowsAsync<TException>(Func<Task> action, string message)
+    where TException : Exception
+{
+    try
+    {
+        await action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
 }
 
 static void Assert(bool condition, string message)

@@ -421,6 +421,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             startInfo.FileName = nodeRuntime!.ExecutablePath!;
             startInfo.ArgumentList.Add(sourceEntrypoint!);
             startInfo.ArgumentList.Add("web");
+            AddLauncherPatch(startInfo, instance);
             startInfo.ArgumentList.Add("--host");
             startInfo.ArgumentList.Add("127.0.0.1");
             startInfo.ArgumentList.Add("--port");
@@ -429,23 +430,62 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         else
         {
             var executablePath = instance.DshExecutablePath!;
-            var commandArguments = "web --host 127.0.0.1 --port "
-                + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (Path.GetExtension(executablePath).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
                 || Path.GetExtension(executablePath).Equals(".bat", StringComparison.OrdinalIgnoreCase))
             {
                 startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+                var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
+                var patchArgument = IsRegularFile(patchPath)
+                    ? $" --patch \"{patchPath}\""
+                    : string.Empty;
+                var commandArguments = $"web{patchArgument} --host 127.0.0.1 --port "
+                    + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 startInfo.Arguments = $"/d /c \"\"{executablePath}\" {commandArguments}\"";
             }
             else
             {
                 startInfo.FileName = executablePath;
-                startInfo.Arguments = commandArguments;
+                startInfo.ArgumentList.Add("web");
+                AddLauncherPatch(startInfo, instance);
+                startInfo.ArgumentList.Add("--host");
+                startInfo.ArgumentList.Add("127.0.0.1");
+                startInfo.ArgumentList.Add("--port");
+                startInfo.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
         }
 
         startInfo.Environment["DSH_HOME"] = instance.DshHome;
+        // Keep the second default skill root isolated as well. Without this
+        // variable DSh falls back to the user's global %USERPROFILE%\.agents.
+        startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(instance.DshHome, ".agents");
         return startInfo;
+    }
+
+    private static void AddLauncherPatch(ProcessStartInfo startInfo, ManagerInstance instance)
+    {
+        var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
+        if (IsRegularFile(patchPath))
+        {
+            startInfo.ArgumentList.Add("--patch");
+            startInfo.ArgumentList.Add(patchPath);
+        }
+    }
+
+    private static bool IsRegularFile(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static int AllocateFreePort()

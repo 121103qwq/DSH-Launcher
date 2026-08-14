@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-按构建提示词继续实现 Windows x64 的独立 DSH Launcher；当前已完成 DSh 运行时识别、已安装实例注册与隔离、Source 项目识别与依赖/构建/运行链路，以及 installed DSh 的基础运行生命周期。
+按构建提示词继续实现 Windows x64 的独立 DSH Launcher；当前已完成 DSh 运行时识别、已安装实例注册与隔离、Source 项目识别与依赖/构建/运行链路、installed DSh 生命周期，以及第一版生态和对话管理入口。
 
 ## 已完成内容
 
@@ -18,9 +18,13 @@
 - 已修正停止状态误报：停止未被当前 Runner 管理的进程失败时不再直接保存为“已停止”，而是保留错误状态和诊断。
 - 已实现 installed DSh 生命周期：按实例设置 `DSH_HOME`，分配 loopback 空闲端口，启动 `dsh web`，等待 HTTP 可访问，支持停止和重启；运行进程退出或 Launcher 重启时不会保留虚假的 Running 状态。
 - 已实现同一 `DSH_HOME` 的跨 Runner 本地独占锁文件，避免两个 Launcher 同时写入同一实例数据；锁文件位于用户本地 Launcher 锁目录，不会被 DSh 的 DSH_HOME watcher 监听；Runner 还会清理整个子进程树。
-- 已添加无外部 NuGet 依赖的 `DshLauncher.SelfTest` 控制台测试项目，覆盖注册往返、重复目录拒绝、Source 检查、当前机器 DSh 检测、安装缺失环境保护、Source 直接启动保护、启动/健康检查/重复启动/跨 Runner 拒绝/停止/重启/接管。
+- 已实现 `ExtensionService` 与扩展窗口：按 DSh 实际 profile 结构列出 Plugin，支持 Plugin 安装/更新/删除/启停；按 DSh 实际 Skill 根导入/删除 Skill；管理 MCP stdio/streamable-http 配置；导入/删除用户 Agent Preset；Workflow 仅显示随附 standard preset 能力，不伪造 DSh 不认识的目录。扩展写入前会拒绝实例运行状态、重解析点、越界路径、危险包名和命令行控制字符。
+- 已实现 `ModelService` 与模型窗口：读写 `settings.yaml` 的 `llm-deepseek`、`llm-pi-ai.providers`，保留无关顶层段落，原子写入无 BOM，只保存 API Key 环境变量名；模型配置修改要求实例停止。
+- 已实现 `ConversationService` 与对话窗口：按 DSh JSONL 会话目录列出有效和压缩日志，支持未压缩会话导入、导出、备份和删除，并校验 sessions 根、文件名和重解析点；打开会话通过 Chat 的 `localStorage` 预选 session ID，实例未运行或会话头部无效时拒绝打开。
+- 已补充用户操作回归保护：空实例入口、实例运行中修改、Skill/Preset 自包含目录复制、MCP serverName 注入、模型配置无关段落保留、API Key 不落盘、会话路径穿越、压缩会话和重复导入均有自测覆盖。
+- 已添加无外部 NuGet 依赖的 `DshLauncher.SelfTest` 控制台测试项目，覆盖注册往返、重复目录拒绝、隔离 HOME、Source 检查、当前机器 DSh 检测、安装缺失环境保护、Source 直接启动保护、启动/健康检查/重复启动/跨 Runner 拒绝/停止/重启/接管，以及生态/模型/会话边界。
 - 当前功能分支为 `agent/harden-node-detection`，远端基线为已推送的实例注册提交；GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`。
-- 顶层发布文件 `DSH Launcher\\DSH Launcher.exe` 仍是上一版构建产物；本次 0.1.2 代码已通过 Release 编译，但最终顶层单文件需要在提交前重新发布并重新核对 SHA-256。
+- 本次 0.1.3 已生成同名发布目录 `publish\\DSH Launcher\\DSH Launcher.exe`；文件版本为 `0.1.3.0`，SHA-256 为 `7A20C3789738A264B5BC2FC30D5DA42BAC5972845BAB5CE751B9BA0052307395`。仓库工作目录中的旧版 `DSH Launcher\\DSH Launcher.exe` 当前仍被用户原有 Launcher 进程占用，因此没有强制结束进程或覆盖该锁定文件。
 
 ## 当前主要相关文件
 
@@ -35,28 +39,34 @@
 - `src/DshLauncher/Services/SourceBuildService.cs`、`src/DshLauncher/Models/SourceBuildResult.cs`：Source 依赖准备、构建命令执行、超时/取消清理和构建入口验证。
 - `src/DshLauncher/Services/DshInstallService.cs`：使用检测到的 Node.js/npm 执行 DSh 全局安装/更新。
 - `src/DshLauncher/Models/DshInstanceRunResult.cs`、`DshInstallResult.cs`：运行和安装结果模型。
+- `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`：Plugin、Skill、MCP、Agent Preset、Workflow 列表和实例级变更。
+- `src/DshLauncher/Services/ModelService.cs`、`ModelWindow.xaml(.cs)`：Provider/model settings 读写和凭据引用保护。
+- `src/DshLauncher/Services/ConversationService.cs`、`ConversationWindow.xaml(.cs)`：DSh session 文件列表、文件操作和 Chat 会话预选。
+- `src/DshLauncher/Models/EcosystemModels.cs`：扩展、MCP、Provider 和会话记录模型。
 - `tests/DshLauncher.SelfTest/Program.cs`：当前最小自测入口。
 - `src/DshLauncher/DshLauncher.csproj`：.NET 8、win-x64、自包含单文件发布配置，并引用 `Microsoft.Web.WebView2 1.0.4078.44`。
 - `CURRENT_DESIGN.md`：当前有效设计约束。
 
 ## 已执行测试及结果
 
-- `dotnet build .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64`：通过，0 warnings、0 errors。
 - `git diff --check`：通过。
-- `dotnet run --project .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj -c Release --no-restore`：通过，12/12；实际识别到 DSh `0.1.0-rc.6`，Source 安装/构建成功与包管理器失败均被覆盖，Source 本地 HTTP 生命周期、DSh 异常提前退出清理、installed 生命周期/健康检查/停止/重启均通过，跨 Runner 启动被拒绝，测试清理未留下 junction 错误。
-- 已通过当前发布版临时 UI 模拟：实际点击启动并打开 Chat，Chat 内出现 DeepSeek Harness 页面；只关闭 Chat 后 Launcher 窗口仍在、`http://127.0.0.1:5500/` 仍返回 HTTP 200；再从 Launcher 点击停止后端口不可访问、DSh 进程退出；右侧当前实例保持选中并显示运行地址，状态可在“运行中/已停止”间切换；Source 选择器可打开并取消。
-- 已检查发布文件存在、大小和 SHA-256；检查结果如上。
+- `dotnet build .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --no-restore`：通过，0 warnings、0 errors。
+- `dotnet build .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj -c Release --no-restore`：通过，0 warnings、0 errors。
+- `dotnet run --project .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj -c Release --no-build`：通过，16/16；除既有生命周期覆盖外，新增扩展隔离、模型 settings 回环、会话文件管理、空/越界/运行中/压缩日志等用户操作边界均通过。
+- `dotnet publish .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o .\\publish\\ui-next`：通过；临时自包含发布版实际打开扩展中心、模型与 Provider、对话管理窗口，空会话列表正常显示，随后已关闭临时进程。
+- `dotnet publish .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o .\\publish\\DSH Launcher`：通过；同名发布目录中的单文件版本和 SHA-256 已核对。
+- 临时 UI 回归后确认用户原有 `main\\DSH Launcher\\DSH Launcher.exe` 与 DeepSeek Desktop DSh 进程仍在，未启动或停止用户既有 DSh 实例。
 
 ## 已知问题
 
-- 当前自动化测试尚未覆盖 Node.js 检测的超时/取消、DSh 检测超时、Source 异常 `package.json`、DSh 安装命令的真实联网执行和完整 UI 错误提示边界。
-- Source 已实现依赖安装、构建、启动和 Web 健康检查；installed / Source 成功启动后会打开独立 Chat WebView2 窗口，扩展中心、模型和对话管理仍未实现。
+- 当前自动化测试尚未覆盖 Node.js 检测的超时/取消、DSh 检测超时、Source 异常 `package.json`、DSh 安装命令的真实联网执行和所有 UI 错误提示边界。
+- 本次未对真实网络 Plugin 执行安装/更新/删除，避免修改用户实例；服务和临时 UI 窗口已验证。压缩会话仍不能导入或通过 Chat 预选打开。
 - 当前分支仍是 Draft PR，尚未合并到 `main`；下一版 Release 尚未创建。
 
 ## 尚未完成内容
 
-- DSh 实例安装/更新后的注册联动、Source 项目依赖安装与构建、Source/installed 的端口生命周期和基础 Chat WebView2 窗口已完成；扩展与对话能力仍未接入。
-- Source DSh 项目管理、对话管理，以及 Plugin、Skill、MCP、Workflow、Preset 等扩展能力。
+- 仓库工作目录中的旧版顶层文件尚未覆盖，因为它仍被用户原有 Launcher 锁定；当前版本已在独立同名发布目录生成并核对。
+- 当前分支的提交、推送和 GitHub Release 尚未完成。
 
 ## 已尝试但已放弃的方案
 
@@ -64,4 +74,4 @@
 
 ## 下一步最直接的任务
 
-- 补充真实发布版 Source 路径的 UI 点击回归，并实现扩展中心的最小可用 Plugin/Skill/MCP 安装与启停管理。
+- 使用已核对的 `publish\\DSH Launcher\\DSH Launcher.exe`，提交代码和本版发布产物，推送当前分支并创建对应 GitHub Release；不要强制结束用户原有 Launcher 进程。
