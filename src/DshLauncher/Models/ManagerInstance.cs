@@ -29,7 +29,10 @@ public sealed record ManagerInstance(
     InstanceRuntimeStatus RuntimeStatus,
     string? PackageManager,
     string? LastError,
-    DateTimeOffset RegisteredAt)
+    DateTimeOffset RegisteredAt,
+    int? ProcessId = null,
+    int? Port = null,
+    string? WebUrl = null)
 {
     [JsonIgnore]
     public string KindText => Kind == InstanceKind.Installed ? "installed" : "source";

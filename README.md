@@ -4,9 +4,9 @@
 
 ## 当前版本
 
-当前为 Launcher Core 0.1.1，完成了独立 WPF 主窗口、PCL2 风格的信息架构骨架、Node.js/DSh 环境检测、已安装 DSh 实例注册和 Source 项目检查。Node 检测在后台异步执行，单个候选总超时后会清理残留进程；Launcher 自身不依赖 Node.js、npm、pnpm 或已经安装的 DeepSeek Harness。
+当前为 Launcher Core 0.1.1，完成了独立 WPF 主窗口、PCL2 风格的信息架构骨架、Node.js/DSh 环境检测、已安装 DSh 实例注册和 Source 项目检查，并已接入已安装 DSh 的启动、停止、重启、空闲端口与 HTTP 可访问性检查。Node 检测在后台异步执行，单个候选总超时后会清理残留进程；Launcher 自身不依赖 Node.js、npm、pnpm 或已经安装的 DeepSeek Harness。
 
-当前版本暂不实现 DSh 安装执行、Source 构建、实例启动/健康检查、Plugin、Skill、MCP、模型和对话管理；这些入口会明确显示为后续阶段，避免把未完成能力当成已完成能力。
+当前版本已提供 DSh 安装/更新执行入口，但尚未覆盖 Source 构建、Plugin、Skill、MCP、模型和对话管理；这些入口会明确显示为后续阶段，避免把未完成能力当成已完成能力。
 
 ## 构建
 

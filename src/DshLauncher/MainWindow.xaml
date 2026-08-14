@@ -309,15 +309,37 @@
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
-                                        <Button Click="StartInstance_Click"
-                                                IsEnabled="{Binding CanStartInstance}"
-                                                Style="{StaticResource PrimaryButton}"
-                                                Height="48">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="▶" Margin="0,0,8,0" />
-                                                <TextBlock Text="启动实例" />
-                                            </StackPanel>
-                                        </Button>
+                                        <TextBlock Text="{Binding InstanceEndpointText}"
+                                                   Foreground="{StaticResource MutedBrush}"
+                                                   FontSize="12"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,0,0,14" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Click="StartInstance_Click"
+                                                    IsEnabled="{Binding CanStartInstance}"
+                                                    Style="{StaticResource PrimaryButton}"
+                                                    Height="44"
+                                                    Padding="18,0">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="▶" Margin="0,0,8,0" />
+                                                    <TextBlock Text="启动实例" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Click="StopInstance_Click"
+                                                    IsEnabled="{Binding CanStopInstance}"
+                                                    Height="44"
+                                                    Margin="10,0,0,0"
+                                                    Padding="18,0">
+                                                <TextBlock Text="停止" />
+                                            </Button>
+                                            <Button Click="RestartInstance_Click"
+                                                    IsEnabled="{Binding CanStopInstance}"
+                                                    Height="44"
+                                                    Margin="10,0,0,0"
+                                                    Padding="18,0">
+                                                <TextBlock Text="重启" />
+                                            </Button>
+                                        </StackPanel>
                                     </StackPanel>
                                 </Border>
 
@@ -373,8 +395,12 @@
                                                     <Button Click="InstallNode_Click" Padding="10,5" FontSize="12">
                                                         <TextBlock Text="Node.js 安装页" />
                                                     </Button>
-                                                    <Button Click="InstallDsh_Click" Padding="10,5" FontSize="12" Margin="8,0,0,0">
-                                                        <TextBlock Text="DSh 安装说明" />
+                                                    <Button Click="InstallDsh_Click"
+                                                            IsEnabled="{Binding CanInstallDsh}"
+                                                            Padding="10,5"
+                                                            FontSize="12"
+                                                            Margin="8,0,0,0">
+                                                        <TextBlock Text="{Binding DshInstallButtonText}" />
                                                     </Button>
                                                 </StackPanel>
                                             </Grid>

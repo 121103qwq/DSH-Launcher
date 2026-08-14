@@ -97,6 +97,20 @@ public sealed class InstanceRegistry
         return true;
     }
 
+    public ManagerInstance Update(ManagerInstance updated)
+    {
+        var entries = Load().ToList();
+        var index = entries.FindIndex(entry => string.Equals(entry.Id, updated.Id, StringComparison.Ordinal));
+        if (index < 0)
+        {
+            throw new InvalidOperationException("找不到要更新的 DSh 实例。");
+        }
+
+        entries[index] = updated;
+        Save(entries);
+        return updated;
+    }
+
     private void Save(IReadOnlyCollection<ManagerInstance> entries)
     {
         var directory = Path.GetDirectoryName(StoragePath)

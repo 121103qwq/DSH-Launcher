@@ -17,11 +17,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DshRuntimeDetector _dshDetector = new();
     private readonly SourceProjectInspector _sourceInspector = new();
     private readonly InstanceRegistry _instanceRegistry = new();
+    private readonly DshInstanceRunner _instanceRunner = new();
+    private readonly DshInstallService _dshInstaller = new();
     private readonly CancellationTokenSource _windowCancellation = new();
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
     private DshRuntimeInfo _dshRuntime = DshRuntimeInfo.Missing();
     private ManagerInstance? _selectedInstance;
     private bool _isNodeDetectionInProgress;
+    private bool _isLifecycleInProgress;
+    private bool _isDshInstallInProgress;
 
     public MainWindow()
     {
@@ -54,7 +58,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceName));
             OnPropertyChanged(nameof(SelectedInstanceSummary));
             OnPropertyChanged(nameof(SelectedInstanceStatus));
+            OnPropertyChanged(nameof(InstanceEndpointText));
             OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(CanStopInstance));
         }
     }
 
@@ -72,7 +78,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string SelectedInstanceStatus => SelectedInstance?.StatusText ?? "未选择";
 
-    public bool CanStartInstance => SelectedInstance is not null && _dshRuntime.IsAvailable;
+    public bool CanStartInstance => !_isLifecycleInProgress
+        && SelectedInstance is { Kind: InstanceKind.Installed, DshExecutablePath: not null }
+        && !_instanceRunner.IsRunning(SelectedInstance.Id);
+
+    public bool CanStopInstance => !_isLifecycleInProgress
+        && SelectedInstance is not null
+        && _instanceRunner.IsRunning(SelectedInstance.Id);
+
+    public string InstanceEndpointText => SelectedInstance?.WebUrl
+        ?? (SelectedInstance?.RuntimeStatus == InstanceRuntimeStatus.Running ? "正在检查运行地址…" : "尚未启动");
+
+    public bool CanInstallDsh => !_isDshInstallInProgress
+        && !_isNodeDetectionInProgress
+        && _nodeRuntime.IsAvailable;
+
+    public string DshInstallButtonText => _isDshInstallInProgress
+        ? "安装中…"
+        : _dshRuntime.IsAvailable ? "安装/更新 DSh" : "安装 DSh";
 
     public bool CanRefreshNode => !_isNodeDetectionInProgress;
 
@@ -149,6 +172,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(CanInstallDsh));
             return _nodeRuntime;
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -161,6 +185,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(CanInstallDsh));
             ShowNotice(_nodeRuntime.Error ?? "Node.js 检测失败。");
             return _nodeRuntime;
         }
@@ -171,6 +196,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
+            OnPropertyChanged(nameof(CanInstallDsh));
         }
     }
 
@@ -193,6 +219,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(DshStatusBrush));
         OnPropertyChanged(nameof(DshVersionText));
         OnPropertyChanged(nameof(CanStartInstance));
+        OnPropertyChanged(nameof(DshInstallButtonText));
     }
 
     private void LoadInstances()
@@ -200,15 +227,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             Instances.Clear();
-            foreach (var instance in _instanceRegistry.Load())
+            foreach (var storedInstance in _instanceRegistry.Load())
             {
+                var instance = storedInstance.RuntimeStatus == InstanceRuntimeStatus.Running
+                    ? storedInstance with
+                    {
+                        RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                        ProcessId = null,
+                        Port = null,
+                        WebUrl = null
+                    }
+                    : storedInstance;
                 Instances.Add(instance);
+                if (instance != storedInstance)
+                {
+                    _instanceRegistry.Update(instance);
+                }
             }
 
             SelectedInstance = Instances.FirstOrDefault();
             OnPropertyChanged(nameof(InstanceCountText));
             OnPropertyChanged(nameof(NoInstancesVisibility));
             OnPropertyChanged(nameof(InstancesVisibility));
+            OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(CanStopInstance));
         }
         catch (Exception ex)
         {
@@ -325,21 +367,132 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void StartInstance_Click(object sender, RoutedEventArgs e)
+    private async void StartInstance_Click(object sender, RoutedEventArgs e)
     {
-        if (SelectedInstance is null)
+        if (_isLifecycleInProgress || SelectedInstance is null)
         {
-            ShowNotice("请先注册并选择一个 DSh 实例。");
             return;
         }
 
-        if (!_dshRuntime.IsAvailable)
+        var selected = SelectedInstance;
+        SetLifecycleBusy(true);
+        try
         {
-            ShowNotice("当前没有可运行的 DSh。请先安装 DSh 或注册 Source 实例后执行构建。");
+            var result = await _instanceRunner.StartAsync(selected, _windowCancellation.Token);
+            if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
+            {
+                UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
+                ShowNotice(result.Error ?? "DSh 启动失败。");
+                return;
+            }
+
+            UpdateInstance(selected with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Running,
+                ProcessId = result.ProcessId,
+                Port = result.Port,
+                WebUrl = result.WebUrl,
+                LastError = null
+            });
+            ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+            // Window close cancels startup and the runner cleans up its process tree.
+        }
+        catch (Exception ex)
+        {
+            UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, ex.Message);
+            ShowNotice($"启动 DSh 失败：{ex.Message}");
+        }
+        finally
+        {
+            SetLifecycleBusy(false);
+        }
+    }
+
+    private async void StopInstance_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isLifecycleInProgress || SelectedInstance is null)
+        {
             return;
         }
 
-        ShowNotice($"已完成实例选择：{SelectedInstance.Name}。启动、端口分配和健康检查将在下一模块接入。");
+        var selected = SelectedInstance;
+        SetLifecycleBusy(true);
+        try
+        {
+            var result = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
+            if (!result.IsSuccess && _instanceRunner.IsRunning(selected.Id))
+            {
+                ShowNotice(result.Error ?? "停止 DSh 失败。");
+                return;
+            }
+
+            UpdateInstance(selected with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                ProcessId = null,
+                Port = null,
+                WebUrl = null,
+                LastError = null
+            });
+            ShowNotice($"实例已停止：{selected.Name}。");
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"停止 DSh 失败：{ex.Message}");
+        }
+        finally
+        {
+            SetLifecycleBusy(false);
+        }
+    }
+
+    private async void RestartInstance_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isLifecycleInProgress || SelectedInstance is null)
+        {
+            return;
+        }
+
+        var selected = SelectedInstance;
+        SetLifecycleBusy(true);
+        try
+        {
+            var result = await _instanceRunner.RestartAsync(selected, _windowCancellation.Token);
+            if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
+            {
+                UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
+                ShowNotice(result.Error ?? "DSh 重启失败。");
+                return;
+            }
+
+            UpdateInstance(selected with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Running,
+                ProcessId = result.ProcessId,
+                Port = result.Port,
+                WebUrl = result.WebUrl,
+                LastError = null
+            });
+            ShowNotice($"实例已重启：{selected.Name}，运行地址 {result.WebUrl}。");
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, ex.Message);
+            ShowNotice($"重启 DSh 失败：{ex.Message}");
+        }
+        finally
+        {
+            SetLifecycleBusy(false);
+        }
     }
 
     private void InstallNode_Click(object sender, RoutedEventArgs e)
@@ -358,21 +511,97 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void InstallDsh_Click(object sender, RoutedEventArgs e)
+    private async void InstallDsh_Click(object sender, RoutedEventArgs e)
     {
+        if (_isDshInstallInProgress)
+        {
+            return;
+        }
+
+        if (!_nodeRuntime.IsAvailable)
+        {
+            ShowNotice("当前没有可用的 Node.js。请先安装 Node.js，再执行 DSh 安装。");
+            InstallNode_Click(sender, e);
+            return;
+        }
+
+        _isDshInstallInProgress = true;
+        OnPropertyChanged(nameof(CanInstallDsh));
+        OnPropertyChanged(nameof(DshInstallButtonText));
+        ShowNotice("正在使用当前 Node.js 执行 npm install --global @deepseek-ai/dsh，请稍候…");
+
         try
         {
-            Process.Start(new ProcessStartInfo
+            var result = await _dshInstaller.InstallAsync(_nodeRuntime, _windowCancellation.Token);
+            if (!result.IsSuccess)
             {
-                FileName = "https://github.com/deepseek-ai/deepseek-harness#run",
-                UseShellExecute = true
-            });
-            ShowNotice("已打开 DeepSeek Harness 官方运行说明。正式安装流程会使用当前检测到的 Node.js 执行 npm 安装。");
+                ShowNotice(result.Error ?? "DSh 安装失败。");
+                return;
+            }
+
+            await RefreshDshAsync();
+            ShowNotice($"DSh 安装/更新完成：{_dshRuntime.VersionText}。可以重新检测并注册实例。");
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            ShowNotice($"无法打开 DSh 官方安装说明：{ex.Message}");
+            ShowNotice($"DSh 安装失败：{ex.Message}");
         }
+        finally
+        {
+            _isDshInstallInProgress = false;
+            OnPropertyChanged(nameof(CanInstallDsh));
+            OnPropertyChanged(nameof(DshInstallButtonText));
+        }
+    }
+
+    private void UpdateInstanceStatus(ManagerInstance original, InstanceRuntimeStatus status, string? error)
+    {
+        try
+        {
+            UpdateInstance(original with
+            {
+                RuntimeStatus = status,
+                ProcessId = status == InstanceRuntimeStatus.Running ? original.ProcessId : null,
+                Port = status == InstanceRuntimeStatus.Running ? original.Port : null,
+                WebUrl = status == InstanceRuntimeStatus.Running ? original.WebUrl : null,
+                LastError = error
+            });
+        }
+        catch (Exception updateException)
+        {
+            ShowNotice($"实例状态保存失败：{updateException.Message}");
+        }
+    }
+
+    private void UpdateInstance(ManagerInstance updated)
+    {
+        _instanceRegistry.Update(updated);
+        var wasSelected = string.Equals(SelectedInstance?.Id, updated.Id, StringComparison.Ordinal);
+        var index = Instances.ToList().FindIndex(instance => string.Equals(instance.Id, updated.Id, StringComparison.Ordinal));
+        if (index >= 0)
+        {
+            Instances[index] = updated;
+        }
+
+        if (wasSelected)
+        {
+            SelectedInstance = updated;
+        }
+
+        OnPropertyChanged(nameof(CanStartInstance));
+        OnPropertyChanged(nameof(CanStopInstance));
+        OnPropertyChanged(nameof(InstanceEndpointText));
+    }
+
+    private void SetLifecycleBusy(bool isBusy)
+    {
+        _isLifecycleInProgress = isBusy;
+        OnPropertyChanged(nameof(CanStartInstance));
+        OnPropertyChanged(nameof(CanStopInstance));
+        OnPropertyChanged(nameof(InstanceEndpointText));
     }
 
     private static string? PickFolder(string description, string? initialPath = null)
@@ -413,6 +642,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     protected override void OnClosed(EventArgs e)
     {
         _windowCancellation.Cancel();
+        try
+        {
+            _instanceRunner.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Window shutdown must not be blocked by a failed child-process cleanup.
+        }
         _windowCancellation.Dispose();
         base.OnClosed(e);
     }
