@@ -11,7 +11,8 @@ public sealed record SourceProjectInfo(
     bool HasBuildScript,
     bool DependenciesPresent,
     bool HasCliEntrypoint,
-    string? Error)
+    string? Error,
+    string? BuiltCliEntrypoint = null)
 {
     public string StatusText => !IsValid
         ? "无法识别"
@@ -21,7 +22,7 @@ public sealed record SourceProjectInfo(
                 ? "需要安装依赖"
                 : !HasBuildScript
                     ? "缺少 build 脚本"
-                    : "可构建";
+                    : BuiltCliEntrypoint is null ? "可构建" : "已构建";
 
     public string BuildCommand => PackageManager switch
     {

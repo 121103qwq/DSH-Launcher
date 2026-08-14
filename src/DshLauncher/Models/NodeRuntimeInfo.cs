@@ -12,4 +12,9 @@ public sealed record NodeRuntimeInfo(
     public string VersionText => IsAvailable && !string.IsNullOrWhiteSpace(Version)
         ? $"v{Version}"
         : "未安装";
+
+    public bool IsCompatibleWithDshSource => IsAvailable
+        && Version is not null
+        && System.Version.TryParse(Version, out var parsed)
+        && ((parsed.Major == 22 && parsed >= new Version(22, 19, 0)) || parsed.Major >= 24);
 }

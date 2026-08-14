@@ -32,14 +32,38 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         ManagerInstance instance,
         CancellationToken cancellationToken = default)
     {
+        return await StartAsync(instance, null, cancellationToken);
+    }
+
+    public async Task<DshInstanceRunResult> StartAsync(
+        ManagerInstance instance,
+        NodeRuntimeInfo? nodeRuntime,
+        CancellationToken cancellationToken = default)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (instance.Kind != InstanceKind.Installed)
+        var sourceEntrypoint = instance.Kind == InstanceKind.Source
+            ? SourceProjectInspector.TryFindBuiltCliEntrypoint(instance.RootPath)
+            : null;
+        if (instance.Kind == InstanceKind.Source)
         {
-            return DshInstanceRunResult.Failure("Source 实例需要先完成依赖安装和构建，当前不能直接启动。");
-        }
+            if (nodeRuntime is null || !nodeRuntime.IsAvailable || string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
+            {
+                return DshInstanceRunResult.Failure("Source 实例需要可用的 Node.js 才能启动。");
+            }
 
-        if (string.IsNullOrWhiteSpace(instance.DshExecutablePath)
+            if (!nodeRuntime.IsCompatibleWithDshSource)
+            {
+                return DshInstanceRunResult.Failure(
+                    $"当前 Node.js {nodeRuntime.VersionText} 不满足 Source 要求：22.19+ 的 22.x 或 24+。请切换到兼容版本。");
+            }
+
+            if (sourceEntrypoint is null)
+            {
+                return DshInstanceRunResult.Failure("Source 尚未完成构建，找不到 apps/cli/lib/bin.js 或 dist/bin.js。");
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(instance.DshExecutablePath)
             || !File.Exists(instance.DshExecutablePath))
         {
             return DshInstanceRunResult.Failure("实例的 DSh 可执行入口不存在，请重新检测或重新注册实例。");
@@ -89,7 +113,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 var webUrl = $"http://127.0.0.1:{port}/";
                 process = new Process
                 {
-                    StartInfo = CreateStartInfo(instance, port),
+                    StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint),
                     EnableRaisingEvents = true
                 };
                 var output = new StringBuilder();
@@ -182,9 +206,17 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         ManagerInstance instance,
         CancellationToken cancellationToken = default)
     {
+        return await RestartAsync(instance, null, cancellationToken);
+    }
+
+    public async Task<DshInstanceRunResult> RestartAsync(
+        ManagerInstance instance,
+        NodeRuntimeInfo? nodeRuntime,
+        CancellationToken cancellationToken = default)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
         await StopIfRunningAsync(instance.Id, cancellationToken);
-        return await StartAsync(instance, cancellationToken);
+        return await StartAsync(instance, nodeRuntime, cancellationToken);
     }
 
     public async Task StopAllAsync()
@@ -367,10 +399,12 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
-    private static ProcessStartInfo CreateStartInfo(ManagerInstance instance, int port)
+    private static ProcessStartInfo CreateStartInfo(
+        ManagerInstance instance,
+        int port,
+        NodeRuntimeInfo? nodeRuntime,
+        string? sourceEntrypoint)
     {
-        var executablePath = instance.DshExecutablePath!;
-        var commandArguments = $"web --host 127.0.0.1 --port {port}";
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -382,16 +416,32 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             StandardErrorEncoding = Encoding.UTF8
         };
 
-        if (Path.GetExtension(executablePath).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
-            || Path.GetExtension(executablePath).Equals(".bat", StringComparison.OrdinalIgnoreCase))
+        if (instance.Kind == InstanceKind.Source)
         {
-            startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-            startInfo.Arguments = $"/d /c \"\"{executablePath}\" {commandArguments}\"";
+            startInfo.FileName = nodeRuntime!.ExecutablePath!;
+            startInfo.ArgumentList.Add(sourceEntrypoint!);
+            startInfo.ArgumentList.Add("web");
+            startInfo.ArgumentList.Add("--host");
+            startInfo.ArgumentList.Add("127.0.0.1");
+            startInfo.ArgumentList.Add("--port");
+            startInfo.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
         else
         {
-            startInfo.FileName = executablePath;
-            startInfo.Arguments = commandArguments;
+            var executablePath = instance.DshExecutablePath!;
+            var commandArguments = "web --host 127.0.0.1 --port "
+                + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (Path.GetExtension(executablePath).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+                || Path.GetExtension(executablePath).Equals(".bat", StringComparison.OrdinalIgnoreCase))
+            {
+                startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+                startInfo.Arguments = $"/d /c \"\"{executablePath}\" {commandArguments}\"";
+            }
+            else
+            {
+                startInfo.FileName = executablePath;
+                startInfo.Arguments = commandArguments;
+            }
         }
 
         startInfo.Environment["DSH_HOME"] = instance.DshHome;

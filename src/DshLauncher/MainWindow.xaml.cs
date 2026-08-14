@@ -19,9 +19,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly InstanceRegistry _instanceRegistry = new();
     private readonly DshInstanceRunner _instanceRunner = new();
     private readonly DshInstallService _dshInstaller = new();
+    private readonly SourceBuildService _sourceBuilder = new();
     private readonly CancellationTokenSource _windowCancellation = new();
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
     private DshRuntimeInfo _dshRuntime = DshRuntimeInfo.Missing();
+    private ChatWindow? _chatWindow;
     private ManagerInstance? _selectedInstance;
     private bool _isNodeDetectionInProgress;
     private bool _isLifecycleInProgress;
@@ -79,7 +81,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string SelectedInstanceStatus => SelectedInstance?.StatusText ?? "未选择";
 
     public bool CanStartInstance => !_isLifecycleInProgress
-        && SelectedInstance is { Kind: InstanceKind.Installed, DshExecutablePath: not null }
+        && SelectedInstance is not null
+        && (SelectedInstance.Kind == InstanceKind.Installed
+            ? SelectedInstance.DshExecutablePath is not null
+            : _nodeRuntime.IsCompatibleWithDshSource)
         && !_instanceRunner.IsRunning(SelectedInstance.Id);
 
     public bool CanStopInstance => !_isLifecycleInProgress
@@ -378,7 +383,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SetLifecycleBusy(true);
         try
         {
-            var result = await _instanceRunner.StartAsync(selected, _windowCancellation.Token);
+            if (!await PrepareSourceAsync(selected))
+            {
+                return;
+            }
+
+            var result = await _instanceRunner.StartAsync(
+                selected,
+                selected.Kind == InstanceKind.Source ? _nodeRuntime : null,
+                _windowCancellation.Token);
             if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
             {
                 UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
@@ -394,6 +407,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 WebUrl = result.WebUrl,
                 LastError = null
             });
+            OpenChatWindow(result.WebUrl);
             ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -423,12 +437,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             var result = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
-            if (!result.IsSuccess && _instanceRunner.IsRunning(selected.Id))
+            if (!result.IsSuccess)
             {
+                UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
                 ShowNotice(result.Error ?? "停止 DSh 失败。");
                 return;
             }
 
+            CloseChatWindow();
             UpdateInstance(selected with
             {
                 RuntimeStatus = InstanceRuntimeStatus.Stopped,
@@ -463,7 +479,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SetLifecycleBusy(true);
         try
         {
-            var result = await _instanceRunner.RestartAsync(selected, _windowCancellation.Token);
+            if (selected.Kind == InstanceKind.Source && _instanceRunner.IsRunning(selected.Id))
+            {
+                var stoppedBeforePrepare = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
+                if (!stoppedBeforePrepare.IsSuccess)
+                {
+                    UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, stoppedBeforePrepare.Error);
+                    ShowNotice(stoppedBeforePrepare.Error ?? "Source 重启前停止失败。");
+                    return;
+                }
+            }
+
+            if (!await PrepareSourceAsync(selected))
+            {
+                return;
+            }
+
+            var result = selected.Kind == InstanceKind.Source
+                ? await _instanceRunner.StartAsync(selected, _nodeRuntime, _windowCancellation.Token)
+                : await _instanceRunner.RestartAsync(selected, _windowCancellation.Token);
             if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
             {
                 UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
@@ -479,6 +513,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 WebUrl = result.WebUrl,
                 LastError = null
             });
+            OpenChatWindow(result.WebUrl);
             ShowNotice($"实例已重启：{selected.Name}，运行地址 {result.WebUrl}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -576,6 +611,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private async Task<bool> PrepareSourceAsync(ManagerInstance instance)
+    {
+        if (instance.Kind != InstanceKind.Source)
+        {
+            return true;
+        }
+
+        var project = _sourceInspector.Inspect(instance.RootPath);
+        var result = await _sourceBuilder.PrepareAsync(project, _nodeRuntime, _windowCancellation.Token);
+        if (result.IsSuccess)
+        {
+            ShowNotice($"Source 依赖和构建已完成：{Path.GetFileName(result.EntrypointPath!)}。正在启动实例…");
+            return true;
+        }
+
+        UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, result.Error);
+        var outputSuffix = string.IsNullOrWhiteSpace(result.Output)
+            ? string.Empty
+            : $" 输出：{result.Output}";
+        ShowNotice((result.Error ?? "Source 准备失败。") + outputSuffix);
+        return false;
+    }
+
     private void UpdateInstance(ManagerInstance updated)
     {
         _instanceRegistry.Update(updated);
@@ -642,6 +700,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     protected override void OnClosed(EventArgs e)
     {
         _windowCancellation.Cancel();
+        CloseChatWindow();
         try
         {
             _instanceRunner.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -652,6 +711,47 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         _windowCancellation.Dispose();
         base.OnClosed(e);
+    }
+
+    private void OpenChatWindow(string address)
+    {
+        CloseChatWindow();
+        try
+        {
+            var chat = new ChatWindow(address) { Owner = this };
+            _chatWindow = chat;
+            chat.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_chatWindow, chat))
+                {
+                    _chatWindow = null;
+                }
+            };
+            chat.Show();
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"Chat 窗口无法打开：{ex.Message}。Launcher 和实例仍保持运行。");
+        }
+    }
+
+    private void CloseChatWindow()
+    {
+        var chat = _chatWindow;
+        _chatWindow = null;
+        if (chat is null)
+        {
+            return;
+        }
+
+        try
+        {
+            chat.Close();
+        }
+        catch
+        {
+            // A closing Chat window must not prevent Launcher shutdown or DSh cleanup.
+        }
     }
 
     private void ShowNotice(string message)

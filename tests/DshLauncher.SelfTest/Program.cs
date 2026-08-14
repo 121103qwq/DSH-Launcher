@@ -12,6 +12,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("DSh runtime detection", TestDshRuntimeDetection),
     ("DSh install guard", TestDshInstallGuard),
     ("Source runner guard", TestSourceRunnerGuard),
+    ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
+    ("Source runner lifecycle", TestSourceRunnerLifecycle),
+    ("DSh early exit cleanup", TestDshEarlyExitCleanup),
     ("DSh instance lifecycle", TestDshInstanceLifecycle)
 };
 
@@ -196,6 +199,145 @@ static async Task TestSourceRunnerGuard()
     Assert(!result.IsSuccess, "Source 实例在构建前不应直接启动。");
     Assert(result.Error?.Contains("Source", StringComparison.OrdinalIgnoreCase) == true,
         "Source 直接启动应返回明确错误。");
+}
+
+static async Task TestSourcePrepareInstallAndBuild()
+{
+    var runtime = await new NodeRuntimeDetector().DetectAsync();
+    if (!runtime.IsAvailable || runtime.ExecutablePath is null)
+    {
+        Console.WriteLine("INFO Source prepare skipped because Node.js is not installed");
+        return;
+    }
+
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "deepseek-harness");
+    Directory.CreateDirectory(Path.Combine(root, "apps", "cli"));
+    File.WriteAllText(
+        Path.Combine(root, "package.json"),
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\",\"packageManager\":\"pnpm@11.7.0\",\"scripts\":{\"build\":\"pnpm run build\"}}",
+        new UTF8Encoding(false));
+
+    var packageManager = Path.Combine(temporary.Path, "pnpm.cmd");
+    File.WriteAllText(
+        packageManager,
+        "@echo off\r\n"
+        + "if \"%~1\"==\"install\" (\r\n"
+        + "  if not exist node_modules mkdir node_modules\r\n"
+        + "  exit /b 0\r\n"
+        + ")\r\n"
+        + "if \"%~1\"==\"run\" if \"%~2\"==\"build\" (\r\n"
+        + "  if exist fail-build exit /b 7\r\n"
+        + "  if not exist apps\\cli\\lib mkdir apps\\cli\\lib\r\n"
+        + "  >apps\\cli\\lib\\bin.js echo // built fixture\r\n"
+        + "  exit /b 0\r\n"
+        + ")\r\n"
+        + "exit /b 9\r\n",
+        new UTF8Encoding(false));
+
+    var project = new SourceProjectInspector().Inspect(root);
+    var compatibleRuntime = runtime with { Version = "24.0.0" };
+    var service = new SourceBuildService(
+        commandResolver: name => string.Equals(name, "pnpm", StringComparison.OrdinalIgnoreCase)
+            ? packageManager
+            : null,
+        commandTimeout: TimeSpan.FromSeconds(10));
+    var prepared = await service.PrepareAsync(project, compatibleRuntime);
+    Assert(prepared.IsSuccess, prepared.Error ?? "Source 依赖安装和构建失败。");
+    Assert(prepared.DependenciesInstalled && prepared.BuildExecuted,
+        "Source 成功准备必须记录依赖安装和构建步骤。");
+    Assert(prepared.EntrypointPath is not null && File.Exists(prepared.EntrypointPath),
+        "Source 构建成功必须找到 CLI 构建入口。");
+
+    var failingPackageManager = Path.Combine(temporary.Path, "pnpm-fail.cmd");
+    File.WriteAllText(failingPackageManager, "@echo off\r\nexit /b 7\r\n", new UTF8Encoding(false));
+    var failingService = new SourceBuildService(
+        commandResolver: name => string.Equals(name, "pnpm", StringComparison.OrdinalIgnoreCase)
+            ? failingPackageManager
+            : null,
+        commandTimeout: TimeSpan.FromSeconds(10));
+    var failed = await failingService.PrepareAsync(new SourceProjectInspector().Inspect(root), compatibleRuntime);
+    Assert(!failed.IsSuccess, "包管理器返回非零退出码时构建必须失败。");
+    Assert(failed.Error?.Contains("7", StringComparison.Ordinal) == true,
+        "构建失败应保留包管理器退出码诊断。");
+}
+
+static async Task TestSourceRunnerLifecycle()
+{
+    var runtime = await new NodeRuntimeDetector().DetectAsync();
+    if (!runtime.IsAvailable || runtime.ExecutablePath is null || !runtime.IsCompatibleWithDshSource)
+    {
+        Console.WriteLine($"INFO Source lifecycle skipped because compatible Node.js is unavailable ({runtime.VersionText})");
+        return;
+    }
+
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "deepseek-harness");
+    var entrypointDirectory = Path.Combine(root, "apps", "cli", "lib");
+    Directory.CreateDirectory(entrypointDirectory);
+    File.WriteAllText(
+        Path.Combine(root, "package.json"),
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\"}",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(entrypointDirectory, "bin.js"),
+        "const http = require('http');\n"
+        + "const args = process.argv;\n"
+        + "const port = Number(args[args.indexOf('--port') + 1]);\n"
+        + "const host = args[args.indexOf('--host') + 1];\n"
+        + "http.createServer((request, response) => { response.statusCode = 200; response.end('ok'); }).listen(port, host);\n",
+        new UTF8Encoding(false));
+
+    var instance = new ManagerInstance(
+        Id: "source-lifecycle-test",
+        Name: "Source 生命周期测试",
+        RootPath: root,
+        Kind: InstanceKind.Source,
+        DshHome: Path.Combine(temporary.Path, "dsh-home"),
+        DshExecutablePath: null,
+        DetectedVersion: "0.1.0",
+        RuntimeStatus: InstanceRuntimeStatus.Ready,
+        PackageManager: "pnpm",
+        LastError: null,
+        RegisteredAt: DateTimeOffset.UtcNow);
+
+    await using var runner = new DshInstanceRunner();
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+    var started = await runner.StartAsync(instance, runtime, cancellation.Token);
+    Assert(started.IsSuccess, started.Error ?? "Source 生命周期启动失败。");
+    Assert(started.Port is > 0 && started.WebUrl is not null, "Source 启动成功必须返回端口和 URL。");
+    var stopped = await runner.StopAsync(instance.Id, cancellation.Token);
+    Assert(stopped.IsSuccess, stopped.Error ?? "Source 生命周期停止失败。");
+    Assert(!runner.IsRunning(instance.Id), "Source 停止后不能继续报告运行中。");
+}
+
+static async Task TestDshEarlyExitCleanup()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "installed");
+    Directory.CreateDirectory(root);
+    var executable = Path.Combine(root, "dsh.cmd");
+    File.WriteAllText(executable, "@echo off\r\nexit /b 9\r\n", new UTF8Encoding(false));
+    var instance = new ManagerInstance(
+        Id: "early-exit-test",
+        Name: "异常退出测试",
+        RootPath: root,
+        Kind: InstanceKind.Installed,
+        DshHome: Path.Combine(temporary.Path, "dsh-home"),
+        DshExecutablePath: executable,
+        DetectedVersion: "test",
+        RuntimeStatus: InstanceRuntimeStatus.Ready,
+        PackageManager: "npm",
+        LastError: null,
+        RegisteredAt: DateTimeOffset.UtcNow);
+
+    await using var runner = new DshInstanceRunner();
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    var result = await runner.StartAsync(instance, cancellation.Token);
+    Assert(!result.IsSuccess, "DSh 在健康检查前异常退出时启动必须失败。");
+    Assert(result.Error?.Contains("退出", StringComparison.Ordinal) == true,
+        "异常退出应返回进程退出诊断，而不是无期限等待健康检查。");
+    Assert(!runner.IsRunning(instance.Id), "异常退出后 Runner 不能保留幽灵运行状态。");
 }
 
 static async Task TestDshInstanceLifecycle()

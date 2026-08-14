@@ -34,7 +34,8 @@ public sealed class SourceProjectInspector
             var cliPackageName = ReadPackageName(cliPackagePath);
             var hasCliEntrypoint = File.Exists(cliPackagePath)
                 || File.Exists(Path.Combine(normalizedRoot, "apps", "cli", "src", "bin.ts"))
-                || File.Exists(Path.Combine(normalizedRoot, "apps", "cli", "lib", "bin.js"));
+                || TryFindBuiltCliEntrypoint(normalizedRoot) is not null;
+            var builtCliEntrypoint = TryFindBuiltCliEntrypoint(normalizedRoot);
             var isDshSource = string.Equals(name, "deepseek-harness", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, "@deepseek-ai/deepseek-harness", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(cliPackageName, "@deepseek-ai/dsh", StringComparison.Ordinal);
@@ -50,7 +51,8 @@ public sealed class SourceProjectInspector
                 hasBuildScript,
                 Directory.Exists(Path.Combine(normalizedRoot, "node_modules")),
                 hasCliEntrypoint,
-                null);
+                null,
+                builtCliEntrypoint);
         }
         catch (JsonException ex)
         {
@@ -68,6 +70,26 @@ public sealed class SourceProjectInspector
 
     private static SourceProjectInfo Invalid(string rootPath, string error) =>
         new(false, false, rootPath ?? string.Empty, null, null, null, null, false, false, false, error);
+
+    public static string? TryFindBuiltCliEntrypoint(string rootPath)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath))
+        {
+            return null;
+        }
+
+        var normalizedRoot = Path.GetFullPath(rootPath.Trim());
+        var candidates = new[]
+        {
+            Path.Combine(normalizedRoot, "apps", "cli", "lib", "bin.js"),
+            Path.Combine(normalizedRoot, "apps", "cli", "dist", "bin.js"),
+            Path.Combine(normalizedRoot, "apps", "cli", "build", "bin.js"),
+            Path.Combine(normalizedRoot, "apps", "cli", "lib", "bin.mjs"),
+            Path.Combine(normalizedRoot, "apps", "cli", "dist", "bin.mjs")
+        };
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
 
     private static string? NormalizeRoot(string rootPath)
     {
