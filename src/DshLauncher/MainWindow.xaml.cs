@@ -225,28 +225,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return NodeRuntimeCompatibility.Missing;
         }
 
-        if (SelectedInstance?.Kind == InstanceKind.Source)
-        {
-            return _nodeRuntime.GetCompatibility(
-                SourceProjectInspector.TryReadNodeEngine(SelectedInstance.RootPath));
-        }
-
-        if (_dshRuntime.IsAvailable)
-        {
-            return _nodeRuntime.GetCompatibility(_dshRuntime.NodeEngine);
-        }
-
-        return NodeRuntimeCompatibility.Unknown;
+        return _nodeRuntime.GetCompatibility(GetNodeEngineRequirement(SelectedInstance));
     }
 
     private string GetNodeRequirementText()
     {
-        var requirement = SelectedInstance?.Kind == InstanceKind.Source
-            ? SourceProjectInspector.TryReadNodeEngine(SelectedInstance.RootPath)
-            : _dshRuntime.NodeEngine;
+        var requirement = GetNodeEngineRequirement(SelectedInstance);
         return string.IsNullOrWhiteSpace(requirement)
             ? "未声明 engines.node"
             : $"要求 {requirement}";
+    }
+
+    private string? GetNodeEngineRequirement(ManagerInstance? instance)
+    {
+        if (instance?.Kind == InstanceKind.Source)
+        {
+            return SourceProjectInspector.TryReadNodeEngine(instance.RootPath) ?? _dshRuntime.NodeEngine;
+        }
+
+        if (instance?.Kind == InstanceKind.Installed)
+        {
+            return DshRuntimeDetector.TryReadNodeEngine(instance.RootPath) ?? _dshRuntime.NodeEngine;
+        }
+
+        return _dshRuntime.NodeEngine;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -353,6 +355,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanInstallDsh));
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(DshInstallButtonText));
+        RebindInstalledInstancesToDetectedDSh();
     }
 
     private async Task LoadInstancesAsync()
@@ -401,6 +404,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshRunningInstances();
             OnPropertyChanged(nameof(ProviderSummaryText));
             OnPropertyChanged(nameof(CanRefreshProviders));
+            RebindInstalledInstancesToDetectedDSh();
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -983,7 +987,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
-        var prepareNodeEngine = _dshRuntime.NodeEngine;
+        var prepareNodeEngine = GetNodeEngineRequirement(SelectedInstance);
         if (_nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
             && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
@@ -1009,7 +1013,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 progressWindow.SetIndeterminate(false);
                 progressWindow.SetStatus($"正在通过 {sourceName} 解析 Node.js 版本并下载安装程序…");
-                var nodeResult = await _nodeInstaller.InstallAsync(nodeDistBase, progress, cancellation.Token);
+                var nodeResult = await _nodeInstaller.InstallAsync(
+                    nodeDistBase,
+                    progress,
+                    onInstallStarted: () => progressWindow.SetInstallPhase(true),
+                    cancellation.Token);
                 if (!nodeResult.IsSuccess)
                 {
                     progressWindow.SetStatus(nodeResult.Error ?? "Node.js 安装失败。");
@@ -1034,6 +1042,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     return false;
                 }
             }
+
+            progressWindow.SetInstallPhase(false);
 
             if (!_dshRuntime.IsAvailable)
             {
@@ -1079,9 +1089,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task<bool> EnsureRuntimeReadyAsync(ManagerInstance instance)
     {
-        var requirement = instance.Kind == InstanceKind.Source
-            ? SourceProjectInspector.TryReadNodeEngine(instance.RootPath)
-            : _dshRuntime.NodeEngine;
+        var requirement = GetNodeEngineRequirement(instance);
         var missing = new List<string>();
         var needsManualNode = false;
 
@@ -1132,10 +1140,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
+        var current = Instances.FirstOrDefault(item => string.Equals(item.Id, instance.Id, StringComparison.Ordinal)) ?? instance;
         if (!_nodeRuntime.IsAvailable
             || _nodeRuntime.GetCompatibility(requirement) != NodeRuntimeCompatibility.Compatible
-            || (instance.Kind == InstanceKind.Installed
-                && (string.IsNullOrWhiteSpace(instance.DshExecutablePath) || !File.Exists(instance.DshExecutablePath))))
+            || (current.Kind == InstanceKind.Installed
+                && (string.IsNullOrWhiteSpace(current.DshExecutablePath) || !File.Exists(current.DshExecutablePath))))
         {
             ShowNotice("运行环境仍未就绪，请重新检测或手动安装后重试。");
             return false;
@@ -1143,6 +1152,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return true;
     }
+    private void RebindInstalledInstancesToDetectedDSh()
+    {
+        foreach (var instance in Instances.Where(static item => item.Kind == InstanceKind.Installed).ToArray())
+        {
+            var rebound = InstanceRuntimeRebinder.RebindInstalledInstance(instance, _dshRuntime);
+            if (rebound is not null)
+            {
+                UpdateInstance(rebound);
+            }
+        }
+    }
+
     private void SetNavigationSelection(string section)
     {
         var buttons = new[]
@@ -1283,6 +1304,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        selected = SelectedInstance ?? selected;
         SetLifecycleBusy(true);
         try
         {

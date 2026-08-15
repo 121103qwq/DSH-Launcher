@@ -35,11 +35,15 @@ public sealed record NodeInstallResult(
     string? Version,
     string? Error,
     int ExitCode = -1,
-    string? Output = null)
+    string? Output = null,
+    bool IsCancelled = false)
 {
     public static NodeInstallResult Success(string nodeExecutablePath, string version) =>
         new(true, nodeExecutablePath, version, null, 0, null);
 
     public static NodeInstallResult Failure(string error, int exitCode = -1, string? output = null) =>
         new(false, null, null, error, exitCode, output);
+
+    public static NodeInstallResult Cancelled(string error) =>
+        new(false, null, null, error, -3, null, true);
 }

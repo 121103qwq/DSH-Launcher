@@ -21,6 +21,8 @@ public sealed class NodeInstallService
 
     private const string WindowsMsiFileNameSuffix = "-x64.msi";
     private const long MinimumMsiBytes = 1_000_000;
+    private const int InstallTimeoutExitCode = -2;
+    private const int InstallCancelledExitCode = -3;
     private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan HttpTimeout = TimeSpan.FromMinutes(20);
     private readonly HttpClient _httpClient;
@@ -44,6 +46,7 @@ public sealed class NodeInstallService
     public async Task<NodeInstallResult> InstallAsync(
         string distBase,
         IProgress<NodeDownloadProgress>? progress = null,
+        Action? onInstallStarted = null,
         CancellationToken cancellationToken = default)
     {
         if (!IsSupportedDistBase(distBase))
@@ -60,25 +63,13 @@ public sealed class NodeInstallService
         try
         {
             await DownloadAsync(new Uri(downloadUrl), destination, progress, cancellationToken);
+            onInstallStarted?.Invoke();
             var exitCode = await RunInstallerAsync(destination, cancellationToken);
-            if (exitCode is 0 or 3010)
-            {
-                var expectedNode = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                    "nodejs",
-                    "node.exe");
-                return NodeInstallResult.Success(expectedNode, version.TrimStart('v', 'V'));
-            }
-
-            return NodeInstallResult.Failure(
-                exitCode == -2
-                    ? "Node.js 安装程序超过 10 分钟仍未结束，请检查系统安装窗口。"
-                    : $"Node.js 安装失败，msiexec 退出码 {exitCode}。",
-                exitCode);
+            return MapExitCode(exitCode, version);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return NodeInstallResult.Failure("Node.js 下载已取消。");
+            return NodeInstallResult.Cancelled("Node.js 下载已取消。");
         }
         catch (Exception ex) when (ex is IOException
             or UnauthorizedAccessException
@@ -89,6 +80,27 @@ public sealed class NodeInstallService
         {
             return NodeInstallResult.Failure($"Node.js 准备失败：{ex.Message}");
         }
+    }
+
+    internal static NodeInstallResult MapExitCode(int exitCode, string version)
+    {
+        if (exitCode is 0 or 3010)
+        {
+            var expectedNode = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "nodejs",
+                "node.exe");
+            return NodeInstallResult.Success(expectedNode, version.TrimStart('v', 'V'));
+        }
+
+        return exitCode switch
+        {
+            InstallCancelledExitCode => NodeInstallResult.Cancelled(
+                "Node.js 安装阶段已取消等待；Windows Installer 可能仍在后台完成安装。"),
+            InstallTimeoutExitCode => NodeInstallResult.Failure(
+                "Node.js 安装程序超过 10 分钟仍未结束，请检查系统安装窗口。", exitCode),
+            _ => NodeInstallResult.Failure($"Node.js 安装失败，msiexec 退出码 {exitCode}。", exitCode)
+        };
     }
 
     internal async Task<NodeDownloadProgress> DownloadAsync(
@@ -245,16 +257,21 @@ public sealed class NodeInstallService
                 throw new InvalidOperationException("Node.js 安装程序未能启动。");
             }
 
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var exitTask = process.WaitForExitAsync();
-            var timeoutTask = Task.Delay(InstallTimeout, cancellationToken);
+            var timeoutTask = Task.Delay(InstallTimeout, linked.Token);
             var completed = await Task.WhenAny(exitTask, timeoutTask);
-            if (completed != exitTask)
+            if (completed == exitTask)
             {
-                return -2;
+                await exitTask;
+                return process.ExitCode;
             }
 
-            await exitTask;
-            return process.ExitCode;
+            // Never kill msiexec: a cancelled wait is a user abort, otherwise
+            // the full 10-minute timeout elapsed.
+            return cancellationToken.IsCancellationRequested
+                ? InstallCancelledExitCode
+                : InstallTimeoutExitCode;
         }
         catch (System.ComponentModel.Win32Exception ex)
         {

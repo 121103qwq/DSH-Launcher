@@ -20,6 +20,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
     ("Node install version resolution", TestNodeInstallVersionResolution),
     ("Node installer download progress", TestNodeInstallerDownloadProgress),
+    ("Node install result states", TestNodeInstallResultStates),
+    ("Node download cancel cleans part", TestNodeDownloadCancelCleansPart),
+    ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
     ("DSh install guard", TestDshInstallGuard),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
@@ -297,6 +300,104 @@ static async Task TestNodeInstallerDownloadProgress()
     }
 
     Assert(rejected, "过小的下载结果应被拒绝，避免把 HTML 错误页当成安装程序。");
+}
+
+static Task TestNodeInstallResultStates()
+{
+    var cancelled = NodeInstallService.MapExitCode(-3, "v22.23.2");
+    Assert(cancelled.IsCancelled && !cancelled.IsSuccess && cancelled.ExitCode == -3,
+        "用户取消必须返回独立取消状态，不能与真实超时混淆。");
+    var timeout = NodeInstallService.MapExitCode(-2, "v22.23.2");
+    Assert(!timeout.IsCancelled && !timeout.IsSuccess && timeout.ExitCode == -2 && timeout.Error?.Contains("10 分钟") == true,
+        "真实安装超时必须保持失败状态并提示超时，不能是取消状态。");
+    var success = NodeInstallService.MapExitCode(0, "v22.23.2");
+    Assert(success.IsSuccess && success.Version == "22.23.2", "安装成功应返回 Node 路径与版本。");
+    var failed = NodeInstallService.MapExitCode(1603, "v22.23.2");
+    Assert(!failed.IsCancelled && !failed.IsSuccess && failed.ExitCode == 1603, "其它退出码应保留为安装失败。");
+    return Task.CompletedTask;
+}
+
+static async Task TestNodeDownloadCancelCleansPart()
+{
+    var payload = new byte[4_000_000];
+    new Random(7).NextBytes(payload);
+    var handler = new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StreamContent(new SlowCancelStream(payload))
+    });
+    var service = new NodeInstallService(handler);
+    using var temporary = new TestDirectory();
+    var destination = Path.Combine(temporary.Path, "node.msi");
+    using var cts = new CancellationTokenSource();
+    var download = service.DownloadAsync(
+        new Uri("https://nodejs.org/dist/v22.23.2/node-v22.23.2-x64.msi"),
+        destination,
+        null,
+        cts.Token);
+    for (var attempt = 0; attempt < 50 && !Directory.GetFiles(temporary.Path).Any(); attempt++)
+    {
+        await Task.Delay(50);
+    }
+
+    Assert(Directory.GetFiles(temporary.Path).Any(name => name.EndsWith(".part", StringComparison.OrdinalIgnoreCase)),
+        "下载进行中应存在 .part 临时文件。");
+    cts.Cancel();
+    await AssertThrowsAsync<OperationCanceledException>(() => download, "取消下载应抛 OperationCanceledException。");
+    Assert(Directory.GetFiles(temporary.Path).Length == 0, "取消下载后不得残留 .part 临时文件或目标文件。");
+}
+
+static Task TestInstanceRuntimeRebinding()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var oldRoot = Path.Combine(temporary.Path, "old-dsh");
+    Directory.CreateDirectory(oldRoot);
+    var oldExe = Path.Combine(oldRoot, "dsh.cmd");
+    File.WriteAllText(oldExe, "@echo off\r\n", new UTF8Encoding(false));
+
+    var newRoot = Path.Combine(temporary.Path, "new-dsh", "node_modules", "@deepseek-ai", "dsh");
+    Directory.CreateDirectory(newRoot);
+    File.WriteAllText(
+        Path.Combine(newRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"}}",
+        new UTF8Encoding(false));
+    var newExe = Path.Combine(temporary.Path, "new-dsh", "dsh.cmd");
+    File.WriteAllText(newExe, "@echo off\r\n", new UTF8Encoding(false));
+
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var stale = registry.Register("旧 DSh", oldRoot, InstanceKind.Installed, oldExe, "0.1.0", "npm");
+    var home = stale.DshHome;
+
+    // Simulate the old DSh install being deleted (or npm prefix changed).
+    Directory.Delete(oldRoot, recursive: true);
+
+    var detected = new DshRuntimeInfo(true, newExe, "0.2.0", newRoot, null, "^22.19.0 || >=24.0.0");
+    var rebound = InstanceRuntimeRebinder.RebindInstalledInstance(stale, detected);
+    Assert(rebound is not null, "旧路径失效的 Installed 实例应被重新绑定到新检测到的 DSh。");
+    Assert(rebound!.Id == stale.Id && rebound.DshHome == home, "重绑定必须保留实例 Id 与 DSH_HOME。");
+    Assert(rebound.RootPath == Path.GetFullPath(newRoot), "重绑定应更新为重新检测到的 package root。");
+    Assert(rebound.DshExecutablePath == Path.GetFullPath(newExe), "重绑定应更新为重新检测到的 executable。");
+    Assert(rebound.DetectedVersion == "0.2.0" && rebound.RuntimeStatus == InstanceRuntimeStatus.Ready,
+        "重绑定应同步版本与 Ready 状态。");
+
+    var sourceRoot = Path.Combine(temporary.Path, "source");
+    Directory.CreateDirectory(sourceRoot);
+    var source = registry.Register("Source", sourceRoot, InstanceKind.Source, null, null, "pnpm");
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(source, detected) is null,
+        "Source 实例不能被重绑定成 installed runtime。");
+
+    var validRoot = Path.Combine(temporary.Path, "valid-dsh");
+    Directory.CreateDirectory(validRoot);
+    File.WriteAllText(
+        Path.Combine(validRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\"}",
+        new UTF8Encoding(false));
+    var validExe = Path.Combine(validRoot, "dsh.cmd");
+    File.WriteAllText(validExe, "@echo off\r\n", new UTF8Encoding(false));
+    var valid = registry.Register("有效 DSh", validRoot, InstanceKind.Installed, validExe, "0.2.0", "npm");
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(valid, detected) is null,
+        "绑定仍有效的实例不应被重绑定。");
+    return Task.CompletedTask;
 }
 
 static async Task TestDshInstallGuard()
@@ -1718,4 +1819,41 @@ file sealed class NodeProgressSink : IProgress<NodeDownloadProgress>
     public NodeDownloadProgress Last { get; private set; } = new(0, null, null);
 
     public void Report(NodeDownloadProgress value) => Last = value;
+}
+
+file sealed class SlowCancelStream : Stream
+{
+    private readonly byte[] _payload;
+    private bool _started;
+
+    public SlowCancelStream(byte[] payload)
+    {
+        _payload = payload;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        if (!_started)
+        {
+            _started = true;
+            var count = Math.Min(buffer.Length, _payload.Length);
+            _payload.AsMemory(0, count).CopyTo(buffer);
+            return count;
+        }
+
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        return 0;
+    }
+
+    public override void Flush() { }
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) { }
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

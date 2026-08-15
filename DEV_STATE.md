@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-在 `feature/runtime-bootstrap` 分支上开发并提交“当 Windows 上缺少 Node.js 或 DeepSeek Harness 时，用户主动触发的一键运行环境准备”，并把此前 stash 保留的对话名称显示与扩展页卡顿修复一并纳入本分支。
+收口 `feature/runtime-bootstrap`：修复 runtime bootstrap 的边界问题（MSI 取消行为、Installed 实例 DSh 重绑定、Node 兼容以 metadata 为准），完成测试与 Release 验收，准备提交 PR 合并 main。
 
 ## 已完成内容
 
@@ -17,6 +17,7 @@
 - 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。对话列表优先显示会话名称：读取 DSh `storages/session_projcache.json` 的标题，无标题时回退为“未命名 · 项目 · 时间”，不再把原始 session ID 作为首列。
 - 扩展页卡顿修复：已安装插件扫描和插件市场安装状态/主题扫描移到后台线程；已安装列表与市场列表启用虚拟化（Recycling）。打开“扩展”页只读取本地市场缓存，不再每次联网刷新目录；仅在首次无缓存或用户点击“刷新目录”时才联网，避免每次切换页面等待 GitHub/社区目录超时。
 - 一键运行环境准备：设置/诊断页显示 Node/DSh 状态，缺失时提供“准备运行环境（官方源 / 国内镜像）”按钮。Node 缺失时通过 NodeInstallService 下载 Windows x64 Node.js 官方 MSI 并显示真实字节/百分比进度，经系统授权（msiexec /qn）安装后重新运行 NodeRuntimeDetector，无需重启 Launcher；Node 就绪但 DSh 缺失时复用 DshInstallService 通过 npm 安装 `@deepseek-ai/dsh`（不确定进度），安装后重新运行 DshRuntimeDetector。Node 版本不兼容时只提示安装兼容版本，不自动卸载。启动实例时若运行环境缺失会弹出缺失项并询问是否准备，准备成功后继续原启动流程。Launcher 启动时不静默下载或安装任何内容。Node 检测覆盖 `<ProgramFiles>\nodejs`（官方 MSI 默认位置）。
+- runtime bootstrap 边界修复：Node 下载阶段可取消并清理 `.part` 临时文件；MSI 安装开始后禁用取消按钮、不强制终止 Windows Installer，用户取消与真实 10 分钟超时用独立结果状态区分。DSh 重新安装并检测成功后，绑定失效的 Installed 实例经 `InstanceRuntimeRebinder` 重绑定到重新检测到的 package root / executable / version，保留实例 Id 与 DSH_HOME、不创建新实例、不修改 Source 实例；Node 兼容判断优先读取 Installed 实例自身 package root（或 Source 自身 metadata）的 `engines.node`，缺失时回退全局 DSh engine 并保持现有语义。
 
 ## 当前主要相关文件
 
@@ -34,8 +35,9 @@
 ## 已执行测试及结果
 
 - 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）。
-- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：28/28 通过（含 Node 版本解析、下载进度、小文件拒绝，以及会话投影缓存标题断言）。
+- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：31/31 通过（新增：取消/超时结果状态区分、下载取消不残留 .part、Installed 实例重绑定；保留原 Node 解析/进度与会话标题断言）。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
+- Release 单文件自包含 publish：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `4D745A160347BA84CFFD3C9CBC4F1736C06E98E01FDDEE278CFEA90228C37EBD`，已复制到桌面 `build-runtime-bootstrap-20260816`。
 - `git diff --check`：通过。
 
 ## 已知问题
@@ -69,4 +71,4 @@
 
 ## 下一步最直接的任务
 
-在本分支继续一键运行环境准备：提交当前代码并推送；在真实无 Node 机器上验证完整安装链路；验证通过后构建 Release 并复制到桌面目录。
+本轮修复已通过测试与 Release 验收：提交并推送 `feature/runtime-bootstrap`，随后创建 PR 合并 `main`；合并前仍需在真实无 Node 的 Windows 机器上实机验证一键安装链路。

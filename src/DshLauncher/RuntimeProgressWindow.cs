@@ -10,6 +10,7 @@ internal sealed class RuntimeProgressWindow : Window
 {
     private readonly ProgressBar _progressBar;
     private readonly TextBlock _statusText;
+    private readonly Button _cancelButton;
     private readonly CancellationTokenSource _cancellation;
 
     public RuntimeProgressWindow(Window? owner, CancellationTokenSource cancellation)
@@ -46,17 +47,17 @@ internal sealed class RuntimeProgressWindow : Window
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0)
         };
-        var cancel = new Button
+        _cancelButton = new Button
         {
             Content = "取消",
             HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
             Margin = new Thickness(0, 16, 0, 0)
         };
-        cancel.Click += (_, _) => _cancellation.Cancel();
+        _cancelButton.Click += (_, _) => _cancellation.Cancel();
         panel.Children.Add(_statusText);
         panel.Children.Add(_progressBar);
         panel.Children.Add(hint);
-        panel.Children.Add(cancel);
+        panel.Children.Add(_cancelButton);
         Content = panel;
         Closed += (_, _) => _cancellation.Cancel();
     }
@@ -74,5 +75,14 @@ internal sealed class RuntimeProgressWindow : Window
         _progressBar.IsIndeterminate = false;
         _progressBar.Value = progress.Percent ?? 0;
         _statusText.Text = $"正在下载 Node.js 安装程序… {progress.BytesText}（{progress.PercentText}）";
+    }
+
+    public void SetInstallPhase(bool installing)
+    {
+        _cancelButton.IsEnabled = !installing;
+        if (installing)
+        {
+            _statusText.Text = "Node.js 安装已开始，安装阶段不可安全取消，请等待完成…";
+        }
     }
 }
