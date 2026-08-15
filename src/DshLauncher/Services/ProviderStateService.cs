@@ -57,6 +57,22 @@ public sealed class ProviderStateService
             states[normalized] = false;
         }
 
+        Write(instance, states);
+    }
+
+    public void Replace(ManagerInstance instance, IReadOnlyDictionary<string, bool> states)
+    {
+        var normalized = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var pair in states)
+        {
+            normalized[NormalizeProvider(pair.Key)] = pair.Value;
+        }
+
+        Write(instance, normalized);
+    }
+
+    private void Write(ManagerInstance instance, IReadOnlyDictionary<string, bool> states)
+    {
         var path = GetStatePath(instance);
         var directory = Path.GetDirectoryName(path)
             ?? throw new InvalidOperationException("Provider 状态文件没有父目录。");

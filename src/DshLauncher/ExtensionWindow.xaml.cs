@@ -15,13 +15,17 @@ public partial class ExtensionWindow : UserControl
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
     private readonly bool _agentOnly;
     private readonly MarketplaceService? _marketplaceService;
+    private readonly DshMarketThemeService _themeService = new();
     private readonly ObservableCollection<MarketplaceItem> MarketplaceItems = new();
     private IReadOnlyList<MarketplaceItem> _marketplaceSnapshot = Array.Empty<MarketplaceItem>();
-    private Dictionary<string, ExtensionEntry> _installedPlugins = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<ExtensionEntry> _installedPlugins = Array.Empty<ExtensionEntry>();
     private bool _marketplaceCanMutate;
     private bool _isMarketplaceLoading;
+    private bool _isMarketplaceMutating;
     private bool _controlLoaded;
+    private DshMarketThemeState _themeState = DshMarketThemeState.Unavailable("尚未检测当前实例的 dsh-market。 ");
     private CancellationTokenSource? _marketplaceCancellation;
+    private CancellationTokenSource? _searchDebounceCancellation;
 
     public ExtensionWindow(
         ManagerInstance instance,
@@ -104,19 +108,37 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    private async void MarketplaceSearch_Click(object sender, RoutedEventArgs e) => await RefreshMarketplaceAsync();
-
-    private async void MarketplaceRefresh_Click(object sender, RoutedEventArgs e) => await RefreshMarketplaceAsync();
-
-    private async void MarketplaceSearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private async void MarketplaceRefresh_Click(object sender, RoutedEventArgs e)
     {
-        if (e.Key != System.Windows.Input.Key.Enter)
+        if (!_isMarketplaceMutating)
+        {
+            await RefreshMarketplaceAsync();
+        }
+    }
+
+    private async void MarketplaceSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_controlLoaded)
         {
             return;
         }
 
-        e.Handled = true;
-        await RefreshMarketplaceAsync();
+        _searchDebounceCancellation?.Cancel();
+        _searchDebounceCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _searchDebounceCancellation = cancellation;
+        try
+        {
+            await Task.Delay(180, cancellation.Token);
+            if (!cancellation.IsCancellationRequested)
+            {
+                RenderMarketplaceItems();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A new keystroke superseded this local filter.
+        }
     }
 
     private void MarketplaceFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -136,7 +158,7 @@ public partial class ExtensionWindow : UserControl
 
         try
         {
-            var cached = _marketplaceService.ReadCached(_instance, MarketplaceSearchBox.Text);
+            var cached = _marketplaceService.ReadCached(_instance);
             if (cached is null)
             {
                 MarketplaceStatusText.Text = "还没有本地缓存；正在后台读取插件目录。";
@@ -170,7 +192,7 @@ public partial class ExtensionWindow : UserControl
         {
             var result = await _marketplaceService.SearchAsync(
                 _instance,
-                MarketplaceSearchBox.Text,
+                query: null,
                 _marketplaceCancellation.Token);
             await SetMarketplaceSnapshotAsync(result, fromCache: false, _marketplaceCancellation.Token);
             MarketplaceStatusText.Text = result.Warnings.Count == 0
@@ -200,8 +222,10 @@ public partial class ExtensionWindow : UserControl
         var installed = await _service.ListAsync(_instance, cancellationToken);
         _installedPlugins = installed
             .Where(entry => entry.Kind == ExtensionKind.Plugin)
-            .ToDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
-        _marketplaceCanMutate = _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
+            .ToArray();
+        _themeState = await _themeService.ReadAsync(_instance, cancellationToken);
+        _marketplaceCanMutate = !_isMarketplaceMutating
+            && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
             && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
         RenderMarketplaceItems();
         MarketplaceSummaryText.Text = $"找到 {_marketplaceSnapshot.Count} 个候选插件 · 已检查 {result.SourcesChecked} 个来源"
@@ -222,20 +246,51 @@ public partial class ExtensionWindow : UserControl
 
         var items = MarketplaceService.FilterAndSort(
             _marketplaceSnapshot,
+            query: MarketplaceSearchBox.Text,
             sourceKind: GetSelectedSourceKind(),
-            sortOrder: GetSelectedSortOrder());
+            sortOrder: GetSelectedSortOrder(),
+            category: GetSelectedCategory());
         MarketplaceItems.Clear();
         foreach (var item in items)
         {
-            var lookupName = item.PackageName ?? item.Name;
-            var isInstalled = _installedPlugins.TryGetValue(lookupName, out var installedEntry);
+            var installedEntry = MarketplaceService.FindInstalledPlugin(item, _installedPlugins);
+            var isInstalled = installedEntry is not null;
+            var isTheme = string.Equals(
+                MarketplaceService.NormalizeCategory(item.Category),
+                "主题",
+                StringComparison.OrdinalIgnoreCase);
+            var themePackageName = installedEntry?.Name;
+            var themeMarketAvailable = isTheme
+                && themePackageName is not null
+                && _themeState.IsAvailable
+                && _themeState.InstalledNames.Contains(themePackageName);
+            var themeCanApply = themeMarketAvailable
+                && installedEntry!.Managed
+                && _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+                && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
+                && !_isMarketplaceMutating;
             MarketplaceItems.Add(item with
             {
                 IsInstalled = isInstalled,
                 IsManaged = isInstalled && installedEntry!.Managed,
-                CanMutate = _marketplaceCanMutate
+                InstalledVersion = installedEntry?.Version,
+                UpdateStatus = isInstalled
+                    ? MarketplaceService.GetUpdateStatus(item.Version, installedEntry?.Version)
+                    : MarketplaceUpdateStatus.Unknown,
+                CanMutate = _marketplaceCanMutate,
+                IsTheme = isTheme,
+                ThemeMarketAvailable = themeMarketAvailable,
+                ThemeCanApply = themeCanApply,
+                ThemePackageName = themePackageName,
+                ThemeStatusText = isTheme
+                    ? GetThemeStatusText(isInstalled, themeMarketAvailable, themePackageName)
+                    : null
             });
         }
+
+        MarketplaceSummaryText.Text = _marketplaceSnapshot.Count == items.Count
+            ? $"找到 {_marketplaceSnapshot.Count} 个候选插件"
+            : $"显示 {items.Count} / {_marketplaceSnapshot.Count} 个候选插件";
     }
 
     private MarketplaceSourceKind? GetSelectedSourceKind()
@@ -252,9 +307,49 @@ public partial class ExtensionWindow : UserControl
             : MarketplaceSortOrder.Relevance;
     }
 
+    private string? GetSelectedCategory()
+    {
+        var tag = (MarketplaceCategoryList.SelectedItem as ListBoxItem)?.Tag as string;
+        return string.IsNullOrWhiteSpace(tag) ? null : tag;
+    }
+
+    private string GetThemeStatusText(bool isInstalled, bool themeMarketAvailable, string? packageName)
+    {
+        if (!isInstalled)
+        {
+            return "主题资源 · 安装后可通过 dsh-market 应用";
+        }
+
+        if (_instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            return "当前连接的是外部实例，Launcher 不会修改其主题";
+        }
+
+        if (_instance.RuntimeStatus != InstanceRuntimeStatus.Running)
+        {
+            return "启动当前实例后可检测 dsh-market 并应用主题";
+        }
+
+        if (!_themeState.IsAvailable)
+        {
+            return "未检测到 dsh-market；当前只能管理主题 Plugin";
+        }
+
+        if (!themeMarketAvailable || string.IsNullOrWhiteSpace(packageName))
+        {
+            return "dsh-market 未将该安装包识别为主题资源";
+        }
+
+        return _themeState.LiveNames.Contains(packageName)
+            ? "dsh-market 已热加载该主题"
+            : "dsh-market 可应用该主题";
+    }
+
     private async void MarketplaceAction_Click(object sender, RoutedEventArgs e)
     {
-        if (_marketplaceService is null || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item)
+        if (_isMarketplaceMutating
+            || _marketplaceService is null
+            || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item)
         {
             return;
         }
@@ -262,6 +357,7 @@ public partial class ExtensionWindow : UserControl
         try
         {
             EnsureMarketplaceMutationAllowed();
+            BeginMarketplaceMutation(item.IsInstalled ? "正在准备更新 Plugin…" : "正在检查 Plugin…");
             var verification = await _marketplaceService.VerifyAsync(item);
             if (verification.Status == MarketplaceVerificationStatus.Rejected)
             {
@@ -271,41 +367,61 @@ public partial class ExtensionWindow : UserControl
             }
 
             var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
+            var installedEntry = item.IsInstalled
+                ? MarketplaceService.FindInstalledPlugin(item, _installedPlugins)
+                : null;
             var packageSpec = verification.InstallSpec ?? item.InstallSpec;
             string output;
-            if (item.IsInstalled)
+            try
             {
-                if (!item.IsManaged)
+                if (item.IsInstalled)
                 {
-                    throw new InvalidOperationException("当前 Plugin 不是 Launcher 安装的，不能从市场更新。请在 DSh 自己的工具中管理它。");
-                }
+                    if (!item.IsManaged)
+                    {
+                        throw new InvalidOperationException("当前 Plugin 不是 Launcher 安装的，不能从市场更新。请在 DSh 自己的工具中管理它。");
+                    }
 
-                output = await _service.UpdatePluginAsync(
-                    _instance,
-                    verification.PackageName ?? item.PackageName ?? packageSpec,
-                    _nodeRuntime());
-                StatusText.Text = $"Plugin 更新完成。实例下次启动时加载；备份：{snapshot}";
+                    SetMarketplaceMutationText("正在更新 Plugin…");
+                    output = await _service.UpdatePluginAsync(
+                        _instance,
+                        installedEntry?.Name ?? verification.PackageName ?? item.PackageName ?? packageSpec,
+                        _nodeRuntime());
+                    StatusText.Text = $"Plugin 更新完成。实例下次启动时加载；备份：{snapshot}";
+                }
+                else
+                {
+                    SetMarketplaceMutationText("正在安装 Plugin…");
+                    output = await _service.InstallPluginAsync(_instance, packageSpec, _nodeRuntime());
+                    StatusText.Text = $"Plugin 安装完成。实例下次启动时加载；备份：{snapshot}";
+                }
             }
-            else
+            catch (Exception ex)
             {
-                output = await _service.InstallPluginAsync(_instance, packageSpec, _nodeRuntime());
-                StatusText.Text = $"Plugin 安装完成。实例下次启动时加载；备份：{snapshot}";
+                throw CreatePluginRollbackException(snapshot, ex);
             }
 
             MarketplaceStatusText.Text = string.IsNullOrWhiteSpace(output)
                 ? "操作完成。"
                 : $"操作完成：{Tail(output)}";
+            SetMarketplaceMutationText("操作完成，正在刷新实例内容和插件市场…");
+            await RefreshAsync();
             await RefreshMarketplaceAsync();
         }
         catch (Exception ex)
         {
             ShowError(ex);
         }
+        finally
+        {
+            EndMarketplaceMutation();
+        }
     }
 
     private async void MarketplaceRemove_Click(object sender, RoutedEventArgs e)
     {
-        if (_marketplaceService is null || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item)
+        if (_isMarketplaceMutating
+            || _marketplaceService is null
+            || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item)
         {
             return;
         }
@@ -328,21 +444,150 @@ public partial class ExtensionWindow : UserControl
         try
         {
             EnsureMarketplaceMutationAllowed();
+            BeginMarketplaceMutation("正在卸载 Plugin…");
             var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
-            var output = await _service.RemovePluginAsync(
-                _instance,
-                item.PackageName ?? item.InstallSpec,
-                _nodeRuntime());
+            var installedEntry = MarketplaceService.FindInstalledPlugin(item, _installedPlugins);
+            string output;
+            try
+            {
+                output = await _service.RemovePluginAsync(
+                    _instance,
+                    installedEntry?.Name ?? item.PackageName ?? item.InstallSpec,
+                    _nodeRuntime());
+            }
+            catch (Exception ex)
+            {
+                throw CreatePluginRollbackException(snapshot, ex);
+            }
             StatusText.Text = $"Plugin 卸载完成。实例下次启动时生效；备份：{snapshot}";
             MarketplaceStatusText.Text = string.IsNullOrWhiteSpace(output)
                 ? "卸载完成。"
                 : $"卸载完成：{Tail(output)}";
+            SetMarketplaceMutationText("卸载完成，正在刷新实例内容和插件市场…");
+            await RefreshAsync();
             await RefreshMarketplaceAsync();
         }
         catch (Exception ex)
         {
             ShowError(ex);
         }
+        finally
+        {
+            EndMarketplaceMutation();
+        }
+    }
+
+    private void MarketplaceThemePreview_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not MarketplaceItem item || !item.IsTheme)
+        {
+            return;
+        }
+
+        var message = $"{item.Name}\n\n{item.Description}\n\n来源：{item.SourceText}\n分类：主题\n状态：{item.VersionStatusText}\n{item.ThemeStatusText}";
+        System.Windows.MessageBox.Show(
+            Window.GetWindow(this),
+            message,
+            "主题预览",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private async void MarketplaceThemeApply_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isMarketplaceMutating
+            || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item
+            || !item.IsTheme
+            || !item.ThemeCanApply
+            || string.IsNullOrWhiteSpace(item.ThemePackageName))
+        {
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"应用主题“{item.Name}”？dsh-market 会停用当前其它主题并即时切换。",
+                "应用主题",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+            {
+                throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改外部实例主题。 ");
+            }
+
+            BeginMarketplaceMutation("正在通过 dsh-market 应用主题…");
+            var result = await _themeService.ApplyAsync(_instance, item.ThemePackageName);
+            if (!result.IsSuccess)
+            {
+                throw new InvalidOperationException(result.Error ?? "dsh-market 应用主题失败。 ");
+            }
+
+            _themeState = _themeState with { LiveNames = result.LiveNames };
+            MarketplaceStatusText.Text = $"主题已交给 dsh-market 应用：{item.Name}。";
+            RenderMarketplaceItems();
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+        finally
+        {
+            EndMarketplaceMutation();
+        }
+    }
+
+    private void BeginMarketplaceMutation(string message)
+    {
+        _isMarketplaceMutating = true;
+        MarketplaceRefreshButton.IsEnabled = false;
+        MarketplaceProgressPanel.Visibility = Visibility.Visible;
+        MarketplaceProgressText.Text = message;
+        RenderMarketplaceItems();
+    }
+
+    private void SetMarketplaceMutationText(string message)
+    {
+        MarketplaceProgressText.Text = message;
+        MarketplaceStatusText.Text = message;
+    }
+
+    private void EndMarketplaceMutation()
+    {
+        _isMarketplaceMutating = false;
+        MarketplaceRefreshButton.IsEnabled = true;
+        MarketplaceProgressPanel.Visibility = Visibility.Collapsed;
+        _marketplaceCanMutate = _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
+            && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
+        RenderMarketplaceItems();
+    }
+
+    private Exception CreatePluginRollbackException(string snapshot, Exception original)
+    {
+        try
+        {
+            if (_marketplaceService?.RestorePluginSnapshot(_instance, snapshot) == true)
+            {
+                return new InvalidOperationException(
+                    $"{original.Message}\n已恢复操作前的 web profile 配置。",
+                    original);
+            }
+        }
+        catch (Exception rollbackError)
+        {
+            return new InvalidOperationException(
+                $"{original.Message}\n自动恢复 web profile 失败：{rollbackError.Message}",
+                original);
+        }
+
+        return new InvalidOperationException(
+            $"{original.Message}\n没有可用的 web profile 备份，未能自动恢复。",
+            original);
     }
 
     private void MarketplaceList_SelectionChanged(object sender, SelectionChangedEventArgs e)

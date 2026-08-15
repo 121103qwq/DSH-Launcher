@@ -75,10 +75,13 @@
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="8,0,0,0">
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding DetectedVersion, TargetNullValue=版本未标记}"
+                                            <TextBlock Text="{Binding DshVersionText}"
                                                        Foreground="{StaticResource MutedBrush}"
                                                        FontSize="11"
                                                        Margin="0,3,0,0" />
+                                            <TextBlock Text="{Binding ResourceSummaryText}"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="11" />
                                             <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource BlueBrush}" FontSize="11" />
                                         </StackPanel>
                                     </Grid>
@@ -116,6 +119,13 @@
                                         Style="{StaticResource PrimaryButton}"
                                         IsEnabled="{Binding CanClone}"
                                         ToolTip="{Binding CloneButtonToolTip}"
+                                        Padding="16,9" />
+                                <Button Content="删除版本"
+                                        Click="DeleteVersion_Click"
+                                        IsEnabled="{Binding CanDelete}"
+                                        ToolTip="{Binding DeleteButtonToolTip}"
+                                        Foreground="#B42318"
+                                        Margin="8,0,0,0"
                                         Padding="16,9" />
                                 <Button Content="设置整合包格式" Click="OpenSettings_Click" Margin="8,0,0,0" Padding="16,9" />
                             </StackPanel>

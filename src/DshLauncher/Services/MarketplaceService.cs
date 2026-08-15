@@ -19,6 +19,14 @@ public sealed class MarketplaceService
     public const string GitHubTopicUrl = "https://api.github.com/search/repositories?q=topic%3Adsh-plugin&per_page=50";
 
     private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(10);
+    private static readonly string[] PluginProfileFiles =
+    {
+        "package.json",
+        "pnpm-lock.yaml",
+        "package-lock.json",
+        "yarn.lock",
+        "cordis.patch.yml"
+    };
     private static readonly JsonSerializerOptions CacheJsonOptions = new()
     {
         WriteIndented = true,
@@ -49,19 +57,6 @@ public sealed class MarketplaceService
         var items = new List<MarketplaceItem>();
         var warnings = new List<string>();
         var sourcesChecked = 0;
-
-        if (instance is not null)
-        {
-            try
-            {
-                items.AddRange(ReadOfficialItems(instance));
-                sourcesChecked++;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
-            {
-                warnings.Add($"官方运行环境：{ex.Message}");
-            }
-        }
 
         var sourceTasks = new[]
         {
@@ -118,9 +113,8 @@ public sealed class MarketplaceService
 
         cancellationToken.ThrowIfCancellationRequested();
         var cached = TryReadCache();
-        var remoteItems = items
-            .Where(item => item.SourceKind != MarketplaceSourceKind.Official)
-            .ToArray();
+        var mergedItems = MergeItems(items);
+        var remoteItems = mergedItems.ToArray();
         if (remoteItems.Length > 0)
         {
             TryWriteCache(remoteItems, sourcesChecked, DateTimeOffset.UtcNow, warnings);
@@ -134,7 +128,7 @@ public sealed class MarketplaceService
 
         var retrievedAt = DateTimeOffset.UtcNow;
         return new MarketplaceSearchResult(
-            FilterAndSort(items, query, sourceKind, sortOrder),
+            FilterAndSort(MergeItems(items), query, sourceKind, sortOrder),
             warnings,
             sourcesChecked,
             retrievedAt);
@@ -152,21 +146,8 @@ public sealed class MarketplaceService
             return null;
         }
 
-        var items = cached.Items.ToList();
-        if (instance is not null)
-        {
-            try
-            {
-                items.AddRange(ReadOfficialItems(instance));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
-            {
-                // Cached remote sources remain usable when the current profile is incomplete.
-            }
-        }
-
         return new MarketplaceSearchResult(
-            FilterAndSort(items, query, sourceKind, sortOrder),
+            FilterAndSort(MergeItems(cached.Items), query, sourceKind, sortOrder),
             new[] { $"正在使用上次缓存（{cached.RetrievedAt.ToLocalTime():yyyy-MM-dd HH:mm}）。" },
             cached.SourcesChecked,
             cached.RetrievedAt);
@@ -176,17 +157,16 @@ public sealed class MarketplaceService
         IEnumerable<MarketplaceItem> items,
         string? query = null,
         MarketplaceSourceKind? sourceKind = null,
-        MarketplaceSortOrder sortOrder = MarketplaceSortOrder.Relevance)
+        MarketplaceSortOrder sortOrder = MarketplaceSortOrder.Relevance,
+        string? category = null)
     {
         var normalizedQuery = query?.Trim();
-        var filtered = items
-            .Where(item => sourceKind is null || item.SourceKind == sourceKind)
+        var filtered = MergeItems(items)
+            .Where(item => sourceKind is null || HasSourceKind(item, sourceKind.Value))
+            .Where(item => string.IsNullOrWhiteSpace(category)
+                || string.Equals(NormalizeCategory(item.Category), NormalizeCategory(category), StringComparison.OrdinalIgnoreCase))
             .Where(item => string.IsNullOrWhiteSpace(normalizedQuery) || Matches(item, normalizedQuery!))
-            .GroupBy(GetDedupeKey, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group
-                .OrderByDescending(item => VerificationRank(item.VerificationStatus))
-                .ThenByDescending(item => item.SourceKind == MarketplaceSourceKind.Official)
-                .First());
+            .ToArray();
 
         return sortOrder switch
         {
@@ -202,9 +182,93 @@ public sealed class MarketplaceService
                 .ToArray(),
             _ => filtered
                 .OrderBy(item => item.VerificationStatus == MarketplaceVerificationStatus.Rejected)
+                .ThenByDescending(item => MatchRank(item, normalizedQuery))
+                .ThenByDescending(item => item.Stars ?? -1)
                 .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray()
         };
+    }
+
+    public static string NormalizeCategory(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "未分类";
+        }
+
+        var normalized = value.Trim().ToLowerInvariant();
+        if (normalized.Contains("ui") || normalized.Contains("界面") || normalized.Contains("sidebar"))
+        {
+            return "UI";
+        }
+
+        if (normalized.Contains("workflow") || normalized.Contains("工作流"))
+        {
+            return "工作流";
+        }
+
+        if (normalized.Contains("agent") || normalized.Contains("代理"))
+        {
+            return "Agent";
+        }
+
+        if (normalized.Contains("model") || normalized.Contains("模型") || normalized.Contains("provider"))
+        {
+            return "模型";
+        }
+
+        if (normalized.Contains("theme") || normalized.Contains("主题") || normalized.Contains("wallpaper") || normalized.Contains("皮肤"))
+        {
+            return "主题";
+        }
+
+        if (normalized.Contains("dev") || normalized.Contains("开发") || normalized.Contains("tooling") || normalized.Contains("developer"))
+        {
+            return "开发";
+        }
+
+        if (normalized.Contains("tool") || normalized.Contains("工具"))
+        {
+            return "工具";
+        }
+
+        return value.Trim();
+    }
+
+    public static MarketplaceUpdateStatus GetUpdateStatus(string? availableVersion, string? installedVersion)
+    {
+        if (string.IsNullOrWhiteSpace(availableVersion) || string.IsNullOrWhiteSpace(installedVersion))
+        {
+            return MarketplaceUpdateStatus.Unknown;
+        }
+
+        if (TryParseVersion(availableVersion, out var available)
+            && TryParseVersion(installedVersion, out var installed))
+        {
+            return available > installed
+                ? MarketplaceUpdateStatus.Available
+                : MarketplaceUpdateStatus.UpToDate;
+        }
+
+        return string.Equals(NormalizeVersionText(availableVersion), NormalizeVersionText(installedVersion), StringComparison.OrdinalIgnoreCase)
+            ? MarketplaceUpdateStatus.UpToDate
+            : MarketplaceUpdateStatus.Unavailable;
+    }
+
+    public static IReadOnlySet<string> GetPluginIdentities(MarketplaceItem item) =>
+        GetPluginIdentities(item.PackageName, item.Name, item.InstallSpec, item.RepositoryUrl);
+
+    public static IReadOnlySet<string> GetPluginIdentities(ExtensionEntry entry) =>
+        GetPluginIdentities(entry.Name, entry.Name, entry.Name, null);
+
+    public static ExtensionEntry? FindInstalledPlugin(
+        MarketplaceItem item,
+        IEnumerable<ExtensionEntry> installedPlugins)
+    {
+        var identities = GetPluginIdentities(item);
+        return installedPlugins.FirstOrDefault(entry =>
+            entry.Kind == ExtensionKind.Plugin
+            && GetPluginIdentities(entry).Any(identities.Contains));
     }
 
     public async Task<MarketplaceVerificationResult> VerifyAsync(
@@ -222,14 +286,17 @@ public sealed class MarketplaceService
                 item.InstallSpec);
         }
 
+        var installTargetsGitHub = TryGetGitHubRepository(item.InstallSpec, out _)
+            || (string.IsNullOrWhiteSpace(item.PackageName)
+                && !string.IsNullOrWhiteSpace(item.RepositoryUrl));
+        if (installTargetsGitHub)
+        {
+            return await VerifyGitHubRepositoryAsync(item, cancellationToken);
+        }
+
         if (!string.IsNullOrWhiteSpace(item.PackageName))
         {
             return await VerifyNpmPackageAsync(item, cancellationToken);
-        }
-
-        if (!string.IsNullOrWhiteSpace(item.RepositoryUrl))
-        {
-            return await VerifyGitHubRepositoryAsync(item, cancellationToken);
         }
 
         return new MarketplaceVerificationResult(
@@ -243,15 +310,7 @@ public sealed class MarketplaceService
     public string CreatePluginSnapshot(ManagerInstance instance)
     {
         var profileDirectory = Path.Combine(instance.DshHome, "profiles", "web");
-        var files = new[]
-        {
-            "package.json",
-            "pnpm-lock.yaml",
-            "package-lock.json",
-            "yarn.lock",
-            "cordis.patch.yml"
-        };
-        var existing = files
+        var existing = PluginProfileFiles
             .Select(file => Path.Combine(profileDirectory, file))
             .Where(File.Exists)
             .ToArray();
@@ -271,6 +330,57 @@ public sealed class MarketplaceService
         }
 
         return directory;
+    }
+
+    public bool RestorePluginSnapshot(ManagerInstance instance, string snapshotPath)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotPath))
+        {
+            return false;
+        }
+
+        var backupRoot = Path.GetFullPath(_paths.GetInstanceBackupDirectory(instance.Id));
+        var snapshot = Path.GetFullPath(snapshotPath);
+        if (!Directory.Exists(snapshot)
+            || !IsWithinPath(snapshot, backupRoot)
+            || string.Equals(snapshot, backupRoot, StringComparison.OrdinalIgnoreCase)
+            || IsReparsePoint(snapshot))
+        {
+            return false;
+        }
+
+        var profileDirectory = Path.Combine(instance.DshHome, "profiles", "web");
+        if (Directory.Exists(profileDirectory) && IsReparsePoint(profileDirectory))
+        {
+            throw new IOException("当前实例的 web profile 目录不能是重解析点。");
+        }
+
+        Directory.CreateDirectory(profileDirectory);
+        foreach (var file in PluginProfileFiles)
+        {
+            var source = Path.Combine(snapshot, file);
+            var target = Path.Combine(profileDirectory, file);
+            if (File.Exists(source))
+            {
+                if (IsReparsePoint(source) || (File.Exists(target) && IsReparsePoint(target)))
+                {
+                    throw new IOException($"无法安全恢复 Plugin 配置：{file}");
+                }
+
+                File.Copy(source, target, overwrite: true);
+            }
+            else if (File.Exists(target))
+            {
+                if (IsReparsePoint(target))
+                {
+                    throw new IOException($"无法安全删除失败操作留下的配置：{file}");
+                }
+
+                File.Delete(target);
+            }
+        }
+
+        return true;
     }
 
     public static IReadOnlyList<MarketplaceItem> ParseCatalog(
@@ -395,14 +505,63 @@ public sealed class MarketplaceService
         MarketplaceItem item,
         CancellationToken cancellationToken)
     {
-        if (!TryGetGitHubRepository(item.RepositoryUrl!, out var repository))
+        var normalizedInstallSpec = NormalizeInstallSpec(item.InstallSpec);
+        var githubSource = normalizedInstallSpec.StartsWith("github:", StringComparison.OrdinalIgnoreCase)
+            || normalizedInstallSpec.Contains("github.com/", StringComparison.OrdinalIgnoreCase)
+            ? item.InstallSpec
+            : item.RepositoryUrl!;
+        if (!TryGetGitHubRepository(githubSource, out var repository))
         {
             return Rejected(item, "GitHub 地址格式不正确，无法定位仓库。", item.RepositoryUrl);
         }
 
-        foreach (var branch in new[] { "main", "master" })
+        var branches = new List<string>();
+        if (!string.IsNullOrWhiteSpace(repository.Branch))
         {
-            var uri = new Uri($"https://raw.githubusercontent.com/{repository.Owner}/{repository.Name}/{branch}/package.json");
+            branches.Add(repository.Branch);
+        }
+        else
+        {
+            try
+            {
+                var metadataUri = new Uri($"https://api.github.com/repos/{repository.Owner}/{repository.Name}");
+                using var metadataRequest = new HttpRequestMessage(HttpMethod.Get, metadataUri);
+                using var metadataResponse = await SendAsync(metadataRequest, cancellationToken);
+                using var metadata = JsonDocument.Parse(await metadataResponse.Content.ReadAsStringAsync(cancellationToken));
+                var defaultBranch = ReadString(metadata.RootElement, "default_branch");
+                if (!string.IsNullOrWhiteSpace(defaultBranch))
+                {
+                    branches.Add(defaultBranch);
+                }
+            }
+            catch (HttpRequestException)
+            {
+                // Public API metadata can be rate limited. Keep the legacy
+                // fallbacks so verification still works for common repos.
+            }
+        }
+
+        foreach (var fallback in new[] { "main", "master" })
+        {
+            if (!branches.Contains(fallback, StringComparer.OrdinalIgnoreCase))
+            {
+                branches.Add(fallback);
+            }
+        }
+
+        var packagePath = string.IsNullOrWhiteSpace(repository.Subpath)
+            ? "package.json"
+            : repository.Subpath.EndsWith("package.json", StringComparison.OrdinalIgnoreCase)
+                ? repository.Subpath.TrimStart('/')
+                : $"{repository.Subpath.Trim('/')}/package.json";
+        foreach (var branch in branches)
+        {
+            var encodedPath = string.Join(
+                "/",
+                packagePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(Uri.EscapeDataString));
+            var encodedBranch = Uri.EscapeDataString(branch);
+            var uri = new Uri($"https://raw.githubusercontent.com/{repository.Owner}/{repository.Name}/{encodedBranch}/{encodedPath}");
             try
             {
                 var json = await GetStringAsync(uri, cancellationToken);
@@ -412,9 +571,9 @@ public sealed class MarketplaceService
                 var version = ReadString(root, "version");
                 return VerifyManifest(root, packageName, version, item.InstallSpec);
             }
-            catch (HttpRequestException) when (branch == "main")
+            catch (HttpRequestException)
             {
-                // Try master below for older repositories.
+                // Try the next branch or the next fallback below.
             }
             catch (JsonException ex)
             {
@@ -422,7 +581,10 @@ public sealed class MarketplaceService
             }
         }
 
-        return Rejected(item, "仓库根目录没有找到 package.json。", item.InstallSpec);
+        var location = string.IsNullOrWhiteSpace(repository.Subpath)
+            ? "仓库"
+            : $"仓库子目录 /{repository.Subpath.Trim('/')}/";
+        return Rejected(item, $"{location}没有找到 package.json。", item.InstallSpec);
     }
 
     private static MarketplaceVerificationResult VerifyManifest(
@@ -461,68 +623,6 @@ public sealed class MarketplaceService
             packageName,
             version,
             installSpec);
-    }
-
-    private IReadOnlyList<MarketplaceItem> ReadOfficialItems(ManagerInstance instance)
-    {
-        var profilePath = Path.Combine(instance.DshHome, "profiles", "web", "package.json");
-        if (!File.Exists(profilePath))
-        {
-            return Array.Empty<MarketplaceItem>();
-        }
-
-        using var document = JsonDocument.Parse(File.ReadAllText(profilePath, Encoding.UTF8));
-        if (!document.RootElement.TryGetProperty("dependencies", out var dependencies)
-            || dependencies.ValueKind != JsonValueKind.Object)
-        {
-            return Array.Empty<MarketplaceItem>();
-        }
-
-        var result = new List<MarketplaceItem>();
-        foreach (var dependency in dependencies.EnumerateObject())
-        {
-            var manifestPath = FindDependencyManifest(instance, dependency.Name);
-            if (manifestPath is null)
-            {
-                continue;
-            }
-
-            using var manifestDocument = JsonDocument.Parse(File.ReadAllText(manifestPath, Encoding.UTF8));
-            var manifest = manifestDocument.RootElement;
-            if (!HasDshBundlePatch(manifest))
-            {
-                continue;
-            }
-
-            result.Add(new MarketplaceItem(
-                $"official:{dependency.Name}",
-                dependency.Name,
-                dependency.Name,
-                ReadString(manifest, "version") ?? ReadValueString(dependency.Value),
-                ReadString(manifest, "description") ?? "当前 DSh 运行环境提供的 Plugin。",
-                dependency.Name,
-                ReadRepositoryUrl(manifest),
-                "官方",
-                MarketplaceSourceKind.Official,
-                "当前 DSh 运行环境",
-                MarketplaceVerificationStatus.Verified,
-                "已从当前实例的依赖和 package.json 读取。",
-                true,
-                false,
-                false));
-        }
-
-        return result;
-    }
-
-    private string? FindDependencyManifest(ManagerInstance instance, string packageName)
-    {
-        var candidates = new[]
-        {
-            Path.Combine(instance.DshHome, "profiles", "web", "node_modules", packageName, "package.json"),
-            Path.Combine(instance.RootPath, "node_modules", packageName, "package.json")
-        };
-        return candidates.FirstOrDefault(File.Exists);
     }
 
     private async Task<IReadOnlyList<(bool IsFile, string Value)>> ReadCustomSourcesAsync(CancellationToken cancellationToken)
@@ -606,12 +706,20 @@ public sealed class MarketplaceService
             ?? ReadString(entry, "package")
             ?? ReadString(entry, "npm");
         var repository = ReadRepositoryUrl(entry);
-        var installSpec = ReadString(entry, "installSpec")
+        var rawInstallSpec = ReadString(entry, "installSpec")
             ?? ReadString(entry, "install")
             ?? (IsSafePackageName(packageName) ? packageName : null)
             ?? repository;
+        var installSpec = NormalizeInstallSpec(rawInstallSpec ?? string.Empty);
+        repository ??= GetGitHubRepositoryUrl(installSpec);
 
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(installSpec))
+        {
+            return null;
+        }
+
+        if (sourceKind == MarketplaceSourceKind.Official
+            && !IsExplicitOfficialPackage(packageName, repository))
         {
             return null;
         }
@@ -779,10 +887,289 @@ public sealed class MarketplaceService
         }
     }
 
-    private static string GetDedupeKey(MarketplaceItem item) =>
-        item.PackageName?.Trim().ToLowerInvariant()
-        ?? item.RepositoryUrl?.Trim().TrimEnd('/').ToLowerInvariant()
-        ?? item.InstallSpec.Trim().ToLowerInvariant();
+    public static IReadOnlyList<MarketplaceItem> MergeItems(IEnumerable<MarketplaceItem> items)
+    {
+        var merged = new List<MarketplaceItem>();
+        foreach (var raw in items)
+        {
+            var item = NormalizeSourceKind(raw) with { Category = NormalizeCategory(raw.Category) };
+            var matches = merged
+                .Select((candidate, index) => (candidate, index))
+                .Where(pair => GetPluginIdentities(pair.candidate)
+                    .Any(identity => GetPluginIdentities(item).Contains(identity)))
+                .ToArray();
+            if (matches.Length == 0)
+            {
+                merged.Add(item);
+                continue;
+            }
+
+            var combined = matches
+                .Select(pair => pair.candidate)
+                .Aggregate(MergeTwoItems);
+            foreach (var match in matches.OrderByDescending(pair => pair.index))
+            {
+                merged.RemoveAt(match.index);
+            }
+
+            merged.Add(MergeTwoItems(combined, item));
+        }
+
+        return merged;
+    }
+
+    private static MarketplaceItem NormalizeSourceKind(MarketplaceItem item)
+    {
+        if (item.SourceKind != MarketplaceSourceKind.Official
+            || IsExplicitOfficialPackage(item.PackageName, item.RepositoryUrl))
+        {
+            return item;
+        }
+
+        return item with
+        {
+            SourceKind = MarketplaceSourceKind.Custom,
+            SourceName = "历史目录缓存",
+            VerificationStatus = MarketplaceVerificationStatus.Unverified,
+            VerificationMessage = "历史缓存不能证明这是 DSh 官方 Plugin，安装前仍会重新检查。"
+        };
+    }
+
+    private static MarketplaceItem MergeTwoItems(MarketplaceItem first, MarketplaceItem second)
+    {
+        var primary = SourceRank(first.SourceKind) >= SourceRank(second.SourceKind) ? first : second;
+        var secondary = ReferenceEquals(primary, first) ? second : first;
+        var sources = new[] { SourceTextFor(first), SourceTextFor(second) }
+            .SelectMany(value => value.Split(new[] { " / " }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var sourceKinds = new[] { first, second }
+            .SelectMany(item => item.MergedSourceKinds is { Count: > 0 }
+                ? item.MergedSourceKinds
+                : new[] { item.SourceKind })
+            .Distinct()
+            .ToArray();
+        var version = PickVersion(first.Version, second.Version);
+        var installedVersion = first.InstalledVersion ?? second.InstalledVersion;
+        var isInstalled = first.IsInstalled || second.IsInstalled;
+        var updateStatus = isInstalled
+            ? GetUpdateStatus(version, installedVersion)
+            : MarketplaceUpdateStatus.Unknown;
+
+        return primary with
+        {
+            Name = PickText(primary.Name, secondary.Name),
+            PackageName = primary.PackageName ?? secondary.PackageName,
+            Version = version,
+            Description = PickDescription(primary.Description, secondary.Description),
+            InstallSpec = PickText(primary.InstallSpec, secondary.InstallSpec),
+            RepositoryUrl = primary.RepositoryUrl ?? secondary.RepositoryUrl,
+            Category = !string.Equals(primary.Category, "未分类", StringComparison.OrdinalIgnoreCase)
+                ? primary.Category
+                : secondary.Category,
+            VerificationStatus = VerificationRank(first.VerificationStatus) >= VerificationRank(second.VerificationStatus)
+                ? first.VerificationStatus
+                : second.VerificationStatus,
+            VerificationMessage = VerificationRank(first.VerificationStatus) >= VerificationRank(second.VerificationStatus)
+                ? first.VerificationMessage
+                : second.VerificationMessage,
+            IsInstalled = isInstalled,
+            IsManaged = first.IsManaged || second.IsManaged,
+            CanMutate = first.CanMutate || second.CanMutate,
+            Stars = PickStars(first.Stars, second.Stars),
+            PublishedAt = first.PublishedAt >= second.PublishedAt ? first.PublishedAt : second.PublishedAt,
+            InstalledVersion = installedVersion,
+            UpdateStatus = updateStatus,
+            MergedSourceText = sources.Length > 1 ? string.Join(" / ", sources) : null,
+            MergedSourceKinds = sourceKinds.Length > 1 ? sourceKinds : null
+        };
+    }
+
+    private static bool HasSourceKind(MarketplaceItem item, MarketplaceSourceKind sourceKind) =>
+        item.SourceKind == sourceKind
+        || (item.MergedSourceKinds?.Contains(sourceKind) ?? false);
+
+    private static string PickText(string? first, string? second) =>
+        !string.IsNullOrWhiteSpace(first) ? first : second ?? string.Empty;
+
+    private static string PickDescription(string first, string second)
+    {
+        var firstPlaceholder = first.Contains("未提供", StringComparison.OrdinalIgnoreCase)
+            || first.Contains("未说明", StringComparison.OrdinalIgnoreCase);
+        var secondPlaceholder = second.Contains("未提供", StringComparison.OrdinalIgnoreCase)
+            || second.Contains("未说明", StringComparison.OrdinalIgnoreCase);
+        return firstPlaceholder && !secondPlaceholder ? second : first;
+    }
+
+    private static long? PickStars(long? first, long? second)
+    {
+        if (first is null) return second;
+        if (second is null) return first;
+        return Math.Max(first.Value, second.Value);
+    }
+
+    private static string? PickVersion(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first)) return second;
+        if (string.IsNullOrWhiteSpace(second)) return first;
+        if (TryParseVersion(first, out var firstVersion) && TryParseVersion(second, out var secondVersion))
+        {
+            return secondVersion > firstVersion ? second : first;
+        }
+
+        return first;
+    }
+
+    private static int SourceRank(MarketplaceSourceKind sourceKind) => sourceKind switch
+    {
+        MarketplaceSourceKind.Official => 5,
+        MarketplaceSourceKind.CommunityCatalog => 4,
+        MarketplaceSourceKind.Custom => 3,
+        MarketplaceSourceKind.GitHubTopic => 2,
+        _ => 1
+    };
+
+    private static string SourceTextFor(MarketplaceItem item) => item.MergedSourceText ?? (item.SourceKind switch
+    {
+        MarketplaceSourceKind.Official => "DSh 官方",
+        MarketplaceSourceKind.CommunityCatalog => "社区目录",
+        MarketplaceSourceKind.GitHubTopic => "GitHub 发现",
+        _ => item.SourceName
+    });
+
+    private static int MatchRank(MarketplaceItem item, string? query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return 0;
+        }
+
+        var normalized = query.Trim();
+        var values = new[] { item.Name, item.PackageName, item.InstallSpec };
+        if (values.Any(value => string.Equals(value, normalized, StringComparison.OrdinalIgnoreCase))) return 5;
+        if (values.Any(value => value?.StartsWith(normalized, StringComparison.OrdinalIgnoreCase) == true)) return 4;
+        if (values.Any(value => value?.Contains(normalized, StringComparison.OrdinalIgnoreCase) == true)) return 3;
+        if (item.Description.Contains(normalized, StringComparison.OrdinalIgnoreCase)) return 2;
+        return 1;
+    }
+
+    private static IEnumerable<string> EnumeratePluginIdentities(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            yield break;
+        }
+
+        var text = NormalizeInstallSpec(value);
+        if (text.StartsWith("npm:", StringComparison.OrdinalIgnoreCase))
+        {
+            text = text["npm:".Length..];
+        }
+
+        if (TryGetGitHubIdentity(text, out var githubIdentity))
+        {
+            yield return githubIdentity;
+            yield break;
+        }
+
+        if (IsSafePackageName(text))
+        {
+            yield return $"npm:{text.ToLowerInvariant()}";
+        }
+    }
+
+    private static bool TryGetGitHubIdentity(string value, out string identity)
+    {
+        identity = string.Empty;
+        var text = NormalizeInstallSpec(value);
+        if (text.StartsWith("github:", StringComparison.OrdinalIgnoreCase))
+        {
+            text = text["github:".Length..];
+        }
+
+        string? owner = null;
+        string? repository = null;
+        string? subpath = null;
+        if (Uri.TryCreate(text, UriKind.Absolute, out var uri)
+            && string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length >= 2)
+            {
+                owner = segments[0];
+                repository = segments[1];
+                if (segments.Length >= 5 && (segments[2] is "tree" or "blob"))
+                {
+                    subpath = string.Join('/', segments.Skip(4));
+                }
+
+                if (string.IsNullOrWhiteSpace(subpath) && uri.Fragment.StartsWith("#path:", StringComparison.OrdinalIgnoreCase))
+                {
+                    subpath = uri.Fragment["#path:".Length..];
+                }
+            }
+        }
+        else
+        {
+            var pathMarker = text.IndexOf("#path:", StringComparison.OrdinalIgnoreCase);
+            var repositoryText = pathMarker >= 0 ? text[..pathMarker] : text;
+            subpath = pathMarker >= 0 ? text[(pathMarker + "#path:".Length)..] : null;
+            var segments = repositoryText.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 2)
+            {
+                owner = segments[0];
+                repository = segments[1];
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repository))
+        {
+            return false;
+        }
+
+        repository = repository.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? repository[..^4]
+            : repository;
+        var baseIdentity = $"github:{owner}/{repository}".ToLowerInvariant();
+        identity = string.IsNullOrWhiteSpace(subpath)
+            ? baseIdentity
+            : $"{baseIdentity}#path:/{subpath.Trim('/')}";
+        return true;
+    }
+
+    private static IReadOnlySet<string> GetPluginIdentities(
+        string? packageName,
+        string? name,
+        string? installSpec,
+        string? repositoryUrl)
+    {
+        var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in new[] { packageName, installSpec, repositoryUrl })
+        {
+            identities.UnionWith(EnumeratePluginIdentities(value));
+        }
+
+        if (identities.Count == 0 && !string.IsNullOrWhiteSpace(name))
+        {
+            identities.Add($"name:{name.Trim().ToLowerInvariant()}");
+        }
+
+        return identities;
+    }
+
+    private static bool TryParseVersion(string value, out Version version)
+    {
+        var normalized = NormalizeVersionText(value);
+        return Version.TryParse(normalized, out version!);
+    }
+
+    private static string NormalizeVersionText(string value)
+    {
+        var normalized = value.Trim().TrimStart('v', 'V', '^', '~', '>', '<', '=');
+        normalized = normalized.Split(new[] { '-', '+' }, 2)[0];
+        return normalized;
+    }
 
     private static int VerificationRank(MarketplaceVerificationStatus status) => status switch
     {
@@ -851,6 +1238,18 @@ public sealed class MarketplaceService
             && bundle.ValueKind == JsonValueKind.Object
             && bundle.TryGetProperty("patch", out _);
 
+    private static bool IsExplicitOfficialPackage(string? packageName, string? repositoryUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(packageName)
+            && packageName.StartsWith("@deepseek-ai/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return TryGetGitHubIdentity(repositoryUrl ?? string.Empty, out var identity)
+            && identity.StartsWith("github:deepseek-ai/", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool HasDshClient(JsonElement manifest) =>
         manifest.TryGetProperty("dsh.client", out _)
         || manifest.TryGetProperty("dsh", out var dsh)
@@ -874,13 +1273,61 @@ public sealed class MarketplaceService
     private static MarketplaceVerificationResult Rejected(MarketplaceItem item, string message, string? installSpec = null) =>
         new(MarketplaceVerificationStatus.Rejected, message, item.PackageName, item.Version, installSpec ?? item.InstallSpec);
 
+    private static bool IsWithinPath(string path, string root)
+    {
+        var normalizedPath = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedRoot = Path.GetFullPath(root)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(normalizedPath, normalizedRoot, StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryGetGitHubRepository(string url, out GitHubRepository repository)
     {
         repository = default;
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        var text = NormalizeInstallSpec(url);
+        if (text.StartsWith("github:", StringComparison.OrdinalIgnoreCase))
+        {
+            text = text["github:".Length..];
+        }
+
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)
             || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            var pathMarker = text.IndexOf("#path:", StringComparison.OrdinalIgnoreCase);
+            var repositoryText = pathMarker >= 0 ? text[..pathMarker] : text;
+            var repositorySegments = repositoryText.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (repositorySegments.Length != 2)
+            {
+                return false;
+            }
+
+            var pathSubpath = pathMarker >= 0 ? text[(pathMarker + "#path:".Length)..].Trim('/') : null;
+            repository = new GitHubRepository(
+                repositorySegments[0],
+                repositorySegments[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+                    ? repositorySegments[1][..^4]
+                    : repositorySegments[1],
+                null,
+                pathSubpath);
+            return true;
         }
 
         var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -889,10 +1336,101 @@ public sealed class MarketplaceService
             return false;
         }
 
+        var branch = default(string);
+        var subpath = default(string);
+        if (segments.Length >= 4 && (segments[2] is "tree" or "blob"))
+        {
+            branch = segments[3];
+            subpath = segments.Length > 4
+                ? string.Join('/', segments.Skip(4))
+                : null;
+        }
+        else if (uri.Fragment.StartsWith("#path:", StringComparison.OrdinalIgnoreCase))
+        {
+            subpath = uri.Fragment["#path:".Length..].Trim('/');
+        }
+
         repository = new GitHubRepository(segments[0], segments[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
             ? segments[1][..^4]
-            : segments[1]);
+            : segments[1],
+            branch,
+            subpath);
         return true;
+    }
+
+    private static string NormalizeInstallSpec(string value)
+    {
+        var trimmed = value.Trim();
+        var tokens = SplitCommandArguments(trimmed);
+        for (var index = 0; index + 1 < tokens.Count; index++)
+        {
+            if (tokens[index].Equals("add", StringComparison.OrdinalIgnoreCase)
+                || tokens[index].Equals("update", StringComparison.OrdinalIgnoreCase)
+                || tokens[index].Equals("remove", StringComparison.OrdinalIgnoreCase))
+            {
+                var target = tokens[index + 1].Trim();
+                if (!target.StartsWith("-", StringComparison.Ordinal))
+                {
+                    return target;
+                }
+            }
+        }
+
+        return trimmed;
+    }
+
+    private static IReadOnlyList<string> SplitCommandArguments(string value)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        char quote = '\0';
+        foreach (var character in value)
+        {
+            if (quote != '\0')
+            {
+                if (character == quote)
+                {
+                    quote = '\0';
+                }
+                else
+                {
+                    current.Append(character);
+                }
+
+                continue;
+            }
+
+            if (character is '\'' or '"')
+            {
+                quote = character;
+            }
+            else if (char.IsWhiteSpace(character))
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+            else
+            {
+                current.Append(character);
+            }
+        }
+
+        if (current.Length > 0)
+        {
+            tokens.Add(current.ToString());
+        }
+
+        return tokens;
+    }
+
+    private static string? GetGitHubRepositoryUrl(string value)
+    {
+        return TryGetGitHubRepository(value, out var repository)
+            ? $"https://github.com/{repository.Owner}/{repository.Name}"
+            : null;
     }
 
     private sealed record MarketplaceCacheDocument(
@@ -900,5 +1438,9 @@ public sealed class MarketplaceService
         int SourcesChecked,
         DateTimeOffset RetrievedAt);
 
-    private readonly record struct GitHubRepository(string Owner, string Name);
+    private readonly record struct GitHubRepository(
+        string Owner,
+        string Name,
+        string? Branch,
+        string? Subpath);
 }

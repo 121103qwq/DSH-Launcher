@@ -24,6 +24,14 @@ public enum MarketplaceSortOrder
     Stars
 }
 
+public enum MarketplaceUpdateStatus
+{
+    Unknown,
+    UpToDate,
+    Available,
+    Unavailable
+}
+
 public sealed record MarketplaceItem(
     string Id,
     string Name,
@@ -41,16 +49,25 @@ public sealed record MarketplaceItem(
     bool IsManaged = false,
     bool CanMutate = false,
     long? Stars = null,
-    DateTimeOffset? PublishedAt = null)
+    DateTimeOffset? PublishedAt = null,
+    string? InstalledVersion = null,
+    MarketplaceUpdateStatus UpdateStatus = MarketplaceUpdateStatus.Unknown,
+    string? MergedSourceText = null,
+    bool IsTheme = false,
+    bool ThemeMarketAvailable = false,
+    bool ThemeCanApply = false,
+    string? ThemePackageName = null,
+    string? ThemeStatusText = null,
+    IReadOnlyList<MarketplaceSourceKind>? MergedSourceKinds = null)
 {
     [JsonIgnore]
-    public string SourceText => SourceKind switch
+    public string SourceText => MergedSourceText ?? (SourceKind switch
     {
-        MarketplaceSourceKind.Official => "DSh 官方运行环境",
+        MarketplaceSourceKind.Official => "DSh 官方",
         MarketplaceSourceKind.CommunityCatalog => "社区目录",
         MarketplaceSourceKind.GitHubTopic => "GitHub dsh-plugin 标签",
         _ => SourceName
-    };
+    });
 
     [JsonIgnore]
     public string VerificationText => VerificationStatus switch
@@ -61,12 +78,35 @@ public sealed record MarketplaceItem(
     };
 
     [JsonIgnore]
-    public string ActionText => IsInstalled ? "更新" : "安装";
+    public string ActionText
+    {
+        get
+        {
+            if (!IsInstalled)
+            {
+                return "安装";
+            }
+
+            if (!IsManaged)
+            {
+                return "已安装";
+            }
+
+            return UpdateStatus switch
+            {
+                MarketplaceUpdateStatus.Available when !string.IsNullOrWhiteSpace(InstalledVersion)
+                    && !string.IsNullOrWhiteSpace(Version) => $"更新 {InstalledVersion} → {Version}",
+                MarketplaceUpdateStatus.UpToDate => "已安装",
+                MarketplaceUpdateStatus.Unavailable => "更新不可用",
+                _ => "更新状态未知"
+            };
+        }
+    }
 
     [JsonIgnore]
     public bool CanAction => CanMutate
         && VerificationStatus != MarketplaceVerificationStatus.Rejected
-        && (!IsInstalled || IsManaged);
+        && (!IsInstalled || (IsManaged && UpdateStatus != MarketplaceUpdateStatus.UpToDate));
 
     [JsonIgnore]
     public bool CanRemove => CanMutate && IsInstalled && IsManaged;
@@ -75,12 +115,24 @@ public sealed record MarketplaceItem(
     public string TargetText => PackageName ?? InstallSpec;
 
     [JsonIgnore]
+    public string VersionStatusText => !IsInstalled
+        ? (string.IsNullOrWhiteSpace(Version) ? "版本未知" : $"最新 {Version}")
+        : string.IsNullOrWhiteSpace(InstalledVersion)
+            ? "已安装 · 版本未知"
+            : UpdateStatus == MarketplaceUpdateStatus.Available && !string.IsNullOrWhiteSpace(Version)
+                ? $"已安装 {InstalledVersion} · 可更新到 {Version}"
+                : $"已安装 {InstalledVersion}";
+
+    [JsonIgnore]
     public string StarsText => Stars is { } count ? $"★ {count:N0}" : "Star 未知";
 
     [JsonIgnore]
     public string PublishedText => PublishedAt is { } published
         ? published.ToLocalTime().ToString("yyyy-MM-dd")
         : "发布时间未知";
+
+    [JsonIgnore]
+    public string ThemeActionText => "应用主题";
 }
 
 public sealed record MarketplaceSearchResult(

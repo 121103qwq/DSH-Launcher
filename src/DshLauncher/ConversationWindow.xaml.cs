@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using UserControl = System.Windows.Controls.UserControl;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -13,24 +14,46 @@ public partial class ConversationWindow : UserControl
 {
     private readonly ManagerInstance _instance;
     private readonly ConversationService _service;
-    private readonly Func<ConversationEntry, bool> _openConversation;
+    private readonly Func<ConversationEntry, Task<bool>> _openConversation;
+    private readonly Func<Task>? _synchronizeConversations;
+    private readonly Func<string, Task>? _propagateDeletion;
 
     public ConversationWindow(
         ManagerInstance instance,
         ConversationService service,
-        Func<ConversationEntry, bool> openConversation)
+        Func<ConversationEntry, Task<bool>> openConversation,
+        Func<Task>? synchronizeConversations = null,
+        Func<string, Task>? propagateDeletion = null)
     {
         _instance = instance;
         _service = service;
         _openConversation = openConversation;
+        _synchronizeConversations = synchronizeConversations;
+        _propagateDeletion = propagateDeletion;
         InitializeComponent();
     }
 
     private ObservableCollection<ConversationEntry> Entries { get; } = new();
 
-    private async void Window_OnLoaded(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private async void Window_OnLoaded(object sender, RoutedEventArgs e)
+    {
+        await SynchronizeAsync();
+        await RefreshAsync();
+    }
 
-    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private async void Refresh_Click(object sender, RoutedEventArgs e)
+    {
+        await SynchronizeAsync();
+        await RefreshAsync();
+    }
+
+    private async Task SynchronizeAsync()
+    {
+        if (_synchronizeConversations is not null)
+        {
+            await _synchronizeConversations();
+        }
+    }
 
     private async Task RefreshAsync()
     {
@@ -56,7 +79,21 @@ public partial class ConversationWindow : UserControl
         }
     }
 
-    private void Open_Click(object sender, RoutedEventArgs e)
+    private async void Open_Click(object sender, RoutedEventArgs e) => await OpenSelectedAsync();
+
+    private async void ConversationList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source
+            || ItemsControl.ContainerFromElement(ConversationList, source) is not System.Windows.Controls.ListViewItem)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await OpenSelectedAsync();
+    }
+
+    private async Task OpenSelectedAsync()
     {
         if (ConversationList.SelectedItem is not ConversationEntry entry)
         {
@@ -74,7 +111,7 @@ public partial class ConversationWindow : UserControl
 
         try
         {
-            if (!_openConversation(entry))
+            if (!await _openConversation(entry))
             {
                 StatusText.Text = "当前实例没有运行，或没有可用的 Chat 地址；请先启动实例。";
             }
@@ -103,6 +140,7 @@ public partial class ConversationWindow : UserControl
         try
         {
             var target = await Task.Run(() => _service.Import(_instance, dialog.FileName));
+            await SynchronizeAsync();
             StatusText.Text = $"对话已导入：{target}";
             await RefreshAsync();
         }
@@ -175,6 +213,14 @@ public partial class ConversationWindow : UserControl
         try
         {
             await Task.Run(() => _service.Delete(_instance, entry));
+            if (_propagateDeletion is not null)
+            {
+                await _propagateDeletion(entry.RelativePath);
+            }
+            else
+            {
+                await SynchronizeAsync();
+            }
             StatusText.Text = "对话文件已删除。";
             await RefreshAsync();
         }

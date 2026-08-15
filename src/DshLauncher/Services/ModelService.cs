@@ -80,8 +80,7 @@ public sealed class ModelService
     {
         EnsureStopped(instance);
         cancellationToken.ThrowIfCancellationRequested();
-        var section = RenderDeepSeek(apiKeyEnvironment, baseUrl, modelIds);
-        UpsertSection(GetSettingsPath(instance), "llm-deepseek", section);
+        SaveDeepSeekCore(instance, apiKeyEnvironment, baseUrl, modelIds);
         return Task.CompletedTask;
     }
 
@@ -96,9 +95,60 @@ public sealed class ModelService
         EnsureStopped(instance);
         cancellationToken.ThrowIfCancellationRequested();
         var normalizedProvider = NormalizeKey(provider, "Provider");
-        var section = RenderOpenAiProvider(normalizedProvider, apiKeyEnvironment, baseUrl, modelIds);
-        UpsertSection(GetSettingsPath(instance), "llm-pi-ai", section, normalizedProvider);
+        SaveOpenAiCompatibleCore(instance, normalizedProvider, null, apiKeyEnvironment, baseUrl, modelIds);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Copies only the model-provider sections understood by this service.
+    /// Other DSh settings remain in the target settings.yaml, and credentials
+    /// are represented only by their environment-variable names.
+    /// </summary>
+    public void CopyProviderConfiguration(ManagerInstance source, ManagerInstance target)
+    {
+        EnsureStopped(source);
+        EnsureStopped(target);
+
+        var sourceProviders = Read(source);
+        var sourceDeepSeek = sourceProviders.FirstOrDefault(provider =>
+            string.Equals(provider.SettingsNamespace, "llm-deepseek", StringComparison.Ordinal));
+        if (sourceDeepSeek is { Configured: true })
+        {
+            SaveDeepSeekCore(
+                target,
+                sourceDeepSeek.ApiKeyEnvironment,
+                sourceDeepSeek.BaseUrl,
+                sourceDeepSeek.Models);
+        }
+        else
+        {
+            RemoveTopLevelSection(GetSettingsPath(target), "llm-deepseek");
+        }
+
+        var sourceCompatible = sourceProviders
+            .Where(provider => string.Equals(provider.SettingsNamespace, "llm-pi-ai", StringComparison.Ordinal))
+            .ToDictionary(provider => provider.Provider, StringComparer.Ordinal);
+        var targetCompatible = Read(target)
+            .Where(provider => string.Equals(provider.SettingsNamespace, "llm-pi-ai", StringComparison.Ordinal))
+            .Select(provider => provider.Provider)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var provider in sourceCompatible.Values)
+        {
+            SaveOpenAiCompatibleCore(
+                target,
+                provider.Provider,
+                provider.DisplayName,
+                provider.ApiKeyEnvironment,
+                provider.BaseUrl,
+                provider.Models);
+        }
+
+        foreach (var provider in targetCompatible.Where(provider => !sourceCompatible.ContainsKey(provider)))
+        {
+            RemoveNestedProvider(GetSettingsPath(target), "llm-pi-ai", provider);
+        }
     }
 
     private void EnsureStopped(ManagerInstance instance)
@@ -107,6 +157,28 @@ public sealed class ModelService
         {
             throw new InvalidOperationException("实例正在运行，请先停止实例再修改模型配置。");
         }
+    }
+
+    private void SaveDeepSeekCore(
+        ManagerInstance instance,
+        string? apiKeyEnvironment,
+        string? baseUrl,
+        IReadOnlyList<string> modelIds)
+    {
+        var section = RenderDeepSeek(apiKeyEnvironment, baseUrl, modelIds);
+        UpsertSection(GetSettingsPath(instance), "llm-deepseek", section);
+    }
+
+    private void SaveOpenAiCompatibleCore(
+        ManagerInstance instance,
+        string provider,
+        string? displayName,
+        string? apiKeyEnvironment,
+        string? baseUrl,
+        IReadOnlyList<string> modelIds)
+    {
+        var section = RenderOpenAiProvider(provider, displayName, apiKeyEnvironment, baseUrl, modelIds);
+        UpsertSection(GetSettingsPath(instance), "llm-pi-ai", section, provider);
     }
 
     private static void UpsertSection(
@@ -139,6 +211,84 @@ public sealed class ModelService
         finally
         {
             if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+
+    private static void RemoveTopLevelSection(string path, string sectionName)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var existing = File.ReadAllLines(path, Encoding.UTF8).ToList();
+        var start = FindTopLevelStart(existing, sectionName);
+        if (start < 0)
+        {
+            return;
+        }
+
+        var end = FindTopLevelEnd(existing, start);
+        existing.RemoveRange(start, end - start);
+        WriteSettings(path, existing);
+    }
+
+    private static void RemoveNestedProvider(string path, string sectionName, string provider)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var existing = File.ReadAllLines(path, Encoding.UTF8).ToList();
+        var sectionStart = FindTopLevelStart(existing, sectionName);
+        if (sectionStart < 0)
+        {
+            return;
+        }
+
+        var sectionEnd = FindTopLevelEnd(existing, sectionStart);
+        var section = existing.GetRange(sectionStart, sectionEnd - sectionStart);
+        var providersStart = FindIndentedSectionStart(section, "providers", 2);
+        if (providersStart < 0)
+        {
+            return;
+        }
+
+        var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
+        var providerStart = FindProviderStart(section, providersStart + 1, providersEnd, provider);
+        if (providerStart < 0)
+        {
+            return;
+        }
+
+        var providerEnd = FindProviderEnd(section, providerStart, providersEnd);
+        section.RemoveRange(providerStart, providerEnd - providerStart);
+        existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
+        existing.InsertRange(sectionStart, section);
+        WriteSettings(path, existing);
+    }
+
+    private static void WriteSettings(string path, IReadOnlyList<string> lines)
+    {
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("settings.yaml 没有父目录。");
+        Directory.CreateDirectory(directory);
+        var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(
+                temporary,
+                string.Join(Environment.NewLine, lines) + Environment.NewLine,
+                new UTF8Encoding(false));
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
         }
     }
 
@@ -293,9 +443,19 @@ public sealed class ModelService
         return lines;
     }
 
-    private static List<string> RenderOpenAiProvider(string provider, string? apiKeyEnvironment, string? baseUrl, IReadOnlyList<string> modelIds)
+    private static List<string> RenderOpenAiProvider(
+        string provider,
+        string? displayName,
+        string? apiKeyEnvironment,
+        string? baseUrl,
+        IReadOnlyList<string> modelIds)
     {
         var lines = new List<string> { $"    {provider}:" };
+        if (!string.IsNullOrWhiteSpace(displayName)
+            && !string.Equals(displayName, provider, StringComparison.Ordinal))
+        {
+            AddScalar(lines, 6, "displayName", displayName);
+        }
         AddScalar(lines, 6, "apiKeyEnv", NormalizeEnvironmentName(apiKeyEnvironment));
         AddScalar(lines, 6, "baseURL", NormalizeBaseUrl(baseUrl));
         AddScalar(lines, 6, "api", "openai-completions");

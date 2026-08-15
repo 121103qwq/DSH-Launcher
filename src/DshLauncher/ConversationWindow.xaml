@@ -24,7 +24,7 @@
             <Button Content="删除选中对话" Click="Delete_Click" />
         </WrapPanel>
         <Border Grid.Row="1" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="10" Background="White" Padding="8">
-            <ListView x:Name="ConversationList" BorderThickness="0" SelectionChanged="ConversationList_SelectionChanged">
+            <ListView x:Name="ConversationList" BorderThickness="0" SelectionChanged="ConversationList_SelectionChanged" MouseDoubleClick="ConversationList_MouseDoubleClick">
                 <ListView.View>
                     <GridView AllowsColumnReorder="False">
                         <GridViewColumn Header="会话 ID" Width="220" DisplayMemberBinding="{Binding SessionId}" />

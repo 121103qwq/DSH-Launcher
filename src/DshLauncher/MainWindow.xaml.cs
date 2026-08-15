@@ -27,7 +27,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly VersionPackageService _versionPackageService;
     private readonly VersionSettingsService _versionSettingsService = new();
     private readonly ConversationService _conversationService;
+    private readonly ConversationSyncService _conversationSyncService;
     private readonly ModelService _modelService;
+    private readonly ModelProviderSyncService _modelProviderSyncService;
     private readonly ProviderStateService _providerStateService = new();
     private readonly ProviderDiagnosticService _providerDiagnosticService = new();
     private readonly DshInstallService _dshInstaller = new();
@@ -49,7 +51,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _marketplaceService = new();
         _versionPackageService = new(_instanceRegistry);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
+        _conversationSyncService = new(_versionSettingsService, id => _instanceRunner.IsRunning(id));
         _modelService = new(id => _instanceRunner.IsRunning(id));
+        _modelProviderSyncService = new(
+            _versionSettingsService,
+            _modelService,
+            _providerStateService,
+            id => _instanceRunner.IsRunning(id));
         InitializeComponent();
         DataContext = this;
     }
@@ -429,6 +437,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
+            await SynchronizeModelProvidersAsync(instance, cancellation.Token);
             var states = _providerStateService.Read(instance);
             var providers = _modelService.Read(instance);
             foreach (var provider in providers)
@@ -487,6 +496,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var enabled = !card.IsEnabled;
             _providerStateService.SetEnabled(SelectedInstance, card.ProviderKey, enabled);
             card.SetEnabled(enabled);
+            if (!_instanceRunner.IsRunning(SelectedInstance.Id))
+            {
+                _ = SynchronizeModelProvidersAsync(SelectedInstance);
+            }
             ShowNotice($"Provider“{card.DisplayName}”已{(enabled ? "启用" : "禁用")}。该状态由 Launcher 保存，不会改写 DSh 的 settings.yaml。 ");
         }
         catch (Exception ex)
@@ -659,7 +672,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     "扩展" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, marketplaceService: _marketplaceService),
                     "Agent" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, agentOnly: true, marketplaceService: _marketplaceService),
-                    _ => new ConversationWindow(instance, _conversationService, OpenConversation)
+                    _ => new ConversationWindow(
+                        instance,
+                        _conversationService,
+                        entry => OpenConversationAsync(instance, entry),
+                        () => SynchronizeConversationsAsync(instance),
+                        relativePath => PropagateConversationDeletionAsync(instance, relativePath))
                 };
                 ShowEmbeddedPage(page);
             }
@@ -706,6 +724,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _versionPackageService,
             GetVersionTemplate,
             AddCreatedVersion,
+            RemoveDeletedVersion,
             version => SelectedInstance = version));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
@@ -726,27 +745,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _extensionService,
             () => _nodeRuntime,
             _versionPackageService,
-            updated => UpdateVersionSettingsInstance(updated),
             () =>
             {
                 ApplySelectedVersionSettings(SelectedInstance);
                 _ = RefreshNodeAsync();
+                if (SelectedInstance is { } current)
+                {
+                    _ = SynchronizeModelProvidersAsync(current);
+                    _ = SynchronizeConversationsAsync(current);
+                }
             }));
-        OnPropertyChanged(nameof(PageTitle));
-        OnPropertyChanged(nameof(PageSubtitle));
-    }
-
-    private void UpdateVersionSettingsInstance(ManagerInstance updated)
-    {
-        UpdateInstance(updated);
-        if (SelectedInstance is null
-            || !string.Equals(SelectedInstance.Id, updated.Id, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        PageTitle = $"版本设置 - {updated.Name}";
-        PageSubtitle = $"当前实例：{updated.Name} · 管理个性化、配置、插件和分享导出";
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -822,6 +830,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         SelectedInstance = created;
+        OnPropertyChanged(nameof(InstanceCountText));
+        OnPropertyChanged(nameof(NoInstancesVisibility));
+        OnPropertyChanged(nameof(InstancesVisibility));
+        RefreshRunningInstances();
+    }
+
+    private void RemoveDeletedVersion(ManagerInstance deleted)
+    {
+        var wasSelected = SelectedInstance is not null
+            && string.Equals(SelectedInstance.Id, deleted.Id, StringComparison.Ordinal);
+        var removed = Instances.FirstOrDefault(instance =>
+            string.Equals(instance.Id, deleted.Id, StringComparison.Ordinal));
+        if (removed is not null)
+        {
+            Instances.Remove(removed);
+        }
+        if (wasSelected)
+        {
+            SelectedInstance = Instances.FirstOrDefault();
+        }
+
         OnPropertyChanged(nameof(InstanceCountText));
         OnPropertyChanged(nameof(NoInstancesVisibility));
         OnPropertyChanged(nameof(InstancesVisibility));
@@ -992,31 +1021,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SetLifecycleBusy(true);
         try
         {
-            if (!await PrepareSourceAsync(selected))
+            var result = await StartManagedInstanceAsync(selected);
+            if (result is null)
             {
                 return;
             }
 
-            var result = await _instanceRunner.StartAsync(
-                selected,
-                selected.Kind == InstanceKind.Source ? _nodeRuntime : null,
-                _windowCancellation.Token);
             if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
             {
-                UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
                 ShowNotice(result.Error ?? "DSh 启动失败。");
                 return;
             }
 
-            UpdateInstance(selected with
-            {
-                RuntimeStatus = InstanceRuntimeStatus.Running,
-                RuntimeOwnership = InstanceRuntimeOwnership.Managed,
-                ProcessId = result.ProcessId,
-                Port = result.Port,
-                WebUrl = result.WebUrl,
-                LastError = null
-            });
             OpenChatWindow(selected.Id, result.WebUrl);
             ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
         }
@@ -1070,6 +1086,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 WebUrl = null,
                 LastError = null
             });
+            await SynchronizeConversationsAsync(selected with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                RuntimeOwnership = InstanceRuntimeOwnership.None,
+                ProcessId = null,
+                Port = null,
+                WebUrl = null,
+                LastError = null
+            });
             ShowNotice($"实例已停止：{selected.Name}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -1102,25 +1127,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SetLifecycleBusy(true);
         try
         {
-            if (selected.Kind == InstanceKind.Source && _instanceRunner.IsRunning(selected.Id))
+            if (_instanceRunner.IsRunning(selected.Id))
             {
-                var stoppedBeforePrepare = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
-                if (!stoppedBeforePrepare.IsSuccess)
+                var stopped = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
+                if (!stopped.IsSuccess)
                 {
-                    UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, stoppedBeforePrepare.Error);
-                    ShowNotice(stoppedBeforePrepare.Error ?? "Source 重启前停止失败。");
+                    UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, stopped.Error);
+                    ShowNotice(stopped.Error ?? "重启前停止失败。");
                     return;
                 }
+
+                CloseChatWindow(selected.Id);
+                selected = selected with
+                {
+                    RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                    RuntimeOwnership = InstanceRuntimeOwnership.None,
+                    ProcessId = null,
+                    Port = null,
+                    WebUrl = null,
+                    LastError = null
+                };
+                UpdateInstance(selected);
+                await SynchronizeConversationsAsync(selected);
             }
 
-            if (!await PrepareSourceAsync(selected))
+            var result = await StartManagedInstanceAsync(selected);
+            if (result is null)
             {
                 return;
             }
-
-            var result = selected.Kind == InstanceKind.Source
-                ? await _instanceRunner.StartAsync(selected, _nodeRuntime, _windowCancellation.Token)
-                : await _instanceRunner.RestartAsync(selected, _windowCancellation.Token);
             if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
             {
                 UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
@@ -1285,6 +1320,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             : $" 输出：{result.Output}";
         ShowNotice((result.Error ?? "Source 准备失败。") + outputSuffix);
         return false;
+    }
+
+    private async Task<DshInstanceRunResult?> StartManagedInstanceAsync(ManagerInstance instance)
+    {
+        await SynchronizeModelProvidersAsync(instance);
+        await SynchronizeConversationsAsync(instance);
+        if (!await PrepareSourceAsync(instance))
+        {
+            return null;
+        }
+
+        var result = await _instanceRunner.StartAsync(
+            instance,
+            instance.Kind == InstanceKind.Source ? _nodeRuntime : null,
+            _windowCancellation.Token);
+        if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
+        {
+            UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, result.Error);
+            return result;
+        }
+
+        UpdateInstance(instance with
+        {
+            RuntimeStatus = InstanceRuntimeStatus.Running,
+            RuntimeOwnership = InstanceRuntimeOwnership.Managed,
+            ProcessId = result.ProcessId,
+            Port = result.Port,
+            WebUrl = result.WebUrl,
+            LastError = null
+        });
+        return result;
     }
 
     private void UpdateInstance(ManagerInstance updated)
@@ -1472,19 +1538,139 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private bool OpenConversation(ConversationEntry entry)
+    private async Task SynchronizeConversationsAsync(ManagerInstance focus)
     {
-        var instance = SelectedInstance;
+        try
+        {
+            var versions = Instances.ToArray();
+            var result = await Task.Run(() =>
+                _conversationSyncService.Synchronize(focus, versions));
+            if (result.CopiedFiles > 0)
+            {
+                ShowNotice($"已按版本对话策略同步 {result.CopiedFiles} 个会话文件。 ");
+            }
+
+            if (result.HasErrors)
+            {
+                ShowNotice($"对话同步完成，但有 {result.Errors.Count} 个文件未处理：{result.Errors[0]}");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"对话同步失败：{ex.Message}");
+        }
+    }
+
+    private async Task SynchronizeModelProvidersAsync(
+        ManagerInstance focus,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var versions = Instances.ToArray();
+            var result = await Task.Run(
+                () => _modelProviderSyncService.Synchronize(focus, versions),
+                cancellationToken);
+            if (result.CopiedVersions > 0)
+            {
+                ShowNotice($"已按版本设置同步模型 Provider 到 {result.CopiedVersions} 个版本。 ");
+            }
+
+            if (result.HasErrors)
+            {
+                ShowNotice($"模型 Provider 同步完成，但有 {result.Errors.Count} 个版本未处理：{result.Errors[0]}");
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"模型 Provider 同步失败：{ex.Message}");
+        }
+    }
+
+    private async Task PropagateConversationDeletionAsync(ManagerInstance focus, string relativePath)
+    {
+        try
+        {
+            var versions = Instances.ToArray();
+            var result = await Task.Run(() =>
+                _conversationSyncService.PropagateDeletion(focus, relativePath, versions));
+            if (result.HasErrors)
+            {
+                ShowNotice($"会话已从当前版本删除，但有 {result.Errors.Count} 个版本未同步删除：{result.Errors[0]}");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"同步删除会话失败：{ex.Message}");
+        }
+    }
+
+    private async Task<bool> OpenConversationAsync(ManagerInstance owner, ConversationEntry entry)
+    {
+        var instance = Instances.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, owner.Id, StringComparison.Ordinal)) ?? owner;
         if (instance is null
             || entry.SessionId is null
-            || !_instanceRunner.IsRunning(instance.Id)
-            || string.IsNullOrWhiteSpace(instance.WebUrl))
+            || string.IsNullOrWhiteSpace(instance.Id))
         {
             return false;
         }
 
-        OpenChatWindow(instance.Id, instance.WebUrl, entry.SessionId);
-        return true;
+        SelectedInstance = instance;
+        if (_instanceRunner.IsRunning(instance.Id)
+            || instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            if (string.IsNullOrWhiteSpace(instance.WebUrl))
+            {
+                return false;
+            }
+
+            OpenChatWindow(instance.Id, instance.WebUrl, entry.SessionId);
+            return true;
+        }
+
+        if (_isLifecycleInProgress)
+        {
+            ShowNotice("实例正在执行启动或停止操作，请稍候再打开对话。");
+            return false;
+        }
+
+        SetLifecycleBusy(true);
+        try
+        {
+            var result = await StartManagedInstanceAsync(instance);
+            if (result is null)
+            {
+                return false;
+            }
+
+            if (!result.IsSuccess || result.WebUrl is null)
+            {
+                ShowNotice(result.Error ?? "无法启动实例，暂时不能打开对话。");
+                return false;
+            }
+
+            OpenChatWindow(instance.Id, result.WebUrl, entry.SessionId);
+            ShowNotice($"实例已启动，正在打开对话：{entry.SessionId}。 ");
+            return true;
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, ex.Message);
+            ShowNotice($"启动实例后打开对话失败：{ex.Message}");
+            return false;
+        }
+        finally
+        {
+            SetLifecycleBusy(false);
+        }
     }
 
     private void ShowNotice(string message)

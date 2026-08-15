@@ -27,6 +27,7 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <StackPanel>
@@ -173,6 +174,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
@@ -180,9 +182,6 @@
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="190" />
-                        <ColumnDefinition Width="160" />
-                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBox x:Name="MarketplaceSearchBox"
@@ -190,43 +189,84 @@
                              Padding="12,8"
                              VerticalContentAlignment="Center"
                              ToolTip="输入插件名称、包名或关键词"
-                             KeyDown="MarketplaceSearchBox_KeyDown" />
-                    <ComboBox x:Name="MarketplaceSourceBox"
-                              Grid.Column="1"
-                              Height="38"
-                              Margin="8,0,0,0"
-                              SelectedIndex="0"
-                              SelectionChanged="MarketplaceFilter_SelectionChanged">
-                        <ComboBoxItem Tag="">全部来源</ComboBoxItem>
-                        <ComboBoxItem Tag="Official">DSh 官方</ComboBoxItem>
-                        <ComboBoxItem Tag="CommunityCatalog">社区目录</ComboBoxItem>
-                        <ComboBoxItem Tag="GitHubTopic">GitHub 发现</ComboBoxItem>
-                        <ComboBoxItem Tag="Custom">自定义目录</ComboBoxItem>
-                    </ComboBox>
-                    <ComboBox x:Name="MarketplaceSortBox"
-                              Grid.Column="2"
-                              Height="38"
-                              Margin="8,0,0,0"
-                              SelectedIndex="0"
-                              SelectionChanged="MarketplaceFilter_SelectionChanged">
-                        <ComboBoxItem Tag="Relevance">默认排序</ComboBoxItem>
-                        <ComboBoxItem Tag="PublishedAt">发布时间</ComboBoxItem>
-                        <ComboBoxItem Tag="Stars">Star 数量</ComboBoxItem>
-                    </ComboBox>
-                    <Button Grid.Column="3"
-                            Content="搜索"
-                            Click="MarketplaceSearch_Click"
-                            Style="{StaticResource PrimaryButton}"
-                            Margin="8,0,0,0" />
-                    <Button Grid.Column="4"
+                             TextChanged="MarketplaceSearchBox_TextChanged" />
+                    <Button Grid.Column="1"
+                            x:Name="MarketplaceRefreshButton"
                             Content="刷新目录"
                             Click="MarketplaceRefresh_Click"
                             Margin="8,0,0,0" />
                 </Grid>
 
-                <StackPanel Grid.Row="1" Margin="0,14,0,12">
+                <StackPanel Grid.Row="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="0,10,0,0">
+                    <TextBlock Text="分类" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ListBox x:Name="MarketplaceCategoryList"
+                             Width="440"
+                             Height="34"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             SelectedIndex="0"
+                             SelectionChanged="MarketplaceFilter_SelectionChanged">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="10,6" />
+                                <Setter Property="Margin" Value="0,0,4,0" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#E3F0FD" />
+                                        <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBoxItem Tag="">全部</ListBoxItem>
+                        <ListBoxItem Tag="UI">UI</ListBoxItem>
+                        <ListBoxItem Tag="工具">工具</ListBoxItem>
+                        <ListBoxItem Tag="工作流">工作流</ListBoxItem>
+                        <ListBoxItem Tag="Agent">Agent</ListBoxItem>
+                        <ListBoxItem Tag="模型">模型</ListBoxItem>
+                        <ListBoxItem Tag="主题">主题</ListBoxItem>
+                        <ListBoxItem Tag="开发">开发</ListBoxItem>
+                    </ListBox>
+                    <ComboBox x:Name="MarketplaceSortBox"
+                              Width="126"
+                              Height="38"
+                              Margin="8,0,0,0"
+                              SelectedIndex="0"
+                              ToolTip="排序方式"
+                              SelectionChanged="MarketplaceFilter_SelectionChanged">
+                        <ComboBoxItem Tag="Relevance">默认排序</ComboBoxItem>
+                        <ComboBoxItem Tag="PublishedAt">最新发布</ComboBoxItem>
+                        <ComboBoxItem Tag="Stars">热门（Star）</ComboBoxItem>
+                    </ComboBox>
+                    <ComboBox x:Name="MarketplaceSourceBox"
+                              Width="150"
+                              Height="38"
+                              Margin="8,0,0,0"
+                              SelectedIndex="0"
+                              ToolTip="次级来源筛选"
+                              SelectionChanged="MarketplaceFilter_SelectionChanged">
+                        <ComboBoxItem Tag="">来源：全部</ComboBoxItem>
+                        <ComboBoxItem Tag="Official">DSh 官方</ComboBoxItem>
+                        <ComboBoxItem Tag="CommunityCatalog">社区目录</ComboBoxItem>
+                        <ComboBoxItem Tag="GitHubTopic">GitHub 发现</ComboBoxItem>
+                        <ComboBoxItem Tag="Custom">自定义目录</ComboBoxItem>
+                    </ComboBox>
+                </StackPanel>
+
+                <StackPanel Grid.Row="2" Margin="0,14,0,12">
                     <TextBlock Text="插件市场" FontSize="21" FontWeight="SemiBold" />
-                    <TextBlock Text="右侧显示市场候选；安装前会再次检查 package.json 和 DSh bundle。"
+                    <TextBlock Text="输入时直接在本地目录中筛选；只有点击“刷新目录”才会联网。安装前会再次检查 package.json 和 DSh bundle。"
                                Foreground="{StaticResource MutedBrush}"
                                FontSize="11"
                                Margin="0,4,0,0" />
@@ -236,7 +276,7 @@
                                Margin="0,4,0,0" />
                 </StackPanel>
 
-                <Border Grid.Row="2"
+                <Border Grid.Row="3"
                         Background="#F8FBFE"
                         BorderBrush="{StaticResource LineBrush}"
                         BorderThickness="1"
@@ -292,22 +332,70 @@
                                             <WrapPanel Margin="0,6,0,0">
                                                 <TextBlock Text="{Binding SourceText}" Foreground="{StaticResource BlueBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding Category}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,12,0" />
+                                                <TextBlock Text="{Binding VersionStatusText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding VerificationText}" Foreground="#25875A" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding StarsText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding PublishedText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                                             </WrapPanel>
                                         </StackPanel>
                                         <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                            <Button Content="预览"
+                                                    Click="MarketplaceThemePreview_Click"
+                                                    Padding="12,6"
+                                                    Margin="0,0,0,7">
+                                                <Button.Style>
+                                                    <Style TargetType="Button">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsTheme}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Content="{Binding ThemeActionText}"
+                                                    Click="MarketplaceThemeApply_Click"
+                                                    IsEnabled="{Binding ThemeCanApply}"
+                                                    Padding="12,6"
+                                                    Margin="0,0,0,7">
+                                                <Button.Style>
+                                                    <Style TargetType="Button">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsTheme}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
                                             <Button Content="{Binding ActionText}"
                                                     Click="MarketplaceAction_Click"
                                                     IsEnabled="{Binding CanAction}"
                                                     Padding="12,6"
                                                     Style="{StaticResource PrimaryButton}" />
                                             <Button Content="卸载"
-                                                    Click="MarketplaceRemove_Click"
-                                                    IsEnabled="{Binding CanRemove}"
-                                                    Padding="12,6"
-                                                    Margin="0,7,0,0" />
+                                                     Click="MarketplaceRemove_Click"
+                                                     IsEnabled="{Binding CanRemove}"
+                                                     Padding="12,6"
+                                                     Margin="0,7,0,0" />
+                                            <TextBlock Text="{Binding ThemeStatusText}"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="10"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,7,0,0">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsTheme}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
@@ -316,7 +404,20 @@
                     </ListBox>
                 </Border>
 
-                <TextBlock Grid.Row="3"
+                <StackPanel Grid.Row="4"
+                            x:Name="MarketplaceProgressPanel"
+                            Visibility="Collapsed"
+                            Margin="0,10,0,0">
+                    <TextBlock x:Name="MarketplaceProgressText"
+                               Foreground="{StaticResource BlueBrush}"
+                               TextWrapping="Wrap" />
+                    <ProgressBar x:Name="MarketplaceProgressBar"
+                                 Height="7"
+                                 Margin="0,6,0,0"
+                                 IsIndeterminate="True" />
+                </StackPanel>
+
+                <TextBlock Grid.Row="5"
                            x:Name="MarketplaceStatusText"
                            Foreground="{StaticResource MutedBrush}"
                            TextWrapping="Wrap"

@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace DshLauncher.Models;
@@ -67,4 +69,107 @@ public sealed record ManagerInstance(
         InstanceRuntimeStatus.Stopped => "已停止",
         _ => "待检查"
     };
+
+    [JsonIgnore]
+    public string DshVersionText => string.IsNullOrWhiteSpace(DetectedVersion)
+        ? "DSh 版本未标记"
+        : $"DSh {DetectedVersion}";
+
+    [JsonIgnore]
+    public string ResourceSummaryText => $"{ReadPluginCount()} Plugins · {ReadSkillCount()} Skills";
+
+    private int ReadPluginCount()
+    {
+        var path = Path.Combine(DshHome, "profiles", "web", "package.json");
+        if (!File.Exists(path))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (document.RootElement.TryGetProperty("dependencies", out var dependencies)
+                && dependencies.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var dependency in dependencies.EnumerateObject())
+                {
+                    names.Add(dependency.Name);
+                }
+            }
+
+            if (document.RootElement.TryGetProperty("dsh", out var dsh)
+                && dsh.ValueKind == JsonValueKind.Object
+                && dsh.TryGetProperty("profile", out var profile)
+                && profile.ValueKind == JsonValueKind.Object
+                && profile.TryGetProperty("bundles", out var bundles)
+                && bundles.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var bundle in bundles.EnumerateArray())
+                {
+                    if (bundle.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(bundle.GetString()))
+                    {
+                        names.Add(bundle.GetString()!);
+                    }
+                }
+            }
+
+            return names.Count;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+
+    private int ReadSkillCount()
+    {
+        return CountSkillRoot(Path.Combine(DshHome, "skills"))
+            + CountSkillRoot(Path.Combine(DshHome, ".agents", "skills"));
+    }
+
+    private static int CountSkillRoot(string root)
+    {
+        if (!Directory.Exists(root) || IsReparsePoint(root))
+        {
+            return 0;
+        }
+
+        var count = 0;
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root))
+        {
+            if (IsReparsePoint(entry))
+            {
+                continue;
+            }
+
+            if (Directory.Exists(entry))
+            {
+                if (File.Exists(Path.Combine(entry, "SKILL.md")))
+                {
+                    count++;
+                }
+            }
+            else if (entry.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 }

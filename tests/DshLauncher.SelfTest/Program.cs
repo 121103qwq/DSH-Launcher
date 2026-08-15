@@ -26,12 +26,15 @@ var tests = new (string Name, Func<Task> Run)[]
     ("DSh instance lifecycle", TestDshInstanceLifecycle),
     ("Attached runtime lifecycle", TestAttachedRuntimeLifecycle),
     ("Extension ecosystem isolation", TestExtensionEcosystemIsolation),
+    ("dsh-market theme bridge", TestDshMarketThemeBridge),
     ("Plugin command supplies pnpm runtime", TestPluginCommandSuppliesPnpmRuntime),
     ("Marketplace discovery and verification", TestMarketplaceDiscoveryAndVerification),
     ("Version copy, clean version and package import", TestVersionPackageOperations),
     ("Model settings round-trip", TestModelSettingsRoundTrip),
     ("Provider state and diagnostics", TestProviderStateAndDiagnostics),
-    ("Conversation file management", TestConversationFileManagement)
+    ("Model provider synchronization", TestModelProviderSynchronization),
+    ("Conversation file management", TestConversationFileManagement),
+    ("Conversation synchronization", TestConversationSynchronization)
 };
 
 var failures = 0;
@@ -575,6 +578,17 @@ static async Task TestExtensionEcosystemIsolation()
     Assert(File.Exists(skill.Location), "导入 Skill 后必须存在 SKILL.md。");
     Assert((await service.ListAsync(instance)).Any(entry => entry.Id == skill.Id), "导入 Skill 后应能从 DSH_HOME 列出。");
 
+    var agentSkillDirectory = Path.Combine(home, ".agents", "skills", "agent-only");
+    Directory.CreateDirectory(agentSkillDirectory);
+    File.WriteAllText(
+        Path.Combine(agentSkillDirectory, "SKILL.md"),
+        "---\nname: agent-only\ndescription: Instance-local agent skill\n---\n# Agent only\n",
+        new UTF8Encoding(false));
+    var agentSkill = (await service.ListAsync(instance)).Single(entry => entry.Name == "agent-only");
+    Assert(agentSkill.Managed, "实例 DSH_AGENTS_HOME 下的 Skill 必须被识别为当前实例资源。");
+    await service.RemoveSkillAsync(instance, agentSkill);
+    Assert(!Directory.Exists(agentSkillDirectory), "删除实例 DSH_AGENTS_HOME 下的 Skill 不能留下目录。");
+
     await AssertThrowsAsync<InvalidOperationException>(
         () => service.ImportSkillAsync(instance, Path.Combine(home, "skills")),
         "不能把包含 skills 根目录的目录复制到它的子目录。");
@@ -626,6 +640,57 @@ static async Task TestExtensionEcosystemIsolation()
         () => guarded.ImportSkillAsync(instance, skillSource),
         "实例运行时不能导入 Skill。");
     await service.RemoveSkillAsync(instance, skill);
+}
+
+static async Task TestDshMarketThemeBridge()
+{
+    var requests = new List<HttpRequestMessage>();
+    using var client = new HttpClient(new ProviderTestHandler(request =>
+    {
+        requests.Add(request);
+        if (request.RequestUri?.AbsolutePath == "/dsh-market/installed")
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"installed\":{\"dsh-theme-dark\":\"github:theme/dark\"},\"live\":[\"dsh-theme-dark\"]}",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+
+        Assert(request.RequestUri?.AbsolutePath == "/dsh-market/use-skin", "主题应用必须调用 dsh-market 的 use-skin 路由。");
+        Assert(request.Headers.TryGetValues("Origin", out var origins)
+            && origins.Single() == "http://127.0.0.1:43123", "主题应用必须发送当前实例的同源 Origin。");
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{\"ok\":true,\"live\":[\"dsh-theme-dark\"]}",
+                Encoding.UTF8,
+                "application/json")
+        };
+    }));
+
+    using var service = new DshMarketThemeService(client);
+    var instance = CreateTestInstance("theme-test", "C:\\workspace", "C:\\dsh-home") with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        WebUrl = "http://127.0.0.1:43123/"
+    };
+    var state = await service.ReadAsync(instance);
+    Assert(state.IsAvailable && state.InstalledNames.Contains("dsh-theme-dark"), "应读取 dsh-market 的已安装主题名称。");
+    Assert(state.LiveNames.Contains("dsh-theme-dark"), "应读取 dsh-market 当前热加载资源。");
+
+    var applied = await service.ApplyAsync(instance, "dsh-theme-dark");
+    Assert(applied.IsSuccess && applied.LiveNames.Contains("dsh-theme-dark"), "应通过 dsh-market 应用主题并读取结果。");
+    Assert(requests.Count == 2, "主题桥接应只执行一次状态读取和一次应用请求。");
+
+    var unavailable = await service.ReadAsync(instance with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Stopped,
+        WebUrl = null
+    });
+    Assert(!unavailable.IsAvailable, "未运行实例不能虚构 dsh-market 主题状态。");
 }
 
 static async Task TestPluginCommandSuppliesPnpmRuntime()
@@ -692,6 +757,27 @@ static async Task TestMarketplaceDiscoveryAndVerification()
             return JsonResponse("{\"plugins\":[{\"name\":\"demo-plugin\",\"npm\":\"demo-plugin\",\"description\":\"demo\",\"category\":\"tools\"}]}");
         }
 
+        if (url.Contains("api.github.com/repos/demo/monorepo", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"default_branch\":\"develop\"}");
+        }
+
+        if (url.Contains("api.github.com/repos/demo/community-theme", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"default_branch\":\"develop\"}");
+        }
+
+        if (url.Contains("raw.githubusercontent.com/demo/community-theme/develop/package.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"name\":\"community-theme\",\"version\":\"1.0.0\",\"main\":\"index.js\",\"dsh.bundle.patch\":{}}");
+        }
+
+        if (url.Contains("raw.githubusercontent.com/demo/monorepo/develop/packages/theme/package.json", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("raw.githubusercontent.com/demo/monorepo/feature/packages/theme/package.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"name\":\"demo-theme\",\"version\":\"2.0.0\",\"main\":\"index.js\",\"dsh.bundle.patch\":{}}");
+        }
+
         if (url.Contains("api.github.com", StringComparison.OrdinalIgnoreCase))
         {
             return JsonResponse("{\"items\":[]}");
@@ -718,6 +804,29 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     Assert(result.Items.Count == 2, "市场搜索应合并社区目录和本地自定义目录，并按关键词过滤。 ");
     Assert(result.Items.All(item => item.VerificationStatus == MarketplaceVerificationStatus.Unverified), "目录条目默认只能标记为待检查，不能把目录收录当成安全证明。 ");
 
+    var commandCatalog = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[{\"name\":\"community-theme\",\"install\":\"dsh plugin --profile web add github:demo/community-theme\",\"category\":\"theme\"}]}",
+        MarketplaceSourceKind.CommunityCatalog,
+        "社区目录");
+    Assert(commandCatalog.Count == 1
+        && commandCatalog[0].InstallSpec == "github:demo/community-theme"
+        && commandCatalog[0].RepositoryUrl == "https://github.com/demo/community-theme",
+        "社区目录的完整 DSh CLI 安装命令应先提取为可传给官方 CLI 的 Plugin spec。 ");
+    var commandVerified = await service.VerifyAsync(commandCatalog[0]);
+    Assert(commandVerified.Status == MarketplaceVerificationStatus.Verified
+        && commandVerified.InstallSpec == "github:demo/community-theme",
+        "从社区目录提取出的 GitHub Plugin spec 应能通过 package.json 校验。 ");
+
+    var githubWithPackageName = commandCatalog[0] with
+    {
+        PackageName = "community-theme",
+        RepositoryUrl = "https://github.com/demo/community-theme"
+    };
+    var githubPackageVerified = await service.VerifyAsync(githubWithPackageName);
+    Assert(githubPackageVerified.Status == MarketplaceVerificationStatus.Verified
+        && githubPackageVerified.PackageName == "community-theme",
+        "同时包含展示用包名和 GitHub 安装地址时，应按 GitHub 来源校验而不是误走 npm。 ");
+
     var verified = await service.VerifyAsync(new MarketplaceItem(
         "npm:demo-plugin",
         "demo-plugin",
@@ -732,6 +841,22 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         MarketplaceVerificationStatus.Unverified,
         "待检查"));
     Assert(verified.Status == MarketplaceVerificationStatus.Verified && verified.Version == "1.2.3", "有 dsh.bundle.patch 和入口的 npm 包应通过检查。 ");
+    var npmWithRepositoryMetadata = await service.VerifyAsync(new MarketplaceItem(
+        "npm:demo-plugin-with-repository",
+        "demo-plugin",
+        "demo-plugin",
+        null,
+        "demo",
+        "demo-plugin",
+        "https://github.com/demo/demo-plugin",
+        "tools",
+        MarketplaceSourceKind.CommunityCatalog,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查"));
+    Assert(npmWithRepositoryMetadata.Status == MarketplaceVerificationStatus.Verified
+        && npmWithRepositoryMetadata.Version == "1.2.3",
+        "npm 安装目标附带 GitHub 仓库元数据时，仍应按 npm 包校验。 ");
 
     var rejected = await service.VerifyAsync(new MarketplaceItem(
         "npm:bad-plugin",
@@ -749,6 +874,39 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     Assert(rejected.Status == MarketplaceVerificationStatus.Rejected
         && rejected.Message.Contains("dsh.bundle.patch", StringComparison.Ordinal), "没有 DSh bundle 声明的 npm 包必须被拒绝。 ");
 
+    var githubDefaultBranch = await service.VerifyAsync(new MarketplaceItem(
+        "github:demo/monorepo#path:/packages/theme",
+        "demo-theme",
+        null,
+        null,
+        "theme",
+        "github:demo/monorepo#path:/packages/theme",
+        "https://github.com/demo/monorepo",
+        "theme",
+        MarketplaceSourceKind.GitHubTopic,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查"));
+    Assert(githubDefaultBranch.Status == MarketplaceVerificationStatus.Verified
+        && githubDefaultBranch.PackageName == "demo-theme",
+        "GitHub 校验应读取 default_branch 并支持 monorepo #path 子目录。 ");
+
+    var githubExplicitBranch = await service.VerifyAsync(new MarketplaceItem(
+        "github:demo/monorepo/tree/feature/packages/theme",
+        "demo-theme",
+        null,
+        null,
+        "theme",
+        "https://github.com/demo/monorepo/tree/feature/packages/theme",
+        "https://github.com/demo/monorepo/tree/feature/packages/theme",
+        "theme",
+        MarketplaceSourceKind.GitHubTopic,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查"));
+    Assert(githubExplicitBranch.Status == MarketplaceVerificationStatus.Verified,
+        "GitHub 校验应保留 tree/<branch>/<subpath> 的显式分支。 ");
+
     var root = Path.Combine(temporary.Path, "workspace");
     var home = Path.Combine(temporary.Path, "dsh-home");
     Directory.CreateDirectory(Path.Combine(home, "profiles", "web"));
@@ -757,6 +915,9 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     var instance = CreateTestInstance("marketplace-test", root, home);
     var snapshot = service.CreatePluginSnapshot(instance);
     Assert(File.Exists(Path.Combine(snapshot, "package.json")) && File.Exists(Path.Combine(snapshot, "cordis.patch.yml")), "市场操作前应备份 web profile 配置。 ");
+    File.WriteAllText(Path.Combine(home, "profiles", "web", "package.json"), "{\"broken\":true}", new UTF8Encoding(false));
+    Assert(service.RestorePluginSnapshot(instance, snapshot), "Plugin 操作失败后应能恢复操作前的 web profile 配置。 ");
+    Assert(File.ReadAllText(Path.Combine(home, "profiles", "web", "package.json")) == "{}", "恢复 Plugin 快照不能留下失败操作写入的配置。 ");
 
     var cached = service.ReadCached(null, "plugin");
     Assert(cached is not null && cached.Items.Count == 2, "在线市场结果应写入缓存，并可在没有网络请求时读取。 ");
@@ -770,6 +931,98 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     Assert(sorted[0].Name == "新但冷门", "市场应支持按发布时间排序。 ");
     sorted = MarketplaceService.FilterAndSort(sorted, sortOrder: MarketplaceSortOrder.Stars);
     Assert(sorted[0].Name == "旧但热门", "市场应支持按 Star 数量排序。 ");
+    var localFiltered = MarketplaceService.FilterAndSort(
+        new[]
+        {
+            new MarketplaceItem("local-a", "Aegis Tools", "aegis-tools", "1.0.0", "本地搜索测试", "aegis-tools", null, "tools", MarketplaceSourceKind.Custom, "test", MarketplaceVerificationStatus.Unverified, ""),
+            new MarketplaceItem("local-b", "Other", "other", "1.0.0", "Aegis description", "other", null, "theme", MarketplaceSourceKind.Custom, "test", MarketplaceVerificationStatus.Unverified, "")
+        },
+        query: "Aegis",
+        category: "工具");
+    Assert(localFiltered.Count == 1 && localFiltered[0].Name == "Aegis Tools", "本地搜索应同时支持即时关键词和分类过滤。 ");
+
+    var merged = MarketplaceService.MergeItems(new[]
+    {
+        new MarketplaceItem(
+            "catalog:better-sidebar",
+            "Better Sidebar",
+            null,
+            "1.2.0",
+            "中文介绍",
+            "https://github.com/demo/better-plugins/tree/main/packages/sidebar",
+            "https://github.com/demo/better-plugins/tree/main/packages/sidebar",
+            "ui",
+            MarketplaceSourceKind.CommunityCatalog,
+            "社区目录",
+            MarketplaceVerificationStatus.Unverified,
+            "目录待检查",
+            Stars: 123),
+        new MarketplaceItem(
+            "github:demo/better-plugins",
+            "sidebar",
+            null,
+            null,
+            "GitHub description",
+            "github:demo/better-plugins#path:/packages/sidebar",
+            "https://github.com/demo/better-plugins",
+            "tools",
+            MarketplaceSourceKind.GitHubTopic,
+            "GitHub 发现",
+            MarketplaceVerificationStatus.Unverified,
+            "标签只用于发现")
+    });
+    Assert(merged.Count == 1, "相同 GitHub monorepo 子路径的来源必须合并成一个条目。 ");
+    Assert(merged[0].Stars == 123 && merged[0].Category == "UI", "来源合并不能丢失目录的 Star 和分类。 ");
+    Assert(merged[0].SourceText.Contains("社区目录", StringComparison.Ordinal)
+        && merged[0].SourceText.Contains("GitHub", StringComparison.Ordinal), "合并条目应保留多个来源信息。 ");
+    Assert(MarketplaceService.FilterAndSort(merged, sourceKind: MarketplaceSourceKind.GitHubTopic).Count == 1
+        && MarketplaceService.FilterAndSort(merged, sourceKind: MarketplaceSourceKind.CommunityCatalog).Count == 1,
+        "来源筛选不能因为多来源合并后选择了一个主来源而丢失条目。 ");
+
+    var installed = new ExtensionEntry(
+        "plugin:github:demo/better-plugins#path:/packages/sidebar",
+        ExtensionKind.Plugin,
+        "github:demo/better-plugins#path:/packages/sidebar",
+        "1.0.0",
+        "installed",
+        "profile",
+        true,
+        true);
+    var marketplaceIdentity = MarketplaceService.GetPluginIdentities(merged[0]);
+    var installedIdentity = MarketplaceService.GetPluginIdentities(installed);
+    Assert(marketplaceIdentity.Any(installedIdentity.Contains), "npm/GitHub/subpath identity 应能匹配已安装 Plugin。 ");
+    Assert(MarketplaceService.FindInstalledPlugin(merged[0], new[] { installed }) == installed,
+        "市场更新或卸载应使用当前 profile 中匹配到的真实 Plugin 包名。 ");
+    Assert(MarketplaceService.GetUpdateStatus("1.1.0", "1.0.0") == MarketplaceUpdateStatus.Available, "较新的市场版本应显示可更新。 ");
+    Assert(MarketplaceService.GetUpdateStatus("1.0.0", "1.0.0") == MarketplaceUpdateStatus.UpToDate, "相同版本应显示已是最新。 ");
+    Assert(MarketplaceService.GetUpdateStatus(null, "1.0.0") == MarketplaceUpdateStatus.Unknown, "缺少版本信息时更新状态应为未知。 ");
+
+    var invalidOfficial = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[{\"name\":\"community\",\"npm\":\"community\"}]}",
+        MarketplaceSourceKind.Official,
+        "DSh 官方");
+    var validOfficial = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[{\"name\":\"official\",\"npm\":\"@deepseek-ai/official\"}]}",
+        MarketplaceSourceKind.Official,
+        "DSh 官方");
+    Assert(invalidOfficial.Count == 0 && validOfficial.Count == 1, "官方来源只能接受明确的 DeepSeek 官方包或仓库。 ");
+    var oldCachedOfficial = MarketplaceService.MergeItems(new[]
+    {
+        new MarketplaceItem(
+            "official:community",
+            "community",
+            "community",
+            "1.0.0",
+            "旧缓存",
+            "community",
+            null,
+            "工具",
+            MarketplaceSourceKind.Official,
+            "当前 DSh 运行环境",
+            MarketplaceVerificationStatus.Verified,
+            "旧缓存")
+    });
+    Assert(oldCachedOfficial[0].SourceKind != MarketplaceSourceKind.Official, "旧缓存中的本地依赖不能继续显示为官方来源。 ");
 }
 
 static Task TestVersionPackageOperations()
@@ -820,6 +1073,7 @@ static Task TestVersionPackageOperations()
     Assert(settingsService.ShouldSyncConversations(source, workspacePeer), "全量模式应兜底同步其它版本。 ");
     settingsService.Save(workspacePeer, new VersionSettingsData { SyncAllConfiguration = true });
     Assert(settingsService.ShouldSyncConfiguration(source, workspacePeer), "和所有版本配置同步应覆盖其它版本的独立设置。 ");
+    Assert(settingsService.ShouldSyncConversations(source, workspacePeer), "和所有版本配置同步打开后，对话策略应覆盖其它版本的独立设置。 ");
 
     var sourceSettings = Path.Combine(source.DshHome, "settings.yaml");
     File.WriteAllText(
@@ -829,11 +1083,20 @@ static Task TestVersionPackageOperations()
     var sourceProfile = Path.Combine(source.DshHome, "profiles", "web");
     File.WriteAllText(
         Path.Combine(sourceProfile, "package.json"),
-        "{\"dependencies\":{\"demo-plugin\":\"1.2.3\"},\"scripts\":{\"leak\":\"secret\"},\"dsh\":{\"profile\":{\"bundles\":[\"demo-plugin\"]}}}",
+        "{\"dependencies\":{\"demo-plugin\":\"1.2.3\",\"remote-plugin\":\"https://share-user:plugin-secret@github.com/demo/remote-plugin.git?token=plugin-query-secret\"},\"scripts\":{\"leak\":\"secret\"},\"dsh\":{\"profile\":{\"bundles\":[\"demo-plugin\"]}}}",
         new UTF8Encoding(false));
     var sessions = Path.Combine(source.DshHome, "sessions");
     Directory.CreateDirectory(sessions);
     File.WriteAllText(Path.Combine(sessions, "private.jsonl"), "do not export", new UTF8Encoding(false));
+    var skillDirectory = Path.Combine(source.DshHome, "skills", "code-review");
+    Directory.CreateDirectory(skillDirectory);
+    File.WriteAllText(
+        Path.Combine(skillDirectory, "SKILL.md"),
+        "---\nname: code-review\ndescription: Review code\n---\napiKey: skill-secret\n",
+        new UTF8Encoding(false));
+    var presetDirectory = Path.Combine(source.DshHome, ".agent-presets", "reviewer");
+    Directory.CreateDirectory(presetDirectory);
+    File.WriteAllText(Path.Combine(presetDirectory, "agent.cordis.yml"), "name: reviewer\n", new UTF8Encoding(false));
     var exportPath = Path.Combine(temporary.Path, "share.dshpack");
     packages.ExportPackage(
         source,
@@ -852,11 +1115,38 @@ static Task TestVersionPackageOperations()
             "导出 Provider 配置必须删除 API Key 值但保留环境变量名。 ");
         Assert(exported.GetEntry("dsh-home/profiles/web/package.json") is not null,
             "导出 Plugin 配置时应保留精简后的 profile package.json。 ");
+        using var pluginReader = new StreamReader(exported.GetEntry("dsh-home/profiles/web/package.json")!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var safePlugins = pluginReader.ReadToEnd();
+        Assert(!safePlugins.Contains("plugin-secret", StringComparison.Ordinal)
+            && !safePlugins.Contains("plugin-query-secret", StringComparison.Ordinal)
+            && !safePlugins.Contains("share-user@", StringComparison.Ordinal),
+            "导出 Plugin dependency 不能携带 URL 用户名、密码或 Token。 ");
         using var manifestReader = new StreamReader(exported.GetEntry("manifest.json")!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var manifestText = manifestReader.ReadToEnd();
         Assert(manifestText.Contains("\"sessions\": false", StringComparison.Ordinal)
-            && manifestText.Contains("\"apiKeys\": false", StringComparison.Ordinal),
+            && manifestText.Contains("\"apiKeys\": false", StringComparison.Ordinal)
+            && manifestText.Contains("\"plugins\"", StringComparison.Ordinal)
+            && manifestText.Contains("\"skills\"", StringComparison.Ordinal)
+            && manifestText.Contains("\"agentPresets\"", StringComparison.Ordinal)
+            && manifestText.Contains("\"providers\"", StringComparison.Ordinal),
             "整合包 manifest 必须声明不包含会话和 API Key。 ");
+    }
+
+    var preview = packages.PreviewPackage(exportPath);
+    Assert(preview.PluginCount == 2
+        && preview.SkillCount == 1
+        && preview.AgentPresetCount == 1
+        && preview.ProviderCount == 1
+        && preview.Workflow == "standard",
+        "整合包预览必须显示实际导出的 Plugin、Skill、Agent Preset、Provider 和 Workflow。 ");
+    using (var exported = ZipFile.OpenRead(exportPath))
+    {
+        var skillEntry = exported.GetEntry("dsh-home/skills/code-review/SKILL.md");
+        Assert(skillEntry is not null, "整合包应包含可分享的 Skill 文件。 ");
+        using var skillReader = new StreamReader(skillEntry!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        Assert(!skillReader.ReadToEnd().Contains("skill-secret", StringComparison.Ordinal), "Skill 导出不能携带敏感值。 ");
+        Assert(exported.GetEntry("dsh-home/.agent-presets/reviewer/agent.cordis.yml") is not null,
+            "整合包应包含 Agent Preset 配置。 ");
     }
 
     var importedDesign = packages.ImportPackage(exportPath, source);
@@ -865,6 +1155,12 @@ static Task TestVersionPackageOperations()
     var importedSettings = File.ReadAllText(Path.Combine(importedDesign.DshHome, "settings.yaml"));
     Assert(!importedSettings.Contains("super-secret", StringComparison.Ordinal),
         "导入整合包后也不能恢复被清理的 API Key。 ");
+    var importedSkill = Path.Combine(importedDesign.DshHome, "skills", "code-review", "SKILL.md");
+    Assert(File.Exists(importedSkill)
+        && !File.ReadAllText(importedSkill).Contains("skill-secret", StringComparison.Ordinal),
+        "导入整合包应恢复 Skill，但不能恢复敏感值。 ");
+    Assert(File.Exists(Path.Combine(importedDesign.DshHome, ".agent-presets", "reviewer", "agent.cordis.yml")),
+        "导入整合包应恢复 Agent Preset。 ");
     Assert(settingsService.Read(importedDesign).NodeExecutablePath is null,
         "整合包不能恢复本机 Node.js 路径。 ");
 
@@ -887,6 +1183,20 @@ static Task TestVersionPackageOperations()
     Assert(File.ReadAllText(Path.Combine(imported.DshHome, "imported.txt")) == "imported", "整合包应解压到新版本的 DSH_HOME。 ");
     packages.SavePackageExtension("zip");
     Assert(packages.PackageExtension == ".zip", "整合包扩展名设置应自动补点并保存。 ");
+
+    var deletable = packages.CreateCleanVersion(source, "待删除版本");
+    File.WriteAllText(Path.Combine(deletable.DshHome, "delete-me.txt"), "temporary", new UTF8Encoding(false));
+    var backupDirectory = Path.Combine(launcherRoot, "backups", deletable.Id);
+    Directory.CreateDirectory(backupDirectory);
+    File.WriteAllText(Path.Combine(backupDirectory, "backup.txt"), "temporary", new UTF8Encoding(false));
+    AssertThrows<InvalidOperationException>(
+        () => packages.DeleteVersion(deletable with { RuntimeStatus = InstanceRuntimeStatus.Running }),
+        "运行中的版本不能删除。 ");
+    Assert(Directory.Exists(deletable.DshHome), "删除保护失败时不能提前删除版本目录。 ");
+    packages.DeleteVersion(deletable);
+    Assert(!registry.Load().Any(item => item.Id == deletable.Id), "删除版本后注册记录必须移除。 ");
+    Assert(!Directory.Exists(deletable.DshHome), "删除版本后必须清理 DSH_HOME。 ");
+    Assert(!Directory.Exists(backupDirectory), "删除版本后必须清理该版本的 Launcher 备份。 ");
     return Task.CompletedTask;
 }
 
@@ -991,6 +1301,72 @@ static async Task TestProviderStateAndDiagnostics()
     Assert(!unauthorized.IsHealthy && unauthorized.StatusText == "认证失败", "Provider 返回 401 时应显示认证问题。 ");
 }
 
+static Task TestModelProviderSynchronization()
+{
+    using var temporary = new TestDirectory();
+    var runtime = Path.Combine(temporary.Path, "runtime");
+    Directory.CreateDirectory(runtime);
+    var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var first = registry.Register("模型版本 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var second = registry.Register("模型版本 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var independent = registry.Register("独立模型版本", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var settings = new VersionSettingsService();
+    settings.Save(first, new VersionSettingsData { SyncModelProviders = true });
+    settings.Save(second, new VersionSettingsData { SyncModelProviders = true });
+    settings.Save(independent, new VersionSettingsData { SyncModelProviders = false });
+
+    var models = new ModelService();
+    models.SaveDeepSeekAsync(
+        first,
+        "FIRST_KEY",
+        "https://first.example/v1",
+        new[] { "first-model" }).GetAwaiter().GetResult();
+    models.SaveOpenAiCompatibleAsync(
+        second,
+        "gateway",
+        "SECOND_KEY",
+        "https://second.example/v1",
+        new[] { "second-model" }).GetAwaiter().GetResult();
+    models.SaveDeepSeekAsync(
+        independent,
+        "INDEPENDENT_KEY",
+        "https://independent.example/v1",
+        new[] { "independent-model" }).GetAwaiter().GetResult();
+
+    File.SetLastWriteTimeUtc(
+        Path.Combine(first.DshHome, "settings.yaml"),
+        DateTime.UtcNow.AddMinutes(-2));
+    File.SetLastWriteTimeUtc(
+        Path.Combine(second.DshHome, "settings.yaml"),
+        DateTime.UtcNow.AddMinutes(-1));
+
+    var states = new ProviderStateService();
+    states.SetEnabled(second, "gateway", false);
+    var sync = new ModelProviderSyncService(settings, models, states);
+    var result = sync.Synchronize(first, new[] { first, second, independent });
+    Assert(result.CopiedVersions == 1 && !result.HasErrors, "模型 Provider 应从最新停止版本同步到同策略版本。 ");
+
+    var synchronized = models.Read(first);
+    var gateway = synchronized.Single(provider => provider.Provider == "gateway");
+    Assert(gateway.BaseUrl == "https://second.example/v1"
+        && gateway.Models.SequenceEqual(new[] { "second-model" }), "同步后应保留最新 Provider 的地址和模型列表。 ");
+    Assert(!synchronized.Any(provider => provider.Configured && provider.SettingsNamespace == "llm-deepseek"), "同步 Provider 不能保留源版本已经不存在的 DeepSeek 配置。 ");
+    Assert(!states.IsEnabled(first, "gateway"), "同步后应复制 Provider 的禁用状态。 ");
+
+    var independentProvider = models.Read(independent).Single(provider => provider.SettingsNamespace == "llm-deepseek");
+    Assert(independentProvider.BaseUrl == "https://independent.example/v1"
+        && independentProvider.Models.SequenceEqual(new[] { "independent-model" }), "关闭自动同步的版本不能被其它版本覆盖。 ");
+
+    var runningSecond = second with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Managed
+    };
+    var skipped = sync.Synchronize(first, new[] { first, runningSecond });
+    Assert(skipped.SkippedRunningVersions == 1 && skipped.CopiedVersions == 0, "运行中的版本不能被 Provider 同步写入。 ");
+    return Task.CompletedTask;
+}
+
 static Task TestConversationFileManagement()
 {
     using var temporary = new TestDirectory();
@@ -1063,6 +1439,71 @@ static Task TestConversationFileManagement()
 
     var guarded = new ConversationService(isRunning: _ => true);
     AssertThrows<InvalidOperationException>(() => guarded.Export(importedInstance, entries[0], Path.Combine(temporary.Path, "blocked.jsonl")), "实例运行时不能导出可能正在写入的会话快照。");
+    return Task.CompletedTask;
+}
+
+static Task TestConversationSynchronization()
+{
+    using var temporary = new TestDirectory();
+    var runtime = Path.Combine(temporary.Path, "runtime");
+    Directory.CreateDirectory(runtime);
+    var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var first = registry.Register("工作区 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var second = registry.Register("工作区 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var independent = registry.Register("独立版本", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var settings = new VersionSettingsService();
+    settings.Save(first, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Workspace,
+        ConversationWorkspace = "编程"
+    });
+    settings.Save(second, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Workspace,
+        ConversationWorkspace = "编程"
+    });
+    settings.Save(independent, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Independent
+    });
+
+    var firstSession = Path.Combine(first.DshHome, "sessions", "--C-work--", "session-a", "session.jsonl");
+    Directory.CreateDirectory(Path.GetDirectoryName(firstSession)!);
+    File.WriteAllText(firstSession, "first workspace session", new UTF8Encoding(false));
+    File.SetLastWriteTimeUtc(firstSession, new DateTime(2026, 8, 16, 10, 0, 0, DateTimeKind.Utc));
+
+    var sync = new ConversationSyncService(settings);
+    var workspaceResult = sync.Synchronize(first, new[] { first, second, independent });
+    var secondSession = Path.Combine(second.DshHome, "sessions", "--C-work--", "session-a", "session.jsonl");
+    Assert(workspaceResult.CopiedFiles == 1 && File.Exists(secondSession), "工作区同步应把会话文件复制到同工作区版本。");
+    Assert(!File.Exists(Path.Combine(independent.DshHome, "sessions", "--C-work--", "session-a", "session.jsonl")), "独立版本不应收到工作区会话文件。");
+
+    var newer = "newer workspace session";
+    File.WriteAllText(firstSession, newer, new UTF8Encoding(false));
+    File.SetLastWriteTimeUtc(firstSession, new DateTime(2026, 8, 16, 11, 0, 0, DateTimeKind.Utc));
+    var runningSecond = second with { RuntimeStatus = InstanceRuntimeStatus.Running };
+    var skipped = sync.Synchronize(first, new[] { first, runningSecond, independent });
+    Assert(skipped.SkippedRunningVersions == 1, "运行中的工作区版本应被跳过，不能直接写入它的会话文件。");
+    Assert(File.ReadAllText(secondSession) == "first workspace session", "运行中的版本会话文件不应被同步覆盖。");
+
+    settings.Save(independent, new VersionSettingsData { ConversationSyncMode = ConversationSyncMode.All });
+    var allResult = sync.Synchronize(independent, new[] { first, second, independent });
+    var independentSession = Path.Combine(independent.DshHome, "sessions", "--C-work--", "session-a", "session.jsonl");
+    Assert(allResult.CopiedFiles >= 2, "全量模式应把最新会话同步到其它停止版本。");
+    Assert(File.ReadAllText(independentSession) == newer, "全量模式应选择停止版本中更新时间较新的会话文件。");
+    Assert(File.ReadAllText(secondSession) == newer, "全量模式应覆盖停止的工作区版本。");
+
+    var relativeSession = Path.Combine("--C-work--", "session-a", "session.jsonl");
+    var deletion = sync.PropagateDeletion(independent, relativeSession, new[] { first, second, independent });
+    Assert(!deletion.HasErrors, "同步删除停止版本中的会话不应产生错误。");
+    Assert(!File.Exists(firstSession) && !File.Exists(secondSession) && !File.Exists(independentSession), "同步删除应清理所有关联停止版本的会话文件。");
+    sync.SynchronizeAll(new[] { first, second, independent });
+    Assert(!File.Exists(firstSession) && !File.Exists(secondSession) && !File.Exists(independentSession), "删除标记应阻止旧会话在下一次同步时复活。");
+
+    File.WriteAllText(firstSession, "new session after deletion", new UTF8Encoding(false));
+    File.SetLastWriteTimeUtc(firstSession, DateTime.UtcNow.AddSeconds(2));
+    sync.Synchronize(first, new[] { first, second, independent });
+    Assert(File.ReadAllText(independentSession) == "new session after deletion", "重新创建同一路径的新会话应清除旧删除标记并同步。");
     return Task.CompletedTask;
 }
 

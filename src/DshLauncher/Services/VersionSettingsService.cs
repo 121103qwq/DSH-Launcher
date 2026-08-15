@@ -91,6 +91,11 @@ public sealed class VersionSettingsService
     {
         var leftSettings = Read(left);
         var rightSettings = Read(right);
+        if (leftSettings.SyncAllConfiguration || rightSettings.SyncAllConfiguration)
+        {
+            return true;
+        }
+
         if (leftSettings.ConversationSyncMode == ConversationSyncMode.All
             || rightSettings.ConversationSyncMode == ConversationSyncMode.All)
         {

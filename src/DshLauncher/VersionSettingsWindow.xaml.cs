@@ -20,7 +20,6 @@ public partial class VersionSettingsWindow : UserControl
     private readonly ExtensionService _extensionService;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntimeProvider;
     private readonly VersionPackageService _packageService;
-    private readonly Action<ManagerInstance> _instanceUpdated;
     private readonly Action _settingsSaved;
     private VersionSettingsData _settings = new();
 
@@ -31,7 +30,6 @@ public partial class VersionSettingsWindow : UserControl
         ExtensionService extensionService,
         Func<NodeRuntimeInfo?> nodeRuntimeProvider,
         VersionPackageService packageService,
-        Action<ManagerInstance> instanceUpdated,
         Action settingsSaved)
     {
         _instance = instance;
@@ -40,7 +38,6 @@ public partial class VersionSettingsWindow : UserControl
         _extensionService = extensionService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _packageService = packageService;
-        _instanceUpdated = instanceUpdated;
         _settingsSaved = settingsSaved;
 
         InitializeComponent();
@@ -62,7 +59,6 @@ public partial class VersionSettingsWindow : UserControl
             : "版本设置";
         VersionIdentityText.Text = _instance?.Name ?? "尚未选择版本";
         PersonalizationVersionText.Text = _instance?.Name ?? "请先创建或选择一个版本";
-        VersionNameBox.Text = _instance?.Name ?? string.Empty;
         PersonalizationDetailsText.Text = _instance is null
             ? "版本设置需要绑定到一个真实版本。请先在启动页选择实例，或在版本控制中创建版本。"
             : $"{_instance.KindText} · {_instance.RootPath}\n状态：{_instance.StatusText}";
@@ -137,51 +133,6 @@ public partial class VersionSettingsWindow : UserControl
     private void Plugins_Click(object sender, RoutedEventArgs e) => ShowPage(PluginsButton);
 
     private void Export_Click(object sender, RoutedEventArgs e) => ShowPage(ExportButton);
-
-    private void SaveVersionName_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null)
-        {
-            VersionNameStatusText.Text = "请先选择版本。";
-            return;
-        }
-
-        var name = VersionNameBox.Text.Trim();
-        if (name.Length == 0)
-        {
-            VersionNameStatusText.Text = "版本名称不能为空。";
-            return;
-        }
-
-        if (name.Length > 80)
-        {
-            VersionNameStatusText.Text = "版本名称不能超过 80 个字符。";
-            return;
-        }
-
-        if (string.Equals(name, _instance.Name, StringComparison.Ordinal))
-        {
-            VersionNameStatusText.Text = "版本名称没有变化。";
-            return;
-        }
-
-        try
-        {
-            var updated = _instance with { Name = name };
-            _instanceUpdated(updated);
-            _instance = updated;
-            VersionSettingsHeaderText.Text = $"版本设置 - {updated.Name}";
-            VersionIdentityText.Text = updated.Name;
-            PersonalizationVersionText.Text = updated.Name;
-            VersionNameBox.Text = updated.Name;
-            VersionNameStatusText.Text = $"已保存版本名称：{updated.Name}";
-            _settingsSaved();
-        }
-        catch (Exception ex)
-        {
-            VersionNameStatusText.Text = $"保存版本名称失败：{ex.Message}";
-        }
-    }
 
     private void ShowPage(WpfButton activeButton)
     {

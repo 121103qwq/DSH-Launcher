@@ -14,6 +14,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly VersionPackageService _packageService;
     private readonly Func<ManagerInstance?> _templateProvider;
     private readonly Action<ManagerInstance> _versionCreated;
+    private readonly Action<ManagerInstance> _versionDeleted;
     private readonly Action<ManagerInstance> _versionSelected;
     private bool _isBusy;
 
@@ -23,11 +24,13 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         VersionPackageService packageService,
         Func<ManagerInstance?> templateProvider,
         Action<ManagerInstance> versionCreated,
+        Action<ManagerInstance> versionDeleted,
         Action<ManagerInstance> versionSelected)
     {
         _packageService = packageService;
         _templateProvider = templateProvider;
         _versionCreated = versionCreated;
+        _versionDeleted = versionDeleted;
         _versionSelected = versionSelected;
         foreach (var version in versions)
         {
@@ -59,6 +62,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedVersionDetails));
             OnPropertyChanged(nameof(CanClone));
             OnPropertyChanged(nameof(CloneButtonToolTip));
+            OnPropertyChanged(nameof(CanDelete));
+            OnPropertyChanged(nameof(DeleteButtonToolTip));
             if (value is not null)
             {
                 _versionSelected(value);
@@ -86,6 +91,19 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             ? "请先停止这个版本，再复制完整 DSH_HOME。"
             : "复制当前版本的完整 DSH_HOME、Provider、Plugin、Skill 和对话设置。";
 
+    public bool CanDelete => !_isBusy
+        && SelectedVersion is not null
+        && SelectedVersion.RuntimeStatus != InstanceRuntimeStatus.Running
+        && SelectedVersion.RuntimeOwnership != InstanceRuntimeOwnership.Attached;
+
+    public string DeleteButtonToolTip => SelectedVersion is null
+        ? "请先在左侧选择一个版本。"
+        : SelectedVersion.RuntimeStatus == InstanceRuntimeStatus.Running
+            ? "运行中的版本不能删除，请先停止。"
+            : SelectedVersion.RuntimeOwnership == InstanceRuntimeOwnership.Attached
+                ? "Attached 版本不能删除，请先解除外部连接。"
+                : "删除注册记录、该版本的 DSH_HOME 和 Launcher 备份，且无法恢复。";
+
     public string PackageFormatText => $"当前格式：{_packageService.PackageExtension}";
 
     private void Window_OnLoaded(object sender, RoutedEventArgs e)
@@ -100,6 +118,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedVersionDetails));
         OnPropertyChanged(nameof(CanClone));
         OnPropertyChanged(nameof(CloneButtonToolTip));
+        OnPropertyChanged(nameof(CanDelete));
+        OnPropertyChanged(nameof(DeleteButtonToolTip));
         OnPropertyChanged(nameof(PackageFormatText));
     }
 
@@ -111,6 +131,52 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private async void CloneVersion_Click(object sender, RoutedEventArgs e)
     {
         await CreateVersionAsync(clone: true);
+    }
+
+    private async void DeleteVersion_Click(object sender, RoutedEventArgs e)
+    {
+        var version = SelectedVersion;
+        if (version is null)
+        {
+            SetStatus("删除版本前请先在左侧选择一个版本。 ");
+            return;
+        }
+
+        if (!CanDelete)
+        {
+            SetStatus(DeleteButtonToolTip);
+            return;
+        }
+
+        var result = System.Windows.MessageBox.Show(
+            Window.GetWindow(this),
+            $"确定删除版本“{version.Name}”？\n\n这会删除该版本的 DSH_HOME、Launcher 备份和注册记录，操作无法恢复。不会删除共享的 DSh 运行目录。\n\n如果要保留配置，请先导出整合包。",
+            "确认删除版本",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning);
+        if (result != System.Windows.MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            await Task.Run(() => _packageService.DeleteVersion(version));
+            Versions.Remove(version);
+            _versionDeleted(version);
+            SelectedVersion = Versions.FirstOrDefault();
+            OnPropertyChanged(nameof(VersionCountText));
+            SetStatus($"版本已删除：{version.Name}。共享的 DSh 运行目录没有受到影响。 ");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"删除版本失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private async Task CreateVersionAsync(bool clone)
@@ -191,6 +257,26 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         SetBusy(true);
         try
         {
+            var preview = await Task.Run(() => _packageService.PreviewPackage(dialog.FileName));
+            var previewText = $"{preview.Name}\n\n"
+                + $"{preview.Description}\n\n"
+                + $"DSh：{preview.DshVersion ?? "未标记"}\n"
+                + $"Plugins：{preview.PluginCount}\n"
+                + $"Skills：{preview.SkillCount}\n"
+                + $"Agent Presets：{preview.AgentPresetCount}\n"
+                + $"Providers：{preview.ProviderCount}\n"
+                + $"Workflow：{preview.Workflow ?? "无"}\n\n"
+                + $"将创建新的独立版本“{preview.Name}”，不会覆盖已有版本。\n\n确认导入吗？";
+            if (System.Windows.MessageBox.Show(
+                    Window.GetWindow(this),
+                    previewText,
+                    "导入整合包预览",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Information) != System.Windows.MessageBoxResult.Yes)
+            {
+                return;
+            }
+
             var created = await Task.Run(() => _packageService.ImportPackage(dialog.FileName, template));
             Versions.Add(created);
             SelectedVersion = created;

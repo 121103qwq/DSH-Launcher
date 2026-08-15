@@ -239,8 +239,18 @@ public sealed class ExtensionService
             throw new InvalidOperationException("只能删除当前实例导入的 Skill。");
         }
 
-        var root = Path.GetFullPath(Path.Combine(instance.DshHome, "skills"));
         var target = Path.GetFullPath(entry.Location);
+        var roots = new[]
+        {
+            Path.GetFullPath(Path.Combine(instance.DshHome, "skills")),
+            Path.GetFullPath(Path.Combine(instance.DshHome, ".agents", "skills"))
+        };
+        var root = roots.FirstOrDefault(candidate => IsWithinPath(target, candidate));
+        if (root is null)
+        {
+            throw new InvalidOperationException("Skill 不在当前实例的隔离目录内。 ");
+        }
+
         EnsurePathDoesNotEscape(target, root);
         RejectReparsePoint(target, "Skill 目录");
         if (!File.Exists(target) && !Directory.Exists(target))
@@ -255,6 +265,14 @@ public sealed class ExtensionService
         else
         {
             File.Delete(target);
+            var parent = Directory.GetParent(target)?.FullName;
+            if (parent is not null
+                && !string.Equals(parent, root, StringComparison.OrdinalIgnoreCase)
+                && Directory.Exists(parent)
+                && !Directory.EnumerateFileSystemEntries(parent).Any())
+            {
+                DeleteDirectoryIfOwned(parent, root);
+            }
         }
         return Task.CompletedTask;
     }
@@ -485,7 +503,7 @@ public sealed class ExtensionService
         var roots = new[]
         {
             (Path.Combine(instance.DshHome, "skills"), true),
-            (Path.Combine(instance.DshHome, ".agents", "skills"), false),
+            (Path.Combine(instance.DshHome, ".agents", "skills"), true),
             (Path.Combine(instance.RootPath, ".dsh", "skills"), false),
             (Path.Combine(instance.RootPath, ".agents", "skills"), false)
         };
@@ -1206,6 +1224,16 @@ public sealed class ExtensionService
         {
             throw new InvalidOperationException("目标路径不在实例管理目录内。");
         }
+    }
+
+    private static bool IsWithinPath(string path, string root)
+    {
+        var normalizedPath = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedRoot = Path.GetFullPath(root)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(normalizedPath, normalizedRoot, StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void RejectReparsePoint(string path, string label)

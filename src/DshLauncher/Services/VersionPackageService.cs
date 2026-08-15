@@ -28,6 +28,12 @@ public sealed class VersionPackageService
     private static readonly Regex SensitiveInlineValue = new(
         @"(?i)([""']?(?:api[-_]?key|token|secret|password|access[-_]?token|refresh[-_]?token|credential(?:s)?|key)[""']?\s*:\s*)([""'][^""']*[""']|[^,\r\n}\]]+)",
         RegexOptions.CultureInvariant);
+    private static readonly Regex SensitiveUrlUserInfo = new(
+        @"(?i)(https?://)[^/\s:@]+(?::[^/\s@]*)?@",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex SensitiveUrlQuery = new(
+        @"(?i)([?&](?:api[-_]?key|token|secret|password|access[-_]?token|refresh[-_]?token|credential(?:s)?)=)[^&#\s]+",
+        RegexOptions.CultureInvariant);
 
     private readonly InstanceRegistry _registry;
     private readonly LauncherPaths _paths;
@@ -82,6 +88,39 @@ public sealed class VersionPackageService
         }
     }
 
+    public void DeleteVersion(ManagerInstance instance)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        if (instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            || instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            throw new InvalidOperationException("运行中或 Attached 版本不能删除，请先停止或解除外部连接。 ");
+        }
+
+        var registered = _registry.Load().FirstOrDefault(item =>
+            string.Equals(item.Id, instance.Id, StringComparison.Ordinal));
+        if (registered is null)
+        {
+            throw new InvalidOperationException("找不到要删除的版本注册记录。 ");
+        }
+
+        var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(instance.Id));
+        var registeredHome = Path.GetFullPath(registered.DshHome);
+        var requestedHome = Path.GetFullPath(instance.DshHome);
+        if (!string.Equals(registeredHome, expectedHome, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(requestedHome, expectedHome, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("版本 DSH_HOME 不在 Launcher 的隔离目录中，已拒绝删除。 ");
+        }
+
+        DeleteGeneratedDirectory(expectedHome, "版本 DSH_HOME");
+        DeleteGeneratedDirectory(_paths.GetInstanceBackupDirectory(instance.Id), "版本备份目录");
+        if (!_registry.Unregister(instance.Id))
+        {
+            throw new InvalidOperationException("版本数据已删除，但注册记录没有成功更新。 ");
+        }
+    }
+
     public string ExportPackage(
         ManagerInstance instance,
         string packagePath,
@@ -101,6 +140,10 @@ public sealed class VersionPackageService
         {
             "dsh-home/.dsh-launcher/version-settings.json"
         };
+        var plugins = Array.Empty<string>();
+        var skills = new List<string>();
+        var agentPresets = new List<string>();
+        var providers = Array.Empty<string>();
 
         try
         {
@@ -134,6 +177,8 @@ public sealed class VersionPackageService
                             SanitizeSettingsText(File.ReadAllText(providerStatePath, Encoding.UTF8)));
                         contents.Add("dsh-home/.dsh-launcher/providers.json");
                     }
+
+                    providers = ReadProviderNames(instance);
                 }
 
                 if (options.IncludePluginConfiguration)
@@ -147,8 +192,25 @@ public sealed class VersionPackageService
                             "dsh-home/profiles/web/package.json",
                             pluginConfiguration.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                         contents.Add("dsh-home/profiles/web/package.json");
+                        plugins = ReadPluginNames(pluginConfiguration);
                     }
                 }
+
+                skills.AddRange(AddSafeTextDirectoryEntries(
+                    archive,
+                    Path.Combine(instance.DshHome, "skills"),
+                    "dsh-home/skills",
+                    contents));
+                skills.AddRange(AddSafeTextDirectoryEntries(
+                    archive,
+                    Path.Combine(instance.DshHome, ".agents", "skills"),
+                    "dsh-home/.agents/skills",
+                    contents));
+                agentPresets.AddRange(AddSafeTextDirectoryEntries(
+                    archive,
+                    Path.Combine(instance.DshHome, ".agent-presets"),
+                    "dsh-home/.agent-presets",
+                    contents));
 
                 var manifest = new Dictionary<string, object?>
                 {
@@ -156,9 +218,17 @@ public sealed class VersionPackageService
                     ["format"] = "dsh-launcher-design",
                     ["product"] = "DSH Launcher",
                     ["name"] = instance.Name,
+                    ["description"] = $"DSH Launcher 版本“{instance.Name}”的可分享配置。",
+                    ["createdAt"] = DateTimeOffset.UtcNow,
+                    ["dshVersion"] = instance.DetectedVersion,
                     ["detectedVersion"] = instance.DetectedVersion,
                     ["packageManager"] = instance.PackageManager,
                     ["kind"] = instance.KindText,
+                    ["plugins"] = plugins,
+                    ["skills"] = skills.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    ["agentPresets"] = agentPresets.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    ["providers"] = providers,
+                    ["workflow"] = "standard",
                     ["contents"] = contents,
                     ["privacy"] = new Dictionary<string, bool>
                     {
@@ -181,6 +251,27 @@ public sealed class VersionPackageService
         }
     }
 
+    public DshPackPreview PreviewPackage(string packagePath)
+    {
+        if (!File.Exists(packagePath))
+        {
+            throw new FileNotFoundException("找不到整合包文件。", packagePath);
+        }
+
+        using var archive = ZipFile.OpenRead(packagePath);
+        var manifest = ReadPackageManifest(archive);
+        return new DshPackPreview(
+            string.IsNullOrWhiteSpace(manifest.Name) ? "未命名整合包" : manifest.Name,
+            manifest.Description ?? "未提供说明。",
+            manifest.DshVersion ?? manifest.DetectedVersion,
+            manifest.CreatedAt,
+            manifest.Plugins,
+            manifest.Skills,
+            manifest.AgentPresets,
+            manifest.Providers,
+            manifest.Workflow);
+    }
+
     public ManagerInstance ImportPackage(string packagePath, ManagerInstance template)
     {
         if (!File.Exists(packagePath))
@@ -196,25 +287,7 @@ public sealed class VersionPackageService
             throw new InvalidDataException("整合包缺少 manifest.json。 ");
         }
 
-        PackageManifest manifest;
-        using (var stream = manifestEntry.Open())
-        using (var document = JsonDocument.Parse(stream))
-        {
-            var root = document.RootElement;
-            var formatVersion = root.TryGetProperty("formatVersion", out var format)
-                && format.TryGetInt32(out var parsedFormat)
-                ? parsedFormat
-                : 0;
-            if (formatVersion != CurrentPackageFormatVersion)
-            {
-                throw new InvalidDataException($"不支持的整合包格式版本：{formatVersion}。当前支持 {CurrentPackageFormatVersion}。 ");
-            }
-
-            manifest = new PackageManifest(
-                ReadString(root, "name"),
-                ReadString(root, "detectedVersion"),
-                ReadString(root, "packageManager"));
-        }
+        var manifest = ReadPackageManifest(archive, manifestEntry);
 
         var name = string.IsNullOrWhiteSpace(manifest.Name)
             ? $"{template.Name}（导入）"
@@ -224,7 +297,7 @@ public sealed class VersionPackageService
             template.RootPath,
             template.Kind,
             template.DshExecutablePath,
-            manifest.DetectedVersion ?? template.DetectedVersion,
+            manifest.DshVersion ?? manifest.DetectedVersion ?? template.DetectedVersion,
             manifest.PackageManager ?? template.PackageManager);
         try
         {
@@ -344,6 +417,17 @@ public sealed class VersionPackageService
             return;
         }
 
+        if (IsShareableTextFile(relative)
+            && (relative.StartsWith("skills/", StringComparison.OrdinalIgnoreCase)
+                || relative.StartsWith(".agents/skills/", StringComparison.OrdinalIgnoreCase)
+                || relative.StartsWith(".agent-presets/", StringComparison.OrdinalIgnoreCase)))
+        {
+            using var resourceStream = entry.Open();
+            using var resourceReader = new StreamReader(resourceStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            File.WriteAllText(destination, SanitizeSettingsText(resourceReader.ReadToEnd()), new UTF8Encoding(false));
+            return;
+        }
+
         using var copyStream = entry.Open();
         using var targetStream = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         copyStream.CopyTo(targetStream);
@@ -375,7 +459,22 @@ public sealed class VersionPackageService
             var result = new JsonObject();
             if (root["dependencies"] is JsonObject dependencies)
             {
-                result["dependencies"] = dependencies.DeepClone();
+                var sanitizedDependencies = new JsonObject();
+                foreach (var dependency in dependencies)
+                {
+                    if (dependency.Value is JsonValue value
+                        && value.TryGetValue<string>(out var specification)
+                        && specification is not null)
+                    {
+                        sanitizedDependencies[dependency.Key] = SanitizePluginSpecification(specification);
+                    }
+                    else
+                    {
+                        sanitizedDependencies[dependency.Key] = dependency.Value?.DeepClone();
+                    }
+                }
+
+                result["dependencies"] = sanitizedDependencies;
             }
 
             if (root["dsh"] is JsonObject dsh
@@ -401,6 +500,162 @@ public sealed class VersionPackageService
         {
             return null;
         }
+    }
+
+    private static string SanitizePluginSpecification(string specification)
+    {
+        var sanitized = SensitiveUrlUserInfo.Replace(specification, "$1");
+        return SensitiveUrlQuery.Replace(sanitized, "$1<redacted>");
+    }
+
+    private static string[] ReadPluginNames(JsonObject pluginConfiguration)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (pluginConfiguration["dependencies"] is JsonObject dependencies)
+        {
+            foreach (var dependency in dependencies)
+            {
+                names.Add(dependency.Key);
+            }
+        }
+
+        if (pluginConfiguration["dsh"] is JsonObject dsh
+            && dsh["profile"] is JsonObject profile
+            && profile["bundles"] is JsonArray bundles)
+        {
+            foreach (var bundle in bundles)
+            {
+                if (bundle is JsonValue value && value.TryGetValue<string>(out var name)
+                    && !string.IsNullOrWhiteSpace(name))
+                {
+                    names.Add(name);
+                }
+            }
+        }
+
+        return names.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string[] ReadProviderNames(ManagerInstance instance)
+    {
+        try
+        {
+            return new ModelService()
+                .Read(instance)
+                .Select(provider => provider.Provider)
+                .Where(provider => !string.IsNullOrWhiteSpace(provider))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(provider => provider, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    private static IReadOnlyList<string> AddSafeTextDirectoryEntries(
+        ZipArchive archive,
+        string sourceRoot,
+        string archiveRoot,
+        ICollection<string> contents)
+    {
+        if (!Directory.Exists(sourceRoot))
+        {
+            return Array.Empty<string>();
+        }
+
+        RejectReparsePoint(sourceRoot, "整合包源目录");
+        var names = new List<string>();
+        foreach (var file in EnumerateSafeFiles(sourceRoot))
+        {
+            var relative = Path.GetRelativePath(sourceRoot, file).Replace('\\', '/');
+            if (IsForbiddenImportPath(relative) || !IsShareableTextFile(relative))
+            {
+                continue;
+            }
+
+            var archivePath = $"{archiveRoot}/{relative}";
+            AddTextEntry(archive, archivePath, SanitizeSettingsText(File.ReadAllText(file, Encoding.UTF8)));
+            contents.Add(archivePath);
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (string.Equals(name, "SKILL", StringComparison.OrdinalIgnoreCase))
+            {
+                name = new DirectoryInfo(Path.GetDirectoryName(file) ?? sourceRoot).Name;
+            }
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
+    }
+
+    private static IEnumerable<string> EnumerateSafeFiles(string root)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root))
+        {
+            RejectReparsePoint(entry, "整合包源目录中的文件");
+            if (Directory.Exists(entry))
+            {
+                foreach (var nested in EnumerateSafeFiles(entry))
+                {
+                    yield return nested;
+                }
+            }
+            else
+            {
+                yield return entry;
+            }
+        }
+    }
+
+    private static bool IsShareableTextFile(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".txt", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static PackageManifest ReadPackageManifest(ZipArchive archive, ZipArchiveEntry? knownEntry = null)
+    {
+        var manifestEntry = knownEntry ?? archive.Entries.FirstOrDefault(entry =>
+            string.Equals(entry.FullName.Replace('\\', '/'), "manifest.json", StringComparison.OrdinalIgnoreCase));
+        if (manifestEntry is null)
+        {
+            throw new InvalidDataException("整合包缺少 manifest.json。 ");
+        }
+
+        using var stream = manifestEntry.Open();
+        using var document = JsonDocument.Parse(stream);
+        var root = document.RootElement;
+        var formatVersion = root.TryGetProperty("formatVersion", out var format)
+            && format.TryGetInt32(out var parsedFormat)
+            ? parsedFormat
+            : 0;
+        if (formatVersion != CurrentPackageFormatVersion)
+        {
+            throw new InvalidDataException($"不支持的整合包格式版本：{formatVersion}。当前支持 {CurrentPackageFormatVersion}。 ");
+        }
+
+        return new PackageManifest(
+            ReadString(root, "name"),
+            ReadString(root, "description"),
+            ReadString(root, "dshVersion"),
+            ReadString(root, "detectedVersion"),
+            ReadString(root, "packageManager"),
+            ReadDateTimeOffset(root, "createdAt"),
+            ReadStringArray(root, "plugins"),
+            ReadStringArray(root, "skills"),
+            ReadStringArray(root, "agentPresets"),
+            ReadStringArray(root, "providers"),
+            ReadString(root, "workflow"));
     }
 
     private static string SanitizeSettingsText(string content)
@@ -528,15 +783,74 @@ public sealed class VersionPackageService
         }
     }
 
+    private static void DeleteGeneratedDirectory(string path, string label)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        RejectReparsePoint(path, label);
+        foreach (var entry in Directory.EnumerateFileSystemEntries(path).ToArray())
+        {
+            RejectReparsePoint(entry, label);
+            if (Directory.Exists(entry))
+            {
+                DeleteGeneratedDirectory(entry, label);
+            }
+            else
+            {
+                File.Delete(entry);
+            }
+        }
+
+        Directory.Delete(path, recursive: false);
+    }
+
     private static string? ReadString(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
 
+    private static string[] ReadStringArray(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return value.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Cast<string>()
+            .ToArray();
+    }
+
+    private static DateTimeOffset? ReadDateTimeOffset(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value)
+            || value.ValueKind != JsonValueKind.String
+            || !DateTimeOffset.TryParse(value.GetString(), out var parsed))
+        {
+            return null;
+        }
+
+        return parsed;
+    }
+
     private sealed record VersionSettings(string PackageExtension);
 
     private sealed record PackageManifest(
         string? Name,
+        string? Description,
+        string? DshVersion,
         string? DetectedVersion,
-        string? PackageManager);
+        string? PackageManager,
+        DateTimeOffset? CreatedAt,
+        string[] Plugins,
+        string[] Skills,
+        string[] AgentPresets,
+        string[] Providers,
+        string? Workflow);
 }
