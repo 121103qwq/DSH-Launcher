@@ -39,10 +39,11 @@ public sealed class SourceBuildService
             return SourceBuildResult.Failure("Source 构建需要可用的 Node.js。");
         }
 
-        if (!nodeRuntime.IsCompatibleWithDshSource)
+        var nodeCompatibility = nodeRuntime.GetCompatibility(project.NodeEngine);
+        if (nodeCompatibility != NodeRuntimeCompatibility.Compatible)
         {
             return SourceBuildResult.Failure(
-                $"当前 Node.js {nodeRuntime.VersionText} 不满足 Source 要求：22.19+ 的 22.x 或 24+。请切换到兼容版本。");
+                $"当前 Node.js {nodeRuntime.VersionText} 的兼容状态为 {nodeCompatibility}，不满足 Source 的 engines.node 要求：{project.NodeEngine ?? "未声明"}。请切换到兼容版本。");
         }
 
         var packageManager = NormalizePackageManager(project.PackageManager);

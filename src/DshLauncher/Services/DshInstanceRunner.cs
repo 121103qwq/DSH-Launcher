@@ -17,14 +17,76 @@ public sealed class DshInstanceRunner : IAsyncDisposable
 
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly Dictionary<string, RunningDshProcess> _running = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AttachedDshService> _attached = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public bool IsRunning(string instanceId)
     {
         lock (_running)
         {
+            if (_running.TryGetValue(instanceId, out var running)
+                && !HasExited(running.Process))
+            {
+                return true;
+            }
+        }
+
+        lock (_attached)
+        {
+            return _attached.ContainsKey(instanceId);
+        }
+    }
+
+    public bool IsManaged(string instanceId)
+    {
+        lock (_running)
+        {
             return _running.TryGetValue(instanceId, out var running)
                 && !HasExited(running.Process);
+        }
+    }
+
+    public bool IsAttached(string instanceId)
+    {
+        lock (_attached)
+        {
+            return _attached.ContainsKey(instanceId);
+        }
+    }
+
+    public async Task<bool> TryAttachAsync(
+        ManagerInstance instance,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetAttachEndpoint(instance, out var endpoint))
+        {
+            return false;
+        }
+
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (IsManaged(instance.Id))
+            {
+                return false;
+            }
+
+            if (!await ProbeEndpointAsync(endpoint, cancellationToken))
+            {
+                return false;
+            }
+
+            lock (_attached)
+            {
+                _attached[instance.Id] = new AttachedDshService(endpoint, instance.Port!.Value);
+            }
+
+            return true;
+        }
+        finally
+        {
+            _operationGate.Release();
         }
     }
 
@@ -52,10 +114,12 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 return DshInstanceRunResult.Failure("Source 实例需要可用的 Node.js 才能启动。");
             }
 
-            if (!nodeRuntime.IsCompatibleWithDshSource)
+            var nodeEngine = SourceProjectInspector.TryReadNodeEngine(instance.RootPath);
+            var nodeCompatibility = nodeRuntime.GetCompatibility(nodeEngine);
+            if (nodeCompatibility != NodeRuntimeCompatibility.Compatible)
             {
                 return DshInstanceRunResult.Failure(
-                    $"当前 Node.js {nodeRuntime.VersionText} 不满足 Source 要求：22.19+ 的 22.x 或 24+。请切换到兼容版本。");
+                    $"当前 Node.js {nodeRuntime.VersionText} 的兼容状态为 {nodeCompatibility}，不满足 Source 的 engines.node 要求：{nodeEngine ?? "未声明"}。请切换到兼容版本。");
             }
 
             if (sourceEntrypoint is null)
@@ -95,6 +159,12 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     existing.Process.Id,
                     existing.Port,
                     existing.WebUrl);
+            }
+
+            if (IsAttached(instance.Id))
+            {
+                return DshInstanceRunResult.Failure(
+                    "该实例已经连接到外部 DSh 服务，Launcher 不会再启动第二个进程。请先让外部服务退出，或在实例页清除连接状态。");
             }
 
             RemoveExited(instance.Id);
@@ -182,6 +252,12 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         {
             if (!TryGetRunning(instanceId, out var running))
             {
+                if (IsAttached(instanceId))
+                {
+                    return DshInstanceRunResult.Failure(
+                        "该实例由外部 DSh 服务提供，Launcher 不会停止外部进程。");
+                }
+
                 return DshInstanceRunResult.Failure("实例当前没有由 Launcher 管理的运行进程。");
             }
 
@@ -215,6 +291,12 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (IsAttached(instance.Id))
+        {
+            return DshInstanceRunResult.Failure(
+                "该实例由外部 DSh 服务提供，Launcher 不会停止或重启外部进程。");
+        }
+
         await StopIfRunningAsync(instance.Id, cancellationToken);
         return await StartAsync(instance, nodeRuntime, cancellationToken);
     }
@@ -324,6 +406,28 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         return HealthResult.Failed($"DSh 健康检查超时（30 秒）。{lastError ?? string.Empty}{GetDiagnosticSuffix(running)}");
     }
 
+    private static async Task<bool> ProbeEndpointAsync(Uri endpoint, CancellationToken cancellationToken)
+    {
+        using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
+        {
+            Timeout = HealthRequestTimeout
+        };
+
+        try
+        {
+            using var response = await client.GetAsync(endpoint, cancellationToken);
+            return (int)response.StatusCode < 500;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
     private async Task StopCoreAsync(string instanceId, RunningDshProcess running)
     {
         lock (_running)
@@ -373,6 +477,23 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             running = null!;
             return false;
         }
+    }
+
+    private static bool TryGetAttachEndpoint(ManagerInstance instance, out Uri endpoint)
+    {
+        endpoint = null!;
+        if (instance.Port is not > 0
+            || string.IsNullOrWhiteSpace(instance.WebUrl)
+            || !Uri.TryCreate(instance.WebUrl, UriKind.Absolute, out var parsed)
+            || !parsed.IsLoopback
+            || parsed.Scheme is not ("http" or "https")
+            || parsed.Port != instance.Port.Value)
+        {
+            return false;
+        }
+
+        endpoint = parsed;
+        return true;
     }
 
     private void RemoveExited(string instanceId)
@@ -575,6 +696,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         string WebUrl,
         StringBuilder Output,
         InstanceLock InstanceLock);
+
+    private sealed record AttachedDshService(Uri Endpoint, int Port);
 
     private sealed class InstanceLock : IDisposable
     {

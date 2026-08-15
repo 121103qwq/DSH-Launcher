@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -12,12 +14,14 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source project inspection", TestSourceProjectInspection),
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
+    ("Node runtime compatibility", TestNodeRuntimeCompatibility),
     ("DSh install guard", TestDshInstallGuard),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
     ("Source runner lifecycle", TestSourceRunnerLifecycle),
     ("DSh early exit cleanup", TestDshEarlyExitCleanup),
     ("DSh instance lifecycle", TestDshInstanceLifecycle),
+    ("Attached runtime lifecycle", TestAttachedRuntimeLifecycle),
     ("Extension ecosystem isolation", TestExtensionEcosystemIsolation),
     ("Model settings round-trip", TestModelSettingsRoundTrip),
     ("Conversation file management", TestConversationFileManagement)
@@ -146,7 +150,7 @@ static Task TestSourceProjectInspection()
     Directory.CreateDirectory(Path.Combine(root, "apps", "cli"));
     File.WriteAllText(
         Path.Combine(root, "package.json"),
-        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\",\"packageManager\":\"pnpm@10.0.0\",\"scripts\":{\"build\":\"pnpm run build\"}}",
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"},\"packageManager\":\"pnpm@10.0.0\",\"scripts\":{\"build\":\"pnpm run build\"}}",
         new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(root, "pnpm-workspace.yaml"), "packages: []", new UTF8Encoding(false));
 
@@ -156,6 +160,7 @@ static Task TestSourceProjectInspection()
     Assert(beforeDependencies.IsDshSource, "DeepSeek Harness 根项目应被识别为 DSh Source。");
     Assert(beforeDependencies.PackageManager == "pnpm", "应读取 packageManager 中的 pnpm。");
     Assert(beforeDependencies.PackageManagerVersion == "10.0.0", "应读取包管理器版本。");
+    Assert(beforeDependencies.NodeEngine == "^22.19.0 || >=24.0.0", "应从 Source package.json 读取 engines.node。");
     Assert(beforeDependencies.HasBuildScript, "应识别 build 脚本。");
     Assert(beforeDependencies.StatusText == "需要安装依赖", "没有 node_modules 时应提示安装依赖。");
 
@@ -202,6 +207,23 @@ static async Task TestDshRuntimeDetection()
     Assert(runtime.PackageRoot is not null, "检测到的官方 DSh 入口应能解析 package root。");
     Assert(DshRuntimeDetector.TryReadPackageVersion(runtime.PackageRoot!) == runtime.Version,
         "DSh 运行时版本应与安装包 package.json 版本一致。");
+    Assert(DshRuntimeDetector.TryReadNodeEngine(runtime.PackageRoot!) == runtime.NodeEngine,
+        "DSh 运行时应从同一个 package.json 暴露 engines.node，而不是另写版本规则。");
+}
+
+static Task TestNodeRuntimeCompatibility()
+{
+    Assert(NodeRuntimeInfo.EvaluateCompatibility("24.19.0", "^22.19.0 || >=24.0.0") == NodeRuntimeCompatibility.Compatible,
+        "Node.js 24.x 应满足官方兼容范围。");
+    Assert(NodeRuntimeInfo.EvaluateCompatibility("20.11.0", "^22.19.0 || >=24.0.0") == NodeRuntimeCompatibility.Incompatible,
+        "Node.js 20.x 应被标记为 Incompatible。");
+    Assert(NodeRuntimeInfo.EvaluateCompatibility("22.18.0", "^22.19.0 || >=24.0.0") == NodeRuntimeCompatibility.Incompatible,
+        "低于 engines.node 下限的 Node.js 22.x 应被拒绝。");
+    Assert(NodeRuntimeInfo.EvaluateCompatibility("24.19.0", null) == NodeRuntimeCompatibility.Compatible,
+        "package metadata 未声明 engines.node 时不能凭空添加长期硬编码限制。");
+    Assert(NodeRuntimeInfo.EvaluateCompatibility(null, ">=24") == NodeRuntimeCompatibility.Missing,
+        "缺少 Node.js 版本时应返回 Missing。");
+    return Task.CompletedTask;
 }
 
 static async Task TestDshInstallGuard()
@@ -210,6 +232,12 @@ static async Task TestDshInstallGuard()
     Assert(!result.IsSuccess, "缺少 Node.js 时不应执行 npm 安装。");
     Assert(result.Error?.Contains("Node.js", StringComparison.OrdinalIgnoreCase) == true,
         "缺少 Node.js 时应返回明确错误。");
+
+    var unsupportedRegistry = await new DshInstallService().InstallAsync(
+        new NodeRuntimeInfo(true, "node.exe", "24.19.0", null),
+        "https://example.invalid/registry");
+    Assert(!unsupportedRegistry.IsSuccess && unsupportedRegistry.Error?.Contains("安装源", StringComparison.Ordinal) == true,
+        "DSh 安装只能选择官方 npm 源或国内镜像，不能接受任意 registry。");
 }
 
 static async Task TestSourceRunnerGuard()
@@ -430,6 +458,55 @@ static async Task TestDshInstanceLifecycle()
     var takeover = await competingRunner.StartAsync(instance, cancellation.Token);
     Assert(takeover.IsSuccess, takeover.Error ?? "首个 Runner 停止后，实例应允许被另一个 Runner 接管。");
     await competingRunner.StopAsync(instance.Id, cancellation.Token);
+}
+
+static async Task TestAttachedRuntimeLifecycle()
+{
+    using var temporary = new TestDirectory();
+    using var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    var serverTask = Task.Run(async () =>
+    {
+        using var client = await listener.AcceptTcpClientAsync();
+        await using var stream = client.GetStream();
+        var request = new byte[2048];
+        _ = await stream.ReadAsync(request);
+        var response = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        await stream.WriteAsync(response);
+    });
+
+    var instance = new ManagerInstance(
+        Id: "attached-runtime-test",
+        Name: "Attached 运行态测试",
+        RootPath: temporary.Path,
+        Kind: InstanceKind.Installed,
+        DshHome: Path.Combine(temporary.Path, "dsh-home"),
+        DshExecutablePath: null,
+        DetectedVersion: "test",
+        RuntimeStatus: InstanceRuntimeStatus.Running,
+        PackageManager: "npm",
+        LastError: null,
+        RegisteredAt: DateTimeOffset.UtcNow,
+        ProcessId: 43210,
+        Port: port,
+        WebUrl: $"http://127.0.0.1:{port}/");
+
+    await using var runner = new DshInstanceRunner();
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    Assert(await runner.TryAttachAsync(instance, cancellation.Token), "健康的 loopback DSh Web 端点应可被 Attached。");
+    Assert(runner.IsRunning(instance.Id), "Attached 服务应可打开 Web UI 并报告运行中。");
+    Assert(runner.IsAttached(instance.Id), "Attached 服务必须标记为外部所有权。");
+    Assert(!runner.IsManaged(instance.Id), "Attached 服务不能被当作 Launcher 管理进程。");
+
+    var stop = await runner.StopAsync(instance.Id, cancellation.Token);
+    Assert(!stop.IsSuccess && stop.Error?.Contains("外部", StringComparison.Ordinal) == true,
+        "Stop 不得停止 Attached 外部进程。");
+    var restart = await runner.RestartAsync(instance, cancellation.Token);
+    Assert(!restart.IsSuccess && restart.Error?.Contains("外部", StringComparison.Ordinal) == true,
+        "Restart 不得重启 Attached 外部进程。");
+
+    await serverTask;
 }
 
 static async Task TestExtensionEcosystemIsolation()

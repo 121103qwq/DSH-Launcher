@@ -7,10 +7,21 @@ namespace DshLauncher.Services;
 
 public sealed class DshInstallService
 {
+    public const string OfficialRegistry = "https://registry.npmjs.org";
+    public const string ChinaRegistry = "https://registry.npmmirror.com";
+
     private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
 
     public async Task<DshInstallResult> InstallAsync(
         NodeRuntimeInfo nodeRuntime,
+        CancellationToken cancellationToken = default)
+    {
+        return await InstallAsync(nodeRuntime, registry: null, cancellationToken);
+    }
+
+    public async Task<DshInstallResult> InstallAsync(
+        NodeRuntimeInfo nodeRuntime,
+        string? registry,
         CancellationToken cancellationToken = default)
     {
         if (!nodeRuntime.IsAvailable || string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
@@ -18,8 +29,15 @@ public sealed class DshInstallService
             return DshInstallResult.Failure("未找到可用的 Node.js，不能执行 DSh 安装。");
         }
 
+        if (registry is not null
+            && !string.Equals(registry, OfficialRegistry, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(registry, ChinaRegistry, StringComparison.OrdinalIgnoreCase))
+        {
+            return DshInstallResult.Failure("DSh 安装源不受支持，只能使用 npm 官方源或 npmmirror 国内镜像。");
+        }
+
         var npmPath = FindNpm(nodeRuntime.ExecutablePath);
-        var startInfo = CreateStartInfo(npmPath);
+        var startInfo = CreateStartInfo(npmPath, registry);
         using var process = new Process { StartInfo = startInfo };
 
         try
@@ -91,9 +109,10 @@ public sealed class DshInstallService
         return "npm.cmd";
     }
 
-    private static ProcessStartInfo CreateStartInfo(string npmPath)
+    private static ProcessStartInfo CreateStartInfo(string npmPath, string? registry)
     {
-        const string commandArguments = "install --global @deepseek-ai/dsh";
+        var commandArguments = "install --global @deepseek-ai/dsh"
+            + (string.IsNullOrWhiteSpace(registry) ? string.Empty : $" --registry={registry}");
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,

@@ -12,7 +12,8 @@ public sealed record SourceProjectInfo(
     bool DependenciesPresent,
     bool HasCliEntrypoint,
     string? Error,
-    string? BuiltCliEntrypoint = null)
+    string? BuiltCliEntrypoint = null,
+    string? NodeEngine = null)
 {
     public string StatusText => !IsValid
         ? "无法识别"

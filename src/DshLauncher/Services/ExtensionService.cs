@@ -615,10 +615,11 @@ public sealed class ExtensionService
             var entrypoint = project.BuiltCliEntrypoint
                 ?? SourceProjectInspector.TryFindBuiltCliEntrypoint(instance.RootPath)
                 ?? throw new InvalidOperationException("Source 尚未完成构建，无法管理 Plugin。");
-            if (nodeRuntime is null || !nodeRuntime.IsAvailable || !nodeRuntime.IsCompatibleWithDshSource
+            var nodeEngine = SourceProjectInspector.TryReadNodeEngine(instance.RootPath);
+            if (nodeRuntime is null || nodeRuntime.GetCompatibility(nodeEngine) != NodeRuntimeCompatibility.Compatible
                 || string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
             {
-                throw new InvalidOperationException("Source Plugin 管理需要满足 DSh 要求的 Node.js。");
+                throw new InvalidOperationException($"Source Plugin 管理需要兼容的 Node.js；当前状态为 {nodeRuntime?.GetCompatibility(nodeEngine).ToString() ?? "Missing"}，要求：{nodeEngine ?? "未声明"}。");
             }
 
             startInfo.FileName = nodeRuntime.ExecutablePath;

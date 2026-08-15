@@ -333,7 +333,7 @@
                                                 <TextBlock Text="停止" />
                                             </Button>
                                             <Button Click="RestartInstance_Click"
-                                                    IsEnabled="{Binding CanStopInstance}"
+                                                    IsEnabled="{Binding CanRestartInstance}"
                                                     Height="44"
                                                     Margin="10,0,0,0"
                                                     Padding="18,0">
@@ -392,15 +392,25 @@
                                             <Grid>
                                                 <TextBlock Text="{Binding NodePathText}" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" />
                                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                                    <Button Click="InstallNode_Click" Padding="10,5" FontSize="12">
-                                                        <TextBlock Text="Node.js 安装页" />
+                                                    <Button Click="InstallNode_Click" Padding="9,5" FontSize="11">
+                                                        <TextBlock Text="Node.js 官方" />
+                                                    </Button>
+                                                    <Button Click="InstallNodeMirror_Click" Padding="9,5" FontSize="11" Margin="6,0,0,0">
+                                                        <TextBlock Text="Node.js 国内镜像" />
                                                     </Button>
                                                     <Button Click="InstallDsh_Click"
                                                             IsEnabled="{Binding CanInstallDsh}"
-                                                            Padding="10,5"
-                                                            FontSize="12"
-                                                            Margin="8,0,0,0">
-                                                        <TextBlock Text="{Binding DshInstallButtonText}" />
+                                                            Padding="9,5"
+                                                            FontSize="11"
+                                                            Margin="6,0,0,0">
+                                                        <TextBlock Text="DSh 官方源" />
+                                                    </Button>
+                                                    <Button Click="InstallDshMirror_Click"
+                                                            IsEnabled="{Binding CanInstallDsh}"
+                                                            Padding="9,5"
+                                                            FontSize="11"
+                                                            Margin="6,0,0,0">
+                                                        <TextBlock Text="DSh 国内镜像" />
                                                     </Button>
                                                 </StackPanel>
                                             </Grid>

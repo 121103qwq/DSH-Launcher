@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前源码和发布版本为 0.1.6，启动、实例和生态管理采用 PCL2 风格的右侧工作区切换；本次会话边界修复和 Windows Release 已完成。
+按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前准备发布 0.1.7，内容包括 Node metadata、Managed/Attached 运行态和依赖下载源选择，启动、实例和生态管理继续采用 PCL2 风格的右侧工作区切换。
 
 ## 已完成内容
 
@@ -15,7 +15,7 @@
 - 已实现 `ManagerInstance` 注册：支持 installed/source 类型、重复目录校验、JSON 原子保存和每实例独立 `DSH_HOME`；当前实际 UI 测试已注册 1 个 installed DSh 实例。
 - 已实现 Source 项目检查：读取 `package.json`、包管理器和锁文件、构建脚本、依赖目录、CLI 入口，并把已找到的构建入口纳入状态显示。
 - 已实现 Source 准备服务：按项目声明的 npm/pnpm/yarn/bun 选择命令，缺少 `node_modules` 时执行 install，再执行 `run build`；超时、取消和非零退出会清理包管理器进程树并返回输出，构建后检查 `apps/cli/lib/bin.js` 等实际入口。
-- 已实现 Source 启动：使用满足 `^22.19.0 || >=24.0.0` 的 Node.js 运行构建入口，复用 installed DSh 的 DSH_HOME 隔离、loopback 端口、健康检查、停止/重启和跨 Launcher 互斥锁。
+- 已实现 Source 启动：按 Source `package.json`/`apps/cli/package.json` 的 `engines.node` 选择兼容 Node.js，复用 installed DSh 的 DSH_HOME 隔离、loopback 端口、健康检查、停止/重启和跨 Launcher 互斥锁。
 - 已修正 Node 候选选择：多个可用 `node.exe` 时选择最高可解析版本，避免 PATH 中旧 Node 覆盖满足 Source 要求的版本。
 - 已修正停止状态误报：停止未被当前 Runner 管理的进程失败时不再直接保存为“已停止”，而是保留错误状态和诊断。
 - 已实现 installed DSh 生命周期：按实例设置 `DSH_HOME`，分配 loopback 空闲端口，启动 `dsh web`，等待 HTTP 可访问，支持停止和重启；运行进程退出或 Launcher 重启时不会保留虚假的 Running 状态。
@@ -26,11 +26,14 @@
 - 已修复会话兼容性与导出边界：header 校验与当前 DSh `version=0`、`createdAt`、`delegationDepth` 及可选字段规则一致，字段类型异常的文件只会被标记为无效；导出保存名去除已有格式后缀，服务层同时归一化重复后缀，避免生成 `*.jsonl.zstd.jsonl.zstd`。
 - 已补充用户操作回归保护：空实例入口、实例运行中修改、Skill/Preset 自包含目录复制、MCP serverName 注入、模型配置无关段落保留、API Key 不落盘、会话路径穿越、有效/损坏 Zstandard 会话和重复导入均有自测覆盖。
 - 已添加 `DshLauncher.SelfTest` 控制台测试项目，覆盖注册往返、重复目录拒绝、隔离 HOME、Source 检查、当前机器 DSh 检测、安装缺失环境保护、Source 直接启动保护、启动/健康检查/重复启动/跨 Runner 拒绝/停止/重启/接管，以及生态/模型/会话边界；测试项目与 Launcher 共用 `ZstdSharp.Port 0.8.8`。
-- 当前功能分支为 `agent/harden-node-detection`，GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`；源码提交为 `40d3175`，发布产物提交为 `4ec7057`，标签为 `v0.1.5`。
+- 当前功能分支为 `agent/harden-node-detection`，GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`；最近发布标签为 `v0.1.6`，本次 runtime 改进准备作为 `v0.1.7` 发布。
 - 0.1.5 已生成并核对 `publish\\release-0.1.5\\DSH Launcher.exe`；文件版本为 `0.1.5.0`，SHA-256 为 `52E673B8CFF57BC8CAAA43EEB2351129AF4E1D14D792D07047E6F65888A221C8`；同一文件已复制到 `DSH Launcher\\DSH Launcher.exe` 顶层位置，两个文件哈希一致。
 - GitHub Release `v0.1.5` 已正式发布并核对为 1 个 Windows EXE；GitHub 资产名为 `DSH.Launcher.exe`，远端 digest 为 `sha256:52e673b8cff57bc8caaa43eeb2351129af4e1d14d792d07047e6f65888a221c8`；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.5`。
 - 0.1.6 源码提交为 `64fcf64`，Windows 产物提交为 `9972091`；`publish\\release-0.1.6\\DSH Launcher.exe` 和顶层 `DSH Launcher\\DSH Launcher.exe` 文件版本均为 `0.1.6.0`，SHA-256 均为 `0A31896F353FAEF2572A7E281CDF528B511E2CADFCA6AE3464E54CEE9E0BA6FF`。
 - GitHub Release `v0.1.6` 已正式发布并核对为 1 个 Windows EXE；资产名为 `DSH.Launcher.exe`，远端 digest 与本地 SHA-256 一致；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.6`。
+- Node 运行时现在从检测到的 DSh 或 Source `package.json` 读取 `engines.node`，以 `Missing`、`Compatible`、`Incompatible`、`Unknown` 表示状态；官方当前安装包未声明 `engines.node` 时不再使用固定的 22/24 版本规则。Source 构建、启动和 Plugin CLI 管理均复用同一 metadata 判断。
+- 实例运行态现在区分 `Managed` 和 `Attached`：启动时记录 Launcher 管理态；Launcher 重启时仅对已有 loopback `WebUrl` 做健康探测，成功后恢复为 Attached；Attached 仍可打开 Chat，但 Runner 和 UI 都禁止 Stop/Restart/重复启动外部进程。
+- 运行环境页现在提供 Node.js 官方下载页、Node.js npmmirror、DSh npm 官方源和 DSh npmmirror 四个入口；DSh 安装服务只接受这两个明确 registry，Launcher 本身仍不内置 Node.js 或 DSh。
 
 ## 当前主要相关文件
 
@@ -69,6 +72,7 @@
 - 0.1.5 最终发布版已用 Computer Use 实测：启动页显示 Core 0.1.5，扩展、模型、Agent、对话均在主窗口右侧切换；对话页显示 `session.jsonl / .zstd` 文案且未出现管理弹窗，测试进程随后已关闭。
 - 本次修复使用当前源码 Release 编译输出做 Computer Use 回归：真实 DSh 创建的有效 `.jsonl.zstd` 会话在 Launcher 对话页显示为有效并可打开；打开后 Chat 的 `deepseek` 工作区和 `新会话` 条目处于选中状态，Launcher 显示 `已打开对话`；停止实例后导出生成单一 `.jsonl.zstd`，未生成重复后缀文件。回归用 Chat、实例和 Launcher 已关闭，导出文件与测试会话已移出仓库和实例目录至 `%TEMP%` 保留。
 - v0.1.6 发布构建已完成：Windows x64 自包含单文件版本为 `0.1.6.0`，本地发布目录与顶层 EXE 哈希一致；GitHub 标签解引用指向 `9972091`，Release 资产上传状态为 `uploaded`，远端 digest 与本地 SHA-256 一致。
+- 本次 runtime 改进自测已完成：`DshLauncher.SelfTest` 为 `18/18`，新增 Node engine range、安装源白名单和 Attached 外部生命周期保护覆盖；Launcher Release 构建为 `0 warnings / 0 errors`。
 - 分支推送 dry-run 和实际推送均通过；远端 `v0.1.5` tag 指向发布产物提交 `4ec7057`，Release 资产数量为 1，资产哈希与本地发布文件一致。
 - 临时 UI 回归后确认用户原有 `main\\DSH Launcher\\DSH Launcher.exe` 与 DeepSeek Desktop DSh 进程仍在，未启动或停止用户既有 DSh 实例。
 
@@ -76,17 +80,20 @@
 
 - 当前自动化测试尚未覆盖 Node.js 检测的超时/取消、DSh 检测超时、Source 异常 `package.json`、DSh 安装命令的真实联网执行和所有 UI 错误提示边界。
 - 本次未对真实网络 Plugin 执行安装/更新/删除，避免修改用户实例；服务和临时 UI 页面已验证。Chat 仍按现有设计使用独立 WebView2 窗口；打开合法会话仍要求实例运行并有可用 Chat 地址，这是当前生命周期约束。
+- Attached 当前只恢复注册记录中已有且通过 loopback 健康检查的 Web 端点，不扫描任意端口，也不自动认领没有已知 URL 的外部 DSh 服务；这是为了避免误接管或误识别其它本地 HTTP 服务。
+- 当前官方 `@deepseek-ai/dsh` 安装包的 `package.json` 未声明 `engines.node`，因此 installed DSh 页面只能显示“未声明”而不能凭空判断 Node 20 一定不兼容；Source 项目若声明 engine 则按其自身 metadata 判断。
 - 当前分支仍是 Draft PR，尚未合并到 `main`；这不影响已发布的 `v0.1.6` Release。
 
 ## 尚未完成内容
 
-- 本次 0.1.6 构建、推送、标签和 GitHub Release 已完成；后续未覆盖的测试边界见“已知问题”。
+- v0.1.6 构建、推送、标签和 GitHub Release 已完成；本次 runtime 改进将在本次发布流程中形成 v0.1.7；Marketplace 多来源聚合、Session deep link、MCP Manager 状态桥接、Theme/Wallpaper 资源和 `.dshpack` 仍未实现。
 
 ## 已尝试但已放弃的方案
 
 - 曾将扩展、模型、对话作为独立管理窗口打开；该方案已放弃，当前统一改为主窗口右侧内嵌页面，只有 Chat WebView2 保持独立窗口。
 - 曾用旧版 `version=1` 且缺少 `delegationDepth` 的临时 header 验证打开流程；该格式不被当前 DSh 识别，已放弃，回归改用真实 DSh UI 创建的合法会话。
+- 曾在 Node 模型中硬编码 `22.19+ 的 22.x 或 24+`；当前改为读取 DSh/Source package metadata，metadata 缺失时保留“未声明/Unknown”语义。
 
 ## 下一步最直接的任务
 
-- 继续按真实 UI 回归覆盖“已知问题”中的边界；当前 v0.1.6 发布交付已完成。
+- 发布 v0.1.7 后继续按真实 UI 回归覆盖 Attached 恢复、外部服务 Stop/Restart 按钮禁用，以及 Node/DSh 官方源和国内镜像入口；随后再评估是否实现 Marketplace 聚合。

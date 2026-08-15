@@ -73,6 +73,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(InstanceEndpointText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanStopInstance));
+            OnPropertyChanged(nameof(CanRestartInstance));
+            OnPropertyChanged(nameof(NodeStatusText));
+            OnPropertyChanged(nameof(NodeStatusBrush));
+            OnPropertyChanged(nameof(NodeVersionText));
+            OnPropertyChanged(nameof(NodePathText));
         }
     }
 
@@ -94,19 +99,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         && SelectedInstance is not null
         && (SelectedInstance.Kind == InstanceKind.Installed
             ? SelectedInstance.DshExecutablePath is not null
-            : _nodeRuntime.IsCompatibleWithDshSource)
+            : GetSelectedNodeCompatibility() == NodeRuntimeCompatibility.Compatible)
         && !_instanceRunner.IsRunning(SelectedInstance.Id);
 
     public bool CanStopInstance => !_isLifecycleInProgress
         && SelectedInstance is not null
-        && _instanceRunner.IsRunning(SelectedInstance.Id);
+        && _instanceRunner.IsManaged(SelectedInstance.Id);
+
+    public bool CanRestartInstance => CanStopInstance;
 
     public string InstanceEndpointText => SelectedInstance?.WebUrl
         ?? (SelectedInstance?.RuntimeStatus == InstanceRuntimeStatus.Running ? "正在检查运行地址…" : "尚未启动");
 
     public bool CanInstallDsh => !_isDshInstallInProgress
         && !_isNodeDetectionInProgress
-        && _nodeRuntime.IsAvailable;
+        && _nodeRuntime.IsAvailable
+        && (_dshRuntime.NodeEngine is null
+            || _nodeRuntime.GetCompatibility(_dshRuntime.NodeEngine) == NodeRuntimeCompatibility.Compatible);
 
     public string DshInstallButtonText => _isDshInstallInProgress
         ? "安装中…"
@@ -116,22 +125,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string NodeStatusText => _isNodeDetectionInProgress
         ? "检测中…"
-        : _nodeRuntime.IsAvailable ? "可用" : "未安装";
+        : GetSelectedNodeCompatibility() switch
+        {
+            NodeRuntimeCompatibility.Missing => "Missing",
+            NodeRuntimeCompatibility.Compatible => "Compatible",
+            NodeRuntimeCompatibility.Incompatible => "Incompatible",
+            _ => "Unknown"
+        };
 
     public System.Windows.Media.Brush NodeStatusBrush => _isNodeDetectionInProgress
         ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(113, 129, 150))
-        : _nodeRuntime.IsAvailable
-            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(37, 135, 90))
-            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 105, 30));
+        : GetSelectedNodeCompatibility() switch
+        {
+            NodeRuntimeCompatibility.Compatible => new SolidColorBrush(System.Windows.Media.Color.FromRgb(37, 135, 90)),
+            NodeRuntimeCompatibility.Incompatible => new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 75, 55)),
+            NodeRuntimeCompatibility.Missing => new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 105, 30)),
+            _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(113, 129, 150))
+        };
 
     public string NodeVersionText => _isNodeDetectionInProgress
         ? "请稍候"
-        : _nodeRuntime.IsAvailable ? _nodeRuntime.VersionText : "需要安装 Node.js";
+        : !_nodeRuntime.IsAvailable
+            ? "需要安装 Node.js"
+            : $"{_nodeRuntime.VersionText} · {GetNodeRequirementText()}";
 
     public string NodePathText => _isNodeDetectionInProgress
         ? "正在检查 PATH 和 Windows 常见安装位置…"
         : _nodeRuntime.IsAvailable
-            ? _nodeRuntime.ExecutablePath ?? "已找到 node.exe，但路径不可用"
+            ? (_nodeRuntime.ExecutablePath ?? "已找到 node.exe，但路径不可用")
             : _nodeRuntime.Error ?? "未找到 PATH 中的 node.exe，也没有发现常见安装位置";
 
     public string DshStatusText => _dshRuntime.IsAvailable ? "可用" : "未安装";
@@ -144,27 +165,58 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ? $"{_dshRuntime.VersionText} · {(_dshRuntime.PackageRoot is null ? "路径未解析" : "已找到安装包")}"
         : "实例注册后由对应运行环境启动";
 
+    private NodeRuntimeCompatibility GetSelectedNodeCompatibility()
+    {
+        if (!_nodeRuntime.IsAvailable)
+        {
+            return NodeRuntimeCompatibility.Missing;
+        }
+
+        if (SelectedInstance?.Kind == InstanceKind.Source)
+        {
+            return _nodeRuntime.GetCompatibility(
+                SourceProjectInspector.TryReadNodeEngine(SelectedInstance.RootPath));
+        }
+
+        if (_dshRuntime.IsAvailable)
+        {
+            return _nodeRuntime.GetCompatibility(_dshRuntime.NodeEngine);
+        }
+
+        return NodeRuntimeCompatibility.Unknown;
+    }
+
+    private string GetNodeRequirementText()
+    {
+        var requirement = SelectedInstance?.Kind == InstanceKind.Source
+            ? SourceProjectInspector.TryReadNodeEngine(SelectedInstance.RootPath)
+            : _dshRuntime.NodeEngine;
+        return string.IsNullOrWhiteSpace(requirement)
+            ? "未声明 engines.node"
+            : $"要求 {requirement}";
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
-        LoadInstances();
+        await RefreshDshAsync();
+        await LoadInstancesAsync();
         SwitchSection("启动");
-        await Task.WhenAll(RefreshNodeAsync(), RefreshDshAsync());
+        await RefreshNodeAsync();
     }
 
     private async void RefreshNode_Click(object sender, RoutedEventArgs e)
     {
+        await RefreshDshAsync();
         var runtime = await RefreshNodeAsync();
         if (runtime is null)
         {
             return;
         }
 
-        await RefreshDshAsync();
-
         ShowNotice(runtime.IsAvailable
-            ? $"运行环境检测完成：Node.js {runtime.VersionText}，DSh {_dshRuntime.VersionText}。"
+            ? $"运行环境检测完成：Node.js {runtime.VersionText}（{NodeStatusText}），DSh {_dshRuntime.VersionText}。"
             : "运行环境检测完成：当前没有找到可用的 node.exe。Launcher 本身仍可继续运行。");
     }
 
@@ -186,6 +238,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             _nodeRuntime = await _nodeDetector.DetectAsync(_windowCancellation.Token);
             OnPropertyChanged(nameof(NodeStatusBrush));
+            OnPropertyChanged(nameof(NodeStatusText));
+            OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanInstallDsh));
@@ -199,6 +253,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             _nodeRuntime = NodeRuntimeInfo.Missing($"Node.js 检测失败：{ex.Message}");
             OnPropertyChanged(nameof(NodeStatusBrush));
+            OnPropertyChanged(nameof(NodeStatusText));
+            OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanInstallDsh));
@@ -210,6 +266,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _isNodeDetectionInProgress = false;
             OnPropertyChanged(nameof(CanRefreshNode));
             OnPropertyChanged(nameof(NodeStatusText));
+            OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanInstallDsh));
@@ -234,26 +291,43 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(DshStatusText));
         OnPropertyChanged(nameof(DshStatusBrush));
         OnPropertyChanged(nameof(DshVersionText));
+        OnPropertyChanged(nameof(NodeStatusText));
+        OnPropertyChanged(nameof(NodeStatusBrush));
+        OnPropertyChanged(nameof(NodeVersionText));
+        OnPropertyChanged(nameof(CanInstallDsh));
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(DshInstallButtonText));
     }
 
-    private void LoadInstances()
+    private async Task LoadInstancesAsync()
     {
         try
         {
             Instances.Clear();
             foreach (var storedInstance in _instanceRegistry.Load())
             {
-                var instance = storedInstance.RuntimeStatus == InstanceRuntimeStatus.Running
-                    ? storedInstance with
+                var instance = storedInstance;
+                if (storedInstance.RuntimeStatus == InstanceRuntimeStatus.Running
+                    && await _instanceRunner.TryAttachAsync(storedInstance, _windowCancellation.Token))
+                {
+                    instance = storedInstance with
+                    {
+                        RuntimeOwnership = InstanceRuntimeOwnership.Attached,
+                        LastError = null
+                    };
+                }
+                else if (storedInstance.RuntimeStatus == InstanceRuntimeStatus.Running)
+                {
+                    instance = storedInstance with
                     {
                         RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                        RuntimeOwnership = InstanceRuntimeOwnership.None,
                         ProcessId = null,
                         Port = null,
                         WebUrl = null
-                    }
-                    : storedInstance;
+                    };
+                }
+
                 Instances.Add(instance);
                 if (instance != storedInstance)
                 {
@@ -267,6 +341,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(InstancesVisibility));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanStopInstance));
+            OnPropertyChanged(nameof(CanRestartInstance));
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -495,6 +573,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var selected = SelectedInstance;
+        if (selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会重复启动该进程。");
+            return;
+        }
+
         SetLifecycleBusy(true);
         try
         {
@@ -517,6 +601,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateInstance(selected with
             {
                 RuntimeStatus = InstanceRuntimeStatus.Running,
+                RuntimeOwnership = InstanceRuntimeOwnership.Managed,
                 ProcessId = result.ProcessId,
                 Port = result.Port,
                 WebUrl = result.WebUrl,
@@ -548,6 +633,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var selected = SelectedInstance;
+        if (selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会停止该进程。");
+            return;
+        }
+
         SetLifecycleBusy(true);
         try
         {
@@ -563,6 +654,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateInstance(selected with
             {
                 RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                RuntimeOwnership = InstanceRuntimeOwnership.None,
                 ProcessId = null,
                 Port = null,
                 WebUrl = null,
@@ -591,6 +683,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var selected = SelectedInstance;
+        if (selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会重启该进程。");
+            return;
+        }
+
         SetLifecycleBusy(true);
         try
         {
@@ -623,6 +721,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateInstance(selected with
             {
                 RuntimeStatus = InstanceRuntimeStatus.Running,
+                RuntimeOwnership = InstanceRuntimeOwnership.Managed,
                 ProcessId = result.ProcessId,
                 Port = result.Port,
                 WebUrl = result.WebUrl,
@@ -661,7 +760,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private void InstallNodeMirror_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://npmmirror.com/mirrors/node/",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"无法打开 Node.js 国内镜像页：{ex.Message}");
+        }
+    }
+
     private async void InstallDsh_Click(object sender, RoutedEventArgs e)
+    {
+        await InstallDshAsync(DshInstallService.OfficialRegistry, "npm 官方源");
+    }
+
+    private async void InstallDshMirror_Click(object sender, RoutedEventArgs e)
+    {
+        await InstallDshAsync(DshInstallService.ChinaRegistry, "npmmirror 国内镜像");
+    }
+
+    private async Task InstallDshAsync(string registry, string sourceName)
     {
         if (_isDshInstallInProgress)
         {
@@ -671,18 +796,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (!_nodeRuntime.IsAvailable)
         {
             ShowNotice("当前没有可用的 Node.js。请先安装 Node.js，再执行 DSh 安装。");
-            InstallNode_Click(sender, e);
+            InstallNode_Click(this, new RoutedEventArgs());
             return;
         }
 
         _isDshInstallInProgress = true;
         OnPropertyChanged(nameof(CanInstallDsh));
         OnPropertyChanged(nameof(DshInstallButtonText));
-        ShowNotice("正在使用当前 Node.js 执行 npm install --global @deepseek-ai/dsh，请稍候…");
+        ShowNotice($"正在使用当前 Node.js 通过 {sourceName} 执行 npm install --global @deepseek-ai/dsh，请稍候…");
 
         try
         {
-            var result = await _dshInstaller.InstallAsync(_nodeRuntime, _windowCancellation.Token);
+            var result = await _dshInstaller.InstallAsync(_nodeRuntime, registry, _windowCancellation.Token);
             if (!result.IsSuccess)
             {
                 ShowNotice(result.Error ?? "DSh 安装失败。");
@@ -714,6 +839,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateInstance(original with
             {
                 RuntimeStatus = status,
+                RuntimeOwnership = status == InstanceRuntimeStatus.Running
+                    ? original.RuntimeOwnership
+                    : InstanceRuntimeOwnership.None,
                 ProcessId = status == InstanceRuntimeStatus.Running ? original.ProcessId : null,
                 Port = status == InstanceRuntimeStatus.Running ? original.Port : null,
                 WebUrl = status == InstanceRuntimeStatus.Running ? original.WebUrl : null,
@@ -764,9 +892,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             SelectedInstance = updated;
         }
 
+        OnPropertyChanged(nameof(SelectedInstanceStatus));
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(CanStopInstance));
+        OnPropertyChanged(nameof(CanRestartInstance));
         OnPropertyChanged(nameof(InstanceEndpointText));
+        OnPropertyChanged(nameof(NodeStatusText));
+        OnPropertyChanged(nameof(NodeStatusBrush));
+        OnPropertyChanged(nameof(NodeVersionText));
     }
 
     private void SetLifecycleBusy(bool isBusy)
@@ -774,6 +907,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _isLifecycleInProgress = isBusy;
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(CanStopInstance));
+        OnPropertyChanged(nameof(CanRestartInstance));
         OnPropertyChanged(nameof(InstanceEndpointText));
     }
 

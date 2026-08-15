@@ -27,12 +27,14 @@ public sealed class DshRuntimeDetector
                 continue;
             }
 
+            var packageRoot = TryFindPackageRoot(candidate);
             return new DshRuntimeInfo(
                 true,
                 candidate,
                 version,
-                TryFindPackageRoot(candidate),
-                null);
+                packageRoot,
+                null,
+                packageRoot is null ? null : TryReadNodeEngine(packageRoot));
         }
 
         return DshRuntimeInfo.Missing("PATH 中没有可运行的 dsh.cmd 或 dsh.exe。");
@@ -100,6 +102,45 @@ public sealed class DshRuntimeDetector
             return document.RootElement.TryGetProperty("version", out var version)
                 && version.ValueKind == JsonValueKind.String
                 ? version.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    public static string? TryReadNodeEngine(string packageRoot)
+    {
+        if (string.IsNullOrWhiteSpace(packageRoot))
+        {
+            return null;
+        }
+
+        var normalized = Path.GetFullPath(packageRoot.Trim());
+        if (!IsDshPackageRoot(normalized))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(normalized, "package.json"), Encoding.UTF8));
+            var root = document.RootElement;
+            return root.TryGetProperty("engines", out var engines)
+                && engines.ValueKind == JsonValueKind.Object
+                && engines.TryGetProperty("node", out var node)
+                && node.ValueKind == JsonValueKind.String
+                ? node.GetString()
                 : null;
         }
         catch (JsonException)
