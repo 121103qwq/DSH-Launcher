@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前已发布 0.1.4，启动、实例和生态管理采用 PCL2 风格的右侧工作区切换。
+按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前源码版本为 0.1.5，启动、实例和生态管理采用 PCL2 风格的右侧工作区切换，0.1.5 的构建与发布核对尚未完成。
 
 ## 已完成内容
 
@@ -22,9 +22,9 @@
 - 已实现同一 `DSH_HOME` 的跨 Runner 本地独占锁文件，避免两个 Launcher 同时写入同一实例数据；锁文件位于用户本地 Launcher 锁目录，不会被 DSh 的 DSH_HOME watcher 监听；Runner 还会清理整个子进程树。
 - 已实现 `ExtensionService` 与内嵌扩展/Agent 页面：按 DSh 实际 profile 结构列出 Plugin，支持 Plugin 安装/更新/删除/启停；按 DSh 实际 Skill 根导入/删除 Skill；管理 MCP stdio/streamable-http 配置；导入/删除用户 Agent Preset；Workflow 仅显示随附 standard preset 能力，不伪造 DSh 不认识的目录。扩展写入前会拒绝实例运行状态、重解析点、越界路径、危险包名和命令行控制字符。
 - 已实现 `ModelService` 与内嵌模型页面：读写 `settings.yaml` 的 `llm-deepseek`、`llm-pi-ai.providers`，保留无关顶层段落，原子写入无 BOM，只保存 API Key 环境变量名；模型配置修改要求实例停止。
-- 已实现 `ConversationService` 与内嵌对话页面：按 DSh JSONL 会话目录列出有效和压缩日志，支持未压缩会话导入、导出、备份和删除，并校验 sessions 根、文件名和重解析点；打开会话通过 Chat 的 `localStorage` 预选 session ID，实例未运行或会话头部无效时拒绝打开。
-- 已补充用户操作回归保护：空实例入口、实例运行中修改、Skill/Preset 自包含目录复制、MCP serverName 注入、模型配置无关段落保留、API Key 不落盘、会话路径穿越、压缩会话和重复导入均有自测覆盖。
-- 已添加无外部 NuGet 依赖的 `DshLauncher.SelfTest` 控制台测试项目，覆盖注册往返、重复目录拒绝、隔离 HOME、Source 检查、当前机器 DSh 检测、安装缺失环境保护、Source 直接启动保护、启动/健康检查/重复启动/跨 Runner 拒绝/停止/重启/接管，以及生态/模型/会话边界。
+- 已实现 `ConversationService` 与内嵌对话页面：按 DSh JSONL 会话目录列出有效和压缩日志，使用 `ZstdSharp.Port 0.8.8` 读取压缩会话首个 Zstandard frame 的 session header；支持 `.jsonl` / `.jsonl.zstd` 导入、导出、备份和删除并保留原始格式，校验 sessions 根、文件名和重解析点；打开会话通过 Chat 的 `localStorage` 预选 session ID，实例未运行或会话头部无效时拒绝打开。
+- 已补充用户操作回归保护：空实例入口、实例运行中修改、Skill/Preset 自包含目录复制、MCP serverName 注入、模型配置无关段落保留、API Key 不落盘、会话路径穿越、有效/损坏 Zstandard 会话和重复导入均有自测覆盖。
+- 已添加 `DshLauncher.SelfTest` 控制台测试项目，覆盖注册往返、重复目录拒绝、隔离 HOME、Source 检查、当前机器 DSh 检测、安装缺失环境保护、Source 直接启动保护、启动/健康检查/重复启动/跨 Runner 拒绝/停止/重启/接管，以及生态/模型/会话边界；测试项目与 Launcher 共用 `ZstdSharp.Port 0.8.8`。
 - 当前功能分支为 `agent/harden-node-detection`，GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`；0.1.4 UI 代码提交为 `4a9efb8c23283cf6211163d5b538095e5dbe603d`，发布产物提交为 `073ccec047770953d086151dd5d873efefe4d66a`，标签为 `v0.1.4`。
 - 0.1.4 已生成 `publish\\release-0.1.4\\DSH Launcher.exe`；文件版本为 `0.1.4.0`，SHA-256 为 `A817F6438956D9CF585F51F298FCFE885B34B42D364D35FD7483726AD70010C4`。仓库工作目录中的旧版 `DSH Launcher\\DSH Launcher.exe` 当前仍被已有 Launcher 进程占用，因此没有强制结束进程或覆盖该锁定文件。
 - GitHub Release `v0.1.4` 已正式发布并核对为 1 个 Windows EXE；GitHub 资产名为 `DSH.Launcher.exe`，远端 digest 与上述 SHA-256 一致；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.4`。
@@ -47,7 +47,7 @@
 - `src/DshLauncher/Services/ConversationService.cs`、`ConversationWindow.xaml(.cs)`：内嵌 DSh session 文件页面、文件操作和 Chat 会话预选。
 - `src/DshLauncher/Models/EcosystemModels.cs`：扩展、MCP、Provider 和会话记录模型。
 - `tests/DshLauncher.SelfTest/Program.cs`：当前最小自测入口。
-- `src/DshLauncher/DshLauncher.csproj`：.NET 8、win-x64、自包含单文件发布配置，并引用 `Microsoft.Web.WebView2 1.0.4078.44`。
+- `src/DshLauncher/DshLauncher.csproj`：.NET 8、win-x64、自包含单文件发布配置，并引用 `Microsoft.Web.WebView2 1.0.4078.44` 和 `ZstdSharp.Port 0.8.8`。
 - `CURRENT_DESIGN.md`：当前有效设计约束。
 
 ## 已执行测试及结果
@@ -56,6 +56,11 @@
 - `dotnet build .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --no-restore`：通过，0 warnings、0 errors。
 - `dotnet build .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj -c Release --no-restore`：通过，0 warnings、0 errors。
 - `dotnet run --project .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj -c Release --no-build`：通过，16/16；除既有生命周期覆盖外，新增扩展隔离、模型 settings 回环、会话文件管理、空/越界/运行中/压缩日志等用户操作边界均通过。
+- `dotnet restore .\\src\\DshLauncher\\DshLauncher.csproj`、`dotnet restore .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj`：通过；已恢复 `ZstdSharp.Port 0.8.8`。
+- `dotnet build .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --no-restore`：通过，0 warnings、0 errors；本次变更后再次通过。
+- `dotnet build .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj -c Release --no-restore`：通过，0 warnings、0 errors；本次变更后再次通过。
+- `dotnet run --project .\\tests\\DshLauncher.SelfTest\\DshLauncher.SelfTest.csproj -c Release --no-build`：通过，16/16；包含两帧拼接 Zstandard 会话读取、损坏压缩文件识别、压缩导入/导出/备份格式保留。
+- 已用自包含临时发布版进行 Computer Use 实测：有效 `.jsonl.zstd` 在对话右侧页面显示 `ui-zstd-test` 和 `C:\\work\\ui-zstd`，打开时因测试实例保持停止而显示预期“实例没有运行”提示；损坏压缩文件被标记为无效，打开时显示 Zstandard header 错误提示。临时窗口已关闭，测试夹具已移出实例目录。
 - `dotnet publish .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o .\\publish\\ui-nav2`：通过；临时自包含发布版实际验证启动/实例布局差异，以及扩展、Agent、模型、对话页面在右侧切换且没有管理弹窗，随后已关闭该临时进程。
 - `dotnet publish .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o .\\publish\\release-0.1.4`：通过；文件版本和 SHA-256 已核对。
 - 发布目录中的 0.1.4 单文件已实际 smoke test：启动页不显示实例列表，实例页显示列表和注册入口；扩展、Agent、模型、对话均在右侧切换，Agent 页隐藏 Plugin 操作，未出现管理弹窗；测试进程随后已关闭。
@@ -64,13 +69,13 @@
 ## 已知问题
 
 - 当前自动化测试尚未覆盖 Node.js 检测的超时/取消、DSh 检测超时、Source 异常 `package.json`、DSh 安装命令的真实联网执行和所有 UI 错误提示边界。
-- 本次未对真实网络 Plugin 执行安装/更新/删除，避免修改用户实例；服务和临时 UI 页面已验证。Chat 仍按现有设计使用独立 WebView2 窗口，压缩会话仍不能导入或通过 Chat 预选打开。
+- 本次未对真实网络 Plugin 执行安装/更新/删除，避免修改用户实例；服务和临时 UI 页面已验证。Chat 仍按现有设计使用独立 WebView2 窗口；压缩会话需要有效 header，且实际打开仍要求实例运行并有可用 Chat 地址。
 - 当前分支仍是 Draft PR，尚未合并到 `main`；这不影响已发布的 `v0.1.4` Release。
 
 ## 尚未完成内容
 
-- 仓库工作目录中的旧版顶层 `DSH Launcher\\DSH Launcher.exe` 尚未覆盖，因为它仍被已有 Launcher 锁定；0.1.4 文件已在 `publish\\release-0.1.4` 生成、核对并上传 Release。
-- 工作树仍保留一个因已有用户进程锁定而无法覆盖的旧版顶层 EXE 差异；0.1.4 的独立发布目录、提交、推送、标签和 Release 已完成。
+- 0.1.5 还未完成最终发布：需要生成 `publish\\release-0.1.5\\DSH Launcher.exe`，核对文件版本和 SHA-256，提交源码/测试/文档及发布产物，推送当前分支，创建并核对 `v0.1.5` Release。
+- 仓库工作目录中的旧版顶层 `DSH Launcher\\DSH Launcher.exe` 尚未覆盖，因为它仍被已有 Launcher 锁定；不得强制结束该用户进程或覆盖锁定文件。
 
 ## 已尝试但已放弃的方案
 
@@ -78,4 +83,4 @@
 
 ## 下一步最直接的任务
 
-- 当前最直接任务是补齐 Zstandard 会话读取/打开能力，并继续覆盖真实 UI 错误提示边界；处理顶层旧版 EXE 前仍不要强制结束已有 Launcher 进程。
+- 当前最直接任务是完成 0.1.5 发布流程并核对远端 Release；处理顶层旧版 EXE 前仍不要强制结束已有 Launcher 进程。

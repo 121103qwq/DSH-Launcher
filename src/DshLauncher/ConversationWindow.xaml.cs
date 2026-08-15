@@ -48,7 +48,7 @@ public partial class ConversationWindow : UserControl
                     string.Equals(entry.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
             }
 
-            StatusText.Text = $"已读取 {Entries.Count} 个对话文件。压缩 session.jsonl.zstd 可查看，但当前不能导入。";
+            StatusText.Text = $"已读取 {Entries.Count} 个对话文件。压缩 session.jsonl.zstd 可查看、打开和导入，导入时保留原始格式。";
             UpdateSelection();
         }
         catch (Exception ex)
@@ -62,6 +62,14 @@ public partial class ConversationWindow : UserControl
         if (ConversationList.SelectedItem is not ConversationEntry entry)
         {
             StatusText.Text = "请先选择一个对话。";
+            return;
+        }
+
+        if (!entry.HasValidHeader || entry.SessionId is null)
+        {
+            StatusText.Text = entry.IsCompressed
+                ? "无法打开：压缩会话的 Zstandard header 无法读取，文件可能已损坏。"
+                : "无法打开：会话 header 无法读取。";
             return;
         }
 
@@ -83,7 +91,7 @@ public partial class ConversationWindow : UserControl
         using var dialog = new Forms.OpenFileDialog
         {
             Title = "导入 DSh session.jsonl",
-            Filter = "DSh session (*.jsonl)|*.jsonl|所有文件 (*.*)|*.*",
+            Filter = "DSh session (*.jsonl;*.jsonl.zstd)|*.jsonl;*.jsonl.zstd|所有文件 (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = false
         };
@@ -180,7 +188,9 @@ public partial class ConversationWindow : UserControl
 
         StatusText.Text = entry.HasValidHeader
             ? $"已选择 {entry.SessionId} · {entry.RelativePath}"
-            : "已选择压缩或无法读取头部的会话文件；可导出/备份，打开前需有可识别的会话 ID。";
+            : entry.IsCompressed
+                ? "已选择无法读取 header 的压缩会话；可导出/备份或删除，打开前需先确认文件未损坏。"
+                : "已选择无法读取 header 的会话文件；可导出/备份或删除。";
     }
 
     private void ShowError(Exception ex)

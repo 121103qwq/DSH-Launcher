@@ -9,9 +9,9 @@
     <AssemblyName>DSH Launcher</AssemblyName>
     <RootNamespace>DshLauncher</RootNamespace>
     <ApplicationTitle>DSH Launcher</ApplicationTitle>
-    <Version>0.1.4</Version>
-    <FileVersion>0.1.4.0</FileVersion>
-    <AssemblyVersion>0.1.4.0</AssemblyVersion>
+    <Version>0.1.5</Version>
+    <FileVersion>0.1.5.0</FileVersion>
+    <AssemblyVersion>0.1.5.0</AssemblyVersion>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -21,5 +21,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 </Project>

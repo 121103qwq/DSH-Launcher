@@ -19,7 +19,7 @@
         <WrapPanel Grid.Row="1" Margin="0,20,0,14">
             <Button Content="刷新" Click="Refresh_Click" Margin="0,0,8,0" />
             <Button Content="打开选中对话" Click="Open_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" />
-            <Button Content="导入 session.jsonl" Click="Import_Click" Margin="0,0,8,0" />
+            <Button Content="导入 session.jsonl / .zstd" Click="Import_Click" Margin="0,0,8,0" />
             <Button Content="导出选中对话" Click="Export_Click" Margin="0,0,8,0" />
             <Button Content="备份选中对话" Click="Backup_Click" Margin="0,0,8,0" />
             <Button Content="删除选中对话" Click="Delete_Click" />

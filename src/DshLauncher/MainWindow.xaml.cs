@@ -314,7 +314,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     "扩展" => "管理当前实例的 Plugin 与 MCP",
                     "Agent" => "管理当前实例的 Skill、Agent Preset 与 Workflow",
                     "模型" => "编辑当前实例的 DSh Provider 与模型列表",
-                    _ => "管理当前实例的 session.jsonl 对话文件"
+                    _ => "管理当前实例的 session.jsonl / .zstd 对话文件"
                 };
 
                 object page = section switch

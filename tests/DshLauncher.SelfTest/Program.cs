@@ -1,6 +1,7 @@
 using System.Text;
 using DshLauncher.Models;
 using DshLauncher.Services;
+using ZstdSharp;
 
 var tests = new (string Name, Func<Task> Run)[]
 {
@@ -583,13 +584,20 @@ static Task TestConversationFileManagement()
     var compressedDirectory = Path.Combine(home, "sessions", "--C-work-demo--", "session-2");
     Directory.CreateDirectory(compressedDirectory);
     var compressedPath = Path.Combine(compressedDirectory, "session.jsonl.zstd");
-    File.WriteAllBytes(compressedPath, new byte[] { 1, 2, 3 });
+    var compressedHeader = "{\"type\":\"session\",\"version\":1,\"id\":\"session-2\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\"}\n";
+    var compressedEvents = "{\"type\":\"message\"}\n";
+    File.WriteAllBytes(compressedPath, CompressZstd(compressedHeader).Concat(CompressZstd(compressedEvents)).ToArray());
+    var invalidCompressedPath = Path.Combine(home, "sessions", "--C-work-demo--", "session-3", "session.jsonl.zstd");
+    Directory.CreateDirectory(Path.GetDirectoryName(invalidCompressedPath)!);
+    File.WriteAllBytes(invalidCompressedPath, new byte[] { 1, 2, 3 });
 
     var service = new ConversationService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
     var entries = service.List(instance);
     var session = entries.Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
     Assert(session.HasValidHeader && session.SessionId == "session-1", "应读取 JSONL 首行会话头部。");
-    Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader), "压缩会话应列出但标记为未解析头部。");
+    var compressedSession = entries.Single(entry => entry.FullPath == Path.GetFullPath(compressedPath));
+    Assert(compressedSession.IsCompressed && compressedSession.HasValidHeader && compressedSession.SessionId == "session-2", "应解压压缩会话的首个 Zstandard frame 并读取会话头部。");
+    Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(invalidCompressedPath)), "损坏的压缩会话应列出但标记为不可解析。");
 
     var backup = service.Backup(instance, session);
     Assert(File.Exists(backup), "备份对话必须生成独立文件。");
@@ -598,6 +606,15 @@ static Task TestConversationFileManagement()
     Assert(File.Exists(exportPath), "导出对话必须生成用户指定的文件。");
     var importedPath = service.Import(importedInstance, exportPath);
     Assert(File.Exists(importedPath), "导入对话必须按 DSh projectKey 和 session ID 落位。");
+
+    var compressedBackup = service.Backup(instance, compressedSession);
+    Assert(File.Exists(compressedBackup) && compressedBackup.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase), "压缩会话备份必须保留原始格式。");
+    var compressedExportPath = Path.Combine(temporary.Path, "exported-session.jsonl.zstd");
+    service.Export(instance, compressedSession, compressedExportPath);
+    Assert(File.Exists(compressedExportPath), "压缩会话导出必须生成用户指定的文件。");
+    var importedCompressedPath = service.Import(importedInstance, compressedExportPath);
+    Assert(importedCompressedPath.EndsWith("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase), "压缩会话导入必须保留 session.jsonl.zstd 格式。");
+    Assert(new ConversationService().List(importedInstance).Any(entry => entry.SessionId == "session-2" && entry.HasValidHeader && entry.IsCompressed), "导入后的压缩会话应可再次读取头部。");
 
     var outside = Path.Combine(temporary.Path, "outside.jsonl");
     File.WriteAllText(outside, "not a managed session\n", new UTF8Encoding(false));
@@ -609,6 +626,12 @@ static Task TestConversationFileManagement()
     var guarded = new ConversationService(isRunning: _ => true);
     AssertThrows<InvalidOperationException>(() => guarded.Export(importedInstance, entries[0], Path.Combine(temporary.Path, "blocked.jsonl")), "实例运行时不能导出可能正在写入的会话快照。");
     return Task.CompletedTask;
+}
+
+static byte[] CompressZstd(string text)
+{
+    using var compressor = new Compressor(3);
+    return compressor.Wrap(Encoding.UTF8.GetBytes(text)).ToArray();
 }
 
 static ManagerInstance CreateTestInstance(string id, string root, string home) => new(

@@ -8,5 +8,5 @@
 - 扩展：Plugin 依据 DSh `profiles\\web\\package.json` 的 dependencies 与 `dsh.profile.bundles` 管理；安装、更新、删除通过 DSh CLI 完成。Skill 使用 DSh 的实例 `skills`、实例 `.agents\\skills` 和项目 `.dsh\\skills`/`.agents\\skills` 根；Agent Preset 使用实例 `.agent-presets`。Workflow 当前表示 DSh 随附 standard preset 提供的能力，不虚构独立目录。
 - MCP：配置符合 DSh MCP client 的 `stdio` 或 `streamable-http` 结构，元数据保存在实例 `.dsh-launcher\\mcp.json`，启用项生成实例 `launcher.patch.yml`，启动时通过 `--patch` 叠加；配置与 Plugin/Skill/Preset 修改都要求实例停止。
 - 模型：编辑实例 `settings.yaml` 中的 `llm-deepseek` 和 `llm-pi-ai.providers`；保留无关顶层段落，只写环境变量引用、URL 和模型目录，不写 API Key 明文。
-- 对话：按 DSh JSONL 持久化格式扫描实例 `sessions`，识别 `session.jsonl` 和 `session.jsonl.zstd`；未压缩且头部有效的会话可从 Chat 入口预选，文件可导入、导出、备份或删除，修改类操作要求实例停止。当前没有 Zstandard 解压读取器，因此压缩会话不能导入或预选打开。
+- 对话：按 DSh JSONL 持久化格式扫描实例 `sessions`，识别 `session.jsonl` 和 `session.jsonl.zstd`；压缩文件按首个 Zstandard frame 读取 session header，头部有效的会话可从 Chat 入口预选，文件可导入、导出、备份或删除并保留原始格式，修改类操作要求实例停止。无法读取 header 的压缩文件仍列出但禁止打开。
 - Node/DSh 检测：检查 PATH 和 Windows 常见目录，实际执行版本命令；多个 Node 候选优先选择最高可解析版本，单候选检测超时会清理进程树，窗口关闭会取消检测。Windows `.cmd` 入口通过 `cmd.exe` 调用。

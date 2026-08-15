@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.IO;
 using DshLauncher.Models;
+using ZstdSharp;
 
 namespace DshLauncher.Services;
 
@@ -11,6 +12,8 @@ namespace DshLauncher.Services;
 /// </summary>
 public sealed class ConversationService
 {
+    private const int MaxHeaderBytes = 256_000;
+    private const int ZstdReadBufferSize = 64 * 1024;
     private readonly LauncherPaths _paths;
     private readonly Func<string, bool> _isRunning;
 
@@ -99,9 +102,10 @@ public sealed class ConversationService
             throw new FileNotFoundException("导入会话文件不存在，或是符号链接。", source);
         }
 
-        if (!source.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
+        var compressed = source.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase);
+        if (!compressed && !source.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
         {
-            throw new NotSupportedException("当前导入入口只接受未压缩 session.jsonl；压缩日志会保留在原格式，待后续加入受支持的 Zstandard 读取器。");
+            throw new NotSupportedException("当前导入入口只接受 session.jsonl 或 session.jsonl.zstd。");
         }
 
         var header = ReadHeader(source);
@@ -113,7 +117,7 @@ public sealed class ConversationService
         var sessionsRoot = GetSessionsRoot(instance);
         var projectDirectory = ProjectDirectory(sessionsRoot, header.WorkingDirectory);
         var sessionDirectory = Path.Combine(projectDirectory, EncodeSegment(header.SessionId));
-        var target = Path.Combine(sessionDirectory, "session.jsonl");
+        var target = Path.Combine(sessionDirectory, compressed ? "session.jsonl.zstd" : "session.jsonl");
         EnsurePathDoesNotEscape(target, sessionsRoot);
         EnsureNoReparseComponents(sessionDirectory, sessionsRoot);
         if (File.Exists(target) || Directory.Exists(target))
@@ -173,9 +177,7 @@ public sealed class ConversationService
                 try
                 {
                     var info = new FileInfo(entry);
-                    var header = fileName.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase)
-                        ? null
-                        : ReadHeader(entry);
+                    var header = ReadHeader(entry);
                     result.Add(new ConversationEntry(
                         Path.GetRelativePath(root, entry),
                         Path.GetFullPath(entry),
@@ -242,41 +244,24 @@ public sealed class ConversationService
     {
         try
         {
-            using var stream = File.OpenRead(path);
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096);
-            var line = reader.ReadLine();
-            if (string.IsNullOrWhiteSpace(line) || line.Length > 256_000)
+            using var source = File.OpenRead(path);
+            if (path.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase))
             {
-                return null;
+                using var decompressor = new DecompressionStream(
+                    source,
+                    ZstdReadBufferSize,
+                    checkEndOfStream: false,
+                    leaveOpen: false);
+                return ParseHeader(ReadHeaderLine(decompressor));
             }
 
-            using var document = JsonDocument.Parse(line);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("type", out var type)
-                || !string.Equals(type.GetString(), "session", StringComparison.Ordinal)
-                || !root.TryGetProperty("id", out var id)
-                || string.IsNullOrWhiteSpace(id.GetString()))
-            {
-                return null;
-            }
-
-            var sessionId = id.GetString()!;
-            if (sessionId.Length > 256 || sessionId.Any(char.IsControl))
-            {
-                return null;
-            }
-
-            var cwd = root.TryGetProperty("cwd", out var cwdValue) && cwdValue.ValueKind == JsonValueKind.String
-                ? cwdValue.GetString()
-                : null;
-            if (cwd is not null && (cwd.Length > 4096 || cwd.Any(char.IsControl)))
-            {
-                return null;
-            }
-
-            return new HeaderInfo(sessionId, cwd);
+            return ParseHeader(ReadHeaderLine(source));
         }
         catch (JsonException)
+        {
+            return null;
+        }
+        catch (ZstdException)
         {
             return null;
         }
@@ -288,6 +273,75 @@ public sealed class ConversationService
         {
             return null;
         }
+    }
+
+    private static HeaderInfo? ParseHeader(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.Length > MaxHeaderBytes)
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(line);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("type", out var type)
+            || !string.Equals(type.GetString(), "session", StringComparison.Ordinal)
+            || !root.TryGetProperty("id", out var id)
+            || string.IsNullOrWhiteSpace(id.GetString()))
+        {
+            return null;
+        }
+
+        var sessionId = id.GetString()!;
+        if (sessionId.Length > 256 || sessionId.Any(char.IsControl))
+        {
+            return null;
+        }
+
+        var cwd = root.TryGetProperty("cwd", out var cwdValue) && cwdValue.ValueKind == JsonValueKind.String
+            ? cwdValue.GetString()
+            : null;
+        if (cwd is not null && (cwd.Length > 4096 || cwd.Any(char.IsControl)))
+        {
+            return null;
+        }
+
+        return new HeaderInfo(sessionId, cwd);
+    }
+
+    private static string? ReadHeaderLine(Stream stream)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[4096];
+        while (buffer.Length <= MaxHeaderBytes)
+        {
+            var read = stream.Read(chunk, 0, chunk.Length);
+            if (read == 0)
+            {
+                break;
+            }
+
+            var newline = Array.IndexOf(chunk, (byte)'\n', 0, read);
+            var count = newline >= 0 ? newline + 1 : read;
+            if (buffer.Length + count > MaxHeaderBytes)
+            {
+                return null;
+            }
+
+            buffer.Write(chunk, 0, count);
+            if (newline >= 0)
+            {
+                break;
+            }
+        }
+
+        if (buffer.Length == 0)
+        {
+            return null;
+        }
+
+        var line = Encoding.UTF8.GetString(buffer.ToArray()).TrimEnd('\r', '\n');
+        return line.Length > 0 && line[0] == '\uFEFF' ? line[1..] : line;
     }
 
     private static string ProjectDirectory(string root, string? cwd) =>
