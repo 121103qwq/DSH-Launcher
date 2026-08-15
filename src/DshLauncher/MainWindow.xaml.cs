@@ -33,6 +33,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly ProviderStateService _providerStateService = new();
     private readonly ProviderDiagnosticService _providerDiagnosticService = new();
     private readonly DshInstallService _dshInstaller = new();
+    private readonly NodeInstallService _nodeInstaller = new();
     private readonly SourceBuildService _sourceBuilder = new();
     private readonly CancellationTokenSource _windowCancellation = new();
     private CancellationTokenSource? _providerRefreshCancellation;
@@ -43,6 +44,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isNodeDetectionInProgress;
     private bool _isLifecycleInProgress;
     private bool _isDshInstallInProgress;
+    private bool _isRuntimePrepareInProgress;
     private bool _isProviderDetectionInProgress;
 
     public MainWindow()
@@ -143,10 +145,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string SelectedInstanceStatus => SelectedInstance?.StatusText ?? "未选择";
 
     public bool CanStartInstance => !_isLifecycleInProgress
+        && !_isRuntimePrepareInProgress
         && SelectedInstance is not null
-        && (SelectedInstance.Kind == InstanceKind.Installed
-            ? SelectedInstance.DshExecutablePath is not null
-            : GetSelectedNodeCompatibility() == NodeRuntimeCompatibility.Compatible)
         && (!_instanceRunner.IsRunning(SelectedInstance.Id)
             || !string.IsNullOrWhiteSpace(SelectedInstance.WebUrl));
 
@@ -862,7 +862,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var panel = new StackPanel
         {
             Margin = new Thickness(24),
-            VerticalAlignment = VerticalAlignment.Top
+            VerticalAlignment = VerticalAlignment.Top,
+            MaxWidth = 720
         };
         panel.Children.Add(new TextBlock
         {
@@ -870,19 +871,278 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             FontSize = 20,
             FontWeight = FontWeights.SemiBold
         });
+
+        var nodeStatus = new TextBlock
+        {
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 20, 0, 0)
+        };
+        var nodeDetail = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        var dshStatus = new TextBlock
+        {
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 16, 0, 0)
+        };
+        var dshDetail = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        panel.Children.Add(nodeStatus);
+        panel.Children.Add(nodeDetail);
+        panel.Children.Add(dshStatus);
+        panel.Children.Add(dshDetail);
+
+        var buttons = new WrapPanel { Margin = new Thickness(0, 18, 0, 0) };
         var refreshButton = new System.Windows.Controls.Button
         {
             Content = "重新检测",
             Style = (Style)FindResource("PrimaryButton"),
             Padding = new Thickness(14, 9, 14, 9),
-            Margin = new Thickness(0, 18, 0, 0),
+            Margin = new Thickness(0, 0, 8, 0),
             HorizontalAlignment = System.Windows.HorizontalAlignment.Left
         };
-        refreshButton.Click += RefreshNode_Click;
-        panel.Children.Add(refreshButton);
+        var prepareButton = new System.Windows.Controls.Button
+        {
+            Content = "准备运行环境（官方源）",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 9, 14, 9),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var prepareMirrorButton = new System.Windows.Controls.Button
+        {
+            Content = "准备运行环境（国内镜像）",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 9, 14, 9),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var hint = new TextBlock
+        {
+            Text = "准备运行环境会下载 Node.js 官方安装程序并按系统授权安装，再通过 npm 安装 @deepseek-ai/dsh；Launcher 启动时不会自动下载或安装任何内容。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        buttons.Children.Add(refreshButton);
+        buttons.Children.Add(prepareButton);
+        buttons.Children.Add(prepareMirrorButton);
+        panel.Children.Add(buttons);
+        panel.Children.Add(hint);
+
+        void UpdateStatus()
+        {
+            nodeStatus.Text = $"Node.js：{NodeStatusText}";
+            nodeDetail.Text = _nodeRuntime.IsAvailable
+                ? $"{_nodeRuntime.VersionText} · {(_nodeRuntime.ExecutablePath ?? "路径未知")}"
+                : _nodeRuntime.Error ?? "未安装";
+            dshStatus.Text = $"DeepSeek Harness：{DshStatusText}";
+            dshDetail.Text = _dshRuntime.IsAvailable
+                ? $"{_dshRuntime.VersionText} · {(_dshRuntime.ExecutablePath ?? "路径未知")}"
+                : "未安装";
+            var ready = _nodeRuntime.IsAvailable && _dshRuntime.IsAvailable;
+            prepareButton.IsEnabled = !ready && !_isRuntimePrepareInProgress;
+            prepareMirrorButton.IsEnabled = prepareButton.IsEnabled;
+            prepareButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+            prepareMirrorButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        refreshButton.Click += async (_, _) =>
+        {
+            await RefreshDshAsync();
+            await RefreshNodeAsync();
+            UpdateStatus();
+        };
+        prepareButton.Click += async (_, _) =>
+        {
+            await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry);
+            UpdateStatus();
+        };
+        prepareMirrorButton.Click += async (_, _) =>
+        {
+            await PrepareRuntimeAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry);
+            UpdateStatus();
+        };
+
+        UpdateStatus();
         return panel;
     }
 
+    private async Task<bool> PrepareRuntimeAsync(string sourceName, string nodeDistBase, string? npmRegistry)
+    {
+        if (_isRuntimePrepareInProgress)
+        {
+            return false;
+        }
+
+        var prepareNodeEngine = _dshRuntime.NodeEngine;
+        if (_nodeRuntime.IsAvailable
+            && !string.IsNullOrWhiteSpace(prepareNodeEngine)
+            && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
+        {
+            System.Windows.MessageBox.Show(this,
+                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本（Node.js 22 LTS 或 24+）后重试。",
+                "运行环境不兼容",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return false;
+        }
+
+        _isRuntimePrepareInProgress = true;
+        OnPropertyChanged(nameof(CanStartInstance));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        var progressWindow = new RuntimeProgressWindow(this, cancellation);
+        progressWindow.Show();
+        try
+        {
+            var progress = new Progress<NodeDownloadProgress>(progressWindow.SetDownloadProgress);
+
+            if (!_nodeRuntime.IsAvailable)
+            {
+                progressWindow.SetIndeterminate(false);
+                progressWindow.SetStatus($"正在通过 {sourceName} 解析 Node.js 版本并下载安装程序…");
+                var nodeResult = await _nodeInstaller.InstallAsync(nodeDistBase, progress, cancellation.Token);
+                if (!nodeResult.IsSuccess)
+                {
+                    progressWindow.SetStatus(nodeResult.Error ?? "Node.js 安装失败。");
+                    System.Windows.MessageBox.Show(this, nodeResult.Error ?? "Node.js 安装失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
+                }
+
+                progressWindow.SetStatus("Node.js 安装完成，正在重新检测…");
+                for (var attempt = 0; attempt < 5 && !_nodeRuntime.IsAvailable; attempt++)
+                {
+                    await RefreshNodeAsync();
+                    if (!_nodeRuntime.IsAvailable)
+                    {
+                        await Task.Delay(1000, cancellation.Token);
+                    }
+                }
+
+                if (!_nodeRuntime.IsAvailable)
+                {
+                    progressWindow.SetStatus("Node.js 安装后仍未被检测到，请确认安装路径后重新检测。");
+                    System.Windows.MessageBox.Show(this, "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
+                }
+            }
+
+            if (!_dshRuntime.IsAvailable)
+            {
+                progressWindow.SetIndeterminate(true);
+                progressWindow.SetStatus(npmRegistry is null
+                    ? "正在通过 npm 官方源安装 DeepSeek Harness…"
+                    : "正在通过 npmmirror 国内镜像安装 DeepSeek Harness…");
+                var dshResult = await _dshInstaller.InstallAsync(_nodeRuntime, npmRegistry, cancellation.Token);
+                if (!dshResult.IsSuccess)
+                {
+                    progressWindow.SetStatus(dshResult.Error ?? "DSh 安装失败。");
+                    System.Windows.MessageBox.Show(this, dshResult.Error ?? "DSh 安装失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
+                }
+
+                progressWindow.SetStatus("DSh 安装完成，正在重新检测…");
+                await RefreshDshAsync();
+            }
+
+            progressWindow.SetStatus("运行环境已就绪。");
+            ShowNotice($"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}，DSh {_dshRuntime.VersionText}。");
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            ShowNotice("运行环境准备已取消。");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"准备运行环境失败：{ex.Message}");
+            return false;
+        }
+        finally
+        {
+            progressWindow.Close();
+            _isRuntimePrepareInProgress = false;
+            OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(CanInstallDsh));
+            OnPropertyChanged(nameof(DshInstallButtonText));
+        }
+    }
+
+    private async Task<bool> EnsureRuntimeReadyAsync(ManagerInstance instance)
+    {
+        var requirement = instance.Kind == InstanceKind.Source
+            ? SourceProjectInspector.TryReadNodeEngine(instance.RootPath)
+            : _dshRuntime.NodeEngine;
+        var missing = new List<string>();
+        var needsManualNode = false;
+
+        if (!_nodeRuntime.IsAvailable)
+        {
+            missing.Add("Node.js 未安装（可一键准备）");
+        }
+        else if (_nodeRuntime.GetCompatibility(requirement) != NodeRuntimeCompatibility.Compatible)
+        {
+            missing.Add($"Node.js 版本不兼容（当前 {_nodeRuntime.VersionText}，要求 {(string.IsNullOrWhiteSpace(requirement) ? "未声明" : requirement)}）");
+            needsManualNode = true;
+        }
+
+        if (instance.Kind == InstanceKind.Installed
+            && (string.IsNullOrWhiteSpace(instance.DshExecutablePath) || !File.Exists(instance.DshExecutablePath)))
+        {
+            missing.Add("DeepSeek Harness 入口缺失（可一键重装）");
+        }
+
+        if (missing.Count == 0)
+        {
+            return true;
+        }
+
+        if (needsManualNode)
+        {
+            var message = "当前 Node.js 版本与 DeepSeek Harness 要求不兼容。\n\n"
+                + string.Join("\n", missing.Select(item => "• " + item))
+                + "\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本（Node.js 22 LTS 或 24+）后重试。";
+            System.Windows.MessageBox.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        var confirm = System.Windows.MessageBox.Show(
+            this,
+            "运行环境缺失：\n\n" + string.Join("\n", missing.Select(item => "• " + item))
+            + "\n\n是否现在准备运行环境？准备完成后将自动继续启动实例。",
+            "准备运行环境",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirm != MessageBoxResult.Yes)
+        {
+            return false;
+        }
+
+        if (!await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry))
+        {
+            return false;
+        }
+
+        if (!_nodeRuntime.IsAvailable
+            || _nodeRuntime.GetCompatibility(requirement) != NodeRuntimeCompatibility.Compatible
+            || (instance.Kind == InstanceKind.Installed
+                && (string.IsNullOrWhiteSpace(instance.DshExecutablePath) || !File.Exists(instance.DshExecutablePath))))
+        {
+            ShowNotice("运行环境仍未就绪，请重新检测或手动安装后重试。");
+            return false;
+        }
+
+        return true;
+    }
     private void SetNavigationSelection(string section)
     {
         var buttons = new[]
@@ -1015,6 +1275,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 ShowNotice("实例仍在运行，但没有可用的 Web 地址，暂时不能重新打开窗口。 ");
             }
+            return;
+        }
+
+        if (!await EnsureRuntimeReadyAsync(selected))
+        {
             return;
         }
 

@@ -68,14 +68,16 @@ public partial class ExtensionWindow : UserControl
         _controlLoaded = true;
         if (!_agentOnly)
         {
-            await LoadCachedMarketplaceAsync();
+            // Show the cached catalog first; only go online when there is no
+            // cache yet (first run) or when the user explicitly refreshes.
+            var hasCache = await LoadCachedMarketplaceAsync();
+            if (!hasCache)
+            {
+                _ = RefreshMarketplaceAsync();
+            }
         }
 
         await RefreshAsync();
-        if (!_agentOnly)
-        {
-            _ = RefreshMarketplaceAsync();
-        }
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
@@ -85,7 +87,7 @@ public partial class ExtensionWindow : UserControl
         try
         {
             var selectedId = (ExtensionList.SelectedItem as ExtensionEntry)?.Id;
-            var entries = await _service.ListAsync(_instance);
+            var entries = await Task.Run(async () => await _service.ListAsync(_instance));
             entries = (_agentOnly
                     ? entries.Where(entry => entry.Kind is ExtensionKind.Skill or ExtensionKind.Preset or ExtensionKind.Workflow)
                     : entries.Where(entry => entry.Kind is ExtensionKind.Plugin or ExtensionKind.Mcp))
@@ -149,11 +151,11 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    private async Task LoadCachedMarketplaceAsync()
+    private async Task<bool> LoadCachedMarketplaceAsync()
     {
         if (_marketplaceService is null)
         {
-            return;
+            return false;
         }
 
         try
@@ -161,15 +163,17 @@ public partial class ExtensionWindow : UserControl
             var cached = _marketplaceService.ReadCached(_instance);
             if (cached is null)
             {
-                MarketplaceStatusText.Text = "还没有本地缓存；正在后台读取插件目录。";
-                return;
+                MarketplaceStatusText.Text = "还没有本地缓存；点击“刷新目录”可从在线来源读取插件目录。";
+                return false;
             }
 
             await SetMarketplaceSnapshotAsync(cached, fromCache: true);
+            return true;
         }
         catch (Exception ex)
         {
             MarketplaceStatusText.Text = $"读取插件市场缓存失败：{ex.Message}";
+            return false;
         }
     }
 
@@ -219,11 +223,16 @@ public partial class ExtensionWindow : UserControl
         CancellationToken cancellationToken = default)
     {
         _marketplaceSnapshot = result.Items;
-        var installed = await _service.ListAsync(_instance, cancellationToken);
+        var (installed, themeState) = await Task.Run(async () =>
+        {
+            var scanned = await _service.ListAsync(_instance, cancellationToken);
+            var theme = await _themeService.ReadAsync(_instance, cancellationToken);
+            return (scanned, theme);
+        }, cancellationToken);
         _installedPlugins = installed
             .Where(entry => entry.Kind == ExtensionKind.Plugin)
             .ToArray();
-        _themeState = await _themeService.ReadAsync(_instance, cancellationToken);
+        _themeState = themeState;
         _marketplaceCanMutate = !_isMarketplaceMutating
             && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
             && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;

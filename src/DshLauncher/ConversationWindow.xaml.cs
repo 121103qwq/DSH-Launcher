@@ -117,7 +117,7 @@ public partial class ConversationWindow : UserControl
             }
             else
             {
-                StatusText.Text = $"已打开对话：{entry.SessionId}。";
+                StatusText.Text = $"已打开对话：{entry.DisplayName}。";
             }
         }
         catch (Exception ex)
@@ -246,7 +246,7 @@ public partial class ConversationWindow : UserControl
         }
 
         StatusText.Text = entry.HasValidHeader
-            ? $"已选择 {entry.SessionId} · {entry.RelativePath}"
+            ? $"已选择 {entry.DisplayName} · {entry.RelativePath}"
             : entry.IsCompressed
                 ? "已选择无法读取 header 的压缩会话；可导出/备份或删除，打开前需先确认文件未损坏。"
                 : "已选择无法读取 header 的会话文件；可导出/备份或删除。";

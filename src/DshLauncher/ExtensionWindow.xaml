@@ -82,7 +82,10 @@
                              Background="Transparent"
                              Foreground="{StaticResource TextBrush}"
                              SelectionChanged="ExtensionList_SelectionChanged"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingStackPanel.IsVirtualizing="True"
+                             VirtualizingStackPanel.VirtualizationMode="Recycling"
+                             ScrollViewer.CanContentScroll="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Border Padding="10"
@@ -288,7 +291,10 @@
                              Background="Transparent"
                              Foreground="{StaticResource TextBrush}"
                              SelectionChanged="MarketplaceList_SelectionChanged"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingStackPanel.IsVirtualizing="True"
+                             VirtualizingStackPanel.VirtualizationMode="Recycling"
+                             ScrollViewer.CanContentScroll="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Border Padding="14"

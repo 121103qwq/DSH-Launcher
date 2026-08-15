@@ -27,7 +27,7 @@
             <ListView x:Name="ConversationList" BorderThickness="0" SelectionChanged="ConversationList_SelectionChanged" MouseDoubleClick="ConversationList_MouseDoubleClick">
                 <ListView.View>
                     <GridView AllowsColumnReorder="False">
-                        <GridViewColumn Header="会话 ID" Width="220" DisplayMemberBinding="{Binding SessionId}" />
+                        <GridViewColumn Header="名称" Width="280" DisplayMemberBinding="{Binding DisplayName}" />
                         <GridViewColumn Header="工作目录" Width="280" DisplayMemberBinding="{Binding WorkingDirectory}" />
                         <GridViewColumn Header="更新时间" Width="180" DisplayMemberBinding="{Binding UpdatedAt}" />
                         <GridViewColumn Header="大小" Width="90" DisplayMemberBinding="{Binding SizeBytes}" />

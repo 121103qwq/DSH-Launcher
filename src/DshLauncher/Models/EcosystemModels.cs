@@ -37,7 +37,8 @@ public sealed record ConversationEntry(
     DateTimeOffset UpdatedAt,
     long SizeBytes,
     bool IsCompressed,
-    bool HasValidHeader);
+    bool HasValidHeader,
+    string DisplayName);
 
 public sealed record ModelProviderInfo(
     string Provider,

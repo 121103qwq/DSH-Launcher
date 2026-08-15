@@ -36,7 +36,8 @@ public sealed class ConversationService
         }
 
         var result = new List<ConversationEntry>();
-        Walk(root, root, result);
+        var titles = ReadSessionTitles(instance);
+        Walk(root, root, result, titles);
         return result
             .OrderByDescending(entry => entry.UpdatedAt)
             .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
@@ -152,7 +153,7 @@ public sealed class ConversationService
         File.Delete(source);
     }
 
-    private void Walk(string directory, string root, ICollection<ConversationEntry> result)
+    private void Walk(string directory, string root, ICollection<ConversationEntry> result, IReadOnlyDictionary<string, string?> titles)
     {
         try
         {
@@ -165,7 +166,7 @@ public sealed class ConversationService
 
                 if (Directory.Exists(entry))
                 {
-                    Walk(entry, root, result);
+                    Walk(entry, root, result, titles);
                     continue;
                 }
 
@@ -180,15 +181,19 @@ public sealed class ConversationService
                 {
                     var info = new FileInfo(entry);
                     var header = ReadHeader(entry);
+                    var updatedAt = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
                     result.Add(new ConversationEntry(
                         Path.GetRelativePath(root, entry),
                         Path.GetFullPath(entry),
                         header?.SessionId,
                         header?.WorkingDirectory,
-                        new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
+                        updatedAt,
                         info.Length,
                         fileName.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase),
-                        header is not null));
+                        header is not null,
+                        header?.SessionId is null
+                            ? "无法读取会话"
+                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, updatedAt)));
                 }
                 catch (IOException)
                 {
@@ -210,6 +215,78 @@ public sealed class ConversationService
         }
     }
 
+
+    private const string SessionTitleCacheFileName = "session_projcache.json";
+
+    private static IReadOnlyDictionary<string, string?> ReadSessionTitles(ManagerInstance instance)
+    {
+        var path = Path.Combine(instance.DshHome, "storages", SessionTitleCacheFileName);
+        if (!File.Exists(path) || IsReparsePoint(path))
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+            if (!document.RootElement.TryGetProperty("tables", out var tables)
+                || !tables.TryGetProperty("sessions", out var sessions)
+                || sessions.ValueKind != JsonValueKind.Object)
+            {
+                return new Dictionary<string, string?>(StringComparer.Ordinal);
+            }
+
+            var result = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var session in sessions.EnumerateObject())
+            {
+                if (!session.Value.TryGetProperty("rows", out var rows)
+                    || !rows.TryGetProperty("title", out var titleRow)
+                    || !titleRow.TryGetProperty("val", out var titleValue))
+                {
+                    continue;
+                }
+
+                result[session.Name] = titleValue.ValueKind == JsonValueKind.String
+                    ? titleValue.GetString()
+                    : null;
+            }
+
+            return result;
+        }
+        catch (IOException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+    }
+
+    private static string BuildDisplayName(
+        IReadOnlyDictionary<string, string?> titles,
+        string sessionId,
+        string? workingDirectory,
+        DateTimeOffset updatedAt)
+    {
+        if (titles.TryGetValue(sessionId, out var title) && !string.IsNullOrWhiteSpace(title))
+        {
+            var normalized = string.Join(" ", title!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return normalized.Length <= 120 ? normalized : normalized[..120];
+        }
+
+        var project = string.IsNullOrWhiteSpace(workingDirectory)
+            ? null
+            : Path.GetFileName(workingDirectory!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var when = updatedAt.ToLocalTime().ToString("MM-dd HH:mm");
+        return string.IsNullOrEmpty(project)
+            ? $"未命名 · {when}"
+            : $"未命名 · {project} · {when}";
+    }
     private string ValidateEntry(ManagerInstance instance, ConversationEntry entry)
     {
         var root = GetSessionsRoot(instance);

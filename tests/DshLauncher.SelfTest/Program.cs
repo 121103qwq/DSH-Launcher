@@ -18,6 +18,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
+    ("Node install version resolution", TestNodeInstallVersionResolution),
+    ("Node installer download progress", TestNodeInstallerDownloadProgress),
     ("DSh install guard", TestDshInstallGuard),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
@@ -239,6 +241,62 @@ static Task TestNodeRuntimeCompatibility()
     Assert(NodeRuntimeInfo.EvaluateCompatibility(null, ">=24") == NodeRuntimeCompatibility.Missing,
         "缺少 Node.js 版本时应返回 Missing。");
     return Task.CompletedTask;
+}
+
+static Task TestNodeInstallVersionResolution()
+{
+    var index = "[{\"version\":\"v20.11.0\",\"lts\":false},{\"version\":\"v22.23.2\",\"lts\":\"Jod\"},{\"version\":\"v24.5.0\",\"lts\":false}]";
+    Assert(NodeInstallService.SelectLtsVersion(index) == "v22.23.2", "应优先选择兼容的 22.x LTS。");
+
+    var indexWith24 = "[{\"version\":\"v22.18.0\",\"lts\":true},{\"version\":\"v24.10.0\",\"lts\":\"Krypton\"}]";
+    Assert(NodeInstallService.SelectLtsVersion(indexWith24) == "v24.10.0", "22.18 低于 DSh 兼容下限时应选择 24+ LTS。");
+
+    var nonLts = "[{\"version\":\"v25.0.0\",\"lts\":false}]";
+    Assert(NodeInstallService.SelectLtsVersion(nonLts) is null, "没有可用兼容 LTS 时应返回 null 并使用固定版本兜底。");
+    Assert(NodeInstallService.SelectLtsVersion("not json") is null, "损坏的版本索引应返回 null。");
+    return Task.CompletedTask;
+}
+
+static async Task TestNodeInstallerDownloadProgress()
+{
+    var payload = new byte[1_200_000];
+    new Random(42).NextBytes(payload);
+    var handler = new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new ByteArrayContent(payload)
+    });
+    var service = new NodeInstallService(handler);
+    using var temporary = new TestDirectory();
+    var destination = Path.Combine(temporary.Path, "node.msi");
+    var sink = new NodeProgressSink();
+    var result = await service.DownloadAsync(
+        new Uri("https://nodejs.org/dist/v22.23.2/node-v22.23.2-x64.msi"),
+        destination,
+        sink,
+        CancellationToken.None);
+    Assert(result.Percent is 100, "下载完成时返回进度应为 100%。");
+    Assert(File.Exists(destination) && new FileInfo(destination).Length == payload.Length, "下载文件应与响应内容一致。");
+    Assert(sink.Last.Percent is 100, "进度回调最终应报告 100%。");
+
+    var smallService = new NodeInstallService(new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new ByteArrayContent(new byte[512])
+    }));
+    var rejected = false;
+    try
+    {
+        await smallService.DownloadAsync(
+            new Uri("https://nodejs.org/dist/v22.23.2/node-v22.23.2-x64.msi"),
+            Path.Combine(temporary.Path, "small.msi"),
+            null,
+            CancellationToken.None);
+    }
+    catch (IOException)
+    {
+        rejected = true;
+    }
+
+    Assert(rejected, "过小的下载结果应被拒绝，避免把 HTML 错误页当成安装程序。");
 }
 
 static async Task TestDshInstallGuard()
@@ -1403,6 +1461,15 @@ static Task TestConversationFileManagement()
     var entries = service.List(instance);
     var session = entries.Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
     Assert(session.HasValidHeader && session.SessionId == "session-1", "应读取 JSONL 首行会话头部。");
+    var projectionCacheDirectory = Path.Combine(home, "storages");
+    Directory.CreateDirectory(projectionCacheDirectory);
+    File.WriteAllText(
+        Path.Combine(projectionCacheDirectory, "session_projcache.json"),
+        "{\"tables\":{\"sessions\":{\"session-1\":{\"rows\":{\"title\":{\"val\":\"测试标题\"}}}}}}",
+        new UTF8Encoding(false));
+    var titled = service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
+    Assert(titled.DisplayName == "测试标题", "应优先显示 DSh session 投影缓存中的标题。");
+    Assert(service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(compressedPath)).DisplayName.Contains("demo"), "无标题会话应回退到工作目录名称。");
     var compressedSession = entries.Single(entry => entry.FullPath == Path.GetFullPath(compressedPath));
     Assert(compressedSession.IsCompressed && compressedSession.HasValidHeader && compressedSession.SessionId == "session-2", "应解压压缩会话的首个 Zstandard frame 并读取会话头部。");
     Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(invalidCompressedPath)), "损坏的压缩会话应列出但标记为不可解析。");
@@ -1631,4 +1698,24 @@ file sealed class ProviderTestHandler : HttpMessageHandler
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         Task.FromResult(_handler(request));
+}
+
+file sealed class NodeTestHandler : HttpMessageHandler
+{
+    private readonly Func<HttpResponseMessage> _factory;
+
+    public NodeTestHandler(Func<HttpResponseMessage> factory)
+    {
+        _factory = factory;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        Task.FromResult(_factory());
+}
+
+file sealed class NodeProgressSink : IProgress<NodeDownloadProgress>
+{
+    public NodeDownloadProgress Last { get; private set; } = new(0, null, null);
+
+    public void Report(NodeDownloadProgress value) => Last = value;
 }
