@@ -157,6 +157,25 @@ public sealed class DshRuntimeDetector
         }
     }
 
+    public static string? ResolveNodeEngine(ManagerInstance? instance, string? detectedNodeEngine)
+    {
+        if (instance?.Kind == InstanceKind.Source)
+        {
+            // Source 是独立 runtime：未声明 engines.node 时保持未声明，
+            // 不继承系统全局 installed DSh 的版本要求。
+            return SourceProjectInspector.TryReadNodeEngine(instance.RootPath);
+        }
+
+        if (instance?.Kind == InstanceKind.Installed)
+        {
+            // 优先读取实例自己的 package metadata；仅当其失效且 Launcher
+            // 正在重装/重绑定时才使用重新检测到的 DSh metadata。
+            return TryReadNodeEngine(instance.RootPath) ?? detectedNodeEngine;
+        }
+
+        return detectedNodeEngine;
+    }
+
     public static string? FindExecutableForPackageRoot(string packageRoot)
     {
         if (string.IsNullOrWhiteSpace(packageRoot))

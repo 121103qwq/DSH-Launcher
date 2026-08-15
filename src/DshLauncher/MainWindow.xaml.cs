@@ -236,20 +236,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             : $"要求 {requirement}";
     }
 
-    private string? GetNodeEngineRequirement(ManagerInstance? instance)
-    {
-        if (instance?.Kind == InstanceKind.Source)
-        {
-            return SourceProjectInspector.TryReadNodeEngine(instance.RootPath) ?? _dshRuntime.NodeEngine;
-        }
-
-        if (instance?.Kind == InstanceKind.Installed)
-        {
-            return DshRuntimeDetector.TryReadNodeEngine(instance.RootPath) ?? _dshRuntime.NodeEngine;
-        }
-
-        return _dshRuntime.NodeEngine;
-    }
+    private string? GetNodeEngineRequirement(ManagerInstance? instance) =>
+        DshRuntimeDetector.ResolveNodeEngine(instance, _dshRuntime.NodeEngine);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -1079,6 +1067,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         finally
         {
+            // 无论成功、失败、取消还是超时，先恢复窗口可关闭状态，
+            // 避免 MSI 安装阶段的关闭保护把进度窗口卡在屏幕上。
+            progressWindow.SetInstallPhase(false);
             progressWindow.Close();
             _isRuntimePrepareInProgress = false;
             OnPropertyChanged(nameof(CanStartInstance));

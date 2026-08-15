@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.IO.Compression;
 using System.Text;
+using DshLauncher;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using ZstdSharp;
@@ -23,6 +24,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node install result states", TestNodeInstallResultStates),
     ("Node download cancel cleans part", TestNodeDownloadCancelCleansPart),
     ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
+    ("Node engine requirement resolution", TestNodeEngineRequirementResolution),
+    ("Runtime progress window close guard", TestRuntimeProgressCloseGuard),
     ("DSh install guard", TestDshInstallGuard),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
@@ -397,6 +400,83 @@ static Task TestInstanceRuntimeRebinding()
     var valid = registry.Register("有效 DSh", validRoot, InstanceKind.Installed, validExe, "0.2.0", "npm");
     Assert(InstanceRuntimeRebinder.RebindInstalledInstance(valid, detected) is null,
         "绑定仍有效的实例不应被重绑定。");
+    return Task.CompletedTask;
+}
+
+static Task TestNodeEngineRequirementResolution()
+{
+    using var temporary = new TestDirectory();
+
+    var sourceRoot = Path.Combine(temporary.Path, "source");
+    Directory.CreateDirectory(Path.Combine(sourceRoot, "apps", "cli"));
+    File.WriteAllText(
+        Path.Combine(sourceRoot, "package.json"),
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\",\"engines\":{\"node\":\">=20.0.0\"},\"packageManager\":\"pnpm@10.0.0\"}",
+        new UTF8Encoding(false));
+    var source = new ManagerInstance(
+        "source-engine",
+        "Source",
+        sourceRoot,
+        InstanceKind.Source,
+        Path.Combine(temporary.Path, "source-home"),
+        null,
+        null,
+        InstanceRuntimeStatus.Ready,
+        "pnpm",
+        null,
+        DateTimeOffset.UtcNow);
+    const string globalEngine = "^22.19.0 || >=24.0.0";
+    Assert(DshRuntimeDetector.ResolveNodeEngine(source, globalEngine) == ">=20.0.0",
+        "Source 声明 engines.node 时应优先使用 Source 自己的要求。");
+
+    var undeclaredRoot = Path.Combine(temporary.Path, "source-undeclared");
+    Directory.CreateDirectory(undeclaredRoot);
+    File.WriteAllText(
+        Path.Combine(undeclaredRoot, "package.json"),
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\",\"packageManager\":\"pnpm@10.0.0\"}",
+        new UTF8Encoding(false));
+    Assert(DshRuntimeDetector.ResolveNodeEngine(source with { Id = "source-undeclared", RootPath = undeclaredRoot }, globalEngine) is null,
+        "Source 未声明 engines.node 时不能继承全局 installed DSh 的版本要求。");
+
+    var installedRoot = Path.Combine(temporary.Path, "installed-dsh");
+    Directory.CreateDirectory(installedRoot);
+    File.WriteAllText(
+        Path.Combine(installedRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"}}",
+        new UTF8Encoding(false));
+    var installed = new ManagerInstance(
+        "installed-engine",
+        "Installed",
+        installedRoot,
+        InstanceKind.Installed,
+        Path.Combine(temporary.Path, "installed-home"),
+        Path.Combine(installedRoot, "dsh.cmd"),
+        "0.2.0",
+        InstanceRuntimeStatus.Ready,
+        "npm",
+        null,
+        DateTimeOffset.UtcNow);
+    Assert(DshRuntimeDetector.ResolveNodeEngine(installed, ">=30.0.0") == "^22.19.0 || >=24.0.0",
+        "Installed 实例声明 engines.node 时应优先使用实例自己的 metadata。");
+
+    var fallbackRoot = Path.Combine(temporary.Path, "installed-undeclared");
+    Directory.CreateDirectory(fallbackRoot);
+    File.WriteAllText(
+        Path.Combine(fallbackRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\"}",
+        new UTF8Encoding(false));
+    Assert(DshRuntimeDetector.ResolveNodeEngine(installed with { Id = "installed-fallback", RootPath = fallbackRoot }, globalEngine) == globalEngine,
+        "Installed 实例 metadata 未声明时可以使用重新检测到的 DSh metadata。");
+
+    Assert(DshRuntimeDetector.ResolveNodeEngine(null, globalEngine) == globalEngine,
+        "未选择实例时诊断页应使用全局 DSh engine。");
+    return Task.CompletedTask;
+}
+
+static Task TestRuntimeProgressCloseGuard()
+{
+    Assert(RuntimeProgressWindow.IsCloseAllowed(false), "Node 下载阶段应允许关闭窗口。");
+    Assert(!RuntimeProgressWindow.IsCloseAllowed(true), "MSI 安装阶段必须阻止窗口关闭。");
     return Task.CompletedTask;
 }
 
