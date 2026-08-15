@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-修复对话列表显示原始 session ID 的问题（改为显示会话名称），并消除扩展/插件市场页打开与操作时的卡顿；这两项改动尚未提交。
+收口长期分支 `agent/harden-node-detection`：把 `origin/main`（早期 README 提交）合并进当前分支，更新 README 与维护文档，验证完整 Launcher，并将 PR #1 合并到 `main`。本轮不开发新功能。
 
 ## 已完成内容
 
@@ -13,9 +13,15 @@
 - Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、进度反馈和完成后刷新。
 - 版本控制支持复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。整合包会清理 API Key、Token、密码、环境变量值和 sessions；导入始终创建新版本。版本设置页不能修改版本名称，名称只由版本控制维护。
 - Provider 启动页支持启用/禁用、`/models` 只读诊断、模型列表/思考档位显示和问题说明；模型设置只保存环境变量名，不保存 API Key 明文。
-- 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。对话列表优先显示会话名称：读取 DSh `storages/session_projcache.json` 的标题，无标题时回退为“未命名 · 项目 · 时间”，不再把原始 session ID 作为首列。
-- 扩展页卡顿修复：已安装插件扫描和插件市场安装状态/主题扫描移到后台线程；已安装列表与市场列表启用虚拟化（Recycling），避免大列表重建和磁盘扫描冻结 UI。
+- 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。
 - `v0.1.9` 已构建、推送并发布；Release 资产和本地发布文件的 SHA-256 已核对一致。
+- 本轮把 `origin/main`（`d5cfa78`，早期 README 更新）合并进 `agent/harden-node-detection`：仅 README.md 一处冲突，已按 v0.1.9 真实状态重写并解决；其余文件自动合并。
+
+## 已暂存（未并入本轮 PR，保留在 stash@{0}）
+
+- 对话列表显示会话名称（读取 DSh 投影缓存标题，不再显示原始 session ID）。
+- 扩展/插件市场页卡顿修复（后台扫描 + 列表虚拟化 + 打开页面不再每次联网）。
+- 运行环境一键准备（NodeInstallService 下载/安装 Node、一键准备按钮、启动前环境拦截、检测器补 Program Files 路径）。
 
 ## 当前主要相关文件
 
@@ -32,14 +38,11 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `agent/harden-node-detection`，HEAD `0392319`；工作区包含本次未提交的对话名称与扩展卡顿修复，以及此前未提交的文档整理。
-- 修改后 `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
-- 当前 `git diff --check`：通过。
-- 当前 `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：26/26 通过；新增会话投影缓存标题与回退名称断言。
-- `v0.1.9` 发布构建：0 warnings、0 errors；文件版本 `0.1.9.0`，本地 SHA-256 为 `63CCE7BDFEE4154BA2FF290DEDB8859F044E79422834A99238C28315FED5E40E`。
-- 本地发布文件：`publish\release-0.1.9-20260816\DSH Launcher.exe`；桌面顶层文件 `C:\Users\121103qwq\Desktop\DSH Launcher\DSH Launcher.exe` 存在且哈希一致。
-- GitHub：`v0.1.9` Release 只有 `DSH.Launcher.exe` 一个资产，远端 digest 与上述 SHA-256 一致；PR #1 仍为 OPEN/DRAFT，尚未合并到 `main`。
-- 本次实现对话名称显示与扩展页卡顿修复，未使用 Computer Use，未构建或发布新 Release。
+- 当前 Git：分支 `agent/harden-node-detection`，已合并 `origin/main`；合并提交尚未创建。
+- 合并后 `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：26/26 通过。
+- 合并后 Release 单文件自包含发布：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `7220D23C8DA300AFBC22AC201CF13AA34DE2FBC2B0B5F8782F33A3BA047E645B`。
+- `git diff --check`：通过。
+- GitHub：PR #1 待更新标题/描述并从 Draft 转为 Ready；随后合并到 `main`。
 
 ## 已知问题
 
@@ -51,7 +54,7 @@
 - 主题当前是市场资源、文字信息预览和 dsh-market 应用桥接，尚未建立视觉预览图或 Wallpaper 资源格式，也未在用户真实实例上做主题视觉验收。
 - GitHub Topic 发现仍未做分页加载；真实 Plugin CLI 失败回滚和启动冲突检查仍缺少更多异常边界覆盖。
 - 官方已安装 DSh 的 package metadata 当前未声明 `engines.node` 时，Node 兼容性只能显示“未声明/Unknown”，不会凭空套用固定版本限制。
-- 当前工作区还有未跟踪的 `CLAUDE.md` 和 `src/DshLauncher/artifacts/`；它们未纳入最近源码提交和 Release。
+- `src/DshLauncher/artifacts/` 是未跟踪的本地构建产物目录，未纳入源码提交和 Release。
 
 ## 尚未完成内容
 
@@ -60,6 +63,7 @@
 - 主题视觉预览、Wallpaper 资源格式和用户真实实例视觉验收。
 - GitHub Topic 分页、更多 Plugin 失败回滚异常和启动冲突检查。
 - 多个运行中 DSh 的实时会话共享写入。
+- 对话名称显示、扩展页卡顿修复与运行环境一键准备（已 stash 保留，留待后续分支）。
 
 ## 已尝试但已放弃的方案
 
@@ -69,4 +73,4 @@
 
 ## 下一步最直接的任务
 
-本次改动已在工作区待提交：提交对话名称显示与扩展页性能修复，随后按 AGENTS.md 构建测试版并同步桌面发布副本。用户未要求本次提交/推送，因此保持未提交状态。
+合并 PR #1 到 `main` 并验证 `main`；随后从最新 `main` 新建 `feature/runtime-bootstrap`，恢复 `stash@{0}` 继续运行环境一键准备。
