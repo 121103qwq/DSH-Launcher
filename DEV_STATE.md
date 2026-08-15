@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前准备发布 0.1.7，内容包括 Node metadata、Managed/Attached 运行态和依赖下载源选择，启动、实例和生态管理继续采用 PCL2 风格的右侧工作区切换。
+按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前发布版本为 0.1.7，内容包括 Node metadata、Managed/Attached 运行态和依赖下载源选择，启动、实例和生态管理继续采用 PCL2 风格的右侧工作区切换。
 
 ## 已完成内容
 
@@ -26,11 +26,13 @@
 - 已修复会话兼容性与导出边界：header 校验与当前 DSh `version=0`、`createdAt`、`delegationDepth` 及可选字段规则一致，字段类型异常的文件只会被标记为无效；导出保存名去除已有格式后缀，服务层同时归一化重复后缀，避免生成 `*.jsonl.zstd.jsonl.zstd`。
 - 已补充用户操作回归保护：空实例入口、实例运行中修改、Skill/Preset 自包含目录复制、MCP serverName 注入、模型配置无关段落保留、API Key 不落盘、会话路径穿越、有效/损坏 Zstandard 会话和重复导入均有自测覆盖。
 - 已添加 `DshLauncher.SelfTest` 控制台测试项目，覆盖注册往返、重复目录拒绝、隔离 HOME、Source 检查、当前机器 DSh 检测、安装缺失环境保护、Source 直接启动保护、启动/健康检查/重复启动/跨 Runner 拒绝/停止/重启/接管，以及生态/模型/会话边界；测试项目与 Launcher 共用 `ZstdSharp.Port 0.8.8`。
-- 当前功能分支为 `agent/harden-node-detection`，GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`；最近发布标签为 `v0.1.6`，本次 runtime 改进准备作为 `v0.1.7` 发布。
+- 当前功能分支为 `agent/harden-node-detection`，GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`；最近发布标签为 `v0.1.7`，源码提交为 `11b9bd3`，Windows 产物提交为 `0ce1282`。
 - 0.1.5 已生成并核对 `publish\\release-0.1.5\\DSH Launcher.exe`；文件版本为 `0.1.5.0`，SHA-256 为 `52E673B8CFF57BC8CAAA43EEB2351129AF4E1D14D792D07047E6F65888A221C8`；同一文件已复制到 `DSH Launcher\\DSH Launcher.exe` 顶层位置，两个文件哈希一致。
 - GitHub Release `v0.1.5` 已正式发布并核对为 1 个 Windows EXE；GitHub 资产名为 `DSH.Launcher.exe`，远端 digest 为 `sha256:52e673b8cff57bc8caaa43eeb2351129af4e1d14d792d07047e6f65888a221c8`；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.5`。
 - 0.1.6 源码提交为 `64fcf64`，Windows 产物提交为 `9972091`；`publish\\release-0.1.6\\DSH Launcher.exe` 和顶层 `DSH Launcher\\DSH Launcher.exe` 文件版本均为 `0.1.6.0`，SHA-256 均为 `0A31896F353FAEF2572A7E281CDF528B511E2CADFCA6AE3464E54CEE9E0BA6FF`。
 - GitHub Release `v0.1.6` 已正式发布并核对为 1 个 Windows EXE；资产名为 `DSH.Launcher.exe`，远端 digest 与本地 SHA-256 一致；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.6`。
+- v0.1.7 源码提交为 `11b9bd3`，Windows 产物提交为 `0ce1282`；`publish\\release-0.1.7\\DSH Launcher.exe` 和顶层 `DSH Launcher\\DSH Launcher.exe` 文件版本均为 `0.1.7.0`，SHA-256 均为 `39907792C94CB9C2F61394213E3834930DF789DFC2961407BA7008653EDF7125`。
+- GitHub Release `v0.1.7` 已正式发布并核对为 1 个 Windows EXE；资产名为 `DSH.Launcher.exe`，远端 digest 与本地 SHA-256 一致；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.7`。
 - Node 运行时现在从检测到的 DSh 或 Source `package.json` 读取 `engines.node`，以 `Missing`、`Compatible`、`Incompatible`、`Unknown` 表示状态；官方当前安装包未声明 `engines.node` 时不再使用固定的 22/24 版本规则。Source 构建、启动和 Plugin CLI 管理均复用同一 metadata 判断。
 - 实例运行态现在区分 `Managed` 和 `Attached`：启动时记录 Launcher 管理态；Launcher 重启时仅对已有 loopback `WebUrl` 做健康探测，成功后恢复为 Attached；Attached 仍可打开 Chat，但 Runner 和 UI 都禁止 Stop/Restart/重复启动外部进程。
 - 运行环境页现在提供 Node.js 官方下载页、Node.js npmmirror、DSh npm 官方源和 DSh npmmirror 四个入口；DSh 安装服务只接受这两个明确 registry，Launcher 本身仍不内置 Node.js 或 DSh。
@@ -82,11 +84,11 @@
 - 本次未对真实网络 Plugin 执行安装/更新/删除，避免修改用户实例；服务和临时 UI 页面已验证。Chat 仍按现有设计使用独立 WebView2 窗口；打开合法会话仍要求实例运行并有可用 Chat 地址，这是当前生命周期约束。
 - Attached 当前只恢复注册记录中已有且通过 loopback 健康检查的 Web 端点，不扫描任意端口，也不自动认领没有已知 URL 的外部 DSh 服务；这是为了避免误接管或误识别其它本地 HTTP 服务。
 - 当前官方 `@deepseek-ai/dsh` 安装包的 `package.json` 未声明 `engines.node`，因此 installed DSh 页面只能显示“未声明”而不能凭空判断 Node 20 一定不兼容；Source 项目若声明 engine 则按其自身 metadata 判断。
-- 当前分支仍是 Draft PR，尚未合并到 `main`；这不影响已发布的 `v0.1.6` Release。
+- 当前分支仍是 Draft PR，尚未合并到 `main`；这不影响已发布的 `v0.1.7` Release。
 
 ## 尚未完成内容
 
-- v0.1.6 构建、推送、标签和 GitHub Release 已完成；本次 runtime 改进将在本次发布流程中形成 v0.1.7；Marketplace 多来源聚合、Session deep link、MCP Manager 状态桥接、Theme/Wallpaper 资源和 `.dshpack` 仍未实现。
+- v0.1.7 构建、推送、标签和 GitHub Release 已完成；Marketplace 多来源聚合、Session deep link、MCP Manager 状态桥接、Theme/Wallpaper 资源和 `.dshpack` 仍未实现。
 
 ## 已尝试但已放弃的方案
 
@@ -96,4 +98,4 @@
 
 ## 下一步最直接的任务
 
-- 发布 v0.1.7 后继续按真实 UI 回归覆盖 Attached 恢复、外部服务 Stop/Restart 按钮禁用，以及 Node/DSh 官方源和国内镜像入口；随后再评估是否实现 Marketplace 聚合。
+- 继续按真实 UI 回归覆盖 Attached 恢复、外部服务 Stop/Restart 按钮禁用，以及 Node/DSh 官方源和国内镜像入口；随后再评估是否实现 Marketplace 聚合。
