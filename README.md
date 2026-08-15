@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-当前为 Launcher Core 0.1.3，完成了独立 WPF 主窗口、PCL2 风格的信息架构骨架、Node.js/DSh 环境检测、已安装 DSh 实例注册和 Source 项目检查，并已接入 installed DSh 与 Source DSh 的启动、停止、重启、空闲端口与 HTTP 可访问性检查。Source 启动前会按项目声明的包管理器执行依赖安装和构建，并在失败时保留诊断；Node 检测会优先选择可用的最高版本。Node 检测在后台异步执行，单个候选总超时后会清理残留进程；Launcher 自身不依赖 Node.js、npm、pnpm 或已经安装的 DeepSeek Harness。
+当前为 Launcher Core 0.1.4，完成了独立 WPF 主窗口、PCL2 风格的信息架构、Node.js/DSh 环境检测、已安装 DSh 实例注册和 Source 项目检查，并已接入 installed DSh 与 Source DSh 的启动、停止、重启、空闲端口与 HTTP 可访问性检查。启动、实例、扩展、模型、Agent、对话和设置均在主窗口右侧切换，管理页不再使用独立弹窗；Chat 仍按运行状态打开独立 WebView2 窗口。Source 启动前会按项目声明的包管理器执行依赖安装和构建，并在失败时保留诊断；Node 检测会优先选择可用的最高版本。Node 检测在后台异步执行，单个候选总超时后会清理残留进程；Launcher 自身不依赖 Node.js、npm、pnpm 或已经安装的 DeepSeek Harness。
 
 当前版本还提供：按实例隔离的 Plugin 管理、Skill 导入/删除、MCP stdio/streamable-http 配置、用户 Agent Preset 导入/删除、模型 Provider 配置，以及 DSh `session.jsonl` 对话列表、导入、导出、备份和删除。模型页面只保存 API Key 环境变量名，不保存密钥明文；扩展和会话文件的修改要求实例已停止。压缩 `session.jsonl.zstd` 可以列出、导出和备份，但当前导入与打开仍要求未压缩且能读取头部的 `session.jsonl`。
 

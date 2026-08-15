@@ -1,27 +1,46 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
+using UserControl = System.Windows.Controls.UserControl;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
 
 namespace DshLauncher;
 
-public partial class ExtensionWindow : Window
+public partial class ExtensionWindow : UserControl
 {
     private readonly ManagerInstance _instance;
     private readonly ExtensionService _service;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
+    private readonly bool _agentOnly;
 
     public ExtensionWindow(
         ManagerInstance instance,
         ExtensionService service,
-        Func<NodeRuntimeInfo?> nodeRuntime)
+        Func<NodeRuntimeInfo?> nodeRuntime,
+        bool agentOnly = false)
     {
         _instance = instance;
         _service = service;
         _nodeRuntime = nodeRuntime;
+        _agentOnly = agentOnly;
         InitializeComponent();
+        if (_agentOnly)
+        {
+            PageHeaderText.Text = "Agent";
+            InstallPluginButton.Visibility = Visibility.Collapsed;
+            AddMcpButton.Visibility = Visibility.Collapsed;
+            EnableButton.Visibility = Visibility.Collapsed;
+            DisableButton.Visibility = Visibility.Collapsed;
+            UpdateButton.Visibility = Visibility.Collapsed;
+            HintText.Text = "修改前请停止实例。Skill 会被 DSh 的 filesystem provider 发现，Agent Preset 和 Workflow 会在下次启动时生效。";
+        }
+        else
+        {
+            ImportSkillButton.Visibility = Visibility.Collapsed;
+            ImportPresetButton.Visibility = Visibility.Collapsed;
+        }
         InstanceText.Text = $"当前实例：{instance.Name} · {_instance.DshHome}";
     }
 
@@ -40,6 +59,10 @@ public partial class ExtensionWindow : Window
         {
             var selectedId = (ExtensionList.SelectedItem as ExtensionEntry)?.Id;
             var entries = await _service.ListAsync(_instance);
+            entries = (_agentOnly
+                    ? entries.Where(entry => entry.Kind is ExtensionKind.Skill or ExtensionKind.Preset or ExtensionKind.Workflow)
+                    : entries.Where(entry => entry.Kind is ExtensionKind.Plugin or ExtensionKind.Mcp))
+                .ToArray();
             Entries.Clear();
             foreach (var entry in entries) Entries.Add(entry);
             ExtensionList.ItemsSource = Entries;
@@ -47,7 +70,9 @@ public partial class ExtensionWindow : Window
             {
                 ExtensionList.SelectedItem = Entries.FirstOrDefault(entry => entry.Id == selectedId);
             }
-            StatusText.Text = $"已读取 {Entries.Count} 个 Plugin / Skill / MCP / Workflow / Preset。";
+            StatusText.Text = _agentOnly
+                ? $"已读取 {Entries.Count} 个 Skill / Agent Preset / Workflow。"
+                : $"已读取 {Entries.Count} 个 Plugin / MCP。";
             UpdateSelection();
         }
         catch (Exception ex)
@@ -58,7 +83,7 @@ public partial class ExtensionWindow : Window
 
     private async void InstallPlugin_Click(object sender, RoutedEventArgs e)
     {
-        var source = TextPromptWindow.Show(this, "安装 Plugin", "输入 npm 包名、Git 仓库或本地路径：");
+        var source = TextPromptWindow.Show(Window.GetWindow(this), "安装 Plugin", "输入 npm 包名、Git 仓库或本地路径：");
         if (string.IsNullOrWhiteSpace(source)) return;
         try
         {
@@ -89,20 +114,20 @@ public partial class ExtensionWindow : Window
 
     private async void AddMcp_Click(object sender, RoutedEventArgs e)
     {
-        var name = TextPromptWindow.Show(this, "添加 MCP", "输入 serverName（仅字母、数字、-、_）：");
+        var name = TextPromptWindow.Show(Window.GetWindow(this), "添加 MCP", "输入 serverName（仅字母、数字、-、_）：");
         if (string.IsNullOrWhiteSpace(name)) return;
-        var transport = TextPromptWindow.Show(this, "添加 MCP", "输入 transport：stdio 或 streamable-http", "stdio");
+        var transport = TextPromptWindow.Show(Window.GetWindow(this), "添加 MCP", "输入 transport：stdio 或 streamable-http", "stdio");
         if (string.IsNullOrWhiteSpace(transport)) return;
-        var commandOrUrl = TextPromptWindow.Show(this, "添加 MCP", transport == "stdio" ? "输入 MCP command：" : "输入 MCP URL：");
+        var commandOrUrl = TextPromptWindow.Show(Window.GetWindow(this), "添加 MCP", transport == "stdio" ? "输入 MCP command：" : "输入 MCP URL：");
         if (string.IsNullOrWhiteSpace(commandOrUrl)) return;
         var arguments = Array.Empty<string>();
         string? workingDirectory = null;
         string? url = null;
         if (transport == "stdio")
         {
-            var rawArguments = TextPromptWindow.Show(this, "添加 MCP", "输入参数（用 | 分隔，可留空）：") ?? string.Empty;
+            var rawArguments = TextPromptWindow.Show(Window.GetWindow(this), "添加 MCP", "输入参数（用 | 分隔，可留空）：") ?? string.Empty;
             arguments = rawArguments.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            workingDirectory = TextPromptWindow.Show(this, "添加 MCP", "输入工作目录（可留空）：");
+            workingDirectory = TextPromptWindow.Show(Window.GetWindow(this), "添加 MCP", "输入工作目录（可留空）：");
         }
         else
         {
@@ -182,7 +207,7 @@ public partial class ExtensionWindow : Window
     private async void Remove_Click(object sender, RoutedEventArgs e)
     {
         if (ExtensionList.SelectedItem is not ExtensionEntry entry) return;
-        if (System.Windows.MessageBox.Show(this, $"确定删除“{entry.Name}”？该操作只针对当前实例。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        if (System.Windows.MessageBox.Show(Window.GetWindow(this), $"确定删除“{entry.Name}”？该操作只针对当前实例。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         try
         {
             switch (entry.Kind)
@@ -227,6 +252,6 @@ public partial class ExtensionWindow : Window
     private void ShowError(Exception ex)
     {
         StatusText.Text = ex.Message;
-        System.Windows.MessageBox.Show(this, ex.Message, "扩展操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        System.Windows.MessageBox.Show(Window.GetWindow(this), ex.Message, "扩展操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

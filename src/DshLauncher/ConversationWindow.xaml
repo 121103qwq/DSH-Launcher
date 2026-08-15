@@ -1,13 +1,9 @@
-<Window x:Class="DshLauncher.ConversationWindow"
+<UserControl x:Class="DshLauncher.ConversationWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="对话管理"
-        Width="1080"
-        Height="720"
-        MinWidth="820"
-        MinHeight="540"
-        WindowStartupLocation="CenterOwner"
         FontFamily="{StaticResource UiFont}"
+        HorizontalAlignment="Stretch"
+        VerticalAlignment="Stretch"
         Loaded="Window_OnLoaded">
     <Grid Margin="24">
         <Grid.RowDefinitions>
@@ -44,4 +40,4 @@
         </Border>
         <TextBlock Grid.Row="3" x:Name="StatusText" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,16,0,0" />
     </Grid>
-</Window>
+</UserControl>

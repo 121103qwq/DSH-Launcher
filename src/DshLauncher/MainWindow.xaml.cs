@@ -3,8 +3,12 @@ using System.ComponentModel;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using WpfBrush = System.Windows.Media.Brush;
+using WpfBrushes = System.Windows.Media.Brushes;
+using WpfColor = System.Windows.Media.Color;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
@@ -27,9 +31,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
     private DshRuntimeInfo _dshRuntime = DshRuntimeInfo.Missing();
     private ChatWindow? _chatWindow;
-    private ExtensionWindow? _extensionWindow;
-    private ModelWindow? _modelWindow;
-    private ConversationWindow? _conversationWindow;
     private ManagerInstance? _selectedInstance;
     private bool _isNodeDetectionInProgress;
     private bool _isLifecycleInProgress;
@@ -64,15 +65,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            var previousId = _selectedInstance?.Id;
             _selectedInstance = value;
-            if (previousId is not null
-                && value is not null
-                && !string.Equals(previousId, value.Id, StringComparison.Ordinal))
-            {
-                // Management windows are bound to the instance they opened.
-                CloseManagementWindows();
-            }
             OnPropertyChanged(nameof(SelectedInstance));
             OnPropertyChanged(nameof(SelectedInstanceName));
             OnPropertyChanged(nameof(SelectedInstanceSummary));
@@ -156,6 +149,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
         LoadInstances();
+        SwitchSection("启动");
         await Task.WhenAll(RefreshNodeAsync(), RefreshDshAsync());
     }
 
@@ -287,51 +281,128 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        SwitchSection(section);
+    }
+
+    private void SwitchSection(string section)
+    {
+        SetNavigationSelection(section);
+        PageNoticeVisibility = Visibility.Collapsed;
+
         if (section == "启动" || section == "实例")
         {
             PageTitle = section;
             PageSubtitle = section == "启动"
-                ? "管理 DeepSeek Harness 实例与运行环境"
+                ? "启动当前选中的 DeepSeek Harness 实例"
                 : "注册并隔离管理 installed / source DSh 实例";
-            PageNoticeVisibility = Visibility.Collapsed;
+            ShowMainDashboard(showInstanceList: section == "实例");
         }
-        else if (section == "扩展" || section == "Agent")
+        else if (section is "扩展" or "Agent" or "模型" or "对话")
         {
-            PageTitle = section;
-            PageSubtitle = "管理当前实例实际使用的 Plugin、Skill、MCP 和 Agent Preset";
-            OnPropertyChanged(nameof(PageTitle));
-            OnPropertyChanged(nameof(PageSubtitle));
-            OpenExtensionWindow();
-            return;
-        }
-        else if (section == "模型")
-        {
-            PageTitle = section;
-            PageSubtitle = "编辑当前实例的 DSh Provider 与模型列表";
-            OnPropertyChanged(nameof(PageTitle));
-            OnPropertyChanged(nameof(PageSubtitle));
-            OpenModelWindow();
-            return;
-        }
-        else if (section == "对话")
-        {
-            PageTitle = section;
-            PageSubtitle = "管理当前实例的 session.jsonl 对话文件";
-            OnPropertyChanged(nameof(PageTitle));
-            OnPropertyChanged(nameof(PageSubtitle));
-            OpenConversationWindow();
-            return;
+            if (SelectedInstance is not { } instance)
+            {
+                PageTitle = section;
+                PageSubtitle = "请先在“实例”工作区注册并选择一个 DSh 实例";
+                ShowMainDashboard(showInstanceList: true);
+                ShowNotice($"请先注册并选择一个 DSh 实例，再打开“{section}”。");
+            }
+            else
+            {
+                PageTitle = section;
+                PageSubtitle = section switch
+                {
+                    "扩展" => "管理当前实例的 Plugin 与 MCP",
+                    "Agent" => "管理当前实例的 Skill、Agent Preset 与 Workflow",
+                    "模型" => "编辑当前实例的 DSh Provider 与模型列表",
+                    _ => "管理当前实例的 session.jsonl 对话文件"
+                };
+
+                object page = section switch
+                {
+                    "扩展" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime),
+                    "Agent" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, agentOnly: true),
+                    "模型" => new ModelWindow(instance, _modelService),
+                    _ => new ConversationWindow(instance, _conversationService, OpenConversation)
+                };
+                ShowEmbeddedPage(page);
+            }
         }
         else
         {
             PageTitle = section;
-            PageSubtitle = "DSH Launcher Core 已保留该工作区入口";
-            ShowNotice($"“{section}”工作区当前尚未接入独立管理页面。");
+            PageSubtitle = "DSH Launcher Core 设置与诊断";
+            ShowEmbeddedPage(CreateSettingsPage());
         }
 
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
         OnPropertyChanged(nameof(PageNoticeVisibility));
+    }
+
+    private void ShowMainDashboard(bool showInstanceList)
+    {
+        EmbeddedPageHost.Content = null;
+        EmbeddedPageHost.Visibility = Visibility.Collapsed;
+        MainDashboardGrid.Visibility = Visibility.Visible;
+        InstanceListCard.Visibility = showInstanceList ? Visibility.Visible : Visibility.Collapsed;
+        MainDashboardGrid.ColumnDefinitions[0].Width = new GridLength(showInstanceList ? 310 : 0);
+        MainDashboardGrid.ColumnDefinitions[1].Width = new GridLength(showInstanceList ? 24 : 0);
+    }
+
+    private void ShowEmbeddedPage(object page)
+    {
+        MainDashboardGrid.Visibility = Visibility.Collapsed;
+        EmbeddedPageHost.Content = page;
+        EmbeddedPageHost.Visibility = Visibility.Visible;
+    }
+
+    private FrameworkElement CreateSettingsPage()
+    {
+        var panel = new StackPanel
+        {
+            Margin = new Thickness(24),
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "设置 / 诊断",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "这里将集中展示 Launcher 配置、运行环境和诊断信息。当前可用的运行环境检测入口仍在顶部。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        });
+        return panel;
+    }
+
+    private void SetNavigationSelection(string section)
+    {
+        var buttons = new[]
+        {
+            NavigationStart,
+            NavigationInstances,
+            NavigationExtensions,
+            NavigationModels,
+            NavigationAgent,
+            NavigationConversations,
+            NavigationSettings
+        };
+        foreach (var button in buttons)
+        {
+            button.Background = WpfBrushes.Transparent;
+            button.Foreground = (WpfBrush)FindResource("TextBrush");
+        }
+
+        var selected = buttons.FirstOrDefault(button => string.Equals(button.Tag as string, section, StringComparison.Ordinal));
+        if (selected is not null)
+        {
+            selected.Background = new SolidColorBrush(WpfColor.FromRgb(228, 241, 254));
+            selected.Foreground = (WpfBrush)FindResource("BlueBrush");
+        }
     }
 
     private void AddInstance_Click(object sender, RoutedEventArgs e)
@@ -745,7 +816,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         _windowCancellation.Cancel();
         CloseChatWindow();
-        CloseManagementWindows();
         try
         {
             _instanceRunner.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -799,96 +869,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void OpenExtensionWindow()
-    {
-        if (SelectedInstance is not { } instance)
-        {
-            ShowNotice("请先注册并选择一个 DSh 实例。扩展操作必须绑定到具体实例。");
-            return;
-        }
-
-        if (_extensionWindow is not null)
-        {
-            _extensionWindow.Activate();
-            return;
-        }
-
-        try
-        {
-            var window = new ExtensionWindow(instance, _extensionService, () => _nodeRuntime) { Owner = this };
-            _extensionWindow = window;
-            window.Closed += (_, _) =>
-            {
-                if (ReferenceEquals(_extensionWindow, window)) _extensionWindow = null;
-            };
-            window.Show();
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"扩展窗口无法打开：{ex.Message}");
-        }
-    }
-
-    private void OpenModelWindow()
-    {
-        if (SelectedInstance is not { } instance)
-        {
-            ShowNotice("请先注册并选择一个 DSh 实例。模型配置必须绑定到具体实例。");
-            return;
-        }
-
-        if (_modelWindow is not null)
-        {
-            _modelWindow.Activate();
-            return;
-        }
-
-        try
-        {
-            var window = new ModelWindow(instance, _modelService) { Owner = this };
-            _modelWindow = window;
-            window.Closed += (_, _) =>
-            {
-                if (ReferenceEquals(_modelWindow, window)) _modelWindow = null;
-            };
-            window.Show();
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"模型窗口无法打开：{ex.Message}");
-        }
-    }
-
-    private void OpenConversationWindow()
-    {
-        if (SelectedInstance is not { } instance)
-        {
-            ShowNotice("请先注册并选择一个 DSh 实例。对话管理必须绑定到具体实例。");
-            return;
-        }
-
-        if (_conversationWindow is not null)
-        {
-            _conversationWindow.Activate();
-            return;
-        }
-
-        try
-        {
-            var window = new ConversationWindow(instance, _conversationService, OpenConversation) { Owner = this };
-            _conversationWindow = window;
-            window.Closed += (_, _) =>
-            {
-                if (ReferenceEquals(_conversationWindow, window)) _conversationWindow = null;
-            };
-            window.Show();
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"对话窗口无法打开：{ex.Message}");
-        }
-    }
-
     private bool OpenConversation(ConversationEntry entry)
     {
         var instance = SelectedInstance;
@@ -902,18 +882,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         OpenChatWindow(instance.WebUrl, entry.SessionId);
         return true;
-    }
-
-    private void CloseManagementWindows()
-    {
-        foreach (var window in new Window?[] { _extensionWindow, _modelWindow, _conversationWindow })
-        {
-            try { window?.Close(); } catch { }
-        }
-
-        _extensionWindow = null;
-        _modelWindow = null;
-        _conversationWindow = null;
     }
 
     private void ShowNotice(string message)

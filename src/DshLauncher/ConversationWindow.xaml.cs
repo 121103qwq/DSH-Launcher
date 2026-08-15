@@ -2,13 +2,14 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using UserControl = System.Windows.Controls.UserControl;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
 
 namespace DshLauncher;
 
-public partial class ConversationWindow : Window
+public partial class ConversationWindow : UserControl
 {
     private readonly ManagerInstance _instance;
     private readonly ConversationService _service;
@@ -150,7 +151,7 @@ public partial class ConversationWindow : Window
         }
 
         if (System.Windows.MessageBox.Show(
-                this,
+                Window.GetWindow(this),
                 $"确定删除会话文件“{entry.RelativePath}”？此操作不可由 Launcher 撤销。",
                 "确认删除",
                 MessageBoxButton.YesNo,
@@ -185,6 +186,6 @@ public partial class ConversationWindow : Window
     private void ShowError(Exception ex)
     {
         StatusText.Text = ex.Message;
-        System.Windows.MessageBox.Show(this, ex.Message, "对话操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        System.Windows.MessageBox.Show(Window.GetWindow(this), ex.Message, "对话操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

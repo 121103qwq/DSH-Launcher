@@ -47,9 +47,13 @@ internal sealed class TextPromptWindow : Window
         Content = panel;
     }
 
-    public static string? Show(Window owner, string title, string prompt, string initialValue = "")
+    public static string? Show(Window? owner, string title, string prompt, string initialValue = "")
     {
         var dialog = new TextPromptWindow(title, prompt, initialValue) { Owner = owner };
+        if (owner is null)
+        {
+            dialog.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        }
         return dialog.ShowDialog() == true ? dialog._input.Text.Trim() : null;
     }
 }

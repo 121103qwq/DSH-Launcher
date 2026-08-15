@@ -107,43 +107,43 @@
                                        Foreground="{StaticResource MutedBrush}"
                                        FontSize="12"
                                        Margin="12,0,0,12" />
-                            <Button Tag="启动" Click="Navigation_Click" Style="{StaticResource NavButton}" Background="#E4F1FE" Foreground="{StaticResource BlueBrush}">
+                            <Button x:Name="NavigationStart" Tag="启动" Click="Navigation_Click" Style="{StaticResource NavButton}" Background="#E4F1FE" Foreground="{StaticResource BlueBrush}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="▶" FontSize="15" Width="30" />
                                     <TextBlock Text="启动" />
                                 </StackPanel>
                             </Button>
-                            <Button Tag="实例" Click="Navigation_Click" Style="{StaticResource NavButton}">
+                            <Button x:Name="NavigationInstances" Tag="实例" Click="Navigation_Click" Style="{StaticResource NavButton}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="▦" FontSize="18" Width="30" />
                                     <TextBlock Text="实例" />
                                 </StackPanel>
                             </Button>
-                            <Button Tag="扩展" Click="Navigation_Click" Style="{StaticResource NavButton}">
+                            <Button x:Name="NavigationExtensions" Tag="扩展" Click="Navigation_Click" Style="{StaticResource NavButton}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="◇" FontSize="22" Width="30" />
                                     <TextBlock Text="扩展" />
                                 </StackPanel>
                             </Button>
-                            <Button Tag="模型" Click="Navigation_Click" Style="{StaticResource NavButton}">
+                            <Button x:Name="NavigationModels" Tag="模型" Click="Navigation_Click" Style="{StaticResource NavButton}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="◉" FontSize="18" Width="30" />
                                     <TextBlock Text="模型" />
                                 </StackPanel>
                             </Button>
-                            <Button Tag="Agent" Click="Navigation_Click" Style="{StaticResource NavButton}">
+                            <Button x:Name="NavigationAgent" Tag="Agent" Click="Navigation_Click" Style="{StaticResource NavButton}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="✦" FontSize="18" Width="30" />
                                     <TextBlock Text="Agent" />
                                 </StackPanel>
                             </Button>
-                            <Button Tag="对话" Click="Navigation_Click" Style="{StaticResource NavButton}">
+                            <Button x:Name="NavigationConversations" Tag="对话" Click="Navigation_Click" Style="{StaticResource NavButton}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="☷" FontSize="20" Width="30" />
                                     <TextBlock Text="对话" />
                                 </StackPanel>
                             </Button>
-                            <Button Tag="设置 / 诊断" Click="Navigation_Click" Style="{StaticResource NavButton}">
+                            <Button x:Name="NavigationSettings" Tag="设置 / 诊断" Click="Navigation_Click" Style="{StaticResource NavButton}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="⚙" FontSize="18" Width="30" />
                                     <TextBlock Text="设置 / 诊断" />
@@ -197,13 +197,13 @@
                             <TextBlock Text="{Binding PageNotice}" Foreground="#8B5A12" TextWrapping="Wrap" />
                         </Border>
 
-                        <Grid Margin="0,24,0,0">
+                        <Grid x:Name="MainDashboardGrid" Margin="0,24,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="310" />
                                 <ColumnDefinition Width="24" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Border Grid.Column="0" Background="{StaticResource CardBrush}" CornerRadius="13" Padding="20" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                            <Border x:Name="InstanceListCard" Grid.Column="0" Background="{StaticResource CardBrush}" CornerRadius="13" Padding="20" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -279,7 +279,7 @@
                                 </Grid>
                             </Border>
 
-                            <StackPanel Grid.Column="2">
+                            <StackPanel x:Name="InstanceWorkspacePanel" Grid.Column="2">
                                 <Border Background="{StaticResource CardBrush}" CornerRadius="13" Padding="22" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
                                     <StackPanel>
                                         <Grid>
@@ -429,13 +429,18 @@
                                 </Border>
                             </StackPanel>
                         </Grid>
+                        <ContentControl x:Name="EmbeddedPageHost"
+                                        Visibility="Collapsed"
+                                        Margin="0,24,0,0"
+                                        HorizontalContentAlignment="Stretch"
+                                        VerticalContentAlignment="Stretch" />
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
 
             <Border Grid.Row="2" Background="#E7F0FA" CornerRadius="0,0,17,17">
                 <Grid Margin="22,0">
-                    <TextBlock Text="DSH Launcher · Core 0.1.3" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                    <TextBlock Text="DSH Launcher · Core 0.1.4" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                     <TextBlock Text="检测结果仅描述外部运行环境，不代表 DSh 已安装" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                 </Grid>
             </Border>

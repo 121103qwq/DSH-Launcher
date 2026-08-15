@@ -1,7 +1,7 @@
 # DSH Launcher 当前设计
 
 - 技术栈：.NET 8 WPF，目标 Windows x64；发布版采用自包含单文件，不依赖 Node.js、npm、pnpm 或已经安装的 DSh。
-- 界面：无边框 Launcher 窗口，顶部操作栏、左侧工作区导航、实例列表和独立管理窗口；信息架构参考 PCL2，但代码、视觉和素材独立实现。
+- 界面：无边框 Launcher 窗口；左侧采用 PCL2 风格工作区导航，右侧通过 `ContentControl` 内嵌切换启动、实例、扩展、模型、Agent、对话和设置页面。扩展、模型、Agent、对话管理不使用独立弹窗；Chat WebView2 仍可作为独立窗口打开。代码、视觉和素材独立实现。
 - 实例隔离：Manager 数据位于 `%USERPROFILE%\\Documents\\DeepSeek\\launcher`；每个实例使用 `instances\\<id>\\dsh-home`，子进程同时注入 `DSH_HOME` 和实例专用 `DSH_AGENTS_HOME`。注册记录会拒绝越界 HOME、重解析点、重复 ID 和重复根目录；取消注册不删除实例数据。
 - 生命周期：`installed` 使用注册的 `dsh` 入口，`source` 使用满足 `^22.19.0 || >=24.0.0` 的 Node.js 运行构建入口；Runner 使用 loopback 空闲端口、HTTP 健康检查、实例独占锁和整棵子进程树清理。启动成功后可打开独立 Chat WebView2 窗口；关闭 Chat 不停止实例。
 - Source：读取项目根 `package.json`、包管理器字段/锁文件、构建脚本、依赖目录和 CLI 入口；准备阶段执行 install 和 `run build`，只接受实际找到的 CLI 构建入口，超时/取消/非零退出会保留诊断并清理进程树。

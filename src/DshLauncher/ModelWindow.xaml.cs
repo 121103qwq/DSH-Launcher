@@ -1,10 +1,12 @@
 using System.Windows;
+using System.Windows.Controls;
+using UserControl = System.Windows.Controls.UserControl;
 using DshLauncher.Models;
 using DshLauncher.Services;
 
 namespace DshLauncher;
 
-public partial class ModelWindow : Window
+public partial class ModelWindow : UserControl
 {
     private readonly ManagerInstance _instance;
     private readonly ModelService _service;
@@ -73,6 +75,6 @@ public partial class ModelWindow : Window
     private void ShowError(Exception ex)
     {
         StatusText.Text = ex.Message;
-        System.Windows.MessageBox.Show(this, ex.Message, "模型配置失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        System.Windows.MessageBox.Show(Window.GetWindow(this), ex.Message, "模型配置失败", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }
