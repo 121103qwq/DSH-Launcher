@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前源码发布目标为 0.1.6，启动、实例和生态管理采用 PCL2 风格的右侧工作区切换；本次目标是发布已完成会话边界修复的 Windows 版本。
+按构建提示词继续维护 Windows x64 的独立 DSH Launcher；当前源码和发布版本为 0.1.6，启动、实例和生态管理采用 PCL2 风格的右侧工作区切换；本次会话边界修复和 Windows Release 已完成。
 
 ## 已完成内容
 
@@ -29,6 +29,8 @@
 - 当前功能分支为 `agent/harden-node-detection`，GitHub PR #1 当前为 OPEN/DRAFT，目标分支为 `main`；源码提交为 `40d3175`，发布产物提交为 `4ec7057`，标签为 `v0.1.5`。
 - 0.1.5 已生成并核对 `publish\\release-0.1.5\\DSH Launcher.exe`；文件版本为 `0.1.5.0`，SHA-256 为 `52E673B8CFF57BC8CAAA43EEB2351129AF4E1D14D792D07047E6F65888A221C8`；同一文件已复制到 `DSH Launcher\\DSH Launcher.exe` 顶层位置，两个文件哈希一致。
 - GitHub Release `v0.1.5` 已正式发布并核对为 1 个 Windows EXE；GitHub 资产名为 `DSH.Launcher.exe`，远端 digest 为 `sha256:52e673b8cff57bc8caaa43eeb2351129af4e1d14d792d07047e6f65888a221c8`；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.5`。
+- 0.1.6 源码提交为 `64fcf64`，Windows 产物提交为 `9972091`；`publish\\release-0.1.6\\DSH Launcher.exe` 和顶层 `DSH Launcher\\DSH Launcher.exe` 文件版本均为 `0.1.6.0`，SHA-256 均为 `0A31896F353FAEF2572A7E281CDF528B511E2CADFCA6AE3464E54CEE9E0BA6FF`。
+- GitHub Release `v0.1.6` 已正式发布并核对为 1 个 Windows EXE；资产名为 `DSH.Launcher.exe`，远端 digest 与本地 SHA-256 一致；Release 地址为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v0.1.6`。
 
 ## 当前主要相关文件
 
@@ -66,6 +68,7 @@
 - `dotnet publish .\\src\\DshLauncher\\DshLauncher.csproj -c Release -r win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o .\\publish\\release-0.1.5`：通过；文件版本为 `0.1.5.0`，SHA-256 已核对。
 - 0.1.5 最终发布版已用 Computer Use 实测：启动页显示 Core 0.1.5，扩展、模型、Agent、对话均在主窗口右侧切换；对话页显示 `session.jsonl / .zstd` 文案且未出现管理弹窗，测试进程随后已关闭。
 - 本次修复使用当前源码 Release 编译输出做 Computer Use 回归：真实 DSh 创建的有效 `.jsonl.zstd` 会话在 Launcher 对话页显示为有效并可打开；打开后 Chat 的 `deepseek` 工作区和 `新会话` 条目处于选中状态，Launcher 显示 `已打开对话`；停止实例后导出生成单一 `.jsonl.zstd`，未生成重复后缀文件。回归用 Chat、实例和 Launcher 已关闭，导出文件与测试会话已移出仓库和实例目录至 `%TEMP%` 保留。
+- v0.1.6 发布构建已完成：Windows x64 自包含单文件版本为 `0.1.6.0`，本地发布目录与顶层 EXE 哈希一致；GitHub 标签解引用指向 `9972091`，Release 资产上传状态为 `uploaded`，远端 digest 与本地 SHA-256 一致。
 - 分支推送 dry-run 和实际推送均通过；远端 `v0.1.5` tag 指向发布产物提交 `4ec7057`，Release 资产数量为 1，资产哈希与本地发布文件一致。
 - 临时 UI 回归后确认用户原有 `main\\DSH Launcher\\DSH Launcher.exe` 与 DeepSeek Desktop DSh 进程仍在，未启动或停止用户既有 DSh 实例。
 
@@ -73,11 +76,11 @@
 
 - 当前自动化测试尚未覆盖 Node.js 检测的超时/取消、DSh 检测超时、Source 异常 `package.json`、DSh 安装命令的真实联网执行和所有 UI 错误提示边界。
 - 本次未对真实网络 Plugin 执行安装/更新/删除，避免修改用户实例；服务和临时 UI 页面已验证。Chat 仍按现有设计使用独立 WebView2 窗口；打开合法会话仍要求实例运行并有可用 Chat 地址，这是当前生命周期约束。
-- 当前分支仍是 Draft PR，尚未合并到 `main`；这不影响已发布的 `v0.1.5` Release。
+- 当前分支仍是 Draft PR，尚未合并到 `main`；这不影响已发布的 `v0.1.6` Release。
 
 ## 尚未完成内容
 
-- 0.1.6 的构建、推送、标签和 GitHub Release 尚未完成；后续未覆盖的测试边界见“已知问题”。
+- 本次 0.1.6 构建、推送、标签和 GitHub Release 已完成；后续未覆盖的测试边界见“已知问题”。
 
 ## 已尝试但已放弃的方案
 
@@ -86,4 +89,4 @@
 
 ## 下一步最直接的任务
 
-- 运行 0.1.6 自测和 Windows x64 发布构建，提交当前全部改动并完成标签、GitHub Release 与产物哈希核对。
+- 继续按真实 UI 回归覆盖“已知问题”中的边界；当前 v0.1.6 发布交付已完成。
