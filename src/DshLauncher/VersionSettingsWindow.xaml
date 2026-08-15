@@ -1,0 +1,381 @@
+<UserControl x:Class="DshLauncher.VersionSettingsWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="{StaticResource UiFont}"
+             Loaded="Window_OnLoaded">
+    <Grid Background="{StaticResource PageBrush}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="180" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0"
+                Background="{StaticResource CardBrush}"
+                BorderBrush="{StaticResource LineBrush}"
+                BorderThickness="0,0,1,0"
+                Padding="10,18">
+            <StackPanel>
+                <TextBlock x:Name="VersionSettingsHeaderText"
+                           Text="版本设置"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Margin="10,0,10,4" />
+                <TextBlock x:Name="VersionIdentityText"
+                           Text="当前版本"
+                           Foreground="{StaticResource MutedBrush}"
+                           FontSize="11"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="10,0,10,18" />
+
+                <Button x:Name="PersonalizationButton"
+                        Content="▣   个性化"
+                        Click="Personalization_Click"
+                        Style="{StaticResource NavButton}" />
+                <Button x:Name="ConfigurationButton"
+                        Content="⚙   配置"
+                        Click="Configuration_Click"
+                        Style="{StaticResource NavButton}" />
+                <Button x:Name="PluginsButton"
+                        Content="♧   插件管理"
+                        Click="Plugins_Click"
+                        Style="{StaticResource NavButton}" />
+                <Button x:Name="ExportButton"
+                        Content="⇧   导出"
+                        Click="Export_Click"
+                        Style="{StaticResource NavButton}" />
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer Grid.Column="1"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      HorizontalContentAlignment="Stretch"
+                      CanContentScroll="False"
+                      PanningMode="VerticalOnly">
+            <StackPanel Margin="20,18,24,26">
+                <TextBlock x:Name="PageHeaderText"
+                           Text="个性化"
+                           FontSize="20"
+                           FontWeight="SemiBold" />
+                <TextBlock x:Name="PageDescriptionText"
+                           Foreground="{StaticResource MutedBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,6,0,18" />
+
+                <StackPanel x:Name="PersonalizationPage">
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20">
+                        <StackPanel>
+                            <TextBlock Text="当前版本" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock x:Name="PersonalizationVersionText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       Margin="0,12,0,0" />
+                            <TextBlock x:Name="PersonalizationDetailsText"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <TextBlock Text="修改版本名称"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Margin="0,22,0,0" />
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="VersionNameBox"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="最多 80 个字符" />
+                                <Button Grid.Column="1"
+                                        Content="保存名称"
+                                        Click="SaveVersionName_Click"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Margin="10,0,0,0" />
+                            </Grid>
+                            <TextBlock x:Name="VersionNameStatusText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <Border Background="#F5F9FD" CornerRadius="10" Padding="18" Margin="0,22,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="版本数据位置" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="DshHomeText"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,5,0,0" />
+                                    <TextBlock Text="每个版本使用独立 DSH_HOME；这里不直接复制 DSh 运行程序。"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap"
+                                               Margin="0,8,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="ConfigurationPage" Visibility="Collapsed">
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20">
+                        <StackPanel>
+                            <CheckBox x:Name="SyncAllConfigurationCheckBox"
+                                      Content="和所有版本配置同步"
+                                      FontSize="15"
+                                      FontWeight="SemiBold"
+                                      Checked="SyncAllConfiguration_Changed"
+                                      Unchecked="SyncAllConfiguration_Changed" />
+                            <TextBlock Text="打开后，下面的对话文件同步选项会跟随所有版本，不能单独修改。模型同步由下面的独立开关控制。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       FontSize="11"
+                                       Margin="0,6,0,16" />
+
+                            <StackPanel x:Name="ConfigurationOptionsPanel">
+                                <TextBlock Text="对话文件同步" FontWeight="SemiBold" />
+                                <RadioButton x:Name="ConversationIndependentRadio"
+                                             Content="该版本完全独立"
+                                             GroupName="ConversationSync"
+                                             Margin="0,10,0,0"
+                                             Checked="ConversationMode_Changed" />
+                                <RadioButton x:Name="ConversationWorkspaceRadio"
+                                             Content="按工作区同步"
+                                             GroupName="ConversationSync"
+                                             Margin="0,8,0,0"
+                                             Checked="ConversationMode_Changed" />
+                                <ComboBox x:Name="ConversationWorkspaceBox"
+                                          IsEditable="True"
+                                          Height="36"
+                                          Margin="24,7,0,0"
+                                          ToolTip="选择已有工作区，或输入新的工作区名称" />
+                                <RadioButton x:Name="ConversationAllRadio"
+                                             Content="全量同步（所有工作区和所有版本）"
+                                             GroupName="ConversationSync"
+                                             Margin="0,10,0,0"
+                                             Checked="ConversationMode_Changed" />
+
+                                <CheckBox x:Name="SyncModelProvidersCheckBox"
+                                          Content="所有版本自动同步模型"
+                                          Margin="0,18,0,0" />
+                                <TextBlock Text="开启后，模型提供商配置不受对话文件的独立、工作区或全量选择影响。"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,6,0,0" />
+                                <Button Content="保存配置"
+                                        Click="SaveConfiguration_Click"
+                                        Style="{StaticResource PrimaryButton}"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,20,0,0" />
+                            </StackPanel>
+                            <TextBlock x:Name="ConfigurationStatusText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,16,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="PluginPage" Visibility="Collapsed">
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20">
+                        <StackPanel>
+                            <DockPanel>
+                                <TextBlock Text="已安装 Plugin" FontSize="16" FontWeight="SemiBold" />
+                                <Button Content="刷新"
+                                        Click="RefreshPlugins_Click"
+                                        DockPanel.Dock="Right"
+                                        Padding="14,6" />
+                            </DockPanel>
+                            <TextBlock x:Name="PluginEmptyText"
+                                       Text="当前版本没有检测到已安装 Plugin。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,16,0,0" />
+                            <ListBox x:Name="PluginList"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Margin="0,12,0,0">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="Margin" Value="0,0,0,8" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#F5F9FD" CornerRadius="9" Padding="14">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding Version, TargetNullValue=版本未标记}"
+                                                               Foreground="{StaticResource MutedBrush}"
+                                                               FontSize="11"
+                                                               Margin="0,3,0,0" />
+                                                    <TextBlock Text="{Binding Description, TargetNullValue=没有描述}"
+                                                               Foreground="{StaticResource MutedBrush}"
+                                                               FontSize="11"
+                                                               TextWrapping="Wrap"
+                                                               Margin="0,3,0,0" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Button Content="启用"
+                                                            Tag="{Binding}"
+                                                            Click="PluginToggle_Click"
+                                                            IsEnabled="{Binding Managed}"
+                                                            Padding="10,6" />
+                                                    <Button Content="禁用"
+                                                            Tag="{Binding}"
+                                                            Click="PluginToggle_Click"
+                                                            IsEnabled="{Binding Managed}"
+                                                            Padding="10,6"
+                                                            Margin="6,0,0,0" />
+                                                    <Button Content="删除"
+                                                            Tag="{Binding}"
+                                                            Click="PluginDelete_Click"
+                                                            IsEnabled="{Binding Managed}"
+                                                            Padding="10,6"
+                                                            Margin="6,0,0,0" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <TextBlock x:Name="PluginStatusText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,14,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20"
+                            Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="窗口与运行环境" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="这些设置只对当前版本生效。Node.js 仍由 Launcher 检测和调用，不会被内置到 Launcher。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       FontSize="11"
+                                       Margin="0,6,0,14" />
+                            <TextBlock Text="自定义窗口标题" FontWeight="SemiBold" />
+                            <TextBox x:Name="WindowTitleBox" Margin="0,7,0,14" />
+                            <TextBlock Text="Node.js 可执行文件" FontWeight="SemiBold" />
+                            <Grid Margin="0,7,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="NodePathBox" />
+                                <Button Grid.Column="1" Content="浏览…" Click="BrowseNode_Click" Margin="8,0,0,0" />
+                            </Grid>
+                            <TextBlock x:Name="NodeRuntimeText"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       FontSize="11"
+                                       Margin="0,8,0,0" />
+                            <Button Content="保存窗口与 Node 设置"
+                                    Click="SavePluginSettings_Click"
+                                    Style="{StaticResource PrimaryButton}"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,16,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="ExportPage" Visibility="Collapsed">
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20">
+                        <StackPanel>
+                            <TextBlock Text="导出版本整合包" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="导出用于分享版本设计，导入后会重新创建一个独立版本。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,14" />
+                            <CheckBox x:Name="IncludeProviderConfigurationCheckBox"
+                                      Content="包含当前版本的模型提供商配置"
+                                      IsChecked="True"
+                                      Margin="0,0,0,10" />
+                            <CheckBox x:Name="IncludePluginConfigurationCheckBox"
+                                      Content="包含当前版本的 Plugin 配置"
+                                      IsChecked="True"
+                                      Margin="0,0,0,10" />
+                            <CheckBox x:Name="IncludeSessionsCheckBox"
+                                      Content="会话文件（禁止导出）"
+                                      IsChecked="False"
+                                      IsEnabled="False"
+                                      Margin="0,0,0,14" />
+                            <Border Background="#FFF9EA" BorderBrush="#F1C26B" BorderThickness="1" CornerRadius="9" Padding="12">
+                                <TextBlock Text="不会导出 API Key、Token、密码、环境变量值或 sessions/会话文件。模型提供商只保留可分享的名称、地址、模型和环境变量名。"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           TextWrapping="Wrap"
+                                           FontSize="11" />
+                            </Border>
+                            <Button Content="导出为压缩包"
+                                    Click="ExportPackage_Click"
+                                    Style="{StaticResource PrimaryButton}"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,18,0,0" />
+                            <TextBlock x:Name="ExportStatusText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,14,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20"
+                            Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="整合包格式" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="版本控制中的导入会识别这个扩展名；包本身仍是 ZIP 结构。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,12" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="220" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="PackageExtensionBox" VerticalContentAlignment="Center" />
+                                <Button Grid.Column="1" Content="保存格式" Click="SavePackageExtension_Click" Margin="8,0,0,0" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <TextBlock x:Name="VersionRequiredText"
+                           Foreground="#B86D1D"
+                           TextWrapping="Wrap"
+                           Margin="0,18,0,0"
+                           Visibility="Collapsed" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

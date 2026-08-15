@@ -1,5 +1,7 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
+using System.IO.Compression;
 using System.Text;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -8,7 +10,8 @@ using ZstdSharp;
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("Instance registry round-trip", TestInstanceRegistryRoundTrip),
-    ("Instance registry rejects duplicate roots", TestInstanceRegistryRejectsDuplicate),
+    ("Instance registry rename persists", TestInstanceRegistryRenamePersists),
+    ("Instance registry allows shared roots for isolated versions", TestInstanceRegistryAllowsSharedRoots),
     ("Instance registry rejects missing executable state", TestInstanceRegistryRejectsMissingExecutableState),
     ("Instance registry rejects unsafe homes and corrupt records", TestInstanceRegistryRejectsUnsafeData),
     ("Source project inspection", TestSourceProjectInspection),
@@ -23,7 +26,11 @@ var tests = new (string Name, Func<Task> Run)[]
     ("DSh instance lifecycle", TestDshInstanceLifecycle),
     ("Attached runtime lifecycle", TestAttachedRuntimeLifecycle),
     ("Extension ecosystem isolation", TestExtensionEcosystemIsolation),
+    ("Plugin command supplies pnpm runtime", TestPluginCommandSuppliesPnpmRuntime),
+    ("Marketplace discovery and verification", TestMarketplaceDiscoveryAndVerification),
+    ("Version copy, clean version and package import", TestVersionPackageOperations),
     ("Model settings round-trip", TestModelSettingsRoundTrip),
+    ("Provider state and diagnostics", TestProviderStateAndDiagnostics),
     ("Conversation file management", TestConversationFileManagement)
 };
 
@@ -73,25 +80,30 @@ static Task TestInstanceRegistryRoundTrip()
     return Task.CompletedTask;
 }
 
-static Task TestInstanceRegistryRejectsDuplicate()
+static Task TestInstanceRegistryAllowsSharedRoots()
 {
     using var temporary = new TestDirectory();
     var root = Path.Combine(temporary.Path, "shared");
     Directory.CreateDirectory(root);
     var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
-    registry.Register("一个实例", root, InstanceKind.Source, packageManager: "pnpm");
+    var first = registry.Register("一个实例", root, InstanceKind.Source, packageManager: "pnpm");
+    var second = registry.Register("另一个实例", root, InstanceKind.Source, packageManager: "pnpm");
+    Assert(first.RootPath == second.RootPath, "共享运行目录的版本应保留同一个 DSh 根目录。");
+    Assert(!string.Equals(first.DshHome, second.DshHome, StringComparison.OrdinalIgnoreCase), "共享运行目录的版本必须使用不同 DSH_HOME。");
+    return Task.CompletedTask;
+}
 
-    var rejected = false;
-    try
-    {
-        registry.Register("另一个实例", root, InstanceKind.Source, packageManager: "pnpm");
-    }
-    catch (InvalidOperationException)
-    {
-        rejected = true;
-    }
+static Task TestInstanceRegistryRenamePersists()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "installed");
+    Directory.CreateDirectory(root);
+    var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var created = registry.Register("原始名称", root, InstanceKind.Installed);
 
-    Assert(rejected, "相同根目录不能重复注册。");
+    var renamed = registry.Update(created with { Name = "新的版本名称" });
+    Assert(renamed.Name == "新的版本名称", "更新实例名称后应返回新名称。 ");
+    Assert(registry.Load().Single().Name == "新的版本名称", "更新实例名称后应持久化到注册文件。 ");
     return Task.CompletedTask;
 }
 
@@ -433,6 +445,24 @@ static async Task TestDshInstanceLifecycle()
         "启动成功必须返回进程、端口和 Web 地址。");
     Assert(runner.IsRunning(instance.Id), "健康检查通过后 Runner 应报告实例运行中。");
 
+    var secondInstance = instance with
+    {
+        Id = "lifecycle-test-second",
+        Name = "生命周期第二实例",
+        DshHome = Path.Combine(temporary.Path, "dsh-home-second")
+    };
+    var secondStarted = await runner.StartAsync(secondInstance, cancellation.Token);
+    Assert(secondStarted.IsSuccess, secondStarted.Error ?? "第二个实例应能同时启动。");
+    Assert(secondStarted.Port is > 0
+        && secondStarted.Port != started.Port
+        && secondStarted.WebUrl is not null,
+        "同时启动的第二个实例必须使用不同端口和 Web 地址。");
+    Assert(runner.IsRunning(instance.Id) && runner.IsRunning(secondInstance.Id),
+        "两个不同 DSH_HOME 的实例应同时处于运行状态。");
+    await runner.StopAsync(secondInstance.Id, cancellation.Token);
+    Assert(runner.IsRunning(instance.Id) && !runner.IsRunning(secondInstance.Id),
+        "停止第二个实例不能影响第一个实例。");
+
     var duplicateStart = await runner.StartAsync(instance, cancellation.Token);
     Console.WriteLine($"INFO DSh lifecycle duplicate: success={duplicateStart.IsSuccess}, error={duplicateStart.Error}");
     Assert(duplicateStart.IsSuccess, duplicateStart.Error ?? "重复启动不应失败。");
@@ -598,6 +628,273 @@ static async Task TestExtensionEcosystemIsolation()
     await service.RemoveSkillAsync(instance, skill);
 }
 
+static async Task TestPluginCommandSuppliesPnpmRuntime()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "workspace");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    var runtimeDirectory = Path.Combine(temporary.Path, "node-runtime");
+    var marker = Path.Combine(temporary.Path, "pnpm-version.txt");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(home);
+    Directory.CreateDirectory(runtimeDirectory);
+
+    var dsh = Path.Combine(runtimeDirectory, "dsh.cmd");
+    var node = Path.Combine(runtimeDirectory, "node.exe");
+    var corepack = Path.Combine(runtimeDirectory, "corepack.cmd");
+    File.WriteAllText(node, string.Empty, new UTF8Encoding(false));
+    File.WriteAllText(
+        corepack,
+        "@echo off\r\n"
+        + "if /I \"%~1\"==\"pnpm\" (echo 11.21.0 & exit /b 0)\r\n"
+        + "exit /b 1\r\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        dsh,
+        "@echo off\r\n"
+        + "pnpm --version > \"" + marker + "\" 2>&1\r\n"
+        + "if errorlevel 1 exit /b 21\r\n"
+        + "exit /b 0\r\n",
+        new UTF8Encoding(false));
+
+    var instance = CreateTestInstance("plugin-runtime", root, home) with { DshExecutablePath = dsh };
+    var previousPath = Environment.GetEnvironmentVariable("PATH");
+    try
+    {
+        Environment.SetEnvironmentVariable("PATH", Path.Combine(temporary.Path, "empty-path"));
+        await new ExtensionService().InstallPluginAsync(instance, "demo-plugin", null);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("PATH", previousPath);
+    }
+
+    Assert(File.Exists(marker), "Plugin CLI 应能通过 Launcher 提供的 pnpm 环境运行。 ");
+    Assert(File.ReadAllText(marker).Contains("11.21.0", StringComparison.Ordinal), "Plugin CLI 应使用可用的 Corepack pnpm shim。 ");
+}
+
+static async Task TestMarketplaceDiscoveryAndVerification()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    Directory.CreateDirectory(launcherRoot);
+    var catalogPath = Path.Combine(launcherRoot, "marketplace.json");
+    File.WriteAllText(
+        catalogPath,
+        "{\"plugins\":[{\"name\":\"custom-plugin\",\"npm\":\"custom-plugin\",\"description\":\"custom\",\"category\":\"tools\"}]}",
+        new UTF8Encoding(false));
+
+    using var httpClient = new HttpClient(new ProviderTestHandler(request =>
+    {
+        var url = request.RequestUri?.ToString() ?? string.Empty;
+        if (url.Contains("awesome-dsh-plugin.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"plugins\":[{\"name\":\"demo-plugin\",\"npm\":\"demo-plugin\",\"description\":\"demo\",\"category\":\"tools\"}]}");
+        }
+
+        if (url.Contains("api.github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"items\":[]}");
+        }
+
+        if (url.Contains("registry.npmjs.org/demo-plugin", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"dist-tags\":{\"latest\":\"1.2.3\"},\"versions\":{\"1.2.3\":{\"name\":\"demo-plugin\",\"version\":\"1.2.3\",\"main\":\"index.js\",\"dsh.bundle.patch\":{}}}}");
+        }
+
+        if (url.Contains("registry.npmjs.org/bad-plugin", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\"1.0.0\":{\"name\":\"bad-plugin\",\"version\":\"1.0.0\",\"main\":\"index.js\"}}}");
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("not found", Encoding.UTF8, "text/plain")
+        };
+    }));
+
+    var service = new MarketplaceService(new LauncherPaths(launcherRoot), httpClient);
+    var result = await service.SearchAsync(null, "plugin");
+    Assert(result.Items.Count == 2, "市场搜索应合并社区目录和本地自定义目录，并按关键词过滤。 ");
+    Assert(result.Items.All(item => item.VerificationStatus == MarketplaceVerificationStatus.Unverified), "目录条目默认只能标记为待检查，不能把目录收录当成安全证明。 ");
+
+    var verified = await service.VerifyAsync(new MarketplaceItem(
+        "npm:demo-plugin",
+        "demo-plugin",
+        "demo-plugin",
+        null,
+        "demo",
+        "demo-plugin",
+        null,
+        "tools",
+        MarketplaceSourceKind.CommunityCatalog,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查"));
+    Assert(verified.Status == MarketplaceVerificationStatus.Verified && verified.Version == "1.2.3", "有 dsh.bundle.patch 和入口的 npm 包应通过检查。 ");
+
+    var rejected = await service.VerifyAsync(new MarketplaceItem(
+        "npm:bad-plugin",
+        "bad-plugin",
+        "bad-plugin",
+        null,
+        "bad",
+        "bad-plugin",
+        null,
+        "tools",
+        MarketplaceSourceKind.CommunityCatalog,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查"));
+    Assert(rejected.Status == MarketplaceVerificationStatus.Rejected
+        && rejected.Message.Contains("dsh.bundle.patch", StringComparison.Ordinal), "没有 DSh bundle 声明的 npm 包必须被拒绝。 ");
+
+    var root = Path.Combine(temporary.Path, "workspace");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(Path.Combine(home, "profiles", "web"));
+    File.WriteAllText(Path.Combine(home, "profiles", "web", "package.json"), "{}", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(home, "profiles", "web", "cordis.patch.yml"), "[]\n", new UTF8Encoding(false));
+    var instance = CreateTestInstance("marketplace-test", root, home);
+    var snapshot = service.CreatePluginSnapshot(instance);
+    Assert(File.Exists(Path.Combine(snapshot, "package.json")) && File.Exists(Path.Combine(snapshot, "cordis.patch.yml")), "市场操作前应备份 web profile 配置。 ");
+
+    var cached = service.ReadCached(null, "plugin");
+    Assert(cached is not null && cached.Items.Count == 2, "在线市场结果应写入缓存，并可在没有网络请求时读取。 ");
+    var sorted = MarketplaceService.FilterAndSort(
+        new[]
+        {
+            new MarketplaceItem("a", "旧但热门", "a", null, "", "a", null, "tools", MarketplaceSourceKind.Custom, "test", MarketplaceVerificationStatus.Unverified, "", Stars: 100, PublishedAt: DateTimeOffset.UtcNow.AddDays(-5)),
+            new MarketplaceItem("b", "新但冷门", "b", null, "", "b", null, "tools", MarketplaceSourceKind.Custom, "test", MarketplaceVerificationStatus.Unverified, "", Stars: 2, PublishedAt: DateTimeOffset.UtcNow)
+        },
+        sortOrder: MarketplaceSortOrder.PublishedAt);
+    Assert(sorted[0].Name == "新但冷门", "市场应支持按发布时间排序。 ");
+    sorted = MarketplaceService.FilterAndSort(sorted, sortOrder: MarketplaceSortOrder.Stars);
+    Assert(sorted[0].Name == "旧但热门", "市场应支持按 Star 数量排序。 ");
+}
+
+static Task TestVersionPackageOperations()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var runtimeRoot = Path.Combine(temporary.Path, "dsh-runtime");
+    Directory.CreateDirectory(runtimeRoot);
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var source = registry.Register("基础版本", runtimeRoot, InstanceKind.Installed, detectedVersion: "0.1.0", packageManager: "npm");
+    Directory.CreateDirectory(Path.Combine(source.DshHome, "profiles", "web"));
+    File.WriteAllText(Path.Combine(source.DshHome, "profiles", "web", "settings.json"), "{}", new UTF8Encoding(false));
+
+    var packages = new VersionPackageService(registry, new LauncherPaths(launcherRoot));
+    var clone = packages.CloneVersion(source, "复制版本");
+    Assert(clone.RootPath == source.RootPath && clone.DshHome != source.DshHome, "复制版本应共享运行目录但复制到新的 DSH_HOME。 ");
+    Assert(File.Exists(Path.Combine(clone.DshHome, "profiles", "web", "settings.json")), "复制版本应复制 DSH_HOME 内容。 ");
+
+    var clean = packages.CreateCleanVersion(source, "干净版本");
+    Assert(clean.DshHome != source.DshHome && !Directory.EnumerateFileSystemEntries(clean.DshHome).Any(), "干净版本不能带入旧版本文件。 ");
+
+    var settingsService = new VersionSettingsService();
+    settingsService.Save(source, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Workspace,
+        ConversationWorkspace = "共享工作区",
+        SyncModelProviders = true,
+        WindowTitle = "分享用版本",
+        NodeExecutablePath = Path.Combine(temporary.Path, "node.exe")
+    });
+    var workspacePeer = registry.Register("工作区副本", runtimeRoot, InstanceKind.Installed, detectedVersion: "0.1.0", packageManager: "npm");
+    settingsService.Save(workspacePeer, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Workspace,
+        ConversationWorkspace = "共享工作区"
+    });
+    Assert(settingsService.ShouldSyncConversations(source, workspacePeer), "相同工作区的版本应同步对话文件。 ");
+    Assert(settingsService.ShouldSyncModelProviders(source, workspacePeer), "开启所有版本自动同步模型后，不应受对话文件同步范围影响。 ");
+    settingsService.Save(workspacePeer, new VersionSettingsData { ConversationSyncMode = ConversationSyncMode.Independent });
+    Assert(!settingsService.ShouldSyncConversations(source, workspacePeer), "独立版本不应与工作区版本同步对话文件。 ");
+    settingsService.Save(workspacePeer, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Independent,
+        SyncModelProviders = false
+    });
+    Assert(!settingsService.ShouldSyncModelProviders(source, workspacePeer), "关闭所有版本自动同步模型后不应同步模型提供商。 ");
+    settingsService.Save(workspacePeer, new VersionSettingsData { ConversationSyncMode = ConversationSyncMode.All });
+    Assert(settingsService.ShouldSyncConversations(source, workspacePeer), "全量模式应兜底同步其它版本。 ");
+    settingsService.Save(workspacePeer, new VersionSettingsData { SyncAllConfiguration = true });
+    Assert(settingsService.ShouldSyncConfiguration(source, workspacePeer), "和所有版本配置同步应覆盖其它版本的独立设置。 ");
+
+    var sourceSettings = Path.Combine(source.DshHome, "settings.yaml");
+    File.WriteAllText(
+        sourceSettings,
+        "llm-deepseek:\n  apiKey: super-secret\n  apiKeyEnv: DEEPSEEK_API_KEY\n  baseURL: https://api.example\n  models:\n    - deepseek-chat\n",
+        new UTF8Encoding(false));
+    var sourceProfile = Path.Combine(source.DshHome, "profiles", "web");
+    File.WriteAllText(
+        Path.Combine(sourceProfile, "package.json"),
+        "{\"dependencies\":{\"demo-plugin\":\"1.2.3\"},\"scripts\":{\"leak\":\"secret\"},\"dsh\":{\"profile\":{\"bundles\":[\"demo-plugin\"]}}}",
+        new UTF8Encoding(false));
+    var sessions = Path.Combine(source.DshHome, "sessions");
+    Directory.CreateDirectory(sessions);
+    File.WriteAllText(Path.Combine(sessions, "private.jsonl"), "do not export", new UTF8Encoding(false));
+    var exportPath = Path.Combine(temporary.Path, "share.dshpack");
+    packages.ExportPackage(
+        source,
+        exportPath,
+        new VersionExportOptions(IncludeProviderConfiguration: true, IncludePluginConfiguration: true));
+    using (var exported = ZipFile.OpenRead(exportPath))
+    {
+        Assert(exported.Entries.All(entry => !entry.FullName.Contains("sessions", StringComparison.OrdinalIgnoreCase)),
+            "版本整合包不能包含 sessions。 ");
+        var exportedSettings = exported.GetEntry("dsh-home/settings.yaml");
+        Assert(exportedSettings is not null, "导出模型提供商配置时应包含 settings.yaml。 ");
+        using var settingsReader = new StreamReader(exportedSettings!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var safeSettings = settingsReader.ReadToEnd();
+        Assert(!safeSettings.Contains("super-secret", StringComparison.Ordinal)
+            && safeSettings.Contains("DEEPSEEK_API_KEY", StringComparison.Ordinal),
+            "导出 Provider 配置必须删除 API Key 值但保留环境变量名。 ");
+        Assert(exported.GetEntry("dsh-home/profiles/web/package.json") is not null,
+            "导出 Plugin 配置时应保留精简后的 profile package.json。 ");
+        using var manifestReader = new StreamReader(exported.GetEntry("manifest.json")!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var manifestText = manifestReader.ReadToEnd();
+        Assert(manifestText.Contains("\"sessions\": false", StringComparison.Ordinal)
+            && manifestText.Contains("\"apiKeys\": false", StringComparison.Ordinal),
+            "整合包 manifest 必须声明不包含会话和 API Key。 ");
+    }
+
+    var importedDesign = packages.ImportPackage(exportPath, source);
+    Assert(!Directory.Exists(Path.Combine(importedDesign.DshHome, "sessions")),
+        "导入分享整合包不能创建 sessions 目录。 ");
+    var importedSettings = File.ReadAllText(Path.Combine(importedDesign.DshHome, "settings.yaml"));
+    Assert(!importedSettings.Contains("super-secret", StringComparison.Ordinal),
+        "导入整合包后也不能恢复被清理的 API Key。 ");
+    Assert(settingsService.Read(importedDesign).NodeExecutablePath is null,
+        "整合包不能恢复本机 Node.js 路径。 ");
+
+    var packPath = Path.Combine(temporary.Path, "import.dshpack");
+    using (var archive = ZipFile.Open(packPath, ZipArchiveMode.Create))
+    {
+        var manifest = archive.CreateEntry("manifest.json");
+        using (var writer = new StreamWriter(manifest.Open(), Encoding.UTF8, leaveOpen: false))
+        {
+            writer.Write("{\"formatVersion\":1,\"name\":\"导入版本\",\"detectedVersion\":\"0.2.0\"}");
+        }
+
+        var data = archive.CreateEntry("dsh-home/imported.txt");
+        using var dataWriter = new StreamWriter(data.Open(), Encoding.UTF8, leaveOpen: false);
+        dataWriter.Write("imported");
+    }
+
+    var imported = packages.ImportPackage(packPath, source);
+    Assert(imported.DetectedVersion == "0.2.0", "整合包 manifest 应能携带版本信息。 ");
+    Assert(File.ReadAllText(Path.Combine(imported.DshHome, "imported.txt")) == "imported", "整合包应解压到新版本的 DSH_HOME。 ");
+    packages.SavePackageExtension("zip");
+    Assert(packages.PackageExtension == ".zip", "整合包扩展名设置应自动补点并保存。 ");
+    return Task.CompletedTask;
+}
+
+static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
+{
+    Content = new StringContent(json, Encoding.UTF8, "application/json")
+};
+
 static async Task TestModelSettingsRoundTrip()
 {
     using var temporary = new TestDirectory();
@@ -637,6 +934,61 @@ static async Task TestModelSettingsRoundTrip()
     await AssertThrowsAsync<InvalidOperationException>(
         () => guarded.SaveDeepSeekAsync(instance, "DEEPSEEK_API_KEY", null, Array.Empty<string>()),
         "实例运行时不能修改模型 settings。");
+}
+
+static async Task TestProviderStateAndDiagnostics()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "workspace");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(home);
+    var instance = CreateTestInstance("provider-test", root, home);
+    var provider = new ModelProviderInfo(
+        "gateway",
+        "测试网关",
+        "llm-pi-ai",
+        null,
+        "http://127.0.0.1:8080/v1",
+        new[] { "model-a" },
+        Configured: true);
+
+    var state = new ProviderStateService();
+    Assert(state.IsEnabled(instance, provider.Provider), "没有 Launcher 状态记录时 Provider 默认应启用。 ");
+    state.SetEnabled(instance, provider.Provider, false);
+    Assert(!state.IsEnabled(instance, provider.Provider), "禁用 Provider 后应从 DSH_HOME 状态文件读取为禁用。 ");
+    Assert(File.ReadAllText(state.GetStatePath(instance)).Contains("\"gateway\": false", StringComparison.Ordinal), "Provider 禁用状态应写入实例隔离目录。 ");
+    state.SetEnabled(instance, provider.Provider, true);
+    Assert(state.IsEnabled(instance, provider.Provider), "重新启用 Provider 后应恢复启用。 ");
+
+    using var client = new HttpClient(new ProviderTestHandler(request =>
+    {
+        Assert(request.RequestUri?.AbsolutePath == "/v1/models", "Provider 检测应调用配置 Base URL 下的 /models。 ");
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{\"data\":[{\"id\":\"model-a\",\"reasoningEfforts\":[\"off\",\"high\"]}]}",
+                Encoding.UTF8,
+                "application/json")
+        };
+    }));
+    using var diagnostics = new ProviderDiagnosticService(client);
+    var healthy = await diagnostics.CheckAsync(provider);
+    Assert(healthy.IsHealthy && healthy.DiscoveredModelCount == 1, "Provider 检测应识别可用的模型列表。 ");
+    Assert(healthy.ThinkingText.Contains("off", StringComparison.Ordinal)
+        && healthy.ThinkingText.Contains("high", StringComparison.Ordinal), "Provider 检测应读取模型的思考档位。 ");
+
+    var mismatch = ProviderDiagnosticService.AnalyzeModelListing(
+        provider with { Models = new[] { "missing-model" } },
+        HttpStatusCode.OK,
+        "{\"data\":[{\"id\":\"model-a\"}]}" );
+    Assert(!mismatch.IsHealthy && mismatch.StatusText == "模型不匹配", "配置模型不在接口列表中时应显示明确问题。 ");
+
+    var unauthorized = ProviderDiagnosticService.AnalyzeModelListing(
+        provider,
+        HttpStatusCode.Unauthorized,
+        "{}" );
+    Assert(!unauthorized.IsHealthy && unauthorized.StatusText == "认证失败", "Provider 返回 401 时应显示认证问题。 ");
 }
 
 static Task TestConversationFileManagement()
@@ -825,4 +1177,17 @@ file sealed class TestDirectory : IDisposable
 
         Directory.Delete(path, recursive: false);
     }
+}
+
+file sealed class ProviderTestHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+
+    public ProviderTestHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    {
+        _handler = handler;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        Task.FromResult(_handler(request));
 }

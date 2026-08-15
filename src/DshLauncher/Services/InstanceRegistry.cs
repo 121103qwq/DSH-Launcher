@@ -38,7 +38,6 @@ public sealed class InstanceRegistry
             var entries = JsonSerializer.Deserialize<List<ManagerInstance>>(json, JsonOptions)
                 ?? new List<ManagerInstance>();
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
-            var seenRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var validated = new List<ManagerInstance>(entries.Count);
             foreach (var entry in entries)
             {
@@ -51,11 +50,6 @@ public sealed class InstanceRegistry
                 if (!seenIds.Add(safe.Id))
                 {
                     throw new InvalidDataException($"实例注册文件包含重复 ID：{safe.Id}");
-                }
-
-                if (!seenRoots.Add(safe.RootPath))
-                {
-                    throw new InvalidDataException($"实例注册文件包含重复目录：{safe.RootPath}");
                 }
 
                 validated.Add(safe);
@@ -86,11 +80,6 @@ public sealed class InstanceRegistry
 
         var normalizedRoot = NormalizeDirectory(rootPath, "实例目录");
         var entries = Load().ToList();
-
-        if (entries.Any(entry => string.Equals(entry.RootPath, normalizedRoot, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException("这个目录已经注册为 DSh 实例。");
-        }
 
         var id = Guid.NewGuid().ToString("N");
         var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(id));
@@ -142,12 +131,6 @@ public sealed class InstanceRegistry
     {
         updated = ValidateStoredEntry(updated);
         var entries = Load().ToList();
-        if (entries.Any(entry => !string.Equals(entry.Id, updated.Id, StringComparison.Ordinal)
-            && string.Equals(entry.RootPath, updated.RootPath, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException("更新后的实例目录已经被另一个 DSh 实例注册。");
-        }
-
         var index = entries.FindIndex(entry => string.Equals(entry.Id, updated.Id, StringComparison.Ordinal));
         if (index < 0)
         {
@@ -184,6 +167,7 @@ public sealed class InstanceRegistry
     private ManagerInstance ValidateStoredEntry(ManagerInstance entry)
     {
         if (string.IsNullOrWhiteSpace(entry.Id)
+            || string.IsNullOrWhiteSpace(entry.Name)
             || string.IsNullOrWhiteSpace(entry.RootPath)
             || string.IsNullOrWhiteSpace(entry.DshHome))
         {
@@ -225,6 +209,7 @@ public sealed class InstanceRegistry
 
         return entry with
         {
+            Name = NormalizeName(entry.Name),
             RootPath = rootPath,
             DshHome = dshHome,
             DshExecutablePath = executable,

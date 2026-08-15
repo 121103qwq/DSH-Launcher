@@ -23,22 +23,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly InstanceRegistry _instanceRegistry = new();
     private readonly DshInstanceRunner _instanceRunner = new();
     private readonly ExtensionService _extensionService;
+    private readonly MarketplaceService _marketplaceService;
+    private readonly VersionPackageService _versionPackageService;
+    private readonly VersionSettingsService _versionSettingsService = new();
     private readonly ConversationService _conversationService;
     private readonly ModelService _modelService;
+    private readonly ProviderStateService _providerStateService = new();
+    private readonly ProviderDiagnosticService _providerDiagnosticService = new();
     private readonly DshInstallService _dshInstaller = new();
     private readonly SourceBuildService _sourceBuilder = new();
     private readonly CancellationTokenSource _windowCancellation = new();
+    private CancellationTokenSource? _providerRefreshCancellation;
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
     private DshRuntimeInfo _dshRuntime = DshRuntimeInfo.Missing();
-    private ChatWindow? _chatWindow;
+    private readonly Dictionary<string, ChatWindow> _chatWindows = new(StringComparer.Ordinal);
     private ManagerInstance? _selectedInstance;
     private bool _isNodeDetectionInProgress;
     private bool _isLifecycleInProgress;
     private bool _isDshInstallInProgress;
+    private bool _isProviderDetectionInProgress;
 
     public MainWindow()
     {
         _extensionService = new(id => _instanceRunner.IsRunning(id));
+        _marketplaceService = new();
+        _versionPackageService = new(_instanceRegistry);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _modelService = new(id => _instanceRunner.IsRunning(id));
         InitializeComponent();
@@ -55,6 +64,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public ObservableCollection<ManagerInstance> Instances { get; } = new();
 
+    public ObservableCollection<ManagerInstance> RunningInstances { get; } = new();
+
+    public ObservableCollection<ProviderCardViewModel> ProviderCards { get; } = new();
+
     public ManagerInstance? SelectedInstance
     {
         get => _selectedInstance;
@@ -66,26 +79,52 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             _selectedInstance = value;
+            ApplySelectedVersionSettings(_selectedInstance);
             OnPropertyChanged(nameof(SelectedInstance));
             OnPropertyChanged(nameof(SelectedInstanceName));
             OnPropertyChanged(nameof(SelectedInstanceSummary));
             OnPropertyChanged(nameof(SelectedInstanceStatus));
             OnPropertyChanged(nameof(InstanceEndpointText));
             OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
             OnPropertyChanged(nameof(CanRestartInstance));
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
+            OnPropertyChanged(nameof(ProviderSummaryText));
+            if (IsLoaded)
+            {
+                _ = RefreshProvidersAsync(_selectedInstance);
+                _ = RefreshNodeAsync();
+            }
         }
     }
 
     public string InstanceCountText => $"{Instances.Count} 个实例";
 
+    public string RunningInstanceCountText => $"{RunningInstances.Count} 个运行中";
+
     public Visibility NoInstancesVisibility => Instances.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public Visibility InstancesVisibility => Instances.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility NoRunningInstancesVisibility => RunningInstances.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility RunningInstancesVisibility => RunningInstances.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility NoProvidersVisibility => ProviderCards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility ProviderCardsVisibility => ProviderCards.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+    public string ProviderSummaryText => SelectedInstance is null
+        ? "选择实例后检测 Provider 的连接、模型列表和思考能力"
+        : _isProviderDetectionInProgress
+            ? $"正在检测 {SelectedInstance.Name} 的 Provider…"
+            : $"{ProviderCards.Count} 个 Provider · 仅调用只读模型列表接口";
+
+    public bool CanRefreshProviders => !_isProviderDetectionInProgress && SelectedInstance is not null;
 
     public string SelectedInstanceName => SelectedInstance?.Name ?? "等待实例注册";
 
@@ -100,7 +139,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         && (SelectedInstance.Kind == InstanceKind.Installed
             ? SelectedInstance.DshExecutablePath is not null
             : GetSelectedNodeCompatibility() == NodeRuntimeCompatibility.Compatible)
-        && !_instanceRunner.IsRunning(SelectedInstance.Id);
+        && (!_instanceRunner.IsRunning(SelectedInstance.Id)
+            || !string.IsNullOrWhiteSpace(SelectedInstance.WebUrl));
+
+    public string StartInstanceButtonText => SelectedInstance is not null
+        && _instanceRunner.IsRunning(SelectedInstance.Id)
+        ? "打开实例"
+        : "启动实例";
 
     public bool CanStopInstance => !_isLifecycleInProgress
         && SelectedInstance is not null
@@ -204,6 +249,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         await LoadInstancesAsync();
         SwitchSection("启动");
         await RefreshNodeAsync();
+        await RefreshProvidersAsync(SelectedInstance);
     }
 
     private async void RefreshNode_Click(object sender, RoutedEventArgs e)
@@ -236,12 +282,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            _nodeRuntime = await _nodeDetector.DetectAsync(_windowCancellation.Token);
+            var preferredNodePath = GetPreferredNodePath();
+            _nodeRuntime = await _nodeDetector.DetectAsync(preferredNodePath, _windowCancellation.Token);
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanInstallDsh));
             return _nodeRuntime;
         }
@@ -342,6 +390,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanStopInstance));
             OnPropertyChanged(nameof(CanRestartInstance));
+            RefreshRunningInstances();
+            OnPropertyChanged(nameof(ProviderSummaryText));
+            OnPropertyChanged(nameof(CanRefreshProviders));
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -350,6 +401,160 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             ShowNotice($"读取实例注册文件失败：{ex.Message}");
         }
+    }
+
+    private async Task RefreshProvidersAsync(ManagerInstance? instance)
+    {
+        _providerRefreshCancellation?.Cancel();
+        _providerRefreshCancellation?.Dispose();
+
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        _providerRefreshCancellation = cancellation;
+        _isProviderDetectionInProgress = instance is not null;
+        ProviderCards.Clear();
+        OnPropertyChanged(nameof(NoProvidersVisibility));
+        OnPropertyChanged(nameof(ProviderCardsVisibility));
+        OnPropertyChanged(nameof(ProviderSummaryText));
+        OnPropertyChanged(nameof(CanRefreshProviders));
+
+        if (instance is null)
+        {
+            _providerRefreshCancellation = null;
+            cancellation.Dispose();
+            _isProviderDetectionInProgress = false;
+            OnPropertyChanged(nameof(ProviderSummaryText));
+            OnPropertyChanged(nameof(CanRefreshProviders));
+            return;
+        }
+
+        try
+        {
+            var states = _providerStateService.Read(instance);
+            var providers = _modelService.Read(instance);
+            foreach (var provider in providers)
+            {
+                var isEnabled = !states.TryGetValue(provider.Provider, out var storedEnabled) || storedEnabled;
+                ProviderCards.Add(new ProviderCardViewModel(provider, isEnabled));
+            }
+
+            OnPropertyChanged(nameof(NoProvidersVisibility));
+            OnPropertyChanged(nameof(ProviderCardsVisibility));
+            OnPropertyChanged(nameof(ProviderSummaryText));
+
+            var checks = ProviderCards.Select(async card =>
+                (Card: card, Result: await _providerDiagnosticService.CheckAsync(card.Provider, cancellation.Token)));
+            var results = await Task.WhenAll(checks);
+            foreach (var result in results)
+            {
+                result.Card.SetDiagnostic(result.Result);
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"Provider 检测失败：{ex.Message}");
+        }
+        finally
+        {
+            if (ReferenceEquals(_providerRefreshCancellation, cancellation))
+            {
+                _providerRefreshCancellation = null;
+                _isProviderDetectionInProgress = false;
+                OnPropertyChanged(nameof(ProviderSummaryText));
+                OnPropertyChanged(nameof(CanRefreshProviders));
+            }
+
+            cancellation.Dispose();
+        }
+    }
+
+    private async void RefreshProviders_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshProvidersAsync(SelectedInstance);
+    }
+
+    private void ProviderToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedInstance is null || (sender as FrameworkElement)?.DataContext is not ProviderCardViewModel card)
+        {
+            return;
+        }
+
+        try
+        {
+            var enabled = !card.IsEnabled;
+            _providerStateService.SetEnabled(SelectedInstance, card.ProviderKey, enabled);
+            card.SetEnabled(enabled);
+            ShowNotice($"Provider“{card.DisplayName}”已{(enabled ? "启用" : "禁用")}。该状态由 Launcher 保存，不会改写 DSh 的 settings.yaml。 ");
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"保存 Provider 状态失败：{ex.Message}");
+        }
+    }
+
+    private void ProviderIssue_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not ProviderCardViewModel card)
+        {
+            return;
+        }
+
+        System.Windows.MessageBox.Show(
+            this,
+            card.IssueDetails,
+            $"{card.DisplayName} Provider 问题",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+    }
+
+    private void RefreshRunningInstances()
+    {
+        RunningInstances.Clear();
+        foreach (var instance in Instances.Where(instance => _instanceRunner.IsRunning(instance.Id)))
+        {
+            RunningInstances.Add(instance);
+        }
+
+        OnPropertyChanged(nameof(RunningInstanceCountText));
+        OnPropertyChanged(nameof(NoRunningInstancesVisibility));
+        OnPropertyChanged(nameof(RunningInstancesVisibility));
+    }
+
+    private void RunningInstances_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source
+            || ItemsControl.ContainerFromElement(RunningInstancesList, source) is not ListBoxItem item
+            || item.DataContext is not ManagerInstance instance)
+        {
+            return;
+        }
+
+        SelectedInstance = instance;
+        if (!_instanceRunner.IsRunning(instance.Id)
+            && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached)
+        {
+            ShowNotice($"实例“{instance.Name}”当前没有运行。请先启动实例。 ");
+            e.Handled = true;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(instance.WebUrl))
+        {
+            ShowNotice($"实例“{instance.Name}”正在运行，但没有可用的 Web 地址。 ");
+            e.Handled = true;
+            return;
+        }
+
+        if (!TryFocusChatWindow(instance.Id))
+        {
+            OpenChatWindow(instance.Id, instance.WebUrl);
+        }
+
+        ShowNotice($"已打开实例：{instance.Name}。 ");
+        e.Handled = true;
     }
 
     private void Navigation_Click(object sender, RoutedEventArgs e)
@@ -362,26 +567,82 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SwitchSection(section);
     }
 
+    private void Window_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        var current = e.OriginalSource as DependencyObject;
+        while (current is not null)
+        {
+            if (current is ScrollViewer viewer && CanScroll(viewer, e.Delta))
+            {
+                viewer.ScrollToVerticalOffset(viewer.VerticalOffset - e.Delta / 3.0);
+                e.Handled = true;
+                return;
+            }
+
+            current = GetParentObject(current);
+        }
+
+        if (CanScroll(MainScrollViewer, e.Delta))
+        {
+            MainScrollViewer.ScrollToVerticalOffset(MainScrollViewer.VerticalOffset - e.Delta / 3.0);
+            e.Handled = true;
+        }
+    }
+
+    private static bool CanScroll(ScrollViewer viewer, int delta)
+    {
+        if (viewer.ScrollableHeight <= 0)
+        {
+            return false;
+        }
+
+        return delta > 0
+            ? viewer.VerticalOffset > 0
+            : viewer.VerticalOffset < viewer.ScrollableHeight;
+    }
+
+    private static DependencyObject? GetParentObject(DependencyObject child)
+    {
+        try
+        {
+            var visualParent = System.Windows.Media.VisualTreeHelper.GetParent(child);
+            if (visualParent is not null)
+            {
+                return visualParent;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            // ContentElement parents are resolved through the logical tree below.
+        }
+
+        return LogicalTreeHelper.GetParent(child);
+    }
+
     private void SwitchSection(string section)
     {
+        if (section == "实例")
+        {
+            section = "启动";
+        }
+
         SetNavigationSelection(section);
         PageNoticeVisibility = Visibility.Collapsed;
 
-        if (section == "启动" || section == "实例")
+        if (section == "启动")
         {
-            PageTitle = section;
-            PageSubtitle = section == "启动"
-                ? "启动当前选中的 DeepSeek Harness 实例"
-                : "注册并隔离管理 installed / source DSh 实例";
-            ShowMainDashboard(showInstanceList: section == "实例");
+            PageTitle = "启动";
+            PageSubtitle = "启动实例并查看正在运行的 DeepSeek Harness";
+            ShowMainDashboard();
+            _ = RefreshProvidersAsync(SelectedInstance);
         }
-        else if (section is "扩展" or "Agent" or "模型" or "对话")
+        else if (section is "扩展" or "Agent" or "对话")
         {
             if (SelectedInstance is not { } instance)
             {
                 PageTitle = section;
-                PageSubtitle = "请先在“实例”工作区注册并选择一个 DSh 实例";
-                ShowMainDashboard(showInstanceList: true);
+                PageSubtitle = "请先在“启动”工作区注册并选择一个 DSh 实例";
+                ShowMainDashboard();
                 ShowNotice($"请先注册并选择一个 DSh 实例，再打开“{section}”。");
             }
             else
@@ -391,15 +652,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     "扩展" => "管理当前实例的 Plugin 与 MCP",
                     "Agent" => "管理当前实例的 Skill、Agent Preset 与 Workflow",
-                    "模型" => "编辑当前实例的 DSh Provider 与模型列表",
                     _ => "管理当前实例的 session.jsonl / .zstd 对话文件"
                 };
 
                 object page = section switch
                 {
-                    "扩展" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime),
-                    "Agent" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, agentOnly: true),
-                    "模型" => new ModelWindow(instance, _modelService),
+                    "扩展" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, marketplaceService: _marketplaceService),
+                    "Agent" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, agentOnly: true, marketplaceService: _marketplaceService),
                     _ => new ConversationWindow(instance, _conversationService, OpenConversation)
                 };
                 ShowEmbeddedPage(page);
@@ -417,21 +676,156 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(PageNoticeVisibility));
     }
 
-    private void ShowMainDashboard(bool showInstanceList)
+    private void ShowMainDashboard()
     {
         EmbeddedPageHost.Content = null;
         EmbeddedPageHost.Visibility = Visibility.Collapsed;
         MainDashboardGrid.Visibility = Visibility.Visible;
-        InstanceListCard.Visibility = showInstanceList ? Visibility.Visible : Visibility.Collapsed;
-        MainDashboardGrid.ColumnDefinitions[0].Width = new GridLength(showInstanceList ? 310 : 0);
-        MainDashboardGrid.ColumnDefinitions[1].Width = new GridLength(showInstanceList ? 24 : 0);
+        ProviderSummaryCard.Visibility = Visibility.Visible;
     }
 
     private void ShowEmbeddedPage(object page)
     {
         MainDashboardGrid.Visibility = Visibility.Collapsed;
+        ProviderSummaryCard.Visibility = Visibility.Collapsed;
         EmbeddedPageHost.Content = page;
         EmbeddedPageHost.Visibility = Visibility.Visible;
+    }
+
+    private void VersionControl_Click(object sender, RoutedEventArgs e) => ShowVersionControl();
+
+    private void VersionSettings_Click(object sender, RoutedEventArgs e) => ShowVersionSettings();
+
+    private void ShowVersionControl()
+    {
+        PageTitle = "版本控制";
+        PageSubtitle = "按版本选择、复制版本或导入整合包；每个版本使用独立 DSH_HOME";
+        ShowEmbeddedPage(new VersionControlWindow(
+            Instances,
+            SelectedInstance,
+            _versionPackageService,
+            GetVersionTemplate,
+            AddCreatedVersion,
+            version => SelectedInstance = version));
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageSubtitle));
+    }
+
+    public void ShowVersionSettings()
+    {
+        PageTitle = SelectedInstance is { } instance
+            ? $"版本设置 - {instance.Name}"
+            : "版本设置";
+        PageSubtitle = SelectedInstance is { } selected
+            ? $"当前实例：{selected.Name} · 管理个性化、配置、插件和分享导出"
+            : "按 PCL2 的版本设置方式管理个性化、配置、插件和分享导出";
+        ShowEmbeddedPage(new VersionSettingsWindow(
+            SelectedInstance,
+            Instances,
+            _versionSettingsService,
+            _extensionService,
+            () => _nodeRuntime,
+            _versionPackageService,
+            updated => UpdateVersionSettingsInstance(updated),
+            () =>
+            {
+                ApplySelectedVersionSettings(SelectedInstance);
+                _ = RefreshNodeAsync();
+            }));
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageSubtitle));
+    }
+
+    private void UpdateVersionSettingsInstance(ManagerInstance updated)
+    {
+        UpdateInstance(updated);
+        if (SelectedInstance is null
+            || !string.Equals(SelectedInstance.Id, updated.Id, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        PageTitle = $"版本设置 - {updated.Name}";
+        PageSubtitle = $"当前实例：{updated.Name} · 管理个性化、配置、插件和分享导出";
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageSubtitle));
+    }
+
+    private string? GetPreferredNodePath()
+    {
+        if (SelectedInstance is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _versionSettingsService.Read(SelectedInstance).NodeExecutablePath;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void ApplySelectedVersionSettings(ManagerInstance? instance)
+    {
+        if (instance is null)
+        {
+            Title = "DSH Launcher";
+            return;
+        }
+
+        try
+        {
+            var title = _versionSettingsService.Read(instance).WindowTitle;
+            Title = string.IsNullOrWhiteSpace(title) ? "DSH Launcher" : title;
+        }
+        catch
+        {
+            Title = "DSH Launcher";
+        }
+    }
+
+    private ManagerInstance? GetVersionTemplate()
+    {
+        if (SelectedInstance is not null)
+        {
+            return SelectedInstance;
+        }
+
+        if (_dshRuntime.PackageRoot is not { } packageRoot
+            || !Directory.Exists(packageRoot))
+        {
+            return null;
+        }
+
+        return new ManagerInstance(
+            "runtime-template",
+            $"DSh {_dshRuntime.Version ?? "installed"}",
+            packageRoot,
+            InstanceKind.Installed,
+            string.Empty,
+            _dshRuntime.ExecutablePath,
+            _dshRuntime.Version,
+            _dshRuntime.ExecutablePath is null ? InstanceRuntimeStatus.Unknown : InstanceRuntimeStatus.Ready,
+            "npm",
+            null,
+            DateTimeOffset.UtcNow);
+    }
+
+    private void AddCreatedVersion(ManagerInstance created)
+    {
+        if (!Instances.Any(instance => string.Equals(instance.Id, created.Id, StringComparison.Ordinal)))
+        {
+            Instances.Add(created);
+        }
+
+        SelectedInstance = created;
+        OnPropertyChanged(nameof(InstanceCountText));
+        OnPropertyChanged(nameof(NoInstancesVisibility));
+        OnPropertyChanged(nameof(InstancesVisibility));
+        RefreshRunningInstances();
     }
 
     private FrameworkElement CreateSettingsPage()
@@ -443,17 +837,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         panel.Children.Add(new TextBlock
         {
-            Text = "设置 / 诊断",
+            Text = "运行环境检测",
             FontSize = 20,
             FontWeight = FontWeights.SemiBold
         });
-        panel.Children.Add(new TextBlock
+        var refreshButton = new System.Windows.Controls.Button
         {
-            Text = "这里将集中展示 Launcher 配置、运行环境和诊断信息。当前可用的运行环境检测入口仍在顶部。",
-            Foreground = (WpfBrush)FindResource("MutedBrush"),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 8, 0, 0)
-        });
+            Content = "重新检测",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 9, 14, 9),
+            Margin = new Thickness(0, 18, 0, 0),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left
+        };
+        refreshButton.Click += RefreshNode_Click;
+        panel.Children.Add(refreshButton);
         return panel;
     }
 
@@ -461,10 +858,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var buttons = new[]
         {
-            NavigationStart,
-            NavigationInstances,
+            NavigationHome,
             NavigationExtensions,
-            NavigationModels,
             NavigationAgent,
             NavigationConversations,
             NavigationSettings
@@ -472,13 +867,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         foreach (var button in buttons)
         {
             button.Background = WpfBrushes.Transparent;
-            button.Foreground = (WpfBrush)FindResource("TextBrush");
+            button.Foreground = WpfBrushes.White;
         }
 
         var selected = buttons.FirstOrDefault(button => string.Equals(button.Tag as string, section, StringComparison.Ordinal));
         if (selected is not null)
         {
-            selected.Background = new SolidColorBrush(WpfColor.FromRgb(228, 241, 254));
+            selected.Background = WpfBrushes.White;
             selected.Foreground = (WpfBrush)FindResource("BlueBrush");
         }
     }
@@ -522,6 +917,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(InstanceCountText));
             OnPropertyChanged(nameof(NoInstancesVisibility));
             OnPropertyChanged(nameof(InstancesVisibility));
+            RefreshRunningInstances();
             ShowNotice($"已注册 installed 实例：{instance.Name}。实例 DSH_HOME 已隔离到 {instance.DshHome}。");
         }
         catch (Exception ex)
@@ -557,6 +953,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(InstanceCountText));
             OnPropertyChanged(nameof(NoInstancesVisibility));
             OnPropertyChanged(nameof(InstancesVisibility));
+            RefreshRunningInstances();
             ShowNotice($"已注册 Source 实例：{instance.Name}。包管理器：{project.PackageManager}；状态：{project.StatusText}。");
         }
         catch (Exception ex)
@@ -573,9 +970,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var selected = SelectedInstance;
-        if (selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        if (_instanceRunner.IsRunning(selected.Id)
+            || selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
         {
-            ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会重复启动该进程。");
+            if (!string.IsNullOrWhiteSpace(selected.WebUrl))
+            {
+                if (!TryFocusChatWindow(selected.Id))
+                {
+                    OpenChatWindow(selected.Id, selected.WebUrl);
+                }
+
+                ShowNotice($"实例仍在运行，已重新打开：{selected.Name}。关闭窗口不会停止实例。 ");
+            }
+            else
+            {
+                ShowNotice("实例仍在运行，但没有可用的 Web 地址，暂时不能重新打开窗口。 ");
+            }
             return;
         }
 
@@ -607,7 +1017,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 WebUrl = result.WebUrl,
                 LastError = null
             });
-            OpenChatWindow(result.WebUrl);
+            OpenChatWindow(selected.Id, result.WebUrl);
             ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -650,7 +1060,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            CloseChatWindow();
+            CloseChatWindow(selected.Id);
             UpdateInstance(selected with
             {
                 RuntimeStatus = InstanceRuntimeStatus.Stopped,
@@ -727,7 +1137,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 WebUrl = result.WebUrl,
                 LastError = null
             });
-            OpenChatWindow(result.WebUrl);
+            OpenChatWindow(selected.Id, result.WebUrl);
             ShowNotice($"实例已重启：{selected.Name}，运行地址 {result.WebUrl}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -894,12 +1304,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         OnPropertyChanged(nameof(SelectedInstanceStatus));
         OnPropertyChanged(nameof(CanStartInstance));
+        OnPropertyChanged(nameof(StartInstanceButtonText));
         OnPropertyChanged(nameof(CanStopInstance));
         OnPropertyChanged(nameof(CanRestartInstance));
         OnPropertyChanged(nameof(InstanceEndpointText));
         OnPropertyChanged(nameof(NodeStatusText));
         OnPropertyChanged(nameof(NodeStatusBrush));
         OnPropertyChanged(nameof(NodeVersionText));
+        RefreshRunningInstances();
     }
 
     private void SetLifecycleBusy(bool isBusy)
@@ -930,10 +1342,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void TitleBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.LeftButton == MouseButtonState.Pressed)
+        if (e.LeftButton == MouseButtonState.Pressed
+            && !IsInsideButton(e.OriginalSource as DependencyObject))
         {
             DragMove();
         }
+    }
+
+    private static bool IsInsideButton(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is System.Windows.Controls.Button)
+            {
+                return true;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return false;
+    }
+
+    private void Brand_Click(object sender, RoutedEventArgs e)
+    {
+        SwitchSection("启动");
     }
 
     private void Minimize_Click(object sender, RoutedEventArgs e)
@@ -948,8 +1381,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     protected override void OnClosed(EventArgs e)
     {
+        _providerRefreshCancellation?.Cancel();
+        _providerRefreshCancellation?.Dispose();
+        _providerRefreshCancellation = null;
         _windowCancellation.Cancel();
-        CloseChatWindow();
+        CloseAllChatWindows();
         try
         {
             _instanceRunner.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -958,22 +1394,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             // Window shutdown must not be blocked by a failed child-process cleanup.
         }
+        _providerDiagnosticService.Dispose();
         _windowCancellation.Dispose();
         base.OnClosed(e);
     }
 
-    private void OpenChatWindow(string address, string? conversationId = null)
+    private void OpenChatWindow(string instanceId, string address, string? conversationId = null)
     {
-        CloseChatWindow();
+        CloseChatWindow(instanceId);
         try
         {
-            var chat = new ChatWindow(address, conversationId) { Owner = this };
-            _chatWindow = chat;
+            var chat = new ChatWindow(address, conversationId);
+            _chatWindows[instanceId] = chat;
             chat.Closed += (_, _) =>
             {
-                if (ReferenceEquals(_chatWindow, chat))
+                if (_chatWindows.TryGetValue(instanceId, out var current)
+                    && ReferenceEquals(current, chat))
                 {
-                    _chatWindow = null;
+                    _chatWindows.Remove(instanceId);
                 }
             };
             chat.Show();
@@ -984,11 +1422,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void CloseChatWindow()
+    private bool TryFocusChatWindow(string instanceId)
     {
-        var chat = _chatWindow;
-        _chatWindow = null;
-        if (chat is null)
+        if (!_chatWindows.TryGetValue(instanceId, out var chat) || !chat.IsVisible)
+        {
+            return false;
+        }
+
+        if (chat.WindowState == WindowState.Minimized)
+        {
+            chat.WindowState = WindowState.Normal;
+        }
+
+        chat.Activate();
+        return true;
+    }
+
+    private void CloseChatWindow(string instanceId)
+    {
+        if (!_chatWindows.Remove(instanceId, out var chat))
         {
             return;
         }
@@ -1003,6 +1455,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private void CloseAllChatWindows()
+    {
+        var chats = _chatWindows.Values.ToArray();
+        _chatWindows.Clear();
+        foreach (var chat in chats)
+        {
+            try
+            {
+                chat.Close();
+            }
+            catch
+            {
+                // A closing Chat window must not prevent Launcher shutdown.
+            }
+        }
+    }
+
     private bool OpenConversation(ConversationEntry entry)
     {
         var instance = SelectedInstance;
@@ -1014,7 +1483,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
-        OpenChatWindow(instance.WebUrl, entry.SessionId);
+        OpenChatWindow(instance.Id, instance.WebUrl, entry.SessionId);
         return true;
     }
 

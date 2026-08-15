@@ -582,7 +582,9 @@ public sealed class ExtensionService
             throw new ArgumentOutOfRangeException(nameof(action));
         }
 
+        using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
         var startInfo = CreatePluginStartInfo(instance, action, packageSpec, nodeRuntime);
+        pnpmEnvironment.Apply(startInfo);
         var output = await RunProcessAsync(startInfo, cancellationToken);
         if (output.ExitCode != 0)
         {
@@ -654,6 +656,164 @@ public sealed class ExtensionService
 
         SetInstanceEnvironment(startInfo, instance);
         return startInfo;
+    }
+
+    private static PnpmEnvironment PreparePnpmEnvironment(
+        ManagerInstance instance,
+        NodeRuntimeInfo? nodeRuntime)
+    {
+        foreach (var directory in GetRuntimeSearchDirectories(instance, nodeRuntime))
+        {
+            var pnpm = FindExecutable(directory, "pnpm");
+            if (pnpm is not null)
+            {
+                return PnpmEnvironment.FromDirectory(Path.GetDirectoryName(pnpm)!);
+            }
+        }
+
+        var fromPath = FindOnPath("pnpm");
+        if (fromPath is not null)
+        {
+            return PnpmEnvironment.FromDirectory(Path.GetDirectoryName(fromPath)!);
+        }
+
+        string? corepack = null;
+        foreach (var directory in GetRuntimeSearchDirectories(instance, nodeRuntime))
+        {
+            corepack = FindExecutable(directory, "corepack");
+            if (corepack is not null)
+            {
+                break;
+            }
+        }
+
+        corepack ??= FindOnPath("corepack");
+        if (corepack is null)
+        {
+            throw new InvalidOperationException(
+                "Plugin 管理需要 pnpm，但当前 Node.js/DSh 环境没有找到 pnpm 或 Corepack。"
+                + "\n国外源：npm install --global pnpm"
+                + "\n国内源：npm install --global pnpm --registry=https://registry.npmmirror.com"
+                + "\n安装后请重新打开 Launcher。 ");
+        }
+
+        var shimDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DSH Launcher",
+            "pnpm-shims",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(shimDirectory);
+        try
+        {
+            var shimPath = Path.Combine(shimDirectory, "pnpm.cmd");
+            var quotedCorepack = corepack.Replace("\"", "\"\"");
+            File.WriteAllText(
+                shimPath,
+                $"@echo off\r\ncall \"{quotedCorepack}\" pnpm %*\r\nexit /b %ERRORLEVEL%\r\n",
+                Encoding.ASCII);
+            return PnpmEnvironment.FromDirectory(shimDirectory, ownsDirectory: true);
+        }
+        catch
+        {
+            TryDeleteDirectory(shimDirectory);
+            throw;
+        }
+    }
+
+    private static IEnumerable<string> GetRuntimeSearchDirectories(
+        ManagerInstance instance,
+        NodeRuntimeInfo? nodeRuntime)
+    {
+        var starts = new List<string>();
+        if (instance.Kind == InstanceKind.Installed && !string.IsNullOrWhiteSpace(instance.DshExecutablePath))
+        {
+            var dshDirectory = Path.GetDirectoryName(instance.DshExecutablePath);
+            if (!string.IsNullOrWhiteSpace(dshDirectory))
+            {
+                starts.Add(dshDirectory);
+            }
+        }
+
+        var nodeDirectory = nodeRuntime?.ExecutablePath is { Length: > 0 } nodePath
+            ? Path.GetDirectoryName(nodePath)
+            : null;
+        if (!string.IsNullOrWhiteSpace(nodeDirectory))
+        {
+            starts.Add(nodeDirectory);
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var start in starts)
+        {
+            var current = Path.GetFullPath(start);
+            for (var depth = 0; depth < 4; depth++)
+            {
+                if (seen.Add(current))
+                {
+                    yield return current;
+                }
+
+                var parent = Directory.GetParent(current)?.FullName;
+                if (string.IsNullOrWhiteSpace(parent) || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                current = parent;
+            }
+        }
+    }
+
+    private static string? FindExecutable(string directory, string command)
+    {
+        var names = OperatingSystem.IsWindows()
+            ? new[] { $"{command}.cmd", $"{command}.exe", command }
+            : new[] { command };
+        return names
+            .Select(name => Path.Combine(directory, name))
+            .FirstOrDefault(File.Exists);
+    }
+
+    private static string? FindOnPath(string command)
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var names = OperatingSystem.IsWindows()
+            ? new[] { $"{command}.cmd", $"{command}.exe", command }
+            : new[] { command };
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = directory.Trim().Trim('"');
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            foreach (var name in names)
+            {
+                var candidate = Path.Combine(trimmed, name);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+            // The external command error remains more useful than cleanup noise.
+        }
     }
 
     private async Task<IReadOnlyList<McpServerDefinition>> ReadMcpAsync(
@@ -1233,6 +1393,40 @@ public sealed class ExtensionService
             stored.Headers ?? new Dictionary<string, string>(),
             stored.WorkingDirectory,
             stored.Enabled);
+    }
+
+    private sealed class PnpmEnvironment : IDisposable
+    {
+        private readonly bool _ownsDirectory;
+
+        private PnpmEnvironment(string directory, bool ownsDirectory)
+        {
+            DirectoryPath = directory;
+            _ownsDirectory = ownsDirectory;
+        }
+
+        public string DirectoryPath { get; }
+
+        public static PnpmEnvironment FromDirectory(string directory, bool ownsDirectory = false) =>
+            new(directory, ownsDirectory);
+
+        public void Apply(ProcessStartInfo startInfo)
+        {
+            var inheritedPath = startInfo.Environment.TryGetValue("PATH", out var configuredPath)
+                ? configuredPath
+                : Environment.GetEnvironmentVariable("PATH");
+            startInfo.Environment["PATH"] = string.IsNullOrWhiteSpace(inheritedPath)
+                ? DirectoryPath
+                : DirectoryPath + Path.PathSeparator + inheritedPath;
+        }
+
+        public void Dispose()
+        {
+            if (_ownsDirectory)
+            {
+                TryDeleteDirectory(DirectoryPath);
+            }
+        }
     }
 
     private sealed record ProcessResult(int ExitCode, string Output);

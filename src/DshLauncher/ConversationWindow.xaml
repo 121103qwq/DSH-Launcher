@@ -5,18 +5,17 @@
         HorizontalAlignment="Stretch"
         VerticalAlignment="Stretch"
         Loaded="Window_OnLoaded">
-    <Grid Margin="24">
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled"
+                  CanContentScroll="False"
+                  PanningMode="VerticalOnly">
+    <Grid Margin="18">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <StackPanel>
-            <TextBlock Text="对话管理" FontSize="26" FontWeight="SemiBold" />
-            <TextBlock x:Name="InstanceText" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" TextWrapping="Wrap" />
-        </StackPanel>
-        <WrapPanel Grid.Row="1" Margin="0,20,0,14">
+        <WrapPanel Grid.Row="0" Margin="0,0,0,14">
             <Button Content="刷新" Click="Refresh_Click" Margin="0,0,8,0" />
             <Button Content="打开选中对话" Click="Open_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" />
             <Button Content="导入 session.jsonl / .zstd" Click="Import_Click" Margin="0,0,8,0" />
@@ -24,7 +23,7 @@
             <Button Content="备份选中对话" Click="Backup_Click" Margin="0,0,8,0" />
             <Button Content="删除选中对话" Click="Delete_Click" />
         </WrapPanel>
-        <Border Grid.Row="2" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="10" Background="White" Padding="8">
+        <Border Grid.Row="1" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="10" Background="White" Padding="8">
             <ListView x:Name="ConversationList" BorderThickness="0" SelectionChanged="ConversationList_SelectionChanged">
                 <ListView.View>
                     <GridView AllowsColumnReorder="False">
@@ -38,6 +37,7 @@
                 </ListView.View>
             </ListView>
         </Border>
-        <TextBlock Grid.Row="3" x:Name="StatusText" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,16,0,0" />
+        <TextBlock Grid.Row="2" x:Name="StatusText" Foreground="{StaticResource BlueBrush}" TextWrapping="Wrap" Margin="0,16,0,0" />
     </Grid>
+    </ScrollViewer>
 </UserControl>

@@ -17,6 +17,14 @@ public sealed class LauncherPaths
 
     public string BackupsDirectory => Path.Combine(RootDirectory, "backups");
 
+    public string MarketplaceCatalogPath => Path.Combine(RootDirectory, "marketplace.json");
+
+    public string MarketplaceSourcesPath => Path.Combine(RootDirectory, "marketplace-sources.json");
+
+    public string MarketplaceCachePath => Path.Combine(RootDirectory, "marketplace-cache.json");
+
+    public string VersionSettingsPath => Path.Combine(RootDirectory, "version-settings.json");
+
     public string GetInstanceDshHome(string instanceId) =>
         Path.Combine(InstancesDirectory, instanceId, "dsh-home");
 

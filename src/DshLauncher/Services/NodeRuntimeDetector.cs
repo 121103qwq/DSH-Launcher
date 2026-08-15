@@ -6,8 +6,26 @@ namespace DshLauncher.Services;
 
 public sealed class NodeRuntimeDetector
 {
-    public async Task<NodeRuntimeInfo> DetectAsync(CancellationToken cancellationToken = default)
+    public Task<NodeRuntimeInfo> DetectAsync(CancellationToken cancellationToken = default) =>
+        DetectAsync(preferredPath: null, cancellationToken);
+
+    public async Task<NodeRuntimeInfo> DetectAsync(
+        string? preferredPath,
+        CancellationToken cancellationToken = default)
     {
+        if (!string.IsNullOrWhiteSpace(preferredPath))
+        {
+            var normalizedPreferredPath = NormalizePreferredPath(preferredPath);
+            if (normalizedPreferredPath is not null && File.Exists(normalizedPreferredPath))
+            {
+                var preferredVersion = await ReadVersionAsync(normalizedPreferredPath, cancellationToken);
+                if (preferredVersion is not null)
+                {
+                    return new NodeRuntimeInfo(true, normalizedPreferredPath, preferredVersion, null);
+                }
+            }
+        }
+
         var available = new List<(string Path, string Version)>();
         foreach (var candidate in GetCandidates())
         {
@@ -34,6 +52,22 @@ public sealed class NodeRuntimeDetector
         }
 
         return NodeRuntimeInfo.Missing("PATH 和 Windows 常见安装目录中都没有可用的 node.exe。");
+    }
+
+    private static string? NormalizePreferredPath(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path.Trim());
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static IEnumerable<string> GetCandidates()

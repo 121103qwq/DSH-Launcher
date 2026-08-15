@@ -40,8 +40,8 @@ public partial class ChatWindow : Window
         {
             System.Windows.MessageBox.Show(
                 this,
-                $"Chat 窗口无法加载 WebView2。\n\n{ex.Message}\n\nLauncher 和 DSh 实例仍会保持运行。",
-                "DSh Chat 启动诊断",
+                $"DeepSeek 窗口无法加载 WebView2。\n\n{ex.Message}\n\nLauncher 和 DSh 实例仍会保持运行。",
+                "DeepSeek 启动诊断",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             Close();
@@ -52,11 +52,11 @@ public partial class ChatWindow : Window
     {
         if (!e.IsSuccess)
         {
-            Title = $"DSh Chat - 连接失败 ({e.WebErrorStatus})";
+            Title = $"DeepSeek - 连接失败 ({e.WebErrorStatus})";
             return;
         }
 
-        Title = "DSh Chat";
+        Title = "DeepSeek";
         if (_conversationId is null || _conversationSelectionApplied || Browser.CoreWebView2 is null)
         {
             return;

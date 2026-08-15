@@ -24,7 +24,6 @@ public partial class ConversationWindow : UserControl
         _service = service;
         _openConversation = openConversation;
         InitializeComponent();
-        InstanceText.Text = $"当前实例：{instance.Name} · 会话目录：{Path.Combine(instance.DshHome, "sessions")}";
     }
 
     private ObservableCollection<ConversationEntry> Entries { get; } = new();

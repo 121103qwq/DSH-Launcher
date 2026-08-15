@@ -9,9 +9,10 @@
     <AssemblyName>DSH Launcher</AssemblyName>
     <RootNamespace>DshLauncher</RootNamespace>
     <ApplicationTitle>DSH Launcher</ApplicationTitle>
-    <Version>0.1.7</Version>
-    <FileVersion>0.1.7.0</FileVersion>
-    <AssemblyVersion>0.1.7.0</AssemblyVersion>
+    <ApplicationIcon>Assets\DSHLauncher.ico</ApplicationIcon>
+    <Version>0.1.8</Version>
+    <FileVersion>0.1.8.0</FileVersion>
+    <AssemblyVersion>0.1.8.0</AssemblyVersion>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -20,6 +21,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="Assets\DSHLauncher.ico" />
+    <None Remove="Assets\DeepSeek.ico" />
+    <Resource Include="Assets\DSHLauncher.ico" />
+    <Resource Include="Assets\DeepSeek.ico" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>

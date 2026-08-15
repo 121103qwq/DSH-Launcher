@@ -14,21 +14,34 @@ public partial class ExtensionWindow : UserControl
     private readonly ExtensionService _service;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
     private readonly bool _agentOnly;
+    private readonly MarketplaceService? _marketplaceService;
+    private readonly ObservableCollection<MarketplaceItem> MarketplaceItems = new();
+    private IReadOnlyList<MarketplaceItem> _marketplaceSnapshot = Array.Empty<MarketplaceItem>();
+    private Dictionary<string, ExtensionEntry> _installedPlugins = new(StringComparer.OrdinalIgnoreCase);
+    private bool _marketplaceCanMutate;
+    private bool _isMarketplaceLoading;
+    private bool _controlLoaded;
+    private CancellationTokenSource? _marketplaceCancellation;
 
     public ExtensionWindow(
         ManagerInstance instance,
         ExtensionService service,
         Func<NodeRuntimeInfo?> nodeRuntime,
-        bool agentOnly = false)
+        bool agentOnly = false,
+        MarketplaceService? marketplaceService = null)
     {
         _instance = instance;
         _service = service;
         _nodeRuntime = nodeRuntime;
         _agentOnly = agentOnly;
+        _marketplaceService = marketplaceService;
         InitializeComponent();
+        CurrentInstanceNameText.Text = instance.Name;
+        CurrentInstanceDetailsText.Text = $"{instance.KindText} · {instance.RootPath}\nDSH_HOME：{instance.DshHome}";
         if (_agentOnly)
         {
-            PageHeaderText.Text = "Agent";
+            MarketplacePanel.Visibility = Visibility.Collapsed;
+            Grid.SetColumnSpan(InstalledPanel, 3);
             InstallPluginButton.Visibility = Visibility.Collapsed;
             AddMcpButton.Visibility = Visibility.Collapsed;
             EnableButton.Visibility = Visibility.Collapsed;
@@ -41,14 +54,24 @@ public partial class ExtensionWindow : UserControl
             ImportSkillButton.Visibility = Visibility.Collapsed;
             ImportPresetButton.Visibility = Visibility.Collapsed;
         }
-        InstanceText.Text = $"当前实例：{instance.Name} · {_instance.DshHome}";
+        MarketplaceList.ItemsSource = MarketplaceItems;
     }
 
     private ObservableCollection<ExtensionEntry> Entries { get; } = new();
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
+        _controlLoaded = true;
+        if (!_agentOnly)
+        {
+            await LoadCachedMarketplaceAsync();
+        }
+
         await RefreshAsync();
+        if (!_agentOnly)
+        {
+            _ = RefreshMarketplaceAsync();
+        }
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
@@ -79,6 +102,274 @@ public partial class ExtensionWindow : UserControl
         {
             ShowError(ex);
         }
+    }
+
+    private async void MarketplaceSearch_Click(object sender, RoutedEventArgs e) => await RefreshMarketplaceAsync();
+
+    private async void MarketplaceRefresh_Click(object sender, RoutedEventArgs e) => await RefreshMarketplaceAsync();
+
+    private async void MarketplaceSearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await RefreshMarketplaceAsync();
+    }
+
+    private void MarketplaceFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_controlLoaded)
+        {
+            RenderMarketplaceItems();
+        }
+    }
+
+    private async Task LoadCachedMarketplaceAsync()
+    {
+        if (_marketplaceService is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var cached = _marketplaceService.ReadCached(_instance, MarketplaceSearchBox.Text);
+            if (cached is null)
+            {
+                MarketplaceStatusText.Text = "还没有本地缓存；正在后台读取插件目录。";
+                return;
+            }
+
+            await SetMarketplaceSnapshotAsync(cached, fromCache: true);
+        }
+        catch (Exception ex)
+        {
+            MarketplaceStatusText.Text = $"读取插件市场缓存失败：{ex.Message}";
+        }
+    }
+
+    private async Task RefreshMarketplaceAsync()
+    {
+        if (_marketplaceService is null || _isMarketplaceLoading)
+        {
+            return;
+        }
+
+        _isMarketplaceLoading = true;
+        _marketplaceCancellation?.Cancel();
+        _marketplaceCancellation?.Dispose();
+        _marketplaceCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        MarketplaceStatusText.Text = _marketplaceSnapshot.Count == 0
+            ? "正在读取插件目录，请稍候…"
+            : "正在后台更新目录，当前先显示本地缓存。";
+
+        try
+        {
+            var result = await _marketplaceService.SearchAsync(
+                _instance,
+                MarketplaceSearchBox.Text,
+                _marketplaceCancellation.Token);
+            await SetMarketplaceSnapshotAsync(result, fromCache: false, _marketplaceCancellation.Token);
+            MarketplaceStatusText.Text = result.Warnings.Count == 0
+                ? "目录已更新。列表中的插件在真正安装前还会再次检查。"
+                : $"目录已更新，但有 {result.Warnings.Count} 个来源暂时不可用；仍显示其他来源的结果。";
+        }
+        catch (OperationCanceledException) when (_marketplaceCancellation?.IsCancellationRequested == true)
+        {
+            MarketplaceStatusText.Text = "读取插件目录超时或已取消，请稍后重试。";
+        }
+        catch (Exception ex)
+        {
+            MarketplaceStatusText.Text = $"读取插件目录失败：{ex.Message}";
+        }
+        finally
+        {
+            _isMarketplaceLoading = false;
+        }
+    }
+
+    private async Task SetMarketplaceSnapshotAsync(
+        MarketplaceSearchResult result,
+        bool fromCache,
+        CancellationToken cancellationToken = default)
+    {
+        _marketplaceSnapshot = result.Items;
+        var installed = await _service.ListAsync(_instance, cancellationToken);
+        _installedPlugins = installed
+            .Where(entry => entry.Kind == ExtensionKind.Plugin)
+            .ToDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
+        _marketplaceCanMutate = _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
+            && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
+        RenderMarketplaceItems();
+        MarketplaceSummaryText.Text = $"找到 {_marketplaceSnapshot.Count} 个候选插件 · 已检查 {result.SourcesChecked} 个来源"
+            + (fromCache ? " · 本地缓存" : string.Empty);
+        if (fromCache)
+        {
+            MarketplaceStatusText.Text = result.Warnings.FirstOrDefault()
+                ?? "先显示本地缓存，在线目录会在后台更新。";
+        }
+    }
+
+    private void RenderMarketplaceItems()
+    {
+        if (_marketplaceService is null)
+        {
+            return;
+        }
+
+        var items = MarketplaceService.FilterAndSort(
+            _marketplaceSnapshot,
+            sourceKind: GetSelectedSourceKind(),
+            sortOrder: GetSelectedSortOrder());
+        MarketplaceItems.Clear();
+        foreach (var item in items)
+        {
+            var lookupName = item.PackageName ?? item.Name;
+            var isInstalled = _installedPlugins.TryGetValue(lookupName, out var installedEntry);
+            MarketplaceItems.Add(item with
+            {
+                IsInstalled = isInstalled,
+                IsManaged = isInstalled && installedEntry!.Managed,
+                CanMutate = _marketplaceCanMutate
+            });
+        }
+    }
+
+    private MarketplaceSourceKind? GetSelectedSourceKind()
+    {
+        var tag = (MarketplaceSourceBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        return Enum.TryParse<MarketplaceSourceKind>(tag, out var value) ? value : null;
+    }
+
+    private MarketplaceSortOrder GetSelectedSortOrder()
+    {
+        var tag = (MarketplaceSortBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        return Enum.TryParse<MarketplaceSortOrder>(tag, out var value)
+            ? value
+            : MarketplaceSortOrder.Relevance;
+    }
+
+    private async void MarketplaceAction_Click(object sender, RoutedEventArgs e)
+    {
+        if (_marketplaceService is null || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item)
+        {
+            return;
+        }
+
+        try
+        {
+            EnsureMarketplaceMutationAllowed();
+            var verification = await _marketplaceService.VerifyAsync(item);
+            if (verification.Status == MarketplaceVerificationStatus.Rejected)
+            {
+                MarketplaceStatusText.Text = verification.Message;
+                System.Windows.MessageBox.Show(Window.GetWindow(this), verification.Message, "插件不能安装", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
+            var packageSpec = verification.InstallSpec ?? item.InstallSpec;
+            string output;
+            if (item.IsInstalled)
+            {
+                if (!item.IsManaged)
+                {
+                    throw new InvalidOperationException("当前 Plugin 不是 Launcher 安装的，不能从市场更新。请在 DSh 自己的工具中管理它。");
+                }
+
+                output = await _service.UpdatePluginAsync(
+                    _instance,
+                    verification.PackageName ?? item.PackageName ?? packageSpec,
+                    _nodeRuntime());
+                StatusText.Text = $"Plugin 更新完成。实例下次启动时加载；备份：{snapshot}";
+            }
+            else
+            {
+                output = await _service.InstallPluginAsync(_instance, packageSpec, _nodeRuntime());
+                StatusText.Text = $"Plugin 安装完成。实例下次启动时加载；备份：{snapshot}";
+            }
+
+            MarketplaceStatusText.Text = string.IsNullOrWhiteSpace(output)
+                ? "操作完成。"
+                : $"操作完成：{Tail(output)}";
+            await RefreshMarketplaceAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private async void MarketplaceRemove_Click(object sender, RoutedEventArgs e)
+    {
+        if (_marketplaceService is null || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item)
+        {
+            return;
+        }
+
+        if (!item.IsInstalled || !item.IsManaged)
+        {
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"确定从当前实例卸载“{item.Name}”？实例需要停止，操作前会保存当前 Plugin 配置。",
+                "确认卸载",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            EnsureMarketplaceMutationAllowed();
+            var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
+            var output = await _service.RemovePluginAsync(
+                _instance,
+                item.PackageName ?? item.InstallSpec,
+                _nodeRuntime());
+            StatusText.Text = $"Plugin 卸载完成。实例下次启动时生效；备份：{snapshot}";
+            MarketplaceStatusText.Text = string.IsNullOrWhiteSpace(output)
+                ? "卸载完成。"
+                : $"卸载完成：{Tail(output)}";
+            await RefreshMarketplaceAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private void MarketplaceList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (MarketplaceList.SelectedItem is MarketplaceItem item)
+        {
+            MarketplaceStatusText.Text = $"{item.VerificationText}：{item.VerificationMessage}";
+        }
+    }
+
+    private void EnsureMarketplaceMutationAllowed()
+    {
+        if (_instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改它的 Plugin。请先使用 Launcher 管理的实例。");
+        }
+
+        if (_instance.RuntimeStatus == InstanceRuntimeStatus.Running)
+        {
+            throw new InvalidOperationException("请先停止实例，再安装、更新或卸载 Plugin。");
+        }
+    }
+
+    private static string Tail(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length <= 600 ? trimmed : trimmed[^600..];
     }
 
     private async void InstallPlugin_Click(object sender, RoutedEventArgs e)
