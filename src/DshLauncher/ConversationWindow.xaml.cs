@@ -79,6 +79,10 @@ public partial class ConversationWindow : UserControl
             {
                 StatusText.Text = "当前实例没有运行，或没有可用的 Chat 地址；请先启动实例。";
             }
+            else
+            {
+                StatusText.Text = $"已打开对话：{entry.SessionId}。";
+            }
         }
         catch (Exception ex)
         {
@@ -120,9 +124,10 @@ public partial class ConversationWindow : UserControl
             Filter = entry.IsCompressed
                 ? "压缩 DSh session (*.jsonl.zstd)|*.jsonl.zstd"
                 : "DSh session (*.jsonl)|*.jsonl",
-            FileName = Path.GetFileName(entry.FullPath),
+            FileName = ExportFileName(entry),
+            DefaultExt = entry.IsCompressed ? "jsonl.zstd" : "jsonl",
             OverwritePrompt = true,
-            AddExtension = false
+            AddExtension = true
         };
         if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
 
@@ -178,6 +183,15 @@ public partial class ConversationWindow : UserControl
     }
 
     private void ConversationList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelection();
+
+    private static string ExportFileName(ConversationEntry entry)
+    {
+        var fileName = Path.GetFileName(entry.FullPath);
+        var extension = entry.IsCompressed ? ".jsonl.zstd" : ".jsonl";
+        return fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^extension.Length]
+            : fileName;
+    }
 
     private void UpdateSelection()
     {

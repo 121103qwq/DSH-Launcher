@@ -579,17 +579,20 @@ static Task TestConversationFileManagement()
     var sourcePath = Path.Combine(sourceDirectory, "session.jsonl");
     File.WriteAllText(
         sourcePath,
-        "{\"type\":\"session\",\"version\":1,\"id\":\"session-1\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\"}\n{\"type\":\"message\"}\n",
+        "{\"type\":\"session\",\"version\":0,\"id\":\"session-1\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\",\"delegationDepth\":0}\n{\"type\":\"message\"}\n",
         new UTF8Encoding(false));
     var compressedDirectory = Path.Combine(home, "sessions", "--C-work-demo--", "session-2");
     Directory.CreateDirectory(compressedDirectory);
     var compressedPath = Path.Combine(compressedDirectory, "session.jsonl.zstd");
-    var compressedHeader = "{\"type\":\"session\",\"version\":1,\"id\":\"session-2\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\"}\n";
+    var compressedHeader = "{\"type\":\"session\",\"version\":0,\"id\":\"session-2\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\",\"delegationDepth\":0}\n";
     var compressedEvents = "{\"type\":\"message\"}\n";
     File.WriteAllBytes(compressedPath, CompressZstd(compressedHeader).Concat(CompressZstd(compressedEvents)).ToArray());
     var invalidCompressedPath = Path.Combine(home, "sessions", "--C-work-demo--", "session-3", "session.jsonl.zstd");
     Directory.CreateDirectory(Path.GetDirectoryName(invalidCompressedPath)!);
     File.WriteAllBytes(invalidCompressedPath, new byte[] { 1, 2, 3 });
+    var malformedPath = Path.Combine(home, "sessions", "--C-work-demo--", "session-4", "session.jsonl");
+    Directory.CreateDirectory(Path.GetDirectoryName(malformedPath)!);
+    File.WriteAllText(malformedPath, "{\"type\":42,\"version\":0,\"id\":\"session-4\",\"createdAt\":1,\"delegationDepth\":0}\n", new UTF8Encoding(false));
 
     var service = new ConversationService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
     var entries = service.List(instance);
@@ -598,6 +601,7 @@ static Task TestConversationFileManagement()
     var compressedSession = entries.Single(entry => entry.FullPath == Path.GetFullPath(compressedPath));
     Assert(compressedSession.IsCompressed && compressedSession.HasValidHeader && compressedSession.SessionId == "session-2", "应解压压缩会话的首个 Zstandard frame 并读取会话头部。");
     Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(invalidCompressedPath)), "损坏的压缩会话应列出但标记为不可解析。");
+    Assert(entries.Any(entry => !entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(malformedPath)), "字段类型异常的会话应列出但不能让整个会话页刷新失败。");
 
     var backup = service.Backup(instance, session);
     Assert(File.Exists(backup), "备份对话必须生成独立文件。");
@@ -615,6 +619,11 @@ static Task TestConversationFileManagement()
     var importedCompressedPath = service.Import(importedInstance, compressedExportPath);
     Assert(importedCompressedPath.EndsWith("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase), "压缩会话导入必须保留 session.jsonl.zstd 格式。");
     Assert(new ConversationService().List(importedInstance).Any(entry => entry.SessionId == "session-2" && entry.HasValidHeader && entry.IsCompressed), "导入后的压缩会话应可再次读取头部。");
+
+    var duplicatedCompressedExportPath = Path.Combine(temporary.Path, "normalized-session.jsonl.zstd.jsonl.zstd");
+    var normalizedCompressedExportPath = Path.Combine(temporary.Path, "normalized-session.jsonl.zstd");
+    var normalizedResult = service.Export(instance, compressedSession, duplicatedCompressedExportPath);
+    Assert(normalizedResult == Path.GetFullPath(normalizedCompressedExportPath) && File.Exists(normalizedCompressedExportPath), "导出压缩会话不能重复追加 .jsonl.zstd 后缀。");
 
     var outside = Path.Combine(temporary.Path, "outside.jsonl");
     File.WriteAllText(outside, "not a managed session\n", new UTF8Encoding(false));

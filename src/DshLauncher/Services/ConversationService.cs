@@ -14,6 +14,8 @@ public sealed class ConversationService
 {
     private const int MaxHeaderBytes = 256_000;
     private const int ZstdReadBufferSize = 64 * 1024;
+    private const int SupportedSessionFormatVersion = 0;
+    private const long MaxSafeInteger = 9_007_199_254_740_991;
     private readonly LauncherPaths _paths;
     private readonly Func<string, bool> _isRunning;
 
@@ -70,7 +72,7 @@ public sealed class ConversationService
             throw new ArgumentException("导出目标不能为空。", nameof(destinationPath));
         }
 
-        var destination = Path.GetFullPath(destinationPath.Trim());
+        var destination = NormalizeExportDestination(destinationPath, entry.IsCompressed);
         if (string.Equals(source, destination, StringComparison.OrdinalIgnoreCase))
         {
             throw new IOException("导出目标不能与源文件相同。");
@@ -285,9 +287,37 @@ public sealed class ConversationService
         using var document = JsonDocument.Parse(line);
         var root = document.RootElement;
         if (!root.TryGetProperty("type", out var type)
+            || type.ValueKind != JsonValueKind.String
             || !string.Equals(type.GetString(), "session", StringComparison.Ordinal)
+            || !root.TryGetProperty("version", out var version)
+            || version.ValueKind != JsonValueKind.Number
+            || !version.TryGetInt32(out var versionNumber)
+            || versionNumber != SupportedSessionFormatVersion
             || !root.TryGetProperty("id", out var id)
-            || string.IsNullOrWhiteSpace(id.GetString()))
+            || id.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(id.GetString())
+            || !root.TryGetProperty("createdAt", out var createdAt)
+            || !IsSafeNonNegativeInteger(createdAt)
+            || !root.TryGetProperty("delegationDepth", out var delegationDepth)
+            || !IsSafeNonNegativeInteger(delegationDepth))
+        {
+            return null;
+        }
+
+        if (root.TryGetProperty("origin", out var origin)
+            && (origin.ValueKind != JsonValueKind.String || !string.Equals(origin.GetString(), "subagent", StringComparison.Ordinal)))
+        {
+            return null;
+        }
+
+        if (root.TryGetProperty("agentPreset", out var agentPreset)
+            && agentPreset.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        if (root.TryGetProperty("sandboxMode", out _)
+            || root.TryGetProperty("approvalPolicy", out _))
         {
             return null;
         }
@@ -298,7 +328,13 @@ public sealed class ConversationService
             return null;
         }
 
-        var cwd = root.TryGetProperty("cwd", out var cwdValue) && cwdValue.ValueKind == JsonValueKind.String
+        if (root.TryGetProperty("cwd", out var cwdValue)
+            && cwdValue.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var cwd = root.TryGetProperty("cwd", out cwdValue)
             ? cwdValue.GetString()
             : null;
         if (cwd is not null && (cwd.Length > 4096 || cwd.Any(char.IsControl)))
@@ -307,6 +343,25 @@ public sealed class ConversationService
         }
 
         return new HeaderInfo(sessionId, cwd);
+    }
+
+    private static bool IsSafeNonNegativeInteger(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt64(out var number)
+        && number >= 0
+        && number <= MaxSafeInteger;
+
+    private static string NormalizeExportDestination(string destinationPath, bool compressed)
+    {
+        var destination = Path.GetFullPath(destinationPath.Trim());
+        var extension = compressed ? ".jsonl.zstd" : ".jsonl";
+        var duplicatedExtension = extension + extension;
+        while (destination.EndsWith(duplicatedExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            destination = destination[..^extension.Length];
+        }
+
+        return destination;
     }
 
     private static string? ReadHeaderLine(Stream stream)

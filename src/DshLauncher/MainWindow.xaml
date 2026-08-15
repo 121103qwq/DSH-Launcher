@@ -440,7 +440,7 @@
 
             <Border Grid.Row="2" Background="#E7F0FA" CornerRadius="0,0,17,17">
                 <Grid Margin="22,0">
-                    <TextBlock Text="DSH Launcher · Core 0.1.5" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                    <TextBlock Text="DSH Launcher · Core 0.1.6" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                     <TextBlock Text="检测结果仅描述外部运行环境，不代表 DSh 已安装" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                 </Grid>
             </Border>
