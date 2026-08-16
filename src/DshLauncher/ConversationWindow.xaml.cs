@@ -17,19 +17,22 @@ public partial class ConversationWindow : UserControl
     private readonly Func<ConversationEntry, Task<bool>> _openConversation;
     private readonly Func<Task>? _synchronizeConversations;
     private readonly Func<string, Task>? _propagateDeletion;
+    private readonly IReadOnlyList<ManagerInstance>? _instances;
 
     public ConversationWindow(
         ManagerInstance instance,
         ConversationService service,
         Func<ConversationEntry, Task<bool>> openConversation,
         Func<Task>? synchronizeConversations = null,
-        Func<string, Task>? propagateDeletion = null)
+        Func<string, Task>? propagateDeletion = null,
+        IReadOnlyList<ManagerInstance>? instances = null)
     {
         _instance = instance;
         _service = service;
         _openConversation = openConversation;
         _synchronizeConversations = synchronizeConversations;
         _propagateDeletion = propagateDeletion;
+        _instances = instances;
         InitializeComponent();
     }
 
@@ -137,14 +140,139 @@ public partial class ConversationWindow : UserControl
         };
         if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
 
+        var targetInstance = _instance;
+        string? workspaceOverride = null;
+        if (_instances is { Count: > 0 })
+        {
+            var choice = ShowImportTargetDialog();
+            if (choice is null)
+            {
+                StatusText.Text = "已取消导入。";
+                return;
+            }
+
+            (targetInstance, workspaceOverride) = choice.Value;
+        }
+
         try
         {
-            var target = await Task.Run(() => _service.Import(_instance, dialog.FileName));
+            var target = await Task.Run(() => _service.Import(targetInstance, dialog.FileName, workspaceOverride));
             await SynchronizeAsync();
-            StatusText.Text = $"对话已导入：{target}";
+            StatusText.Text = $"对话已导入到 {targetInstance.Name}：{target}";
             await RefreshAsync();
         }
         catch (Exception ex) { ShowError(ex); }
+    }
+
+    private const string ImportWorkspaceAuto = "（按文件自带工作目录）";
+
+    private (ManagerInstance Instance, string? Workspace)? ShowImportTargetDialog()
+    {
+        var instances = _instances!;
+        var versionBox = new System.Windows.Controls.ComboBox
+        {
+            DisplayMemberPath = "Name",
+            Margin = new Thickness(0, 6, 0, 0)
+        };
+        versionBox.ItemsSource = instances;
+        versionBox.SelectedIndex = Math.Max(0, instances.ToList().FindIndex(candidate =>
+            string.Equals(candidate.Id, _instance.Id, StringComparison.Ordinal)));
+
+        var workspaceBox = new System.Windows.Controls.ComboBox
+        {
+            IsEditable = true,
+            Margin = new Thickness(0, 6, 0, 0)
+        };
+
+        void LoadWorkspaces(ManagerInstance selected)
+        {
+            try
+            {
+                var workspaces = _service.List(selected)
+                    .Select(entry => entry.WorkingDirectory)
+                    .Where(directory => !string.IsNullOrWhiteSpace(directory))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(directory => directory, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                workspaceBox.ItemsSource = new[] { ImportWorkspaceAuto }.Concat(workspaces).ToArray();
+            }
+            catch
+            {
+                workspaceBox.ItemsSource = new[] { ImportWorkspaceAuto };
+            }
+
+            workspaceBox.SelectedIndex = 0;
+        }
+
+        LoadWorkspaces(instances[Math.Max(0, versionBox.SelectedIndex)]);
+        versionBox.SelectionChanged += (_, _) =>
+        {
+            if (versionBox.SelectedItem is ManagerInstance selected)
+            {
+                LoadWorkspaces(selected);
+            }
+        };
+
+        var confirmButton = new System.Windows.Controls.Button
+        {
+            Content = "导入",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(16, 8, 16, 8),
+            MinWidth = 90
+        };
+        var cancelButton = new System.Windows.Controls.Button
+        {
+            Content = "取消",
+            Padding = new Thickness(16, 8, 16, 8),
+            MinWidth = 90,
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        var buttons = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+            Margin = new Thickness(0, 18, 0, 0)
+        };
+        buttons.Children.Add(confirmButton);
+        buttons.Children.Add(cancelButton);
+
+        var dialog = new Window
+        {
+            Title = "选择导入目标",
+            Owner = Window.GetWindow(this),
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            ResizeMode = ResizeMode.NoResize,
+            MinWidth = 460,
+            Padding = new Thickness(20),
+            Content = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock { Text = "导入到版本", FontWeight = FontWeights.SemiBold },
+                    versionBox,
+                    new TextBlock
+                    {
+                        Text = "工作区（决定会话在 sessions 下的目录）",
+                        FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 14, 0, 0)
+                    },
+                    workspaceBox,
+                    buttons
+                }
+            }
+        };
+        confirmButton.Click += (_, _) => dialog.DialogResult = true;
+        cancelButton.Click += (_, _) => dialog.DialogResult = false;
+
+        if (dialog.ShowDialog() != true
+            || versionBox.SelectedItem is not ManagerInstance target)
+        {
+            return null;
+        }
+
+        var workspace = workspaceBox.Text?.Trim();
+        return (target, string.IsNullOrEmpty(workspace) || workspace == ImportWorkspaceAuto ? null : workspace);
     }
 
     private async void Export_Click(object sender, RoutedEventArgs e)
@@ -231,11 +359,30 @@ public partial class ConversationWindow : UserControl
 
     private static string ExportFileName(ConversationEntry entry)
     {
+        // 导出默认用对话名称命名；没有可读名称时回退到原文件名。
+        var named = SafeFileName(entry.DisplayName);
+        if (!string.IsNullOrWhiteSpace(named))
+        {
+            return named;
+        }
+
         var fileName = Path.GetFileName(entry.FullPath);
         var extension = entry.IsCompressed ? ".jsonl.zstd" : ".jsonl";
         return fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
             ? fileName[..^extension.Length]
             : fileName;
+    }
+
+    private static string SafeFileName(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var builder = new System.Text.StringBuilder(value.Length);
+        foreach (var character in value.Trim())
+        {
+            builder.Append(invalid.Contains(character) ? '_' : character);
+        }
+
+        return builder.ToString().TrimEnd('.', ' ');
     }
 
     private void UpdateSelection()

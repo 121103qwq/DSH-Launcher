@@ -2211,6 +2211,19 @@ static Task TestConversationFileManagement()
 
     var guarded = new ConversationService(isRunning: _ => true);
     AssertThrows<InvalidOperationException>(() => guarded.Export(importedInstance, entries[0], Path.Combine(temporary.Path, "blocked.jsonl")), "实例运行时不能导出可能正在写入的会话快照。");
+
+    // 导入时可指定目标工作区来决定 sessions 落位目录，同时保留原始会话内容。
+    var overriddenHome = Path.Combine(temporary.Path, "overridden-home");
+    Directory.CreateDirectory(overriddenHome);
+    var overriddenInstance = CreateTestInstance("conversation-override", root, overriddenHome);
+    var overriddenPath = service.Import(
+        overriddenInstance,
+        exportPath,
+        "C:\\Users\\demo\\Projects\\skill-lab");
+    Assert(overriddenPath.Contains("--C-Users-demo-Projects-skill-lab--", StringComparison.Ordinal),
+        "指定工作区导入必须落到该工作区的 sessions 目录。");
+    Assert(File.ReadAllBytes(overriddenPath).SequenceEqual(File.ReadAllBytes(exportPath)),
+        "按工作区导入不能改写原始会话内容。");
     return Task.CompletedTask;
 }
 

@@ -24,6 +24,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DshInstanceRunner _instanceRunner = new();
     private readonly ExtensionService _extensionService;
     private readonly MarketplaceService _marketplaceService;
+    private readonly SkillMarketService _skillMarketService;
     private readonly VersionPackageService _versionPackageService;
     private readonly VersionSettingsService _versionSettingsService = new();
     private readonly ConversationService _conversationService;
@@ -54,6 +55,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         _extensionService = new(id => _instanceRunner.IsRunning(id));
         _marketplaceService = new();
+        _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _conversationSyncService = new(_versionSettingsService, id => _instanceRunner.IsRunning(id));
@@ -662,6 +664,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         e.Handled = true;
     }
 
+    private void SwitchContextInstance(ManagerInstance target, string section)
+    {
+        SelectedInstance = target;
+        SwitchSection(section);
+    }
+
     private void Navigation_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement element || element.Tag is not string section)
@@ -762,14 +770,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 object page = section switch
                 {
-                    "扩展" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, marketplaceService: _marketplaceService),
-                    "Agent" => new ExtensionWindow(instance, _extensionService, () => _nodeRuntime, agentOnly: true, marketplaceService: _marketplaceService),
+                    "扩展" => new ExtensionWindow(
+                        instance,
+                        _extensionService,
+                        () => _nodeRuntime,
+                        marketplaceService: _marketplaceService,
+                        instances: Instances.ToArray(),
+                        selectInstance: candidate => SwitchContextInstance(candidate, section)),
+                    "Agent" => new ExtensionWindow(
+                        instance,
+                        _extensionService,
+                        () => _nodeRuntime,
+                        agentOnly: true,
+                        marketplaceService: _marketplaceService,
+                        instances: Instances.ToArray(),
+                        selectInstance: candidate => SwitchContextInstance(candidate, section),
+                        skillMarketService: _skillMarketService),
                     _ => new ConversationWindow(
                         instance,
                         _conversationService,
                         entry => OpenConversationAsync(instance, entry),
                         () => SynchronizeConversationsAsync(instance),
-                        relativePath => PropagateConversationDeletionAsync(instance, relativePath))
+                        relativePath => PropagateConversationDeletionAsync(instance, relativePath),
+                        instances: Instances.ToArray())
                 };
                 ShowEmbeddedPage(page);
             }
@@ -846,9 +869,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     _ = SynchronizeModelProvidersAsync(current, notifyNoConfiguration: true);
                     _ = SynchronizeConversationsAsync(current);
                 }
-            }));
+            },
+            renameVersion: RenameVersion));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
+    }
+
+    private ManagerInstance RenameVersion(ManagerInstance instance, string name)
+    {
+        var updated = _instanceRegistry.Update(instance with { Name = name.Trim() });
+        var index = Instances.ToList().FindIndex(candidate =>
+            string.Equals(candidate.Id, updated.Id, StringComparison.Ordinal));
+        if (index >= 0)
+        {
+            Instances[index] = updated;
+        }
+
+        if (SelectedInstance?.Id == updated.Id)
+        {
+            SelectedInstance = updated;
+            if (PageTitle.StartsWith("版本设置", StringComparison.Ordinal))
+            {
+                PageTitle = $"版本设置 - {updated.Name}";
+                OnPropertyChanged(nameof(PageTitle));
+            }
+        }
+
+        return updated;
     }
 
     private string? GetPreferredNodePath()

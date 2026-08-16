@@ -85,9 +85,21 @@
                                     CornerRadius="10"
                                     Padding="12"
                                     Margin="0,22,0,0">
-                                <TextBlock Text="版本名称由“版本控制”页面维护；这里仅显示当前版本信息和运行设置。"
-                                           Foreground="{StaticResource MutedBrush}"
-                                           TextWrapping="Wrap" />
+                                <StackPanel>
+                                    <TextBlock Text="版本名称" FontWeight="SemiBold" />
+                                    <TextBox x:Name="VersionNameBox" Margin="0,7,0,10" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="保存版本名称"
+                                                Click="SaveVersionName_Click"
+                                                Style="{StaticResource PrimaryButton}"
+                                                HorizontalAlignment="Left" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="VersionNameStatusText"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap"
+                                               Margin="0,8,0,0" />
+                                </StackPanel>
                             </Border>
                             <Border Background="#F5F9FD" CornerRadius="10" Padding="18" Margin="0,22,0,0">
                                 <StackPanel>
@@ -302,10 +314,6 @@
                                        Foreground="{StaticResource MutedBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,6,0,14" />
-                            <CheckBox x:Name="IncludeProviderConfigurationCheckBox"
-                                      Content="包含当前版本的模型提供商配置"
-                                      IsChecked="True"
-                                      Margin="0,0,0,10" />
                             <CheckBox x:Name="IncludePluginConfigurationCheckBox"
                                       Content="包含当前版本的 Plugin 配置"
                                       IsChecked="True"
@@ -316,7 +324,7 @@
                                       IsEnabled="False"
                                       Margin="0,0,0,14" />
                             <Border Background="#FFF9EA" BorderBrush="#F1C26B" BorderThickness="1" CornerRadius="9" Padding="12">
-                                <TextBlock Text="不会导出 API Key、Token、密码、环境变量值或 sessions/会话文件。模型提供商只保留可分享的名称、地址、模型和环境变量名。"
+                                <TextBlock Text="不会导出 API Key、Token、密码、环境变量值、sessions/会话文件，也不导出模型提供商配置。"
                                            Foreground="{StaticResource MutedBrush}"
                                            TextWrapping="Wrap"
                                            FontSize="11" />

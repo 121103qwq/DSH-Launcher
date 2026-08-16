@@ -91,7 +91,7 @@ public sealed class ConversationService
         return destination;
     }
 
-    public string Import(ManagerInstance instance, string sourcePath)
+    public string Import(ManagerInstance instance, string sourcePath, string? workingDirectoryOverride = null)
     {
         EnsureStopped(instance);
         if (string.IsNullOrWhiteSpace(sourcePath))
@@ -118,7 +118,11 @@ public sealed class ConversationService
         }
 
         var sessionsRoot = GetSessionsRoot(instance);
-        var projectDirectory = ProjectDirectory(sessionsRoot, header.WorkingDirectory);
+        // 导入时可覆盖文件自带的工作目录，把会话放进目标版本指定的 workspace。
+        var effectiveWorkingDirectory = !string.IsNullOrWhiteSpace(workingDirectoryOverride)
+            ? workingDirectoryOverride.Trim()
+            : header.WorkingDirectory;
+        var projectDirectory = ProjectDirectory(sessionsRoot, effectiveWorkingDirectory);
         var sessionDirectory = Path.Combine(projectDirectory, EncodeSegment(header.SessionId));
         var target = Path.Combine(sessionDirectory, compressed ? "session.jsonl.zstd" : "session.jsonl");
         EnsurePathDoesNotEscape(target, sessionsRoot);
