@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-用户实测反馈 3 个 bug 已修复：启动页只显示实际配置过的 Provider（未配置显示空状态，不再出现占位默认卡）；Launcher 异常退出遗留的受管实例在下次启动时按记录 PID/端口收编回 Managed（Stop/Restart/删除恢复可用，Attached 只留给真正外部进程，带 PID 复用与端口校验）；扩展页 1MB 级市场缓存解析移到后台线程、已安装与市场列表改为整批替换 ItemsSource（不再逐条 Add 触发布局）。另完成第八轮 Review 5 条修复（精确 DN 组织匹配、msiexec 前取消检查、Node 装后重测 DSh、仅重绑定修复目标实例、npm 源文案）。发布/merge 流程暂停，等待用户验证。
+用户实测 4 个问题已修复（29e078d + c934b45）：启动页只显示实际配置过的 Provider；Launcher 异常退出遗留实例按 PID/端口收编回 Managed（Stop/删除恢复可用）；扩展页已安装/市场列表整批替换 ItemsSource 且市场列表的筛选/排序/投影整体移后台线程（分类切换不再卡顿）；"无法双击打开"根因是发布命令回归——正式发布必须按 README 使用 `-p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true`（72MB 单文件可独立运行；缺省参数的 155MB 产物依赖旁边散装原生 DLL，复制单 EXE 会在 10-25 秒后崩溃），已按正确参数重发并 60 秒干净目录验证。发布/merge 流程暂停，等待用户验证。
 
 ## 已完成内容
 
