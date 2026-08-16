@@ -526,6 +526,12 @@ static Task TestNodeVersionSelectionUsesEngine()
         "未指定 engine 时保持官方 DSh 默认兼容策略（22.19+ 或 24+）。");
     Assert(NodeInstallService.SelectLtsVersion(index, "^22.19.0 || >=24.0.0") == "v24.5.0",
         "Installed 场景应优先选择满足官方 DSh engine 的新版 LTS。");
+    Assert(NodeInstallService.DefaultVersionSatisfies(null),
+        "无 engine 要求时固定版本兜底可用。");
+    Assert(NodeInstallService.DefaultVersionSatisfies("^22.19.0 || >=24.0.0"),
+        "固定版本满足官方 DSh 要求时允许兜底。");
+    Assert(!NodeInstallService.DefaultVersionSatisfies("^20.0.0"),
+        "固定版本不满足 Source engine 时不能兜底安装。");
     return Task.CompletedTask;
 }
 

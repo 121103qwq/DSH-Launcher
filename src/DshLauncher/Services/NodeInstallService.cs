@@ -56,6 +56,13 @@ public sealed class NodeInstallService
         }
 
         var version = await ResolveVersionAsync(distBase, requiredNodeEngine, cancellationToken);
+        if (version is null)
+        {
+            return NodeInstallResult.Failure(string.IsNullOrWhiteSpace(requiredNodeEngine)
+                ? "无法解析兼容的 Node.js LTS 版本，请稍后重试或改用国内镜像。"
+                : $"无法解析满足要求（{requiredNodeEngine}）的 Node.js 版本，请稍后重试或改用国内镜像。");
+        }
+
         var fileName = $"node-{version}{WindowsMsiFileNameSuffix}";
         var downloadUrl = $"{distBase}/{version}/{fileName}";
         var destinationDirectory = Path.Combine(Path.GetTempPath(), "DSH Launcher");
@@ -235,16 +242,29 @@ public sealed class NodeInstallService
         return null;
     }
 
-    private async Task<string> ResolveVersionAsync(string distBase, string? requiredNodeEngine, CancellationToken cancellationToken)
+    internal static bool DefaultVersionSatisfies(string? requiredNodeEngine) =>
+        string.IsNullOrWhiteSpace(requiredNodeEngine)
+        || NodeRuntimeInfo.EvaluateCompatibility(DefaultVersion, requiredNodeEngine) == NodeRuntimeCompatibility.Compatible;
+
+    private async Task<string?> ResolveVersionAsync(string distBase, string? requiredNodeEngine, CancellationToken cancellationToken)
     {
         try
         {
             var json = await _httpClient.GetStringAsync($"{distBase}/index.json", cancellationToken);
-            return SelectLtsVersion(json, requiredNodeEngine) ?? DefaultVersion;
+            var selected = SelectLtsVersion(json, requiredNodeEngine);
+            if (selected is not null)
+            {
+                return selected;
+            }
+
+            // index 中没有满足要求的 LTS 时，只在固定版本本身满足要求时才回退，
+            // 否则停止安装，避免装出与 Source/Installed engine 不兼容的 Node。
+            return DefaultVersionSatisfies(requiredNodeEngine) ? DefaultVersion : null;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
-            return DefaultVersion;
+            cancellationToken.ThrowIfCancellationRequested();
+            return DefaultVersionSatisfies(requiredNodeEngine) ? DefaultVersion : null;
         }
     }
 
