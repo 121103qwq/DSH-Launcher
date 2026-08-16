@@ -230,6 +230,12 @@ public sealed class ConversationService
             // 标题缓存路径经过符号链接/重解析点时拒绝读取，避免混入其它实例的元数据。
             return new Dictionary<string, string?>(StringComparer.Ordinal);
         }
+        catch (UnauthorizedAccessException)
+        {
+            // ACL 拒绝读取路径属性时同样放弃标题缓存；它只是可选增强，
+            // 不能让整个会话列表随可选标题一起失败。
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
 
         if (!File.Exists(path) || IsReparsePoint(path))
         {

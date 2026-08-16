@@ -42,7 +42,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly Dictionary<string, ChatWindow> _chatWindows = new(StringComparer.Ordinal);
     private ManagerInstance? _selectedInstance;
     private bool _isNodeDetectionInProgress;
-    private bool _isLifecycleInProgress;
+    private readonly Services.LifecycleBusyGuard _lifecycleGuard = new();
+    private bool _isLifecycleInProgress => _lifecycleGuard.IsBusy;
     private bool _isDshInstallInProgress;
     private bool _isRuntimePrepareInProgress;
     private bool _isProviderDetectionInProgress;
@@ -172,11 +173,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ? "打开实例"
         : "启动实例";
 
-    public bool CanStopInstance => !_isLifecycleInProgress
-        && SelectedInstance is not null
-        && _instanceRunner.IsManaged(SelectedInstance.Id);
+    public bool CanStopInstance => CanStopInstanceCore(
+        _isLifecycleInProgress,
+        _isRuntimePrepareInProgress,
+        SelectedInstance is not null
+            && _instanceRunner.IsManaged(SelectedInstance.Id));
 
     public bool CanRestartInstance => CanStopInstance;
+
+    internal static bool CanStopInstanceCore(
+        bool lifecycleInProgress,
+        bool runtimePrepareInProgress,
+        bool isManaged) =>
+        !lifecycleInProgress
+        && !runtimePrepareInProgress
+        && isManaged;
 
     public string InstanceEndpointText => SelectedInstance?.WebUrl
         ?? (SelectedInstance?.RuntimeStatus == InstanceRuntimeStatus.Running ? "正在检查运行地址…" : "尚未启动");
@@ -1417,7 +1428,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void StartInstance_Click(object sender, RoutedEventArgs e)
     {
-        if (_isLifecycleInProgress || SelectedInstance is null)
+        if (SelectedInstance is null)
         {
             return;
         }
@@ -1442,22 +1453,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        if (!await EnsureRuntimeReadyAsync(selected))
+        if (!TryBeginLifecycleOperation())
         {
             return;
         }
 
-        // runtime 准备窗口是非模态的，期间用户可能切换 SelectedInstance 或删除目标；
-        // 必须按最初点击的实例 ID 重新解析（重绑定后取最新状态），目标不存在则中止。
-        selected = ResolveInstanceById(Instances, selected.Id);
-        if (selected is null)
-        {
-            ShowNotice("目标实例已被删除，无法继续启动。");
-            return;
-        }
-        SetLifecycleBusy(true);
         try
         {
+            // 串行化 guard 必须先于 runtime 准备占用：准备会打开非模态窗口等待
+            // 下载/安装，期间 Stop/Restart/对话自动启动都不能并发进入。
+            if (!await EnsureRuntimeReadyAsync(selected))
+            {
+                return;
+            }
+
+            // runtime 准备窗口是非模态的，期间用户可能切换 SelectedInstance 或删除目标；
+            // 必须按最初点击的实例 ID 重新解析（重绑定后取最新状态），目标不存在则中止。
+            var resolvedStartTarget = ResolveInstanceById(Instances, selected.Id);
+            if (resolvedStartTarget is null)
+            {
+                ShowNotice("目标实例已被删除，无法继续启动。");
+                return;
+            }
+
+            selected = resolvedStartTarget;
+
             var result = await StartManagedInstanceAsync(selected);
             if (result is null)
             {
@@ -1484,13 +1504,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         finally
         {
-            SetLifecycleBusy(false);
+            EndLifecycleOperation();
         }
     }
 
     private async void StopInstance_Click(object sender, RoutedEventArgs e)
     {
-        if (_isLifecycleInProgress || SelectedInstance is null)
+        if (SelectedInstance is null)
         {
             return;
         }
@@ -1502,7 +1522,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        SetLifecycleBusy(true);
+        if (!TryBeginLifecycleOperation())
+        {
+            return;
+        }
+
         try
         {
             var result = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
@@ -1543,13 +1567,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         finally
         {
-            SetLifecycleBusy(false);
+            EndLifecycleOperation();
         }
     }
 
     private async void RestartInstance_Click(object sender, RoutedEventArgs e)
     {
-        if (_isLifecycleInProgress || SelectedInstance is null)
+        if (SelectedInstance is null)
         {
             return;
         }
@@ -1561,7 +1585,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        SetLifecycleBusy(true);
+        if (!TryBeginLifecycleOperation())
+        {
+            return;
+        }
+
         try
         {
             if (_instanceRunner.IsRunning(selected.Id))
@@ -1587,6 +1615,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 UpdateInstance(selected);
                 await SynchronizeConversationsAsync(selected);
             }
+
+            // 停止完成后与 Start 一致：先做 runtime readiness（运行期间 Node 或
+            // package root 可能已被删除，此时应进入一键修复而不是直接启动失败），
+            // 准备结束后仍按最初目标实例 ID 重新解析，目标被删除则中止。
+            if (!await EnsureRuntimeReadyAsync(selected))
+            {
+                return;
+            }
+
+            var resolvedRestartTarget = ResolveInstanceById(Instances, selected.Id);
+            if (resolvedRestartTarget is null)
+            {
+                ShowNotice("目标实例已被删除，无法继续重启。");
+                return;
+            }
+
+            selected = resolvedRestartTarget;
 
             var result = await StartManagedInstanceAsync(selected);
             if (result is null)
@@ -1622,7 +1667,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         finally
         {
-            SetLifecycleBusy(false);
+            EndLifecycleOperation();
         }
     }
 
@@ -1817,9 +1862,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshRunningInstances();
     }
 
-    private void SetLifecycleBusy(bool isBusy)
+    /// <summary>
+    /// 生命周期操作（Start/Stop/Restart/对话自动启动）在 handler 入口即占用
+    /// 串行化 guard，一直持有到 runtime 准备 + 实际启停 + 状态更新全部结束；
+    /// 只有占用者在自己的 finally 里释放，不存在交叉清写 busy 标志的路径。
+    /// </summary>
+    private bool TryBeginLifecycleOperation()
     {
-        _isLifecycleInProgress = isBusy;
+        if (!_lifecycleGuard.TryBegin())
+        {
+            return false;
+        }
+
+        OnPropertyChanged(nameof(CanStartInstance));
+        OnPropertyChanged(nameof(CanStopInstance));
+        OnPropertyChanged(nameof(CanRestartInstance));
+        OnPropertyChanged(nameof(InstanceEndpointText));
+        return true;
+    }
+
+    private void EndLifecycleOperation()
+    {
+        _lifecycleGuard.End();
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(CanStopInstance));
         OnPropertyChanged(nameof(CanRestartInstance));
@@ -2081,29 +2145,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return true;
         }
 
-        if (_isLifecycleInProgress)
+        if (!TryBeginLifecycleOperation())
         {
             ShowNotice("实例正在执行启动或停止操作，请稍候再打开对话。");
             return false;
         }
 
-        // 对话触发的自动启动同样先做运行环境准备，缺 Node/DSh 时提供一键准备。
-        if (!await EnsureRuntimeReadyAsync(instance))
-        {
-            return false;
-        }
-
-        var resolvedTarget = ResolveInstanceById(Instances, instance.Id);
-        if (resolvedTarget is null)
-        {
-            ShowNotice("目标实例已被删除，无法打开对话。");
-            return false;
-        }
-
-        instance = resolvedTarget;
-        SetLifecycleBusy(true);
         try
         {
+            // 对话触发的自动启动同样先做运行环境准备，缺 Node/DSh 时提供一键准备；
+            // 与 Start/Stop/Restart 共享同一个串行化 guard，准备等待期间不能并发进入其它生命周期操作。
+            if (!await EnsureRuntimeReadyAsync(instance))
+            {
+                return false;
+            }
+
+            var resolvedTarget = ResolveInstanceById(Instances, instance.Id);
+            if (resolvedTarget is null)
+            {
+                ShowNotice("目标实例已被删除，无法打开对话。");
+                return false;
+            }
+
+            instance = resolvedTarget;
             var result = await StartManagedInstanceAsync(instance);
             if (result is null)
             {
@@ -2132,7 +2196,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         finally
         {
-            SetLifecycleBusy(false);
+            EndLifecycleOperation();
         }
     }
 

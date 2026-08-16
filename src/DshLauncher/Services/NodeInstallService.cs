@@ -27,6 +27,11 @@ public sealed class NodeInstallService
     private static readonly TimeSpan HttpTimeout = TimeSpan.FromMinutes(20);
     private readonly HttpClient _httpClient;
 
+    // 超时后未被终止、仍在后台运行的 msiexec；它退出前不允许再次启动
+    // Node 安装，避免两次 Windows Installer 安装同一产品互相重叠。
+    // internal 仅供 SelfTest 注入模拟进程；句柄由延迟清理任务负责释放。
+    internal Process? LingeringInstaller;
+
     public NodeInstallService()
         : this(new HttpClient { Timeout = HttpTimeout })
     {
@@ -54,6 +59,15 @@ public sealed class NodeInstallService
         {
             return NodeInstallResult.Failure("Node.js 下载源不受支持，只能使用官方源或 npmmirror 国内镜像。");
         }
+
+        if (IsProcessAlive(LingeringInstaller))
+        {
+            return NodeInstallResult.Failure(
+                "上一次 Node.js 安装仍在后台运行（超时后不会被强制终止），请等待安装完成后再重新准备运行环境。");
+        }
+
+        // 已退出的残留安装程序只清引用，不释放句柄；延迟清理任务仍持有它。
+        LingeringInstaller = null;
 
         var version = await ResolveVersionAsync(distBase, requiredNodeEngine, cancellationToken);
         if (version is null)
@@ -83,6 +97,7 @@ public sealed class NodeInstallService
 
             onInstallStarted?.Invoke();
             installerRun = await RunInstallerAsync(destination, cancellationToken);
+            LingeringInstaller = installerRun.LingeringProcess;
             return MapExitCode(installerRun.ExitCode, version);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -125,15 +140,7 @@ public sealed class NodeInstallService
     // 的源文件，也可能仍被安装程序需要，清理必须推迟到进程真正退出之后。
     internal static void CleanupInstallerFile(System.Diagnostics.Process? installer, string path)
     {
-        var running = false;
-        try
-        {
-            running = installer is not null && !installer.HasExited;
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            running = true;
-        }
+        var running = IsProcessAlive(installer);
 
         if (running && installer is not null)
         {
@@ -159,6 +166,31 @@ public sealed class NodeInstallService
 
         installer?.Dispose();
         TryDeleteInstaller(path);
+    }
+
+    /// <summary>
+    /// 判断进程是否仍在运行：句柄已被延迟清理释放或进程已退出视为不在运行；
+    /// 查询失败（如权限不足）时保守地视为仍在运行，宁可阻止重复安装。
+    /// </summary>
+    internal static bool IsProcessAlive(Process? process)
+    {
+        if (process is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return !process.HasExited;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return true;
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     internal static NodeInstallResult MapExitCode(int exitCode, string version)

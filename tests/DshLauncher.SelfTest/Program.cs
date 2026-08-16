@@ -24,6 +24,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node install result states", TestNodeInstallResultStates),
     ("Node download cancel cleans part", TestNodeDownloadCancelCleansPart),
     ("Node MSI verification and deferred cleanup", TestNodeMsiVerificationAndDeferredCleanup),
+    ("Lifecycle busy guard", TestLifecycleBusyGuard),
+    ("Conversation title cache reparse rejection", TestConversationTitleCacheReparseRejection),
     ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
     ("Node engine requirement resolution", TestNodeEngineRequirementResolution),
     ("Runtime progress window close guard", TestRuntimeProgressCloseGuard),
@@ -407,6 +409,87 @@ static async Task TestNodeMsiVerificationAndDeferredCleanup()
     }
 
     Assert(!File.Exists(lingeringPath), "安装程序退出后必须补做 MSI 清理。");
+
+    // lingering msiexec 退出前必须阻止第二次 Node 安装，避免 Windows Installer 重叠。
+    Assert(!NodeInstallService.IsProcessAlive(null), "没有残留进程时不应视为安装仍在运行。");
+    var handlerInvoked = false;
+    var guardedService = new NodeInstallService(new NodeTestHandler(() =>
+    {
+        handlerInvoked = true;
+        return new HttpResponseMessage(HttpStatusCode.OK);
+    }));
+    var guardedLingering = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 4 127.0.0.1 > nul") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(guardedLingering is not null, "测试需要能启动辅助进程。");
+    Assert(NodeInstallService.IsProcessAlive(guardedLingering!), "存活中的安装进程必须被视为仍在运行。");
+    guardedService.LingeringInstaller = guardedLingering;
+    var refused = await guardedService.InstallAsync(NodeInstallService.OfficialDistBase);
+    Assert(!refused.IsSuccess && refused.Error?.Contains("仍在后台", StringComparison.Ordinal) == true,
+        "上一次超时的 Node 安装仍在后台运行时必须拒绝再次安装。");
+    Assert(!handlerInvoked, "拒绝发生在任何下载之前。");
+    guardedLingering!.Kill();
+    await guardedLingering.WaitForExitAsync();
+    Assert(!NodeInstallService.IsProcessAlive(guardedLingering),
+        "已退出的残留安装进程不能再阻止新的准备。");
+}
+
+static Task TestLifecycleBusyGuard()
+{
+    var guard = new LifecycleBusyGuard();
+    Assert(!guard.IsBusy && guard.TryBegin(), "空闲时应允许占用生命周期 guard。");
+    Assert(guard.IsBusy, "占用后 guard 必须处于 busy 状态。");
+    Assert(!guard.TryBegin(), "A 正在 runtime 准备/启停时，B 的 Start/Stop/Restart/对话自动启动不能并发进入。");
+    guard.End();
+    Assert(!guard.IsBusy && guard.TryBegin(), "释放后应允许下一个生命周期操作占用。");
+    guard.End();
+
+    Assert(MainWindow.CanStopInstanceCore(false, false, true), "空闲且实例受管时允许 Stop/Restart。");
+    Assert(!MainWindow.CanStopInstanceCore(true, false, true),
+        "其它生命周期操作进行中时不能 Stop/Restart。");
+    Assert(!MainWindow.CanStopInstanceCore(false, true, true),
+        "runtime 准备进行中（非模态窗口等待下载/安装）时不能 Stop/Restart。");
+    Assert(!MainWindow.CanStopInstanceCore(false, false, false), "非受管实例不能 Stop/Restart。");
+    return Task.CompletedTask;
+}
+
+static Task TestConversationTitleCacheReparseRejection()
+{
+    using var temporary = new TestDirectory();
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    var sessionsDirectory = Path.Combine(home, "sessions", "--C-work-demo--", "session-9");
+    Directory.CreateDirectory(sessionsDirectory);
+    File.WriteAllText(
+        Path.Combine(sessionsDirectory, "session.jsonl"),
+        "{\"type\":\"session\",\"version\":0,\"id\":\"session-9\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\",\"delegationDepth\":0}\n",
+        new UTF8Encoding(false));
+
+    // 实例边界外的标题缓存目录；通过 junction 挂进实例 storages。
+    var outsideStorages = Path.Combine(temporary.Path, "outside", "storages");
+    Directory.CreateDirectory(outsideStorages);
+    File.WriteAllText(
+        Path.Combine(outsideStorages, "session_projcache.json"),
+        "{\"tables\":{\"sessions\":{\"session-9\":{\"rows\":{\"title\":{\"val\":\"外部实例标题\"}}}}}}",
+        new UTF8Encoding(false));
+
+    var junction = Path.Combine(home, "storages");
+    var junctionCreated = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{junction}\" \"{outsideStorages}\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+    Assert(junctionCreated is not null, "测试需要能启动 cmd 创建 junction。");
+    junctionCreated!.WaitForExit();
+    Assert(Directory.Exists(junction), "测试环境需要支持创建 junction（mklink /J）。");
+
+    var service = new ConversationService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var instance = CreateTestInstance("conversation-reparse", Path.Combine(temporary.Path, "workspace"), home);
+    var entries = service.List(instance);
+    var session = entries.Single(entry => entry.SessionId == "session-9");
+    Assert(session.HasValidHeader, "标题缓存是可选增强，storages 是重解析点时会话列表必须继续工作。");
+    Assert(session.DisplayName.Contains("未命名", StringComparison.Ordinal) && session.DisplayName != "外部实例标题",
+        "经过重解析点读到实例边界外的标题缓存必须被拒绝，不能泄露其它实例的标题。");
+    return Task.CompletedTask;
 }
 
 static Task TestInstanceRuntimeRebinding()
