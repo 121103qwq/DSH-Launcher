@@ -38,7 +38,8 @@ public sealed record ConversationEntry(
     long SizeBytes,
     bool IsCompressed,
     bool HasValidHeader,
-    string DisplayName);
+    string DisplayName,
+    string InstanceName);
 
 public sealed record ConversationBackupEntry(
     string FileName,
@@ -49,7 +50,8 @@ public sealed record ConversationBackupEntry(
     long SizeBytes,
     bool IsCompressed,
     bool HasValidHeader,
-    string DisplayName);
+    string DisplayName,
+    string InstanceName);
 
 public sealed record ModelProviderInfo(
     string Provider,

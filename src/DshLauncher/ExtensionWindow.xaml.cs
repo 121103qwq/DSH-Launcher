@@ -497,7 +497,7 @@ public partial class ExtensionWindow : UserControl
         bool instanceAttached,
         bool mutating)
     {
-        var items = MarketplaceService.FilterAndSort(
+        var items = MarketplaceService.FilterAndSortMerged(
             snapshot,
             query: query,
             sourceKind: sourceKind,

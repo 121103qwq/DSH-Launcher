@@ -778,7 +778,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (current is ScrollViewer viewer && CanScroll(viewer, e.Delta))
             {
-                viewer.ScrollToVerticalOffset(viewer.VerticalOffset - e.Delta / 3.0);
+                ScrollMouseWheel(viewer, e.Delta);
                 e.Handled = true;
                 return;
             }
@@ -788,9 +788,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (CanScroll(MainScrollViewer, e.Delta))
         {
-            MainScrollViewer.ScrollToVerticalOffset(MainScrollViewer.VerticalOffset - e.Delta / 3.0);
+            ScrollMouseWheel(MainScrollViewer, e.Delta);
             e.Handled = true;
         }
+    }
+
+    private static void ScrollMouseWheel(ScrollViewer viewer, int delta)
+    {
+        if (viewer.CanContentScroll)
+        {
+            var lines = Math.Max(1, Math.Abs(delta) / Mouse.MouseWheelDeltaForOneLine);
+            for (var index = 0; index < lines; index++)
+            {
+                if (delta > 0)
+                {
+                    viewer.LineUp();
+                }
+                else
+                {
+                    viewer.LineDown();
+                }
+            }
+
+            return;
+        }
+
+        viewer.ScrollToVerticalOffset(viewer.VerticalOffset - delta / 3.0);
     }
 
     private static bool CanScroll(ScrollViewer viewer, int delta)

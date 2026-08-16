@@ -121,14 +121,14 @@ public sealed class MarketplaceService
         }
         else if (cached is not null)
         {
-            items.AddRange(cached.Items);
+            mergedItems = MergeItems(cached.Items);
             sourcesChecked = Math.Max(sourcesChecked, cached.SourcesChecked);
             warnings.Add("在线来源暂时没有返回结果，已显示上次缓存。 ");
         }
 
         var retrievedAt = DateTimeOffset.UtcNow;
         return new MarketplaceSearchResult(
-            FilterAndSort(MergeItems(items), query, sourceKind, sortOrder),
+            FilterAndSortMerged(mergedItems, query, sourceKind, sortOrder),
             warnings,
             sourcesChecked,
             retrievedAt);
@@ -146,8 +146,9 @@ public sealed class MarketplaceService
             return null;
         }
 
+        var mergedItems = MergeItems(cached.Items);
         return new MarketplaceSearchResult(
-            FilterAndSort(MergeItems(cached.Items), query, sourceKind, sortOrder),
+            FilterAndSortMerged(mergedItems, query, sourceKind, sortOrder),
             new[] { $"正在使用上次缓存（{cached.RetrievedAt.ToLocalTime():yyyy-MM-dd HH:mm}）。" },
             cached.SourcesChecked,
             cached.RetrievedAt);
@@ -158,10 +159,18 @@ public sealed class MarketplaceService
         string? query = null,
         MarketplaceSourceKind? sourceKind = null,
         MarketplaceSortOrder sortOrder = MarketplaceSortOrder.Relevance,
+        string? category = null) =>
+        FilterAndSortMerged(MergeItems(items), query, sourceKind, sortOrder, category);
+
+    internal static IReadOnlyList<MarketplaceItem> FilterAndSortMerged(
+        IEnumerable<MarketplaceItem> items,
+        string? query = null,
+        MarketplaceSourceKind? sourceKind = null,
+        MarketplaceSortOrder sortOrder = MarketplaceSortOrder.Relevance,
         string? category = null)
     {
         var normalizedQuery = query?.Trim();
-        var filtered = MergeItems(items)
+        var filtered = items
             .Where(item => sourceKind is null || HasSourceKind(item, sourceKind.Value))
             .Where(item => string.IsNullOrWhiteSpace(category)
                 || string.Equals(NormalizeCategory(item.Category), NormalizeCategory(category), StringComparison.OrdinalIgnoreCase))
@@ -889,33 +898,59 @@ public sealed class MarketplaceService
 
     public static IReadOnlyList<MarketplaceItem> MergeItems(IEnumerable<MarketplaceItem> items)
     {
-        var merged = new List<MarketplaceItem>();
+        var merged = new List<MarketplaceItem?>();
+        var identitiesByIndex = new List<HashSet<string>?>();
+        var identityIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var raw in items)
         {
             var item = NormalizeSourceKind(raw) with { Category = NormalizeCategory(raw.Category) };
-            var matches = merged
-                .Select((candidate, index) => (candidate, index))
-                .Where(pair => GetPluginIdentities(pair.candidate)
-                    .Any(identity => GetPluginIdentities(item).Contains(identity)))
+            var itemIdentities = new HashSet<string>(GetPluginIdentities(item), StringComparer.OrdinalIgnoreCase);
+            var matchingIndexes = itemIdentities
+                .Select(identity => identityIndex.TryGetValue(identity, out var index) ? index : -1)
+                .Where(index => index >= 0 && merged[index] is not null)
+                .Distinct()
+                .Order()
                 .ToArray();
-            if (matches.Length == 0)
+            if (matchingIndexes.Length == 0)
             {
+                var index = merged.Count;
                 merged.Add(item);
+                identitiesByIndex.Add(itemIdentities);
+                foreach (var identity in itemIdentities)
+                {
+                    identityIndex[identity] = index;
+                }
+
                 continue;
             }
 
-            var combined = matches
-                .Select(pair => pair.candidate)
+            var combined = matchingIndexes
+                .Select(index => merged[index]!)
                 .Aggregate(MergeTwoItems);
-            foreach (var match in matches.OrderByDescending(pair => pair.index))
+            var combinedIdentities = new HashSet<string>(itemIdentities, StringComparer.OrdinalIgnoreCase);
+            foreach (var index in matchingIndexes)
             {
-                merged.RemoveAt(match.index);
+                if (identitiesByIndex[index] is { } identities)
+                {
+                    combinedIdentities.UnionWith(identities);
+                }
+
+                merged[index] = null;
+                identitiesByIndex[index] = null;
             }
 
-            merged.Add(MergeTwoItems(combined, item));
+            var mergedItem = MergeTwoItems(combined, item);
+            combinedIdentities.UnionWith(GetPluginIdentities(mergedItem));
+            var mergedIndex = merged.Count;
+            merged.Add(mergedItem);
+            identitiesByIndex.Add(combinedIdentities);
+            foreach (var identity in combinedIdentities)
+            {
+                identityIndex[identity] = mergedIndex;
+            }
         }
 
-        return merged;
+        return merged.Where(item => item is not null).Select(item => item!).ToArray();
     }
 
     private static MarketplaceItem NormalizeSourceKind(MarketplaceItem item)

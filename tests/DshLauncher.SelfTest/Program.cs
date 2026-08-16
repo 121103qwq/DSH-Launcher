@@ -2466,6 +2466,8 @@ static Task TestConversationFileManagement()
     var titled = service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
     Assert(titled.DisplayName == "测试标题", "应优先显示 DSh session 投影缓存中的标题。");
     Assert(service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(compressedPath)).DisplayName.Contains("demo"), "无标题会话应回退到工作目录名称。");
+    Assert(service.List(instance).All(entry => entry.InstanceName == instance.Name),
+        "对话列表应显示对应实例名称，不把内部工作目录当作归属信息。");
     File.WriteAllText(
         Path.Combine(projectionCacheDirectory, "session_projcache.json"),
         "{\"tables\":[\"unexpected\"],\"sessions\":{\"session-1\":\"bad\"}}",
@@ -2511,6 +2513,8 @@ static Task TestConversationFileManagement()
     var listedBackup = service.ListBackups(instance).Single(entry =>
         string.Equals(entry.FullPath, backup, StringComparison.OrdinalIgnoreCase));
     Assert(listedBackup.HasValidHeader && listedBackup.SessionId == "session-1", "备份列表应读取会话名称和 header。 ");
+    Assert(listedBackup.InstanceName == instance.Name,
+        "备份列表应显示对应实例名称，不把会话工作目录暴露为归属信息。");
     var restoredPath = service.RestoreBackup(instance, listedBackup);
     Assert(File.Exists(restoredPath)
         && service.List(instance).Any(entry => entry.SessionId == "session-1"),

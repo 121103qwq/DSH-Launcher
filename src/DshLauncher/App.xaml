@@ -132,6 +132,7 @@
                                               TextElement.Foreground="{TemplateBinding Foreground}" />
                             <TextBox x:Name="PART_EditableTextBox"
                                      Margin="{TemplateBinding Padding}"
+                                     Padding="0"
                                      VerticalAlignment="Center"
                                      HorizontalAlignment="Stretch"
                                      BorderThickness="0"

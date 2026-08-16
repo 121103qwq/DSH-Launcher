@@ -38,7 +38,7 @@ public sealed class ConversationService
 
         var result = new List<ConversationEntry>();
         var titles = ReadSessionTitles(instance);
-        Walk(root, root, result, titles);
+        Walk(root, root, result, titles, instance.Name);
         return result
             .OrderByDescending(entry => entry.UpdatedAt)
             .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
@@ -100,7 +100,8 @@ public sealed class ConversationService
                         header is not null,
                         header?.SessionId is null
                             ? "无法读取的备份"
-                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, backedUpAt)));
+                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, backedUpAt),
+                        instance.Name));
                 }
                 catch (IOException)
                 {
@@ -250,7 +251,12 @@ public sealed class ConversationService
         File.Delete(source);
     }
 
-    private void Walk(string directory, string root, ICollection<ConversationEntry> result, IReadOnlyDictionary<string, string?> titles)
+    private void Walk(
+        string directory,
+        string root,
+        ICollection<ConversationEntry> result,
+        IReadOnlyDictionary<string, string?> titles,
+        string instanceName)
     {
         try
         {
@@ -263,7 +269,7 @@ public sealed class ConversationService
 
                 if (Directory.Exists(entry))
                 {
-                    Walk(entry, root, result, titles);
+                    Walk(entry, root, result, titles, instanceName);
                     continue;
                 }
 
@@ -290,7 +296,8 @@ public sealed class ConversationService
                         header is not null,
                         header?.SessionId is null
                             ? "无法读取会话"
-                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, updatedAt)));
+                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, updatedAt),
+                        instanceName));
                 }
                 catch (IOException)
                 {
