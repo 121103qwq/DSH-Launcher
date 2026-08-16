@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-用户实测问题持续修复中（29e078d + c934b45 + 5372650）：启动页只显示实际配置过的 Provider（空 llm-pi-ai 骨架不算已配置，空态文案不再指向不存在的配置页，并说明经 DSh 登录连接的 Provider 不在此显示）；删除版本失败"DSH_HOME 不能是符号链接或重解析点"的根因是 DSh 会在 dsh-home `profiles\node_modules` 下创建指向共享运行目录的 junction——删除/复制/导出现在跳过或只移除链接本身，绝不穿透共享目录；Launcher 异常退出遗留实例按 PID/端口收编回 Managed（Stop/删除恢复可用）；扩展页列表整批替换 ItemsSource 且市场筛选/排序/投影整体移后台线程；"无法双击打开"根因是发布命令回归——正式发布必须按 README 使用 `-p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true`（72MB 单文件可独立运行；缺省参数的 155MB 产物依赖旁边散装原生 DLL，复制单 EXE 会在 10-25 秒后崩溃），已按正确参数重发并 60 秒干净目录验证。发布/merge 流程暂停，等待用户验证。
+用户实测问题持续修复中（29e078d + c934b45 + 5372650 + cb6f712）：启动页只显示实际配置过的 Provider，实例没有已配置 Provider 时整块隐藏；DSh 在 dsh-home `profiles\node_modules` 下创建的指向共享运行目录的 junction 不再阻断删除/复制/导出（跳过或只移除链接本身，绝不穿透共享目录）；"启动后停止/重启不可用"根因是两个 Launcher 进程并行——第二个只能只读 Attached（Stop/Restart 按设计禁用），现在 App 限制单实例、二次启动唤起已有窗口；17:01 崩溃（ObjectDisposedException，dump 定位）是窗口在初始加载期间关闭时 `RefreshProvidersAsync` 入口访问已释放的取消源、异常穿透 `Window_OnLoaded` async void——入口/OnClosed 已自防，OnLoaded 加兜底 catch，未处理 UI 异常写入 `%LOCALAPPDATA%\DeepSeek\launcher\crash.log`；"无法双击打开"根因是发布命令回归——正式发布必须按 README 使用 `-p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true`（72MB 单文件可独立运行；缺省参数的 155MB 产物复制单 EXE 会在 10-25 秒后崩溃）。发布/merge 流程暂停，等待用户验证。
 
 ## 已完成内容
 
@@ -34,10 +34,11 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `feature/runtime-bootstrap`，最新提交 `5372650`（DSh junction 跳过 + Provider 显示修复），已推送 origin。
-- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：41/41 通过（新增：含 junction 的删除/复制/导出回归断言、空 pi-ai 骨架不算已配置）。
+- 当前 Git：分支 `feature/runtime-bootstrap`，最新提交 `cb6f712`（单实例守护 + 关闭竞态崩溃修复 + Provider 区隐藏），已推送 origin。
+- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：41/41 通过。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
-- Release 单文件自包含 publish（README 规范参数）：0 errors；`DSH Launcher.exe` 72,325,277 字节，SHA-256 `DA33E65220D414FAD9296235FA9AE5D55EEF96A35C5F54E865B674B2C8296BBC`，已复制到桌面 `DSH Launcher\DSH Launcher.exe`、`VIDEO-CANDIDATE-v0.1.10`、`video-candidate-20260816` 并确认存在；60 秒干净目录运行存活（一次中途退出经事件日志排查为窗口被手动关闭，非崩溃）。
+- Release 单文件自包含 publish（README 规范参数）：0 errors；`DSH Launcher.exe` 72,326,467 字节，SHA-256 `91C2F265E0E7868983DDF3678988E73B349C9666282A22C6153108423A2AA555`，已复制到桌面 `DSH Launcher\DSH Launcher.exe`、`VIDEO-CANDIDATE-v0.1.10`、`video-candidate-20260816` 并确认存在；冒烟：60 秒干净目录存活，第二次启动 exit 0 并唤起已有窗口。
+- 崩溃取证：`%LOCALAPPDATA%\CrashDumps\DSH Launcher.exe.35640.dmp`（17:01:29）经 dotnet-dump 分析为 `RefreshProvidersAsync` 入口 ObjectDisposedException → `Window_OnLoaded` async void 未捕获。
 - `git diff --check`：通过。
 
 ## 已知问题
