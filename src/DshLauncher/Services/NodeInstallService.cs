@@ -69,12 +69,21 @@ public sealed class NodeInstallService
         // 每次调用使用唯一文件名，多个 Launcher 进程并发准备同一版本时互不干扰。
         var destination = Path.Combine(destinationDirectory, $"node-{version}-{Guid.NewGuid():N}{WindowsMsiFileNameSuffix}");
 
+        InstallerRun? installerRun = null;
         try
         {
             await DownloadAsync(new Uri(downloadUrl), destination, progress, cancellationToken);
+            // MSI 会以管理员权限执行：下载源或镜像被污染时，仅凭长度校验
+            // 不足以放行，必须先验证 Node.js 官方发布者的 Authenticode 签名。
+            if (!MsiAuthenticodeVerifier.IsTrustedNodeInstaller(destination))
+            {
+                return NodeInstallResult.Failure(
+                    "下载的 Node.js 安装程序未通过官方发布者签名验证，已停止安装。请更换下载源或手动安装。");
+            }
+
             onInstallStarted?.Invoke();
-            var exitCode = await RunInstallerAsync(destination, cancellationToken);
-            return MapExitCode(exitCode, version);
+            installerRun = await RunInstallerAsync(destination, cancellationToken);
+            return MapExitCode(installerRun.ExitCode, version);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -91,9 +100,9 @@ public sealed class NodeInstallService
         }
         finally
         {
-            // msiexec 已结束（成功、失败或超时），安装程序不再需要；
-            // 清理下载的 MSI，避免每次准备在 %TEMP%\\DSH Launcher 累积安装包。
-            TryDeleteInstaller(destination);
+            // 清理下载的 MSI，避免每次准备在 %TEMP%\\DSH Launcher 累积安装包；
+            // 超时路径下 msiexec 仍可能在后台运行，必须等它真正退出后再删除。
+            CleanupInstallerFile(installerRun?.LingeringProcess, destination);
         }
     }
 
@@ -110,6 +119,46 @@ public sealed class NodeInstallService
         {
             // 清理失败不能掩盖真实的安装结果。
         }
+    }
+
+    // msiexec 超时后绝不会被强杀，可能仍在后台安装；此时安装包既是被占用
+    // 的源文件，也可能仍被安装程序需要，清理必须推迟到进程真正退出之后。
+    internal static void CleanupInstallerFile(System.Diagnostics.Process? installer, string path)
+    {
+        var running = false;
+        try
+        {
+            running = installer is not null && !installer.HasExited;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            running = true;
+        }
+
+        if (running && installer is not null)
+        {
+            var lingering = installer;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await lingering.WaitForExitAsync();
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                    // 进程已退出或无法等待时继续尝试清理。
+                }
+                finally
+                {
+                    lingering.Dispose();
+                    TryDeleteInstaller(path);
+                }
+            });
+            return;
+        }
+
+        installer?.Dispose();
+        TryDeleteInstaller(path);
     }
 
     internal static NodeInstallResult MapExitCode(int exitCode, string version)
@@ -202,9 +251,17 @@ public sealed class NodeInstallService
         try
         {
             using var document = JsonDocument.Parse(indexJson);
+            // 端点可能返回合法 JSON 但形状错误（错误对象、数组内混入原始值），
+            // 这类索引不可用，交由固定版本兜底，不能让 InvalidOperationException 逃出。
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
             foreach (var entry in document.RootElement.EnumerateArray())
             {
-                if (!entry.TryGetProperty("version", out var versionElement)
+                if (entry.ValueKind != JsonValueKind.Object
+                    || !entry.TryGetProperty("version", out var versionElement)
                     || versionElement.ValueKind != JsonValueKind.String)
                 {
                     continue;
@@ -288,7 +345,9 @@ public sealed class NodeInstallService
         string.Equals(distBase, OfficialDistBase, StringComparison.OrdinalIgnoreCase)
         || string.Equals(distBase, MirrorDistBase, StringComparison.OrdinalIgnoreCase);
 
-    private static async Task<int> RunInstallerAsync(string msiPath, CancellationToken cancellationToken)
+    private sealed record InstallerRun(int ExitCode, Process? LingeringProcess);
+
+    private static async Task<InstallerRun> RunInstallerAsync(string msiPath, CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -299,11 +358,12 @@ public sealed class NodeInstallService
             WindowStyle = ProcessWindowStyle.Hidden
         };
 
-        using var process = new Process { StartInfo = startInfo };
+        var process = new Process { StartInfo = startInfo };
         try
         {
             if (!process.Start())
             {
+                process.Dispose();
                 throw new InvalidOperationException("Node.js 安装程序未能启动。");
             }
 
@@ -314,17 +374,23 @@ public sealed class NodeInstallService
             if (completed == exitTask)
             {
                 await exitTask;
-                return process.ExitCode;
+                var exitCode = process.ExitCode;
+                process.Dispose();
+                return new InstallerRun(exitCode, null);
             }
 
             // Never kill msiexec: a cancelled wait is a user abort, otherwise
-            // the full 10-minute timeout elapsed.
-            return cancellationToken.IsCancellationRequested
-                ? InstallCancelledExitCode
-                : InstallTimeoutExitCode;
+            // the full 10-minute timeout elapsed. The still-running process is
+            // handed back so the caller can defer MSI cleanup until it exits.
+            return new InstallerRun(
+                cancellationToken.IsCancellationRequested
+                    ? InstallCancelledExitCode
+                    : InstallTimeoutExitCode,
+                process);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
+            process.Dispose();
             throw new InvalidOperationException($"无法启动 Node.js 安装程序（可能取消了管理员授权）：{ex.Message}");
         }
     }

@@ -962,7 +962,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             dshDetail.Text = _dshRuntime.IsAvailable
                 ? $"{_dshRuntime.VersionText} · {(_dshRuntime.ExecutablePath ?? "路径未知")}"
                 : "未安装";
-            var ready = _nodeRuntime.IsAvailable && _dshRuntime.IsAvailable;
+            // 设置页按全局环境判定就绪：DSh 声明的 engines.node 与现有 Node
+            // 不兼容时保持“未就绪”，让状态和不兼容提示可见，而不是隐藏准备按钮。
+            var ready = _dshRuntime.IsAvailable && IsGlobalRuntimeReady(_nodeRuntime, _dshRuntime.NodeEngine);
             prepareButton.IsEnabled = !ready && !_isRuntimePrepareInProgress && !_isNodeDetectionInProgress;
             prepareMirrorButton.IsEnabled = prepareButton.IsEnabled;
             prepareButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
@@ -1106,6 +1108,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
+            // DSh 刚被安装/更新，或目标实例原绑定的运行目录已失效：把失效的
+            // Installed 实例重绑定到当前检测到的 DSh，准备流程才能自愈“入口在、
+            // 目录没了”的实例；无失效实例时这里是空操作。
+            RebindInstalledInstancesToDetectedDSh();
+
+            // 新检测到的 DSh metadata 可能声明与现有 Node 不兼容的 engines.node，
+            // 成功提示前必须按最新要求复查，不能沿用准备开始前的结论。
+            var finalRequirement = GetNodeEngineRequirement(target);
+            if (_nodeRuntime.GetCompatibility(finalRequirement) != NodeRuntimeCompatibility.Compatible)
+            {
+                var message = $"Node.js {_nodeRuntime.VersionText} 与当前 DSh 要求（{finalRequirement ?? "未声明"}）不兼容。\n\n"
+                    + "Launcher 不会自动卸载现有 Node.js。请安装满足要求的兼容版本后重试。";
+                progressWindow.SetStatus(message);
+                System.Windows.MessageBox.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+
             progressWindow.SetStatus("运行环境已就绪。");
             ShowNotice(target?.Kind == InstanceKind.Source
                 ? $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}。"
@@ -1152,9 +1171,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
+        // 入口 shim 仍在但 package 目录已删除的实例同样无法启动，
+        // 必须一并视为运行目录失效（否则会被 Runner 的 RootPath 检查拒绝）。
         return target.Kind != InstanceKind.Installed
-            || (!string.IsNullOrWhiteSpace(target.DshExecutablePath) && File.Exists(target.DshExecutablePath));
+            || ((!string.IsNullOrWhiteSpace(target.DshExecutablePath) && File.Exists(target.DshExecutablePath))
+                && DshRuntimeDetector.TryResolvePackageRoot(target.RootPath) is not null);
     }
+
+    internal static bool IsGlobalRuntimeReady(NodeRuntimeInfo nodeRuntime, string? dshNodeEngine) =>
+        nodeRuntime.IsAvailable
+        && (string.IsNullOrWhiteSpace(dshNodeEngine)
+            || nodeRuntime.GetCompatibility(dshNodeEngine) == NodeRuntimeCompatibility.Compatible);
 
     private void SetRuntimeInstallPhase(bool installing)
     {
@@ -1213,9 +1240,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         if (instance.Kind == InstanceKind.Installed
-            && (string.IsNullOrWhiteSpace(instance.DshExecutablePath) || !File.Exists(instance.DshExecutablePath)))
+            && ((string.IsNullOrWhiteSpace(instance.DshExecutablePath) || !File.Exists(instance.DshExecutablePath))
+                || DshRuntimeDetector.TryResolvePackageRoot(instance.RootPath) is null))
         {
-            missing.Add("DeepSeek Harness 入口缺失（可一键重装）");
+            missing.Add("DeepSeek Harness 入口或运行目录缺失（可一键修复）");
         }
 
         if (missing.Count == 0)

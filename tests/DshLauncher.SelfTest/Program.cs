@@ -23,6 +23,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node installer download progress", TestNodeInstallerDownloadProgress),
     ("Node install result states", TestNodeInstallResultStates),
     ("Node download cancel cleans part", TestNodeDownloadCancelCleansPart),
+    ("Node MSI verification and deferred cleanup", TestNodeMsiVerificationAndDeferredCleanup),
     ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
     ("Node engine requirement resolution", TestNodeEngineRequirementResolution),
     ("Runtime progress window close guard", TestRuntimeProgressCloseGuard),
@@ -264,6 +265,10 @@ static Task TestNodeInstallVersionResolution()
     var nonLts = "[{\"version\":\"v25.0.0\",\"lts\":false}]";
     Assert(NodeInstallService.SelectLtsVersion(nonLts) is null, "没有可用兼容 LTS 时应返回 null 并使用固定版本兜底。");
     Assert(NodeInstallService.SelectLtsVersion("not json") is null, "损坏的版本索引应返回 null。");
+    Assert(NodeInstallService.SelectLtsVersion("{\"error\":\"Service Unavailable\"}") is null,
+        "形状错误的合法 JSON 索引（错误对象）应返回 null 并走固定版本兜底，而不是抛异常。");
+    Assert(NodeInstallService.SelectLtsVersion("[\"v22.23.2\",{\"version\":\"v24.5.0\",\"lts\":\"Krypton\"}]") == "v24.5.0",
+        "数组中混入原始值时应跳过无效项并继续选择可用 LTS。");
     return Task.CompletedTask;
 }
 
@@ -351,6 +356,57 @@ static async Task TestNodeDownloadCancelCleansPart()
     cts.Cancel();
     await AssertThrowsAsync<OperationCanceledException>(() => download, "取消下载应抛 OperationCanceledException。");
     Assert(Directory.GetFiles(temporary.Path).Length == 0, "取消下载后不得残留 .part 临时文件或目标文件。");
+}
+
+static async Task TestNodeMsiVerificationAndDeferredCleanup()
+{
+    using var temporary = new TestDirectory();
+    var unsigned = Path.Combine(temporary.Path, "unsigned.msi");
+    await File.WriteAllTextAsync(unsigned, "not a real msi");
+    Assert(!MsiAuthenticodeVerifier.HasValidSignature(unsigned),
+        "未签名的下载结果不能通过 Authenticode 链验证。");
+    Assert(!MsiAuthenticodeVerifier.IsTrustedNodeInstaller(unsigned),
+        "签名验证失败的 MSI 绝不能进入提权安装。");
+    Assert(!MsiAuthenticodeVerifier.IsAllowedNodePublisher(null), "没有签名者证书时必须拒绝。");
+
+    // 系统 DLL 多为 catalog 签名（无内嵌 Authenticode），用内嵌签名的 dotnet.exe
+    // 验证签名链基础设施与发布者白名单；机器上没有该文件时跳过这部分自检。
+    var signedBinary = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
+    if (File.Exists(signedBinary))
+    {
+        Assert(MsiAuthenticodeVerifier.HasValidSignature(signedBinary),
+            "内嵌 Authenticode 签名的文件应通过链验证（验证基础设施自检）。");
+        using var microsoftSigner = MsiAuthenticodeVerifier.ReadSignerCertificate(signedBinary);
+        Assert(microsoftSigner is not null && !MsiAuthenticodeVerifier.IsAllowedNodePublisher(microsoftSigner),
+            "签名有效但发布者不是 Node.js 官方（如 Microsoft）时仍必须拒绝提权安装。");
+        Assert(!MsiAuthenticodeVerifier.IsTrustedNodeInstaller(signedBinary),
+            "签名链有效但发布者不在名单内时整体判定仍为不信任。");
+    }
+
+    // 超时路径下 msiexec 仍可能后台运行：清理必须等它退出后再删安装包。
+    var installerPath = Path.Combine(temporary.Path, "node-v22.23.2-deferred.msi");
+    await File.WriteAllTextAsync(installerPath, "installer payload");
+    var exited = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c exit 0") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(exited is not null, "测试需要能启动辅助进程。");
+    await exited!.WaitForExitAsync();
+    NodeInstallService.CleanupInstallerFile(exited, installerPath);
+    Assert(!File.Exists(installerPath), "安装程序已退出时应立即清理 MSI。");
+
+    var lingeringPath = Path.Combine(temporary.Path, "node-v22.23.2-lingering.msi");
+    await File.WriteAllTextAsync(lingeringPath, "installer payload");
+    var lingering = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 4 127.0.0.1 > nul") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(lingering is not null, "测试需要能启动辅助进程。");
+    NodeInstallService.CleanupInstallerFile(lingering!, lingeringPath);
+    Assert(File.Exists(lingeringPath), "安装程序仍在运行时不能立即删除仍被占用的 MSI。");
+    for (var attempt = 0; attempt < 100 && File.Exists(lingeringPath); attempt++)
+    {
+        await Task.Delay(100);
+    }
+
+    Assert(!File.Exists(lingeringPath), "安装程序退出后必须补做 MSI 清理。");
 }
 
 static Task TestInstanceRuntimeRebinding()
@@ -591,21 +647,37 @@ static Task TestStartFlowDecisions()
         "按 ID 找不到目标时应返回 null。");
 
     var node = new NodeRuntimeInfo(true, "node.exe", "24.19.0", null);
-    var installedExe = Path.Combine(root, "dsh.cmd");
+    var packageRoot = Path.Combine(temporary.Path, "dsh-package");
+    Directory.CreateDirectory(packageRoot);
+    File.WriteAllText(
+        Path.Combine(packageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"}}",
+        new UTF8Encoding(false));
+    var installedExe = Path.Combine(packageRoot, "dsh.cmd");
     File.WriteAllText(installedExe, "@echo off\r\n", new UTF8Encoding(false));
-    var installedReady = CreateTestInstance("installed-ready", root, Path.Combine(temporary.Path, "home-3"))
+    var installedReady = CreateTestInstance("installed-ready", packageRoot, Path.Combine(temporary.Path, "home-3"))
         with { DshExecutablePath = installedExe, DetectedVersion = "0.2.0" };
     var installedStale = CreateTestInstance("installed-stale", root, Path.Combine(temporary.Path, "home-4"));
+    var installedRootGone = CreateTestInstance("installed-root-gone", root, Path.Combine(temporary.Path, "home-5"))
+        with { DshExecutablePath = Path.Combine(packageRoot, "dsh.cmd") };
     Assert(MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedReady),
-        "重绑定后重新读取的 engine 兼容且入口存在时应判定就绪。");
+        "重绑定后重新读取的 engine 兼容、入口和 package 目录都有效时应判定就绪。");
     Assert(!MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedStale),
         "Installed 实例入口仍缺失时不能判定就绪（覆盖 npm 成功但重检测失败场景）。");
+    Assert(!MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedRootGone),
+        "入口 shim 还在但 package 目录已删除的实例不能判定就绪，应路由到一键修复。");
     Assert(MainWindow.IsRuntimeReadyAfterPreparation(node, null,
-        CreateTestInstance("source-ok", root, Path.Combine(temporary.Path, "home-5")) with { Kind = InstanceKind.Source }),
+        CreateTestInstance("source-ok", root, Path.Combine(temporary.Path, "home-6")) with { Kind = InstanceKind.Source }),
         "Source 实例无需全局 DSh 入口即可判定就绪。");
     Assert(!MainWindow.IsRuntimeReadyAfterPreparation(NodeRuntimeInfo.Missing(), null,
-        CreateTestInstance("source-no-node", root, Path.Combine(temporary.Path, "home-6")) with { Kind = InstanceKind.Source }),
+        CreateTestInstance("source-no-node", root, Path.Combine(temporary.Path, "home-7")) with { Kind = InstanceKind.Source }),
         "Node 仍缺失时不能判定就绪。");
+
+    Assert(MainWindow.IsGlobalRuntimeReady(node, null), "全局环境 DSh 未声明 engine 时就绪只看 Node 可用。");
+    Assert(!MainWindow.IsGlobalRuntimeReady(node, ">=26.0.0"),
+        "新装 DSh 声明的 engine 与现有 Node 不兼容时全局环境不能判定就绪。");
+    Assert(!MainWindow.IsGlobalRuntimeReady(NodeRuntimeInfo.Missing(), null),
+        "Node 缺失时全局环境不能判定就绪。");
     return Task.CompletedTask;
 }
 
@@ -1780,6 +1852,15 @@ static Task TestConversationFileManagement()
     var titled = service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
     Assert(titled.DisplayName == "测试标题", "应优先显示 DSh session 投影缓存中的标题。");
     Assert(service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(compressedPath)).DisplayName.Contains("demo"), "无标题会话应回退到工作目录名称。");
+    File.WriteAllText(
+        Path.Combine(projectionCacheDirectory, "session_projcache.json"),
+        "{\"tables\":[\"unexpected\"],\"sessions\":{\"session-1\":\"bad\"}}",
+        new UTF8Encoding(false));
+    var corruptedCacheEntries = service.List(instance);
+    Assert(corruptedCacheEntries.Any(entry => entry.FullPath == Path.GetFullPath(sourcePath) && entry.HasValidHeader),
+        "标题缓存结构损坏（意外值类型）时不能中断会话列表。");
+    Assert(corruptedCacheEntries.Single(entry => entry.FullPath == Path.GetFullPath(sourcePath)).DisplayName.Contains("未命名"),
+        "标题缓存损坏时会话应回退为未命名显示。");
     var compressedSession = entries.Single(entry => entry.FullPath == Path.GetFullPath(compressedPath));
     Assert(compressedSession.IsCompressed && compressedSession.HasValidHeader && compressedSession.SessionId == "session-2", "应解压压缩会话的首个 Zstandard frame 并读取会话头部。");
     Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(invalidCompressedPath)), "损坏的压缩会话应列出但标记为不可解析。");

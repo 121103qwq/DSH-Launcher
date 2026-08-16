@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-收口 `feature/runtime-bootstrap`：等待 PR #2 第四轮 Codex Review 结果；若仍有真实 P1/P2 继续修复并重新 Review，干净后保留真实无 Node Windows 的实机人工验收（Installed 与 Source 两条链路），验收通过再合并 main。
+处理 PR #2 第四轮 Codex Review（1 条 P1 + 5 条 P2，全部确认为真实问题并已修复）：MSI 提权前验证 Authenticode 签名链与 Node.js 官方发布者、形状错误的版本索引走固定版本兜底、msiexec 超时后延迟清理安装包、标题缓存损坏不中断会话列表、package 目录失效也进入一键修复并自愈重绑定、DSh 装后按最新 engines.node 复查 Node 兼容性；完成后重新触发 Review。
 
 ## 已完成内容
 
@@ -17,7 +17,7 @@
 - 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。对话列表优先显示会话名称：读取 DSh `storages/session_projcache.json` 的标题，无标题时回退为“未命名 · 项目 · 时间”，不再把原始 session ID 作为首列。
 - 扩展页卡顿修复：已安装插件扫描和插件市场安装状态/主题扫描移到后台线程；已安装列表与市场列表启用虚拟化（Recycling）。打开“扩展”页只读取本地市场缓存，不再每次联网刷新目录；仅在首次无缓存或用户点击“刷新目录”时才联网，避免每次切换页面等待 GitHub/社区目录超时。
 - 一键运行环境准备：设置/诊断页显示 Node/DSh 状态，缺失时提供“准备运行环境（官方源 / 国内镜像）”按钮。Node 缺失时通过 NodeInstallService 下载 Windows x64 Node.js 官方 MSI 并显示真实字节/百分比进度，经系统授权（msiexec /qn）安装后重新运行 NodeRuntimeDetector，无需重启 Launcher；Node 就绪但 DSh 缺失时复用 DshInstallService 通过 npm 安装 `@deepseek-ai/dsh`（不确定进度），安装后重新运行 DshRuntimeDetector。Node 版本不兼容时只提示安装兼容版本，不自动卸载。启动实例时若运行环境缺失会弹出缺失项并询问是否准备，准备成功后继续原启动流程。Launcher 启动时不静默下载或安装任何内容。Node 检测覆盖 `<ProgramFiles>\nodejs`（官方 MSI 默认位置）。
-- runtime bootstrap 边界修复：Node 下载阶段可取消并清理 `.part` 临时文件，关闭进度窗口等价于取消下载；MSI 安装开始后禁用取消按钮、阻止通过窗口 X 关闭进度窗口并阻止主窗口关闭（流程结束恢复后自动解除）、不强制终止 Windows Installer，安装结束后删除下载的 MSI，用户取消与真实 10 分钟超时用独立结果状态区分。DSh 重新安装并检测成功后，绑定失效的 Installed 实例经 `InstanceRuntimeRebinder` 重绑定到重新检测到的 package root / executable / version，保留实例 Id 与 DSH_HOME、不创建新实例、不修改 Source 实例；运行中或 Attached 实例不参与重绑定。Node 兼容判断以 metadata 为准：Installed 实例优先读取自身 package root 的 `engines.node`，有效但未声明时保持未声明，仅当其 runtime 失效且重装/重绑定时才使用重新检测到的 DSh metadata；Source 实例只读取自身项目 metadata，未声明时保持未声明，不继承全局 installed DSh 的版本要求；未选择实例的诊断场景使用全局 DSh engine。手动安装提示按实际 `engines.node` 要求给出；对话触发的自动启动同样先经过 runtime 准备；准备期间目标实例被删除则中止启动；会话标题缓存路径包含重解析点组件时拒绝读取。MSI 安装后把新检测到的 Node 目录补入当前进程 PATH，DSh 检测/启动可解析 node；设置/诊断页准备按钮面向全局运行环境（不传实例目标），Node 检测进行中禁止启动与一键准备，后台检测结束后自动恢复准备按钮；版本索引不可用且固定兜底版本不满足目标 engine 时停止安装并提示，不装出与 engine 不兼容的 Node；每次安装调用使用唯一 MSI 文件名避免并发干扰。
+- runtime bootstrap 边界修复：Node 下载阶段可取消并清理 `.part` 临时文件，关闭进度窗口等价于取消下载；MSI 安装开始后禁用取消按钮、阻止通过窗口 X 关闭进度窗口并阻止主窗口关闭（流程结束恢复后自动解除）、不强制终止 Windows Installer，安装结束后删除下载的 MSI，用户取消与真实 10 分钟超时用独立结果状态区分。DSh 重新安装并检测成功后，绑定失效的 Installed 实例经 `InstanceRuntimeRebinder` 重绑定到重新检测到的 package root / executable / version，保留实例 Id 与 DSH_HOME、不创建新实例、不修改 Source 实例；运行中或 Attached 实例不参与重绑定。Node 兼容判断以 metadata 为准：Installed 实例优先读取自身 package root 的 `engines.node`，有效但未声明时保持未声明，仅当其 runtime 失效且重装/重绑定时才使用重新检测到的 DSh metadata；Source 实例只读取自身项目 metadata，未声明时保持未声明，不继承全局 installed DSh 的版本要求；未选择实例的诊断场景使用全局 DSh engine。手动安装提示按实际 `engines.node` 要求给出；对话触发的自动启动同样先经过 runtime 准备；准备期间目标实例被删除则中止启动；会话标题缓存路径包含重解析点组件时拒绝读取，缓存结构损坏（意外值类型）时按无标题处理、不中断会话列表。MSI 提权安装前验证 Authenticode 签名链与 Node.js 官方发布者（OpenJS/Node.js Foundation/Joyent），验证失败不执行安装；msiexec 超时后仍可能在后台运行，MSI 清理推迟到进程真正退出；版本索引返回形状错误的合法 JSON 时走固定版本兜底。实例 package 运行目录已删除但入口 shim 仍在时同样视为缺失并进入一键修复，准备完成时自动重绑定自愈；DSh 安装/更新后按最新 engines.node 复查 Node 兼容性，不兼容时报失败且不自动卸载，设置页就绪判定包含该兼容性。MSI 安装后把新检测到的 Node 目录补入当前进程 PATH，DSh 检测/启动可解析 node；设置/诊断页准备按钮面向全局运行环境（不传实例目标），Node 检测进行中禁止启动与一键准备，后台检测结束后自动恢复准备按钮；版本索引不可用且固定兜底版本不满足目标 engine 时停止安装并提示，不装出与 engine 不兼容的 Node；每次安装调用使用唯一 MSI 文件名避免并发干扰。
 
 ## 当前主要相关文件
 
@@ -34,10 +34,10 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）；最新提交 `d3b3c7d`（Address PR #2 third-round review findings），已推送 origin，相对 main ahead 6 / behind 0。
-- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：37/37 通过（新增：Source engine 驱动 Node 版本选择、Source 不装全局 DSh、有效 Installed 未声明 engine 保持未声明、Node 检测期间禁止启动、启动目标按原实例 ID 解析、重绑定后重算 engine 的启动就绪判定、Running/Attached 不重绑定、Node 目录补入 PATH 的纯逻辑、固定版本兜底兼容性）。
+- 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）；最新提交为第四轮 Review 修复提交（哈希见 git log），已推送 origin。
+- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：38/38 通过（第四轮新增：形状错误索引兜底、MSI Authenticode 验证与发布者白名单、msiexec 存活时延迟清理安装包、标题缓存损坏不中断列表、package 目录失效的启动就绪判定、全局环境就绪兼容性判定）。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
-- Release 单文件自包含 publish：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `63FE7F24EA0F28B62DAF5580CF2B541BC51CBD131A494309C9B5E8FDAF29FEAA`，已复制到桌面 `runtime-bootstrap-review-fix4-20260816`；实际启动验证：窗口正常出现且可正常退出（exit 0）。
+- Release 单文件自包含 publish：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `CAE616051263664AEBD7A09E479C94AE0A1DA753C6BDD8E76CF8508B082A5FD0`，已复制到桌面 `runtime-bootstrap-review-fix5-20260816`；启动冒烟验证通过（进程正常驻留，测试后终止）。
 - `git diff --check`：通过。
 
 ## 已知问题
@@ -71,4 +71,4 @@
 
 ## 下一步最直接的任务
 
-接手点：第四轮 `@codex review` 已针对 `d3b3c7d` 触发但结果尚未返回（前 21 条 review 评论已全部回复确认并 resolve）。下一步：等待/拉取第四轮 Review 结果，处理新增真实 P1/P2（不要机械照改，先核对调用链），全部通过后再做真实无 Node Windows 的 Installed/Source 实机人工验收，验收通过才合并 main。
+接手点：第四轮 Review 的 6 条发现（1 P1 + 5 P2）已全部修复并推送，6 条线程已回复并 resolve，第五轮 `@codex review` 已重新触发。下一步：等待第五轮结果；干净后仍保留真实无 Node Windows 的 Installed/Source 实机人工验收，验收通过才合并 main。

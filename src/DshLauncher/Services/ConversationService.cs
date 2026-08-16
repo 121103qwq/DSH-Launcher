@@ -239,7 +239,12 @@ public sealed class ConversationService
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllBytes(path));
-            if (!document.RootElement.TryGetProperty("tables", out var tables)
+            // 标题缓存损坏或 schema 变化时可能持有意外类型；标题只是可选
+            // 增强信息，逐层校验 ValueKind，不让格式异常中断整个会话列表。
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("tables", out var tables)
+                || tables.ValueKind != JsonValueKind.Object
                 || !tables.TryGetProperty("sessions", out var sessions)
                 || sessions.ValueKind != JsonValueKind.Object)
             {
@@ -249,8 +254,11 @@ public sealed class ConversationService
             var result = new Dictionary<string, string?>(StringComparer.Ordinal);
             foreach (var session in sessions.EnumerateObject())
             {
-                if (!session.Value.TryGetProperty("rows", out var rows)
+                if (session.Value.ValueKind != JsonValueKind.Object
+                    || !session.Value.TryGetProperty("rows", out var rows)
+                    || rows.ValueKind != JsonValueKind.Object
                     || !rows.TryGetProperty("title", out var titleRow)
+                    || titleRow.ValueKind != JsonValueKind.Object
                     || !titleRow.TryGetProperty("val", out var titleValue))
                 {
                     continue;
