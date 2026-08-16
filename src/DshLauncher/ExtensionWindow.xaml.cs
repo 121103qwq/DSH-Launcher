@@ -242,6 +242,8 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
+    private int _marketplaceRenderVersion;
+
     private void RenderMarketplaceItems()
     {
         if (_marketplaceService is null)
@@ -249,18 +251,74 @@ public partial class ExtensionWindow : UserControl
             return;
         }
 
+        // 筛选、排序和逐条投影全部放到后台线程（目录可达千余条，切分类/搜索
+        // 时在 UI 线程同步重算会明显卡顿）；UI 线程只做一次 ItemsSource 替换。
+        // 渲染版本号防止慢的旧结果覆盖新的选择。
+        var renderVersion = ++_marketplaceRenderVersion;
+        var snapshot = _marketplaceSnapshot;
+        var query = MarketplaceSearchBox.Text;
+        var sourceKind = GetSelectedSourceKind();
+        var sortOrder = GetSelectedSortOrder();
+        var category = GetSelectedCategory();
+        var installedPlugins = _installedPlugins;
+        var canMutate = _marketplaceCanMutate;
+        var themeState = _themeState;
+        var instanceRunning = _instance.RuntimeStatus == InstanceRuntimeStatus.Running;
+        var instanceAttached = _instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached;
+        var mutating = _isMarketplaceMutating;
+
+        _ = Task.Run(() =>
+        {
+            var rendered = BuildMarketplaceItems(
+                snapshot,
+                query,
+                sourceKind,
+                sortOrder,
+                category,
+                installedPlugins,
+                canMutate,
+                themeState,
+                instanceRunning,
+                instanceAttached,
+                mutating);
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (renderVersion != _marketplaceRenderVersion)
+                {
+                    return;
+                }
+
+                MarketplaceList.ItemsSource = rendered;
+                MarketplaceSummaryText.Text = rendered.Count == snapshot.Count
+                    ? $"找到 {snapshot.Count} 个候选插件"
+                    : $"显示 {rendered.Count} / {snapshot.Count} 个候选插件";
+            });
+        });
+    }
+
+    internal static List<MarketplaceItem> BuildMarketplaceItems(
+        IReadOnlyList<MarketplaceItem> snapshot,
+        string? query,
+        MarketplaceSourceKind? sourceKind,
+        MarketplaceSortOrder sortOrder,
+        string? category,
+        IReadOnlyList<ExtensionEntry> installedPlugins,
+        bool canMutate,
+        DshMarketThemeState themeState,
+        bool instanceRunning,
+        bool instanceAttached,
+        bool mutating)
+    {
         var items = MarketplaceService.FilterAndSort(
-            _marketplaceSnapshot,
-            query: MarketplaceSearchBox.Text,
-            sourceKind: GetSelectedSourceKind(),
-            sortOrder: GetSelectedSortOrder(),
-            category: GetSelectedCategory());
-        // 整批构建后一次性替换 ItemsSource：逐条 Add 会为每个条目触发一次
-        // 集合变更与布局，目录有几百条时打开页面/搜索都会明显卡顿。
+            snapshot,
+            query: query,
+            sourceKind: sourceKind,
+            sortOrder: sortOrder,
+            category: category);
         var rendered = new List<MarketplaceItem>(items.Count);
         foreach (var item in items)
         {
-            var installedEntry = MarketplaceService.FindInstalledPlugin(item, _installedPlugins);
+            var installedEntry = MarketplaceService.FindInstalledPlugin(item, installedPlugins);
             var isInstalled = installedEntry is not null;
             var isTheme = string.Equals(
                 MarketplaceService.NormalizeCategory(item.Category),
@@ -269,13 +327,13 @@ public partial class ExtensionWindow : UserControl
             var themePackageName = installedEntry?.Name;
             var themeMarketAvailable = isTheme
                 && themePackageName is not null
-                && _themeState.IsAvailable
-                && _themeState.InstalledNames.Contains(themePackageName);
+                && themeState.IsAvailable
+                && themeState.InstalledNames.Contains(themePackageName);
             var themeCanApply = themeMarketAvailable
                 && installedEntry!.Managed
-                && _instance.RuntimeStatus == InstanceRuntimeStatus.Running
-                && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
-                && !_isMarketplaceMutating;
+                && instanceRunning
+                && !instanceAttached
+                && !mutating;
             rendered.Add(item with
             {
                 IsInstalled = isInstalled,
@@ -284,21 +342,18 @@ public partial class ExtensionWindow : UserControl
                 UpdateStatus = isInstalled
                     ? MarketplaceService.GetUpdateStatus(item.Version, installedEntry?.Version)
                     : MarketplaceUpdateStatus.Unknown,
-                CanMutate = _marketplaceCanMutate,
+                CanMutate = canMutate,
                 IsTheme = isTheme,
                 ThemeMarketAvailable = themeMarketAvailable,
                 ThemeCanApply = themeCanApply,
                 ThemePackageName = themePackageName,
                 ThemeStatusText = isTheme
-                    ? GetThemeStatusText(isInstalled, themeMarketAvailable, themePackageName)
+                    ? GetThemeStatusText(isInstalled, themeMarketAvailable, themePackageName, themeState, instanceRunning, instanceAttached)
                     : null
             });
         }
 
-        MarketplaceList.ItemsSource = rendered;
-        MarketplaceSummaryText.Text = _marketplaceSnapshot.Count == items.Count
-            ? $"找到 {_marketplaceSnapshot.Count} 个候选插件"
-            : $"显示 {items.Count} / {_marketplaceSnapshot.Count} 个候选插件";
+        return rendered;
     }
 
     private MarketplaceSourceKind? GetSelectedSourceKind()
@@ -321,24 +376,30 @@ public partial class ExtensionWindow : UserControl
         return string.IsNullOrWhiteSpace(tag) ? null : tag;
     }
 
-    private string GetThemeStatusText(bool isInstalled, bool themeMarketAvailable, string? packageName)
+    private static string GetThemeStatusText(
+        bool isInstalled,
+        bool themeMarketAvailable,
+        string? packageName,
+        DshMarketThemeState themeState,
+        bool instanceRunning,
+        bool instanceAttached)
     {
         if (!isInstalled)
         {
             return "主题资源 · 安装后可通过 dsh-market 应用";
         }
 
-        if (_instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        if (instanceAttached)
         {
             return "当前连接的是外部实例，Launcher 不会修改其主题";
         }
 
-        if (_instance.RuntimeStatus != InstanceRuntimeStatus.Running)
+        if (!instanceRunning)
         {
             return "启动当前实例后可检测 dsh-market 并应用主题";
         }
 
-        if (!_themeState.IsAvailable)
+        if (!themeState.IsAvailable)
         {
             return "未检测到 dsh-market；当前只能管理主题 Plugin";
         }
@@ -348,7 +409,7 @@ public partial class ExtensionWindow : UserControl
             return "dsh-market 未将该安装包识别为主题资源";
         }
 
-        return _themeState.LiveNames.Contains(packageName)
+        return themeState.LiveNames.Contains(packageName)
             ? "dsh-market 已热加载该主题"
             : "dsh-market 可应用该主题";
     }
