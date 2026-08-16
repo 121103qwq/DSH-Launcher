@@ -26,6 +26,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
     ("Node engine requirement resolution", TestNodeEngineRequirementResolution),
     ("Runtime progress window close guard", TestRuntimeProgressCloseGuard),
+    ("Node version selection uses source engine", TestNodeVersionSelectionUsesEngine),
+    ("DSh global install target decision", TestDshInstallTargetDecision),
+    ("Start flow decisions", TestStartFlowDecisions),
     ("DSh install guard", TestDshInstallGuard),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
@@ -400,6 +403,28 @@ static Task TestInstanceRuntimeRebinding()
     var valid = registry.Register("有效 DSh", validRoot, InstanceKind.Installed, validExe, "0.2.0", "npm");
     Assert(InstanceRuntimeRebinder.RebindInstalledInstance(valid, detected) is null,
         "绑定仍有效的实例不应被重绑定。");
+
+    var attachedStale = stale with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Attached,
+        ProcessId = 4242,
+        Port = 19000,
+        WebUrl = "http://127.0.0.1:19000"
+    };
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(attachedStale, detected) is null,
+        "Attached 实例不能被重绑定成 Ready。");
+
+    var runningStale = stale with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Managed,
+        ProcessId = 4243,
+        Port = 19001,
+        WebUrl = "http://127.0.0.1:19001"
+    };
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(runningStale, detected) is null,
+        "运行中的实例不能被重绑定成 Ready。");
     return Task.CompletedTask;
 }
 
@@ -459,14 +484,23 @@ static Task TestNodeEngineRequirementResolution()
     Assert(DshRuntimeDetector.ResolveNodeEngine(installed, ">=30.0.0") == "^22.19.0 || >=24.0.0",
         "Installed 实例声明 engines.node 时应优先使用实例自己的 metadata。");
 
-    var fallbackRoot = Path.Combine(temporary.Path, "installed-undeclared");
-    Directory.CreateDirectory(fallbackRoot);
+    var installedUndeclaredRoot = Path.Combine(temporary.Path, "installed-undeclared");
+    Directory.CreateDirectory(installedUndeclaredRoot);
     File.WriteAllText(
-        Path.Combine(fallbackRoot, "package.json"),
+        Path.Combine(installedUndeclaredRoot, "package.json"),
         "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\"}",
         new UTF8Encoding(false));
-    Assert(DshRuntimeDetector.ResolveNodeEngine(installed with { Id = "installed-fallback", RootPath = fallbackRoot }, globalEngine) == globalEngine,
-        "Installed 实例 metadata 未声明时可以使用重新检测到的 DSh metadata。");
+    Assert(DshRuntimeDetector.ResolveNodeEngine(installed with { Id = "installed-fallback", RootPath = installedUndeclaredRoot }, globalEngine) is null,
+        "有效 Installed 实例未声明 engines.node 时应保持未声明，不继承其它 DSh 的要求。");
+
+    var staleRoot = Path.Combine(temporary.Path, "installed-stale");
+    Directory.CreateDirectory(staleRoot);
+    File.WriteAllText(
+        Path.Combine(staleRoot, "package.json"),
+        "{\"name\":\"unrelated\",\"version\":\"1.0.0\"}",
+        new UTF8Encoding(false));
+    Assert(DshRuntimeDetector.ResolveNodeEngine(installed with { Id = "installed-stale", RootPath = staleRoot }, globalEngine) == globalEngine,
+        "runtime 已失效的 Installed 实例在重装/重绑定时才可以使用重新检测到的 DSh metadata。");
 
     Assert(DshRuntimeDetector.ResolveNodeEngine(null, globalEngine) == globalEngine,
         "未选择实例时诊断页应使用全局 DSh engine。");
@@ -477,6 +511,75 @@ static Task TestRuntimeProgressCloseGuard()
 {
     Assert(RuntimeProgressWindow.IsCloseAllowed(false), "Node 下载阶段应允许关闭窗口。");
     Assert(!RuntimeProgressWindow.IsCloseAllowed(true), "MSI 安装阶段必须阻止窗口关闭。");
+    return Task.CompletedTask;
+}
+
+static Task TestNodeVersionSelectionUsesEngine()
+{
+    var index = "[{\"version\":\"v24.5.0\",\"lts\":\"Krypton\"},{\"version\":\"v22.23.2\",\"lts\":\"Jod\"},{\"version\":\"v20.19.0\",\"lts\":\"Iron\"},{\"version\":\"v18.20.4\",\"lts\":false}]";
+    Assert(NodeInstallService.SelectLtsVersion(index, "^20.0.0") == "v20.19.0",
+        "Source 声明 ^20.0.0 时应选择兼容的 Node 20 LTS，而不是全局 DSh 的 22/24 范围。");
+    Assert(NodeInstallService.SelectLtsVersion(index, "^18.0.0") is null,
+        "版本索引中没有兼容 LTS 时应返回 null，由固定版本兜底。");
+    Assert(NodeInstallService.SelectLtsVersion(index) == "v24.5.0",
+        "未指定 engine 时保持官方 DSh 默认兼容策略（22.19+ 或 24+）。");
+    Assert(NodeInstallService.SelectLtsVersion(index, "^22.19.0 || >=24.0.0") == "v24.5.0",
+        "Installed 场景应优先选择满足官方 DSh engine 的新版 LTS。");
+    return Task.CompletedTask;
+}
+
+static Task TestDshInstallTargetDecision()
+{
+    Assert(DshInstallService.ShouldInstallGlobalDSh(false, InstanceKind.Installed),
+        "Installed 实例缺 DSh 时应安装全局 DSh。");
+    Assert(!DshInstallService.ShouldInstallGlobalDSh(false, InstanceKind.Source),
+        "Source 实例缺全局 DSh 时不应安装全局 @deepseek-ai/dsh。");
+    Assert(!DshInstallService.ShouldInstallGlobalDSh(true, InstanceKind.Installed),
+        "已检测到 DSh 时不应重复安装。");
+    Assert(DshInstallService.ShouldInstallGlobalDSh(false, null),
+        "设置页未指定实例且缺 DSh 时应允许安装全局 DSh。");
+    return Task.CompletedTask;
+}
+
+static Task TestStartFlowDecisions()
+{
+    Assert(!MainWindow.CanStartInstanceCore(false, false, true, true, false),
+        "Node 检测进行中不能点击启动。");
+    Assert(MainWindow.CanStartInstanceCore(false, false, false, true, false),
+        "检测完成后且实例可启动时应允许启动。");
+    Assert(!MainWindow.CanStartInstanceCore(false, true, false, true, false),
+        "runtime 准备进行中不能再次启动。");
+    Assert(!MainWindow.CanStartInstanceCore(false, false, false, false, false),
+        "没有选中实例时不能启动。");
+    Assert(!MainWindow.CanStartInstanceCore(false, false, false, true, true),
+        "运行中且没有 Web 地址的实例不能启动。");
+
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "dsh");
+    Directory.CreateDirectory(root);
+    var first = CreateTestInstance("target-first", root, Path.Combine(temporary.Path, "home-1"));
+    var second = CreateTestInstance("target-second", root, Path.Combine(temporary.Path, "home-2"));
+    Assert(MainWindow.ResolveInstanceById(new[] { first, second }, "target-second") == second,
+        "启动目标必须按最初点击的实例 ID 解析，而不是当前 SelectedInstance。");
+    Assert(MainWindow.ResolveInstanceById(new[] { first, second }, "missing") is null,
+        "按 ID 找不到目标时应返回 null。");
+
+    var node = new NodeRuntimeInfo(true, "node.exe", "24.19.0", null);
+    var installedExe = Path.Combine(root, "dsh.cmd");
+    File.WriteAllText(installedExe, "@echo off\r\n", new UTF8Encoding(false));
+    var installedReady = CreateTestInstance("installed-ready", root, Path.Combine(temporary.Path, "home-3"))
+        with { DshExecutablePath = installedExe, DetectedVersion = "0.2.0" };
+    var installedStale = CreateTestInstance("installed-stale", root, Path.Combine(temporary.Path, "home-4"));
+    Assert(MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedReady),
+        "重绑定后重新读取的 engine 兼容且入口存在时应判定就绪。");
+    Assert(!MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedStale),
+        "Installed 实例入口仍缺失时不能判定就绪（覆盖 npm 成功但重检测失败场景）。");
+    Assert(MainWindow.IsRuntimeReadyAfterPreparation(node, null,
+        CreateTestInstance("source-ok", root, Path.Combine(temporary.Path, "home-5")) with { Kind = InstanceKind.Source }),
+        "Source 实例无需全局 DSh 入口即可判定就绪。");
+    Assert(!MainWindow.IsRuntimeReadyAfterPreparation(NodeRuntimeInfo.Missing(), null,
+        CreateTestInstance("source-no-node", root, Path.Combine(temporary.Path, "home-6")) with { Kind = InstanceKind.Source }),
+        "Node 仍缺失时不能判定就绪。");
     return Task.CompletedTask;
 }
 

@@ -13,6 +13,8 @@ public static class InstanceRuntimeRebinder
     public static ManagerInstance? RebindInstalledInstance(ManagerInstance instance, DshRuntimeInfo detected)
     {
         if (instance.Kind != InstanceKind.Installed
+            || instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            || instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached
             || !detected.IsAvailable
             || string.IsNullOrWhiteSpace(detected.PackageRoot)
             || string.IsNullOrWhiteSpace(detected.ExecutablePath))

@@ -168,9 +168,17 @@ public sealed class DshRuntimeDetector
 
         if (instance?.Kind == InstanceKind.Installed)
         {
-            // 优先读取实例自己的 package metadata；仅当其失效且 Launcher
-            // 正在重装/重绑定时才使用重新检测到的 DSh metadata。
-            return TryReadNodeEngine(instance.RootPath) ?? detectedNodeEngine;
+            var packageRoot = TryResolvePackageRoot(instance.RootPath);
+            if (packageRoot is null)
+            {
+                // 当前实例 runtime 已失效（正在重装/重绑定）时才使用
+                // 重新检测到的 DSh metadata。
+                return detectedNodeEngine;
+            }
+
+            // 有效 package 未声明 engines.node 时保持未声明，
+            // 不继承系统中其它 DSh 的版本要求。
+            return TryReadNodeEngine(packageRoot);
         }
 
         return detectedNodeEngine;

@@ -47,14 +47,15 @@ public sealed class NodeInstallService
         string distBase,
         IProgress<NodeDownloadProgress>? progress = null,
         Action? onInstallStarted = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? requiredNodeEngine = null)
     {
         if (!IsSupportedDistBase(distBase))
         {
             return NodeInstallResult.Failure("Node.js 下载源不受支持，只能使用官方源或 npmmirror 国内镜像。");
         }
 
-        var version = await ResolveVersionAsync(distBase, cancellationToken);
+        var version = await ResolveVersionAsync(distBase, requiredNodeEngine, cancellationToken);
         var fileName = $"node-{version}{WindowsMsiFileNameSuffix}";
         var downloadUrl = $"{distBase}/{version}/{fileName}";
         var destinationDirectory = Path.Combine(Path.GetTempPath(), "DSH Launcher");
@@ -167,7 +168,7 @@ public sealed class NodeInstallService
         }
     }
 
-    internal static string? SelectLtsVersion(string indexJson)
+    internal static string? SelectLtsVersion(string indexJson, string? requiredNodeEngine = null)
     {
         try
         {
@@ -188,11 +189,18 @@ public sealed class NodeInstallService
                 }
 
                 var version = versionElement.GetString()!;
-                var major = GetMajor(version);
-                var minor = GetMinor(version);
-                // DSh currently requires Node ^22.19.0 || >=24; prefer a
-                // compatible 22.x LTS, otherwise a 24+ LTS.
-                if ((major == 22 && minor >= 19) || major >= 24)
+                if (string.IsNullOrWhiteSpace(requiredNodeEngine))
+                {
+                    // 无明确要求时使用官方 installed DSh 兼容范围作为默认策略。
+                    var major = GetMajor(version);
+                    var minor = GetMinor(version);
+                    if ((major == 22 && minor >= 19) || major >= 24)
+                    {
+                        return version;
+                    }
+                }
+                else if (NodeRuntimeInfo.EvaluateCompatibility(version, requiredNodeEngine)
+                    == NodeRuntimeCompatibility.Compatible)
                 {
                     return version;
                 }
@@ -206,12 +214,12 @@ public sealed class NodeInstallService
         return null;
     }
 
-    private async Task<string> ResolveVersionAsync(string distBase, CancellationToken cancellationToken)
+    private async Task<string> ResolveVersionAsync(string distBase, string? requiredNodeEngine, CancellationToken cancellationToken)
     {
         try
         {
             var json = await _httpClient.GetStringAsync($"{distBase}/index.json", cancellationToken);
-            return SelectLtsVersion(json) ?? DefaultVersion;
+            return SelectLtsVersion(json, requiredNodeEngine) ?? DefaultVersion;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {

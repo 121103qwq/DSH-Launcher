@@ -46,6 +46,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isDshInstallInProgress;
     private bool _isRuntimePrepareInProgress;
     private bool _isProviderDetectionInProgress;
+    private bool _blockWindowCloseForMsi;
 
     public MainWindow()
     {
@@ -144,11 +145,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string SelectedInstanceStatus => SelectedInstance?.StatusText ?? "未选择";
 
-    public bool CanStartInstance => !_isLifecycleInProgress
-        && !_isRuntimePrepareInProgress
-        && SelectedInstance is not null
-        && (!_instanceRunner.IsRunning(SelectedInstance.Id)
-            || !string.IsNullOrWhiteSpace(SelectedInstance.WebUrl));
+    public bool CanStartInstance => CanStartInstanceCore(
+        _isLifecycleInProgress,
+        _isRuntimePrepareInProgress,
+        _isNodeDetectionInProgress,
+        SelectedInstance is not null,
+        SelectedInstance is not null
+            && _instanceRunner.IsRunning(SelectedInstance.Id)
+            && string.IsNullOrWhiteSpace(SelectedInstance.WebUrl));
+
+    internal static bool CanStartInstanceCore(
+        bool lifecycleInProgress,
+        bool runtimePrepareInProgress,
+        bool nodeDetectionInProgress,
+        bool hasSelection,
+        bool runningWithoutWebUrl) =>
+        !lifecycleInProgress
+        && !runtimePrepareInProgress
+        && !nodeDetectionInProgress
+        && hasSelection
+        && !runningWithoutWebUrl;
 
     public string StartInstanceButtonText => SelectedInstance is not null
         && _instanceRunner.IsRunning(SelectedInstance.Id)
@@ -277,6 +293,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(NodeStatusBrush));
         OnPropertyChanged(nameof(NodeVersionText));
         OnPropertyChanged(nameof(NodePathText));
+        OnPropertyChanged(nameof(CanStartInstance));
+        OnPropertyChanged(nameof(StartInstanceButtonText));
 
         try
         {
@@ -315,6 +333,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
+            OnPropertyChanged(nameof(CanStartInstance));
+            OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanInstallDsh));
         }
     }
@@ -955,12 +975,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         prepareButton.Click += async (_, _) =>
         {
-            await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry);
+            await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry, SelectedInstance);
             UpdateStatus();
         };
         prepareMirrorButton.Click += async (_, _) =>
         {
-            await PrepareRuntimeAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry);
+            await PrepareRuntimeAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry, SelectedInstance);
             UpdateStatus();
         };
 
@@ -968,20 +988,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return panel;
     }
 
-    private async Task<bool> PrepareRuntimeAsync(string sourceName, string nodeDistBase, string? npmRegistry)
+    private async Task<bool> PrepareRuntimeAsync(string sourceName, string nodeDistBase, string? npmRegistry, ManagerInstance? target)
     {
         if (_isRuntimePrepareInProgress)
         {
             return false;
         }
 
-        var prepareNodeEngine = GetNodeEngineRequirement(SelectedInstance);
+        var prepareNodeEngine = GetNodeEngineRequirement(target);
         if (_nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
             && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
         {
             System.Windows.MessageBox.Show(this,
-                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本（Node.js 22 LTS 或 24+）后重试。",
+                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本后重试。",
                 "运行环境不兼容",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
@@ -1004,8 +1024,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var nodeResult = await _nodeInstaller.InstallAsync(
                     nodeDistBase,
                     progress,
-                    onInstallStarted: () => progressWindow.SetInstallPhase(true),
-                    cancellation.Token);
+                    onInstallStarted: () =>
+                    {
+                        progressWindow.SetInstallPhase(true);
+                        SetRuntimeInstallPhase(true);
+                    },
+                    cancellation.Token,
+                    prepareNodeEngine);
                 if (!nodeResult.IsSuccess)
                 {
                     progressWindow.SetStatus(nodeResult.Error ?? "Node.js 安装失败。");
@@ -1032,8 +1057,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             progressWindow.SetInstallPhase(false);
+            SetRuntimeInstallPhase(false);
 
-            if (!_dshRuntime.IsAvailable)
+            if (DshInstallService.ShouldInstallGlobalDSh(_dshRuntime.IsAvailable, target?.Kind))
             {
                 progressWindow.SetIndeterminate(true);
                 progressWindow.SetStatus(npmRegistry is null
@@ -1048,11 +1074,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
 
                 progressWindow.SetStatus("DSh 安装完成，正在重新检测…");
-                await RefreshDshAsync();
+                for (var attempt = 0; attempt < 5 && !_dshRuntime.IsAvailable; attempt++)
+                {
+                    await RefreshDshAsync();
+                    if (!_dshRuntime.IsAvailable)
+                    {
+                        await Task.Delay(1000, cancellation.Token);
+                    }
+                }
+
+                if (!_dshRuntime.IsAvailable)
+                {
+                    progressWindow.SetStatus("DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。");
+                    System.Windows.MessageBox.Show(this, "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
+                }
             }
 
             progressWindow.SetStatus("运行环境已就绪。");
-            ShowNotice($"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}，DSh {_dshRuntime.VersionText}。");
+            ShowNotice(target?.Kind == InstanceKind.Source
+                ? $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}。"
+                : $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}，DSh {_dshRuntime.VersionText}。");
             return true;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -1067,15 +1109,41 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         finally
         {
-            // 无论成功、失败、取消还是超时，先恢复窗口可关闭状态，
-            // 避免 MSI 安装阶段的关闭保护把进度窗口卡在屏幕上。
+            // 无论成功、失败、取消还是超时，先恢复进度窗口与主窗口的可关闭状态，
+            // 避免 MSI 安装阶段的关闭保护把窗口卡在屏幕上。
             progressWindow.SetInstallPhase(false);
+            SetRuntimeInstallPhase(false);
             progressWindow.Close();
             _isRuntimePrepareInProgress = false;
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanInstallDsh));
             OnPropertyChanged(nameof(DshInstallButtonText));
         }
+    }
+
+    internal static ManagerInstance? ResolveInstanceById(
+        IEnumerable<ManagerInstance> instances,
+        string instanceId) =>
+        instances.FirstOrDefault(item => string.Equals(item.Id, instanceId, StringComparison.Ordinal));
+
+    internal static bool IsRuntimeReadyAfterPreparation(
+        NodeRuntimeInfo nodeRuntime,
+        string? nodeEngineRequirement,
+        ManagerInstance target)
+    {
+        if (!nodeRuntime.IsAvailable
+            || nodeRuntime.GetCompatibility(nodeEngineRequirement) != NodeRuntimeCompatibility.Compatible)
+        {
+            return false;
+        }
+
+        return target.Kind != InstanceKind.Installed
+            || (!string.IsNullOrWhiteSpace(target.DshExecutablePath) && File.Exists(target.DshExecutablePath));
+    }
+
+    private void SetRuntimeInstallPhase(bool installing)
+    {
+        _blockWindowCloseForMsi = installing;
     }
 
     private async Task<bool> EnsureRuntimeReadyAsync(ManagerInstance instance)
@@ -1126,16 +1194,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
-        if (!await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry))
+        if (!await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry, instance))
         {
             return false;
         }
 
-        var current = Instances.FirstOrDefault(item => string.Equals(item.Id, instance.Id, StringComparison.Ordinal)) ?? instance;
-        if (!_nodeRuntime.IsAvailable
-            || _nodeRuntime.GetCompatibility(requirement) != NodeRuntimeCompatibility.Compatible
-            || (current.Kind == InstanceKind.Installed
-                && (string.IsNullOrWhiteSpace(current.DshExecutablePath) || !File.Exists(current.DshExecutablePath))))
+        // 重新安装/重绑定后按最初目标 ID 重新解析实例，并重新读取其 engines.node；
+        // 不能用准备开始前缓存的 requirement 判断最终兼容性。
+        var current = ResolveInstanceById(Instances, instance.Id) ?? instance;
+        var currentRequirement = GetNodeEngineRequirement(current);
+        if (!IsRuntimeReadyAfterPreparation(_nodeRuntime, currentRequirement, current))
         {
             ShowNotice("运行环境仍未就绪，请重新检测或手动安装后重试。");
             return false;
@@ -1295,7 +1363,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        selected = SelectedInstance ?? selected;
+        // runtime 准备窗口是非模态的，期间用户可能切换了 SelectedInstance；
+        // 必须继续启动最初点击的实例（重绑定后按 ID 取最新状态）。
+        selected = ResolveInstanceById(Instances, selected.Id) ?? selected;
         SetLifecycleBusy(true);
         try
         {
@@ -1721,6 +1791,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void Close_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (_blockWindowCloseForMsi)
+        {
+            e.Cancel = true;
+            ShowNotice("Node.js 系统安装正在进行，请等待安装完成后再关闭 Launcher。");
+            return;
+        }
+
+        base.OnClosing(e);
     }
 
     protected override void OnClosed(EventArgs e)

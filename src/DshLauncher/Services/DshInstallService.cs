@@ -12,6 +12,13 @@ public sealed class DshInstallService
 
     private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// 全局 DSh 只在 Installed 目标（或未指定目标的设置页）缺失时安装；
+    /// Source 实例使用项目自带 CLI，不需要全局 @deepseek-ai/dsh。
+    /// </summary>
+    public static bool ShouldInstallGlobalDSh(bool dshAvailable, InstanceKind? targetKind) =>
+        !dshAvailable && (targetKind is null or InstanceKind.Installed);
+
     public async Task<DshInstallResult> InstallAsync(
         NodeRuntimeInfo nodeRuntime,
         CancellationToken cancellationToken = default)
