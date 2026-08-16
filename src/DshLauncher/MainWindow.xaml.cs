@@ -276,11 +276,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
-        await RefreshDshAsync();
-        await LoadInstancesAsync();
-        SwitchSection("启动");
-        await RefreshNodeAsync();
-        await RefreshProvidersAsync(SelectedInstance);
+        try
+        {
+            await RefreshDshAsync();
+            await LoadInstancesAsync();
+            SwitchSection("启动");
+            await RefreshNodeAsync();
+            await RefreshProvidersAsync(SelectedInstance);
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"初始化失败：{ex.Message}");
+        }
     }
 
     private async void RefreshNode_Click(object sender, RoutedEventArgs e)
@@ -456,10 +466,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task RefreshProvidersAsync(ManagerInstance? instance)
     {
-        _providerRefreshCancellation?.Cancel();
-        _providerRefreshCancellation?.Dispose();
+        // 取消源字段可能被并发刷新或 OnClosed 释放；入口代码位于 try 之外，
+        // 必须自防 ObjectDisposedException，否则会穿透 async void 调用方导致崩溃。
+        var previous = _providerRefreshCancellation;
+        _providerRefreshCancellation = null;
+        try
+        {
+            previous?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
 
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        previous?.Dispose();
+
+        CancellationTokenSource cancellation;
+        try
+        {
+            cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        }
+        catch (ObjectDisposedException)
+        {
+            // 窗口已进入关闭流程。
+            return;
+        }
+
         _providerRefreshCancellation = cancellation;
         _isProviderDetectionInProgress = instance is not null;
         ProviderCards.Clear();
@@ -467,6 +498,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(ProviderCardsVisibility));
         OnPropertyChanged(nameof(ProviderSummaryText));
         OnPropertyChanged(nameof(CanRefreshProviders));
+        UpdateProviderSectionVisibility();
 
         if (instance is null)
         {
@@ -475,6 +507,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _isProviderDetectionInProgress = false;
             OnPropertyChanged(nameof(ProviderSummaryText));
             OnPropertyChanged(nameof(CanRefreshProviders));
+            UpdateProviderSectionVisibility();
             return;
         }
 
@@ -494,6 +527,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NoProvidersVisibility));
             OnPropertyChanged(nameof(ProviderCardsVisibility));
             OnPropertyChanged(nameof(ProviderSummaryText));
+            UpdateProviderSectionVisibility();
 
             var checks = ProviderCards.Select(async card =>
                 (Card: card, Result: await _providerDiagnosticService.CheckAsync(card.Provider, cancellation.Token)));
@@ -518,10 +552,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 _isProviderDetectionInProgress = false;
                 OnPropertyChanged(nameof(ProviderSummaryText));
                 OnPropertyChanged(nameof(CanRefreshProviders));
+                UpdateProviderSectionVisibility();
             }
 
             cancellation.Dispose();
         }
+    }
+
+    private void UpdateProviderSectionVisibility()
+    {
+        // 经 DSh 登录页连接的 Provider 不写入 settings.yaml 的 llm 段，真实实例
+        // 通常没有可展示的 Provider；此时整块隐藏，不长期显示"未检测到"。
+        var visible = _isProviderDetectionInProgress || ProviderCards.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ProviderHeaderGrid.Visibility = visible;
+        ProviderListGrid.Visibility = visible;
+        ProviderSeparator.Visibility = visible;
     }
 
     private async void RefreshProviders_Click(object sender, RoutedEventArgs e)
@@ -2035,7 +2082,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     protected override void OnClosed(EventArgs e)
     {
-        _providerRefreshCancellation?.Cancel();
+        try
+        {
+            _providerRefreshCancellation?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
         _providerRefreshCancellation?.Dispose();
         _providerRefreshCancellation = null;
         _windowCancellation.Cancel();

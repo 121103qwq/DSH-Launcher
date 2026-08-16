@@ -165,7 +165,7 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
-                                    <Grid Grid.Row="0">
+                                    <Grid x:Name="ProviderHeaderGrid" Grid.Row="0">
                                         <StackPanel>
                                             <TextBlock Text="模型提供商" FontSize="18" FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding ProviderSummaryText}"
@@ -187,7 +187,7 @@
                                             </Border>
                                         </StackPanel>
                                     </Grid>
-                                    <Grid Grid.Row="1" Margin="0,16,0,14">
+                                    <Grid x:Name="ProviderListGrid" Grid.Row="1" Margin="0,16,0,14">
                                         <TextBlock Text="未在当前实例的 settings.yaml 中检测到 llm Provider 配置；通过 DSh 登录页连接的 Provider 不会显示在这里。"
                                                    Visibility="{Binding NoProvidersVisibility}"
                                                    Foreground="{StaticResource MutedBrush}"
@@ -270,7 +270,7 @@
                                             </ItemsControl>
                                         </ScrollViewer>
                                     </Grid>
-                                    <Border Grid.Row="2" Height="1" Background="{StaticResource LineBrush}" Margin="0,0,0,14" />
+                                    <Border x:Name="ProviderSeparator" Grid.Row="2" Height="1" Background="{StaticResource LineBrush}" Margin="0,0,0,14" />
                                     <Grid Grid.Row="3">
                                         <TextBlock Text="启动实例" FontSize="16" FontWeight="SemiBold" />
                                         <Border HorizontalAlignment="Right" Background="#E7F1FC" CornerRadius="10" Padding="8,3">
