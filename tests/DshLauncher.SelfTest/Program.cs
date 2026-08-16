@@ -431,6 +431,24 @@ static async Task TestNodeMsiVerificationAndDeferredCleanup()
     await guardedLingering.WaitForExitAsync();
     Assert(!NodeInstallService.IsProcessAlive(guardedLingering),
         "已退出的残留安装进程不能再阻止新的准备。");
+
+    // 残留安装进程退出后必须发出完成通知并解除“仍在运行”状态（Launcher 据此恢复关闭）。
+    var tracked = new NodeInstallService(new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)));
+    Assert(!tracked.HasLingeringInstaller, "没有残留进程时 HasLingeringInstaller 应为 false。");
+    var trackedFile = Path.Combine(temporary.Path, "node-v22.23.2-tracked.msi");
+    await File.WriteAllTextAsync(trackedFile, "installer payload");
+    var trackedProcess = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 5 127.0.0.1 > nul") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(trackedProcess is not null, "测试需要能启动辅助进程。");
+    tracked.LingeringInstaller = trackedProcess;
+    Assert(tracked.HasLingeringInstaller, "残留安装进程存活期间 HasLingeringInstaller 必须为 true。");
+    var completed = new TaskCompletionSource();
+    NodeInstallService.CleanupInstallerFile(trackedProcess, trackedFile, () => completed.TrySetResult());
+    trackedProcess!.Kill();
+    // 不直接 await 进程句柄：延迟清理任务会 Dispose 它；完成事件即代表退出+清理。
+    await completed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+    Assert(!tracked.HasLingeringInstaller, "残留安装进程退出并清理完成后必须解除运行状态。");
+    Assert(!File.Exists(trackedFile), "完成通知触发时 MSI 必须已被清理。");
 }
 
 static Task TestLifecycleBusyGuard()
@@ -449,6 +467,14 @@ static Task TestLifecycleBusyGuard()
     Assert(!MainWindow.CanStopInstanceCore(false, true, true),
         "runtime 准备进行中（非模态窗口等待下载/安装）时不能 Stop/Restart。");
     Assert(!MainWindow.CanStopInstanceCore(false, false, false), "非受管实例不能 Stop/Restart。");
+    // 设置页准备与实例生命周期共用同一 guard：guard 被占用（无论来自哪一侧）
+    // 时 Start/Stop/Restart/对话自动启动全部被拒绝。
+    var settingsGuard = new LifecycleBusyGuard();
+    Assert(settingsGuard.TryBegin(), "设置页准备应能占用同一 guard。");
+    Assert(!settingsGuard.TryBegin(), "guard 已被设置页准备占用时，实例生命周期操作不能进入。");
+    Assert(!MainWindow.CanStopInstanceCore(true, false, true) && !MainWindow.CanStartInstanceCore(true, false, false, true, false),
+        "设置页准备进行中 Start/Stop/Restart 都必须不可用。");
+    settingsGuard.End();
     return Task.CompletedTask;
 }
 

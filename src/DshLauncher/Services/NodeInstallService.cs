@@ -32,6 +32,12 @@ public sealed class NodeInstallService
     // internal 仅供 SelfTest 注入模拟进程；句柄由延迟清理任务负责释放。
     internal Process? LingeringInstaller;
 
+    /// <summary>残留安装进程仍在运行时为 true；UI 据此保持关闭保护。</summary>
+    internal bool HasLingeringInstaller => IsProcessAlive(LingeringInstaller);
+
+    /// <summary>残留安装进程退出且其 MSI 清理完成后触发（延迟清理任务内触发）。</summary>
+    internal event Action? LingeringInstallerCompleted;
+
     public NodeInstallService()
         : this(new HttpClient { Timeout = HttpTimeout })
     {
@@ -117,7 +123,10 @@ public sealed class NodeInstallService
         {
             // 清理下载的 MSI，避免每次准备在 %TEMP%\\DSH Launcher 累积安装包；
             // 超时路径下 msiexec 仍可能在后台运行，必须等它真正退出后再删除。
-            CleanupInstallerFile(installerRun?.LingeringProcess, destination);
+            CleanupInstallerFile(
+                installerRun?.LingeringProcess,
+                destination,
+                () => LingeringInstallerCompleted?.Invoke());
         }
     }
 
@@ -138,7 +147,10 @@ public sealed class NodeInstallService
 
     // msiexec 超时后绝不会被强杀，可能仍在后台安装；此时安装包既是被占用
     // 的源文件，也可能仍被安装程序需要，清理必须推迟到进程真正退出之后。
-    internal static void CleanupInstallerFile(System.Diagnostics.Process? installer, string path)
+    internal static void CleanupInstallerFile(
+        System.Diagnostics.Process? installer,
+        string path,
+        Action? onLingeringCleanupCompleted = null)
     {
         var running = IsProcessAlive(installer);
 
@@ -159,6 +171,7 @@ public sealed class NodeInstallService
                 {
                     lingering.Dispose();
                     TryDeleteInstaller(path);
+                    onLingeringCleanupCompleted?.Invoke();
                 }
             });
             return;
@@ -166,6 +179,8 @@ public sealed class NodeInstallService
 
         installer?.Dispose();
         TryDeleteInstaller(path);
+        // 回调只在“确有残留安装进程、等它退出后补做清理”的分支触发；
+        // 正常安装路径没有残留进程，不应发出完成通知。
     }
 
     /// <summary>

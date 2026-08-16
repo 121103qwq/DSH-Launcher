@@ -63,6 +63,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _modelService,
             _providerStateService,
             id => _instanceRunner.IsRunning(id));
+        // 超时的 msiexec 在后台运行期间阻止关闭 Launcher：不跨进程持久化标记，
+        // 用“无法优雅关闭”保证 Launcher 重开后不会出现第二次 Node MSI 与残留安装重叠。
+        _nodeInstaller.LingeringInstallerCompleted += OnLingeringInstallerCompleted;
         InitializeComponent();
         DataContext = this;
     }
@@ -989,21 +992,40 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateStatus();
         };
         prepareButton.Click += async (_, _) =>
-        {
-            // 设置/诊断页管理的是全局运行环境，不传实例目标；Source 专属的
-            // 精简准备只发生在启动实例流程里。
-            await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry, null);
-            UpdateStatus();
-        };
+            await PrepareRuntimeFromSettingsAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry);
         prepareMirrorButton.Click += async (_, _) =>
-        {
-            await PrepareRuntimeAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry, null);
-            UpdateStatus();
-        };
+            await PrepareRuntimeFromSettingsAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry);
 
         _runtimePanelUpdateStatus = UpdateStatus;
         UpdateStatus();
         return panel;
+    }
+
+    /// <summary>
+    /// 设置/诊断页的运行环境准备入口：与 Start/Stop/Restart/对话自动启动共用
+    /// 同一个 LifecycleBusyGuard——准备进行中不能执行实例生命周期操作，
+    /// 实例操作进行中也不能开始准备，避免安装与启停重叠。
+    /// </summary>
+    private async Task PrepareRuntimeFromSettingsAsync(string sourceName, string nodeDistBase, string npmRegistry)
+    {
+        if (!TryBeginLifecycleOperation())
+        {
+            ShowNotice("当前有实例操作正在进行，请稍候再准备运行环境。");
+            return;
+        }
+
+        try
+        {
+            // 设置/诊断页管理的是全局运行环境，不传实例目标；Source 专属的
+            // 精简准备只发生在启动实例流程里。
+            await PrepareRuntimeAsync(sourceName, nodeDistBase, npmRegistry, null);
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
+
+        _runtimePanelUpdateStatus?.Invoke();
     }
 
     private async Task<bool> PrepareRuntimeAsync(string sourceName, string nodeDistBase, string? npmRegistry, ManagerInstance? target)
@@ -1154,16 +1176,41 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         finally
         {
-            // 无论成功、失败、取消还是超时，先恢复进度窗口与主窗口的可关闭状态，
-            // 避免 MSI 安装阶段的关闭保护把窗口卡在屏幕上。
+            // 无论成功、失败、取消还是超时，先恢复进度窗口的可关闭状态；
+            // 主窗口的关闭保护在残留 msiexec 仍存活时保持生效，等它真正
+            // 退出后由 OnLingeringInstallerCompleted 解除，期间不能通过
+            // 关闭再重开 Launcher 来并发第二次 Node 安装。
             progressWindow.SetInstallPhase(false);
-            SetRuntimeInstallPhase(false);
+            if (!_nodeInstaller.HasLingeringInstaller)
+            {
+                SetRuntimeInstallPhase(false);
+            }
+
             progressWindow.Close();
             _isRuntimePrepareInProgress = false;
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanInstallDsh));
             OnPropertyChanged(nameof(DshInstallButtonText));
         }
+    }
+
+    private void OnLingeringInstallerCompleted()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(OnLingeringInstallerCompleted);
+            return;
+        }
+
+        // 残留安装进程退出后解除关闭保护；若新一轮准备已经开始，则由该
+        // 流程自己的安装阶段/finally 管理保护状态，这里不做任何改动。
+        if (_isRuntimePrepareInProgress)
+        {
+            return;
+        }
+
+        SetRuntimeInstallPhase(false);
+        ShowNotice("后台的 Windows Installer 已结束，Launcher 恢复正常关闭。");
     }
 
     internal static ManagerInstance? ResolveInstanceById(
@@ -1951,7 +1998,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (_blockWindowCloseForMsi)
         {
             e.Cancel = true;
-            ShowNotice("Node.js 系统安装正在进行，请等待安装完成后再关闭 Launcher。");
+            ShowNotice(_nodeInstaller.HasLingeringInstaller
+                ? "Windows Installer 仍在后台完成 Node.js 安装，结束后才能关闭 Launcher。"
+                : "Node.js 系统安装正在进行，请等待安装完成后再关闭 Launcher。");
             return;
         }
 

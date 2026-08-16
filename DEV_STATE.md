@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-处理 PR #2 第五轮 Codex Review（3 条 P2，全部确认为真实问题并已修复）：Restart 停止后接入 EnsureRuntimeReadyAsync 并按原目标 ID 重解析；Start/Stop/Restart/对话自动启动在 handler 入口占用 `LifecycleBusyGuard`，与 runtime 准备全程串行化（runtime 准备期间 Stop/Restart 按钮不可用）；标题缓存前置 reparse 检查遇 `UnauthorizedAccessException` 按无标题降级。附带 audit 修复：超时的 msiexec 仍在后台时拒绝再次启动 Node 安装。完成后重新触发第六轮 Review。
+处理 PR #2 第六轮 Codex Review（3 条 P2，全部确认为真实问题并已修复）：设置页“准备运行环境”入口接入同一个 `LifecycleBusyGuard`（与 Start/Stop/Restart/对话自动启动互斥）；超时残留的 msiexec 存活期间阻止关闭 Launcher（方案 A，不跨进程持久化），退出后经 `LingeringInstallerCompleted` 事件解除保护并清理 MSI；CURRENT_DESIGN.md 的 runtime 准备段落压缩为 durable 设计原则，实现细节只留在 DEV_STATE.md。完成后触发第七轮 Review。
 
 ## 已完成内容
 
@@ -34,10 +34,10 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）；最新提交为第五轮 Review 修复提交（哈希见 git log），已推送 origin。
-- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：40/40 通过（第五轮新增：LifecycleBusyGuard 串行化与 Stop/Restart 可用性纯逻辑、lingering 安装进程拒绝二次安装、storages 为 junction 时标题缓存降级且不泄露边界外标题）。
+- 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）；最新提交为第六轮 Review 修复提交（哈希见 git log），已推送 origin。
+- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：40/40 通过（第六轮新增断言：设置页准备与实例生命周期共用 guard、`HasLingeringInstaller` 状态转换与残留安装完成通知/清理时序）。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
-- Release 单文件自包含 publish：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `128CDF96632F7A4976923CBA1FF1BF8A18F31A170371DD94985472208D8E3765`，已复制到桌面 `runtime-bootstrap-review-fix6-20260816`；启动冒烟验证通过（进程正常驻留，测试后终止）。
+- Release 单文件自包含 publish：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `C784C68F2F544EFBCCE9240437979FDBA8C9DA61D78E693AC3A4A930821E8137`，已复制到桌面 `runtime-bootstrap-review-fix7-20260816` 与 `video-candidate-20260816`（视频录制候选，与最终 publish 字节一致）；启动冒烟验证通过。
 - `git diff --check`：通过。
 
 ## 已知问题
@@ -71,4 +71,4 @@
 
 ## 下一步最直接的任务
 
-接手点：第五轮 Review 的 3 条 P2 与 lingering msiexec audit 修复已全部完成并推送，3 条线程已回复并 resolve，第六轮 `@codex review` 已重新触发。下一步：等待第六轮结果；干净后仍保留真实无 Node Windows 的 Installed/Source 实机人工验收，验收通过才合并 main。
+接手点：第六轮 Review 的 3 条 P2 已全部修复并推送，3 条线程已回复并 resolve，第七轮 `@codex review` 已触发。第七轮干净（0 P1/0 P2）即标记 Code Review 收敛、不再触发下一轮，直接准备 Fresh Windows 实机验收（Installed 与 Source 两条链路）。
