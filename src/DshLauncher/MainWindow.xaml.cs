@@ -961,7 +961,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ? $"{_dshRuntime.VersionText} · {(_dshRuntime.ExecutablePath ?? "路径未知")}"
                 : "未安装";
             var ready = _nodeRuntime.IsAvailable && _dshRuntime.IsAvailable;
-            prepareButton.IsEnabled = !ready && !_isRuntimePrepareInProgress;
+            prepareButton.IsEnabled = !ready && !_isRuntimePrepareInProgress && !_isNodeDetectionInProgress;
             prepareMirrorButton.IsEnabled = prepareButton.IsEnabled;
             prepareButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
             prepareMirrorButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
@@ -975,12 +975,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         prepareButton.Click += async (_, _) =>
         {
-            await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry, SelectedInstance);
+            // 设置/诊断页管理的是全局运行环境，不传实例目标；Source 专属的
+            // 精简准备只发生在启动实例流程里。
+            await PrepareRuntimeAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry, null);
             UpdateStatus();
         };
         prepareMirrorButton.Click += async (_, _) =>
         {
-            await PrepareRuntimeAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry, SelectedInstance);
+            await PrepareRuntimeAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry, null);
             UpdateStatus();
         };
 
@@ -992,6 +994,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (_isRuntimePrepareInProgress)
         {
+            return false;
+        }
+
+        if (_isNodeDetectionInProgress)
+        {
+            ShowNotice("Node.js 检测进行中，请稍候再准备运行环境。");
             return false;
         }
 
@@ -1055,6 +1063,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     return false;
                 }
             }
+
+            // MSI 只更新系统环境，当前 Launcher 进程的 PATH 仍是旧值；
+            // 把新检测到的 Node 目录补到进程 PATH，DSh 检测/启动才能解析 node。
+            EnsureNodeDirectoryOnPath(_nodeRuntime.ExecutablePath);
 
             progressWindow.SetInstallPhase(false);
             SetRuntimeInstallPhase(false);
@@ -1144,6 +1156,41 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void SetRuntimeInstallPhase(bool installing)
     {
         _blockWindowCloseForMsi = installing;
+    }
+
+    private static void EnsureNodeDirectoryOnPath(string? nodeExecutablePath)
+    {
+        var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var updated = BuildPathWithNodeDirectory(nodeExecutablePath, currentPath);
+        if (!string.Equals(currentPath, updated, StringComparison.Ordinal))
+        {
+            Environment.SetEnvironmentVariable("PATH", updated);
+        }
+    }
+
+    internal static string BuildPathWithNodeDirectory(string? nodeExecutablePath, string currentPath)
+    {
+        if (string.IsNullOrWhiteSpace(nodeExecutablePath))
+        {
+            return currentPath;
+        }
+
+        var nodeDirectory = Path.GetDirectoryName(Path.GetFullPath(nodeExecutablePath));
+        if (string.IsNullOrWhiteSpace(nodeDirectory))
+        {
+            return currentPath;
+        }
+
+        var entries = currentPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(static entry => entry.Trim().Trim('"'))
+            .Where(static entry => entry.Length > 0)
+            .ToList();
+        if (entries.Contains(nodeDirectory, StringComparer.OrdinalIgnoreCase))
+        {
+            return currentPath;
+        }
+
+        return nodeDirectory + Path.PathSeparator + string.Join(Path.PathSeparator, entries);
     }
 
     private async Task<bool> EnsureRuntimeReadyAsync(ManagerInstance instance)

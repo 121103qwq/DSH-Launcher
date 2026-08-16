@@ -29,6 +29,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node version selection uses source engine", TestNodeVersionSelectionUsesEngine),
     ("DSh global install target decision", TestDshInstallTargetDecision),
     ("Start flow decisions", TestStartFlowDecisions),
+    ("Node path propagation", TestNodePathPropagation),
     ("DSh install guard", TestDshInstallGuard),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
@@ -538,6 +539,25 @@ static Task TestDshInstallTargetDecision()
         "已检测到 DSh 时不应重复安装。");
     Assert(DshInstallService.ShouldInstallGlobalDSh(false, null),
         "设置页未指定实例且缺 DSh 时应允许安装全局 DSh。");
+    return Task.CompletedTask;
+}
+
+static Task TestNodePathPropagation()
+{
+    const string nodeExe = @"C:\Program Files\nodejs\node.exe";
+    const string existing = @"C:\Windows\System32;D:\Tools";
+    var updated = MainWindow.BuildPathWithNodeDirectory(nodeExe, existing);
+    Assert(updated.StartsWith(@"C:\Program Files\nodejs" + Path.PathSeparator, StringComparison.OrdinalIgnoreCase),
+        "新安装的 Node 目录应补到进程 PATH 最前面。");
+    Assert(updated.Contains(@"D:\Tools", StringComparison.OrdinalIgnoreCase),
+        "原有 PATH 条目应保留。");
+
+    var alreadyInPath = @"C:\Program Files\nodejs;" + existing;
+    Assert(MainWindow.BuildPathWithNodeDirectory(nodeExe, alreadyInPath) == alreadyInPath,
+        "Node 目录已在 PATH 中时不应重复添加。");
+
+    Assert(MainWindow.BuildPathWithNodeDirectory(null, existing) == existing,
+        "没有可用的 Node 路径时不应改动 PATH。");
     return Task.CompletedTask;
 }
 

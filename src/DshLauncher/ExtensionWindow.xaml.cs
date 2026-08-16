@@ -242,7 +242,7 @@ public partial class ExtensionWindow : UserControl
         if (fromCache)
         {
             MarketplaceStatusText.Text = result.Warnings.FirstOrDefault()
-                ?? "先显示本地缓存，在线目录会在后台更新。";
+                ?? "当前显示本地缓存；需要在线更新时请点击“刷新目录”。";
         }
     }
 

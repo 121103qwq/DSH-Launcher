@@ -81,6 +81,27 @@ public sealed class NodeInstallService
         {
             return NodeInstallResult.Failure($"Node.js 准备失败：{ex.Message}");
         }
+        finally
+        {
+            // msiexec 已结束（成功、失败或超时），安装程序不再需要；
+            // 清理下载的 MSI，避免每次准备在 %TEMP%\\DSH Launcher 累积安装包。
+            TryDeleteInstaller(destination);
+        }
+    }
+
+    private static void TryDeleteInstaller(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 清理失败不能掩盖真实的安装结果。
+        }
     }
 
     internal static NodeInstallResult MapExitCode(int exitCode, string version)
