@@ -40,6 +40,17 @@ public sealed record ConversationEntry(
     bool HasValidHeader,
     string DisplayName);
 
+public sealed record ConversationBackupEntry(
+    string FileName,
+    string FullPath,
+    string? SessionId,
+    string? WorkingDirectory,
+    DateTimeOffset BackedUpAt,
+    long SizeBytes,
+    bool IsCompressed,
+    bool HasValidHeader,
+    string DisplayName);
+
 public sealed record ModelProviderInfo(
     string Provider,
     string DisplayName,

@@ -30,6 +30,12 @@ public sealed class LauncherSettingsData
     public bool SyncAllConfiguration { get; set; }
 
     public List<string> Workspaces { get; set; } = new();
+
+    /// <summary>
+    /// Optional npm global prefix used only for the Launcher-managed DSh runtime.
+    /// Instance data remains isolated under each instance's DSH_HOME.
+    /// </summary>
+    public string? DshInstallDirectory { get; set; }
 }
 
 public sealed record VersionExportOptions(

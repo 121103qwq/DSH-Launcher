@@ -21,7 +21,6 @@ public partial class VersionSettingsWindow : UserControl
     private readonly Func<NodeRuntimeInfo?> _nodeRuntimeProvider;
     private readonly VersionPackageService _packageService;
     private readonly Action _settingsSaved;
-    private readonly Func<ManagerInstance, string, ManagerInstance>? _renameVersion;
     private VersionSettingsData _settings = new();
 
     public VersionSettingsWindow(
@@ -31,8 +30,7 @@ public partial class VersionSettingsWindow : UserControl
         ExtensionService extensionService,
         Func<NodeRuntimeInfo?> nodeRuntimeProvider,
         VersionPackageService packageService,
-        Action settingsSaved,
-        Func<ManagerInstance, string, ManagerInstance>? renameVersion = null)
+        Action settingsSaved)
     {
         _instance = instance;
         _versions = versions.ToArray();
@@ -41,7 +39,6 @@ public partial class VersionSettingsWindow : UserControl
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _packageService = packageService;
         _settingsSaved = settingsSaved;
-        _renameVersion = renameVersion;
 
         InitializeComponent();
         try
@@ -66,11 +63,6 @@ public partial class VersionSettingsWindow : UserControl
             ? "版本设置需要绑定到一个真实版本。请先在启动页选择实例，或在版本控制中创建版本。"
             : $"{_instance.KindText} · {_instance.RootPath}\n状态：{_instance.StatusText}";
         DshHomeText.Text = _instance?.DshHome ?? "尚未创建 DSH_HOME";
-        VersionNameBox.Text = _instance?.Name ?? string.Empty;
-        VersionNameBox.IsEnabled = _instance is not null && _renameVersion is not null;
-        VersionNameStatusText.Text = _instance is null
-            ? "请先选择版本再修改名称。"
-            : string.Empty;
         PackageExtensionBox.Text = _packageService.PackageExtension;
         NodeRuntimeText.Text = FormatNodeRuntime();
 
@@ -381,39 +373,6 @@ public partial class VersionSettingsWindow : UserControl
         catch (Exception ex)
         {
             ExportStatusText.Text = $"保存整合包格式失败：{ex.Message}";
-        }
-    }
-
-    private void SaveVersionName_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null)
-        {
-            VersionNameStatusText.Text = "请先选择版本。";
-            return;
-        }
-
-        if (_renameVersion is null)
-        {
-            VersionNameStatusText.Text = "当前入口不支持修改版本名称。";
-            return;
-        }
-
-        try
-        {
-            _instance = _renameVersion(_instance, VersionNameBox.Text);
-            VersionNameBox.Text = _instance.Name;
-            VersionSettingsHeaderText.Text = $"版本设置 - {_instance.Name}";
-            VersionIdentityText.Text = _instance.Name;
-            PersonalizationVersionText.Text = _instance.Name;
-            VersionNameStatusText.Text = $"版本名称已更新：{_instance.Name}";
-        }
-        catch (ArgumentException ex)
-        {
-            VersionNameStatusText.Text = ex.Message;
-        }
-        catch (Exception ex)
-        {
-            VersionNameStatusText.Text = $"保存版本名称失败：{ex.Message}";
         }
     }
 

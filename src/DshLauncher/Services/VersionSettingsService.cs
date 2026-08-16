@@ -94,7 +94,7 @@ public sealed class VersionSettingsService
                 return new LauncherSettingsData();
             }
 
-            settings.Workspaces.RemoveAll(string.IsNullOrWhiteSpace);
+            NormalizeLauncherSettings(settings);
             return settings;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ArgumentException)
@@ -106,7 +106,8 @@ public sealed class VersionSettingsService
 
     public void SaveLauncherSettings(LauncherSettingsData settings)
     {
-        settings.Workspaces.RemoveAll(string.IsNullOrWhiteSpace);
+        ArgumentNullException.ThrowIfNull(settings);
+        NormalizeLauncherSettings(settings);
         WriteSettingsFile(LauncherSettingsPath, JsonSerializer.Serialize(settings, JsonOptions));
     }
 
@@ -116,21 +117,7 @@ public sealed class VersionSettingsService
     /// </summary>
     public string AddLauncherWorkspace(string name)
     {
-        var normalized = name?.Trim() ?? string.Empty;
-        if (normalized.Length == 0)
-        {
-            throw new ArgumentException("工作区名称不能为空。", nameof(name));
-        }
-
-        if (normalized.Length > 80)
-        {
-            throw new ArgumentException("工作区名称不能超过 80 个字符。", nameof(name));
-        }
-
-        if (normalized.Any(char.IsControl))
-        {
-            throw new ArgumentException("工作区名称不能包含控制字符。", nameof(name));
-        }
+        var normalized = NormalizeWorkspaceName(name, nameof(name));
 
         var settings = ReadLauncherSettings();
         if (!settings.Workspaces.Contains(normalized, StringComparer.OrdinalIgnoreCase))
@@ -140,6 +127,105 @@ public sealed class VersionSettingsService
         }
 
         return normalized;
+    }
+
+    /// <summary>
+    /// 重命名 Launcher 工作区，并同步修改当前使用该工作区的版本设置。
+    /// 只改变同步分组名称，不移动或删除任何对话文件。
+    /// </summary>
+    public int RenameLauncherWorkspace(
+        IEnumerable<ManagerInstance> instances,
+        string currentName,
+        string newName)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        var current = NormalizeWorkspaceName(currentName, nameof(currentName));
+        var updated = NormalizeWorkspaceName(newName, nameof(newName));
+        var versions = instances
+            .GroupBy(instance => instance.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+        var knownNames = GetWorkspaceNames(versions);
+        if (!knownNames.Contains(current, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"工作区不存在：{current}。");
+        }
+
+        if (!string.Equals(current, updated, StringComparison.OrdinalIgnoreCase)
+            && knownNames.Contains(updated, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"已经存在同名工作区：{updated}。");
+        }
+
+        var affectedVersions = 0;
+        foreach (var instance in versions)
+        {
+            var versionSettings = Read(instance);
+            if (!string.Equals(
+                    versionSettings.ConversationWorkspace,
+                    current,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            versionSettings.ConversationWorkspace = updated;
+            Save(instance, versionSettings);
+            affectedVersions++;
+        }
+
+        var launcherSettings = ReadLauncherSettings();
+        launcherSettings.Workspaces.RemoveAll(name =>
+            string.Equals(name, current, StringComparison.OrdinalIgnoreCase));
+        if (!launcherSettings.Workspaces.Contains(updated, StringComparer.OrdinalIgnoreCase))
+        {
+            launcherSettings.Workspaces.Add(updated);
+        }
+
+        SaveLauncherSettings(launcherSettings);
+        return affectedVersions;
+    }
+
+    /// <summary>
+    /// 删除 Launcher 工作区，并把原本属于它的版本切回“完全独立”。
+    /// 不删除会话文件或其它版本数据。
+    /// </summary>
+    public int DeleteLauncherWorkspace(IEnumerable<ManagerInstance> instances, string name)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        var normalized = NormalizeWorkspaceName(name, nameof(name));
+        var versions = instances
+            .GroupBy(instance => instance.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+        if (!GetWorkspaceNames(versions).Contains(normalized, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"工作区不存在：{normalized}。");
+        }
+
+        var affectedVersions = 0;
+        foreach (var instance in versions)
+        {
+            var versionSettings = Read(instance);
+            if (!string.Equals(
+                    versionSettings.ConversationWorkspace,
+                    normalized,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            versionSettings.ConversationSyncMode = ConversationSyncMode.Independent;
+            versionSettings.ConversationWorkspace = null;
+            Save(instance, versionSettings);
+            affectedVersions++;
+        }
+
+        var launcherSettings = ReadLauncherSettings();
+        launcherSettings.Workspaces.RemoveAll(workspace =>
+            string.Equals(workspace, normalized, StringComparison.OrdinalIgnoreCase));
+        SaveLauncherSettings(launcherSettings);
+        return affectedVersions;
     }
 
     public IReadOnlyList<string> GetWorkspaceNames(IEnumerable<ManagerInstance> instances)
@@ -206,11 +292,6 @@ public sealed class VersionSettingsService
 
     public bool ShouldSyncModelProviders(ManagerInstance left, ManagerInstance right)
     {
-        if (ShouldSyncConfiguration(left, right))
-        {
-            return true;
-        }
-
         var leftSettings = Read(left);
         var rightSettings = Read(right);
         return leftSettings.SyncModelProviders
@@ -246,6 +327,40 @@ public sealed class VersionSettingsService
         {
             throw new ArgumentException("窗口标题不能包含控制字符。", nameof(settings));
         }
+    }
+
+    private static string NormalizeWorkspaceName(string? value, string parameterName)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+        {
+            throw new ArgumentException("工作区名称不能为空。", parameterName);
+        }
+
+        if (normalized.Length > 80)
+        {
+            throw new ArgumentException("工作区名称不能超过 80 个字符。", parameterName);
+        }
+
+        if (normalized.Any(char.IsControl))
+        {
+            throw new ArgumentException("工作区名称不能包含控制字符。", parameterName);
+        }
+
+        return normalized;
+    }
+
+    private static void NormalizeLauncherSettings(LauncherSettingsData settings)
+    {
+        settings.Workspaces ??= new List<string>();
+        settings.Workspaces = settings.Workspaces
+            .Where(workspace => !string.IsNullOrWhiteSpace(workspace))
+            .Select(workspace => workspace.Trim())
+            .Where(workspace => workspace.Length <= 80 && !workspace.Any(char.IsControl))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(workspace => workspace, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        settings.DshInstallDirectory = NormalizePath(settings.DshInstallDirectory);
     }
 
     private static string? NormalizePath(string? value)

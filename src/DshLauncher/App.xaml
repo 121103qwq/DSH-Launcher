@@ -50,9 +50,13 @@
             </Style.Triggers>
         </Style>
         <Style TargetType="TextBox">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="Background" Value="White" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="CaretBrush" Value="{StaticResource TextBrush}" />
+            <Setter Property="SelectionBrush" Value="#B8DCF8" />
+            <Setter Property="SelectionTextBrush" Value="{StaticResource TextBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="12,8" />
@@ -63,9 +67,11 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="8"
-                                Padding="{TemplateBinding Padding}">
-                            <ScrollViewer x:Name="PART_ContentHost" />
+                                CornerRadius="8">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Focusable="False"
+                                          Foreground="{TemplateBinding Foreground}"
+                                          TextElement.Foreground="{TemplateBinding Foreground}" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsKeyboardFocused" Value="True">
@@ -75,6 +81,18 @@
                                 <Setter Property="Opacity" Value="0.5" />
                             </Trigger>
                         </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ComboBoxHitTarget" TargetType="ToggleButton">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="{TemplateBinding Background}" />
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -110,7 +128,8 @@
                                               IsHitTestVisible="False"
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
-                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" />
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
                             <TextBox x:Name="PART_EditableTextBox"
                                      Margin="{TemplateBinding Padding}"
                                      VerticalAlignment="Center"
@@ -128,6 +147,7 @@
                                   Margin="0,0,10,0"
                                   IsHitTestVisible="False" />
                             <ToggleButton x:Name="ToggleFull"
+                                          Style="{StaticResource ComboBoxHitTarget}"
                                           Grid.ColumnSpan="2"
                                           Background="Transparent"
                                           BorderThickness="0"
@@ -135,6 +155,7 @@
                                           ClickMode="Press"
                                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" />
                             <ToggleButton x:Name="ToggleArrow"
+                                          Style="{StaticResource ComboBoxHitTarget}"
                                           Grid.Column="1"
                                           Background="Transparent"
                                           BorderThickness="0"
@@ -190,7 +211,7 @@
                                 CornerRadius="6"
                                 Padding="{TemplateBinding Padding}"
                                 Margin="4,1">
-                            <ContentPresenter />
+                            <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">

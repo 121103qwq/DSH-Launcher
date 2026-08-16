@@ -12,7 +12,14 @@ public sealed class DshRuntimeDetector
 
     public async Task<DshRuntimeInfo> DetectAsync(CancellationToken cancellationToken = default)
     {
-        foreach (var candidate in GetCandidates())
+        return await DetectAsync(preferredInstallDirectory: null, cancellationToken);
+    }
+
+    public async Task<DshRuntimeInfo> DetectAsync(
+        string? preferredInstallDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var candidate in GetCandidates(preferredInstallDirectory))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -213,7 +220,25 @@ public sealed class DshRuntimeDetector
 
     public static IEnumerable<string> GetCandidates()
     {
+        return GetCandidates(preferredInstallDirectory: null);
+    }
+
+    public static IEnumerable<string> GetCandidates(string? preferredInstallDirectory)
+    {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var normalizedPreferred = TryNormalizeDirectory(preferredInstallDirectory);
+        if (normalizedPreferred is not null)
+        {
+            foreach (var fileName in new[] { "dsh.cmd", "dsh.exe", "dsh" })
+            {
+                var candidate = Path.Combine(normalizedPreferred, fileName);
+                if (seen.Add(candidate))
+                {
+                    yield return candidate;
+                }
+            }
+        }
+
         var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
 
         foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
@@ -244,6 +269,49 @@ public sealed class DshRuntimeDetector
             {
                 yield return candidate;
             }
+        }
+    }
+
+    public static bool IsExecutableInInstallDirectory(
+        string? executablePath,
+        string? installDirectory)
+    {
+        var normalizedDirectory = TryNormalizeDirectory(installDirectory);
+        if (string.IsNullOrWhiteSpace(executablePath) || normalizedDirectory is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var normalizedExecutable = Path.GetFullPath(executablePath);
+            var relative = Path.GetRelativePath(normalizedDirectory, normalizedExecutable);
+            return !Path.IsPathRooted(relative)
+                && !string.Equals(relative, "..", StringComparison.Ordinal)
+                && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string? TryNormalizeDirectory(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(directory.Trim())
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
         }
     }
 

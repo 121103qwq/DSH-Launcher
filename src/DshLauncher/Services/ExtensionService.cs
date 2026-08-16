@@ -123,6 +123,11 @@ public sealed class ExtensionService
     {
         EnsureStopped(instance);
         cancellationToken.ThrowIfCancellationRequested();
+        if (IsProtectedBuiltInPlugin(entry.Name))
+        {
+            throw new InvalidOperationException($"{entry.Name} 是 DSh 默认 Plugin，由运行时管理，不能启用、禁用、更新或删除。");
+        }
+
         if (entry.Kind != ExtensionKind.Plugin || !entry.Managed)
         {
             throw new InvalidOperationException("只有实例自己安装的 Plugin 可以启用或禁用。内置 bundle 不可修改。");
@@ -595,6 +600,11 @@ public sealed class ExtensionService
     {
         EnsureStopped(instance);
         ValidatePackageSpec(packageSpec);
+        if (IsProtectedBuiltInPlugin(packageSpec))
+        {
+            throw new InvalidOperationException($"{packageSpec} 是 DSh 默认 Plugin，由运行时管理，Launcher 不执行安装、更新或删除。");
+        }
+
         if (action is not ("add" or "update" or "remove"))
         {
             throw new ArgumentOutOfRangeException(nameof(action));
@@ -611,6 +621,17 @@ public sealed class ExtensionService
 
         return Tail(output.Output);
     }
+
+    internal static bool IsProtectedBuiltInPlugin(string? packageSpec)
+    {
+        var value = packageSpec?.Trim();
+        return IsPackageOrVersionedSpec(value, BuiltInBase)
+            || IsPackageOrVersionedSpec(value, BuiltInWeb);
+    }
+
+    private static bool IsPackageOrVersionedSpec(string? value, string packageName) =>
+        string.Equals(value, packageName, StringComparison.OrdinalIgnoreCase)
+        || value?.StartsWith(packageName + "@", StringComparison.OrdinalIgnoreCase) == true;
 
     private ProcessStartInfo CreatePluginStartInfo(
         ManagerInstance instance,

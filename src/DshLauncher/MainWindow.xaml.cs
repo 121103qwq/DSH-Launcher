@@ -4,7 +4,9 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using WpfBrush = System.Windows.Media.Brush;
 using WpfBrushes = System.Windows.Media.Brushes;
@@ -17,6 +19,21 @@ namespace DshLauncher;
 
 public partial class MainWindow : Window, INotifyPropertyChanged
 {
+    private const int WindowMessageNonClientHitTest = 0x0084;
+    private const int HitTestClient = 1;
+    private const int HitTestLeft = 10;
+    private const int HitTestRight = 11;
+    private const int HitTestTop = 12;
+    private const int HitTestTopLeft = 13;
+    private const int HitTestTopRight = 14;
+    private const int HitTestBottom = 15;
+    private const int HitTestBottomLeft = 16;
+    private const int HitTestBottomRight = 17;
+    private const double ResizeHitBorder = 5;
+#if DEBUG
+    private const string TestHideNodeVariable = "DSH_LAUNCHER_TEST_HIDE_NODE";
+    private const string TestHideDshVariable = "DSH_LAUNCHER_TEST_HIDE_DSH";
+#endif
     private readonly NodeRuntimeDetector _nodeDetector = new();
     private readonly DshRuntimeDetector _dshDetector = new();
     private readonly SourceProjectInspector _sourceInspector = new();
@@ -49,7 +66,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isRuntimePrepareInProgress;
     private bool _isProviderDetectionInProgress;
     private bool _blockWindowCloseForMsi;
+    private bool _instancesLoadedSuccessfully;
+    private bool _firstRunSetupPromptShown;
     private Action? _runtimePanelUpdateStatus;
+    private HwndSource? _windowSource;
 
     public MainWindow()
     {
@@ -146,22 +166,40 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public bool CanRefreshProviders => !_isProviderDetectionInProgress && SelectedInstance is not null;
 
-    public string SelectedInstanceName => SelectedInstance?.Name ?? "等待实例注册";
+    public string SelectedInstanceName => SelectedInstance?.Name ?? "尚未创建版本";
 
     public string SelectedInstanceSummary => SelectedInstance is null
-        ? "先注册一个 DSh 实例，再从这里启动。"
+        ? "按首次运行引导准备环境并创建第一个版本。"
         : $"{SelectedInstance.KindText} · {SelectedInstance.RootPath}";
 
     public string SelectedInstanceStatus => SelectedInstance?.StatusText ?? "未选择";
 
-    public bool CanStartInstance => CanStartInstanceCore(
-        _isLifecycleInProgress,
-        _isRuntimePrepareInProgress,
-        _isNodeDetectionInProgress,
-        SelectedInstance is not null,
-        SelectedInstance is not null
-            && _instanceRunner.IsRunning(SelectedInstance.Id)
-            && string.IsNullOrWhiteSpace(SelectedInstance.WebUrl));
+    public bool CanStartInstance => SelectedInstance is null
+        ? CanStartFirstVersionSetupCore(
+            _isLifecycleInProgress,
+            _isRuntimePrepareInProgress,
+            _isNodeDetectionInProgress,
+            Instances.Count,
+            _instancesLoadedSuccessfully)
+        : CanStartInstanceCore(
+            _isLifecycleInProgress,
+            _isRuntimePrepareInProgress,
+            _isNodeDetectionInProgress,
+            hasSelection: true,
+            _instanceRunner.IsRunning(SelectedInstance.Id)
+                && string.IsNullOrWhiteSpace(SelectedInstance.WebUrl));
+
+    internal static bool CanStartFirstVersionSetupCore(
+        bool lifecycleInProgress,
+        bool runtimePrepareInProgress,
+        bool nodeDetectionInProgress,
+        int instanceCount,
+        bool instancesLoadedSuccessfully) =>
+        !lifecycleInProgress
+        && !runtimePrepareInProgress
+        && !nodeDetectionInProgress
+        && instancesLoadedSuccessfully
+        && instanceCount == 0;
 
     internal static bool CanStartInstanceCore(
         bool lifecycleInProgress,
@@ -175,10 +213,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         && hasSelection
         && !runningWithoutWebUrl;
 
-    public string StartInstanceButtonText => SelectedInstance is not null
-        && _instanceRunner.IsRunning(SelectedInstance.Id)
-        ? "打开实例"
-        : "启动实例";
+    public string StartInstanceButtonText => SelectedInstance is null
+        ? "准备首个版本"
+        : _instanceRunner.IsRunning(SelectedInstance.Id)
+            ? "打开实例"
+            : "启动实例";
 
     public bool CanStopInstance => CanStopInstanceCore(
         _isLifecycleInProgress,
@@ -285,6 +324,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             SwitchSection("启动");
             await RefreshNodeAsync();
             await RefreshProvidersAsync(SelectedInstance);
+            await PromptFirstRunSetupIfNeededAsync();
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -328,7 +368,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             var preferredNodePath = GetPreferredNodePath();
-            _nodeRuntime = await _nodeDetector.DetectAsync(preferredNodePath, _windowCancellation.Token);
+            _nodeRuntime = IsRuntimeHiddenForBootstrapTest(TestRuntimeKind.Node)
+                ? NodeRuntimeInfo.Missing("隔离测试模式：已对当前 Launcher 进程隐藏本机 Node.js。")
+                : await _nodeDetector.DetectAsync(preferredNodePath, _windowCancellation.Token);
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeVersionText));
@@ -373,7 +415,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
-            _dshRuntime = await _dshDetector.DetectAsync(_windowCancellation.Token);
+            _dshRuntime = IsRuntimeHiddenForBootstrapTest(TestRuntimeKind.Dsh)
+                ? DshRuntimeInfo.Missing("隔离测试模式：已对当前 Launcher 进程隐藏本机 DeepSeek Harness。")
+                : await _dshDetector.DetectAsync(
+                    GetConfiguredDshInstallDirectory(),
+                    _windowCancellation.Token);
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -398,8 +444,51 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 重绑定只发生在用户确认的准备/修复流程（PrepareRuntimeAsync）。
     }
 
+    private string? GetConfiguredDshInstallDirectory() =>
+        _versionSettingsService.ReadLauncherSettings().DshInstallDirectory;
+
+    private enum TestRuntimeKind
+    {
+        Node,
+        Dsh
+    }
+
+    private static bool IsRuntimeHiddenForBootstrapTest(TestRuntimeKind runtime)
+    {
+#if DEBUG
+        var variable = runtime == TestRuntimeKind.Node
+            ? TestHideNodeVariable
+            : TestHideDshVariable;
+        return string.Equals(
+            Environment.GetEnvironmentVariable(variable),
+            "1",
+            StringComparison.Ordinal);
+#else
+        return false;
+#endif
+    }
+
+    private static void RevealRuntimeAfterBootstrap(TestRuntimeKind runtime)
+    {
+#if DEBUG
+        Environment.SetEnvironmentVariable(
+            runtime == TestRuntimeKind.Node ? TestHideNodeVariable : TestHideDshVariable,
+            null);
+#endif
+    }
+
+    internal static bool IsPreferredDshRuntimeReady(
+        DshRuntimeInfo runtime,
+        string? preferredInstallDirectory) =>
+        runtime.IsAvailable
+        && (string.IsNullOrWhiteSpace(preferredInstallDirectory)
+            || DshRuntimeDetector.IsExecutableInInstallDirectory(
+                runtime.ExecutablePath,
+                preferredInstallDirectory));
+
     private async Task LoadInstancesAsync()
     {
+        _instancesLoadedSuccessfully = false;
         try
         {
             Instances.Clear();
@@ -456,6 +545,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshRunningInstances();
             OnPropertyChanged(nameof(ProviderSummaryText));
             OnPropertyChanged(nameof(CanRefreshProviders));
+            _instancesLoadedSuccessfully = true;
+            OnPropertyChanged(nameof(CanStartInstance));
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -869,33 +960,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     _ = SynchronizeModelProvidersAsync(current, notifyNoConfiguration: true);
                     _ = SynchronizeConversationsAsync(current);
                 }
-            },
-            renameVersion: RenameVersion));
+            }));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
-    }
-
-    private ManagerInstance RenameVersion(ManagerInstance instance, string name)
-    {
-        var updated = _instanceRegistry.Update(instance with { Name = name.Trim() });
-        var index = Instances.ToList().FindIndex(candidate =>
-            string.Equals(candidate.Id, updated.Id, StringComparison.Ordinal));
-        if (index >= 0)
-        {
-            Instances[index] = updated;
-        }
-
-        if (SelectedInstance?.Id == updated.Id)
-        {
-            SelectedInstance = updated;
-            if (PageTitle.StartsWith("版本设置", StringComparison.Ordinal))
-            {
-                PageTitle = $"版本设置 - {updated.Name}";
-                OnPropertyChanged(nameof(PageTitle));
-            }
-        }
-
-        return updated;
     }
 
     private string? GetPreferredNodePath()
@@ -1002,7 +1069,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             Margin = new Thickness(24),
             VerticalAlignment = VerticalAlignment.Top,
-            MaxWidth = 720
+            MaxWidth = 980
         };
         panel.Children.Add(new TextBlock
         {
@@ -1039,6 +1106,51 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         panel.Children.Add(nodeDetail);
         panel.Children.Add(dshStatus);
         panel.Children.Add(dshDetail);
+
+        var dshInstallLabel = new TextBlock
+        {
+            Text = "DSh 安装位置",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 18, 0, 0)
+        };
+        var dshInstallRow = new Grid { Margin = new Thickness(0, 7, 0, 0) };
+        dshInstallRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        dshInstallRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        dshInstallRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var dshInstallBox = new System.Windows.Controls.TextBox
+        {
+            Height = 38,
+            VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+            Text = GetConfiguredDshInstallDirectory() ?? string.Empty,
+            ToolTip = "留空时使用当前 Node.js 的 npm 全局默认位置"
+        };
+        var browseDshInstallButton = new System.Windows.Controls.Button
+        {
+            Content = "选择文件夹",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        var saveDshInstallButton = new System.Windows.Controls.Button
+        {
+            Content = "保存位置",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        Grid.SetColumn(browseDshInstallButton, 1);
+        Grid.SetColumn(saveDshInstallButton, 2);
+        dshInstallRow.Children.Add(dshInstallBox);
+        dshInstallRow.Children.Add(browseDshInstallButton);
+        dshInstallRow.Children.Add(saveDshInstallButton);
+        panel.Children.Add(dshInstallLabel);
+        panel.Children.Add(dshInstallRow);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "指定后，Launcher 会把 @deepseek-ai/dsh 安装到这个目录；留空则沿用 npm 全局默认位置。实例的 Plugin、Skill、Provider、设置和对话仍保存在各自独立的 DSH_HOME。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0)
+        });
 
         var buttons = new WrapPanel { Margin = new Thickness(0, 18, 0, 0) };
         var refreshButton = new System.Windows.Controls.Button
@@ -1079,6 +1191,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         void UpdateStatus()
         {
+            var preferredDshDirectory = GetConfiguredDshInstallDirectory();
             nodeStatus.Text = $"Node.js：{NodeStatusText}";
             nodeDetail.Text = _nodeRuntime.IsAvailable
                 ? $"{_nodeRuntime.VersionText} · {(_nodeRuntime.ExecutablePath ?? "路径未知")}"
@@ -1089,11 +1202,45 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 : "未安装";
             // 设置页按全局环境判定就绪：DSh 声明的 engines.node 与现有 Node
             // 不兼容时保持“未就绪”，让状态和不兼容提示可见，而不是隐藏准备按钮。
-            var ready = _dshRuntime.IsAvailable && IsGlobalRuntimeReady(_nodeRuntime, _dshRuntime.NodeEngine);
+            var ready = IsPreferredDshRuntimeReady(_dshRuntime, preferredDshDirectory)
+                && IsGlobalRuntimeReady(_nodeRuntime, _dshRuntime.NodeEngine);
+            prepareButton.Content = string.IsNullOrWhiteSpace(preferredDshDirectory)
+                ? "准备运行环境（官方源）"
+                : "安装到所选位置（官方源）";
+            prepareMirrorButton.Content = string.IsNullOrWhiteSpace(preferredDshDirectory)
+                ? "准备运行环境（国内镜像）"
+                : "安装到所选位置（国内镜像）";
             prepareButton.IsEnabled = !ready && !_isRuntimePrepareInProgress && !_isNodeDetectionInProgress;
             prepareMirrorButton.IsEnabled = prepareButton.IsEnabled;
             prepareButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
             prepareMirrorButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        async Task<bool> SaveDshInstallLocationAsync(bool showNotice)
+        {
+            try
+            {
+                var normalized = DshInstallService.NormalizeInstallDirectory(dshInstallBox.Text);
+                var launcherSettings = _versionSettingsService.ReadLauncherSettings();
+                launcherSettings.DshInstallDirectory = normalized;
+                _versionSettingsService.SaveLauncherSettings(launcherSettings);
+                dshInstallBox.Text = normalized ?? string.Empty;
+                await RefreshDshAsync();
+                UpdateStatus();
+                if (showNotice)
+                {
+                    ShowNotice(normalized is null
+                        ? "DSh 安装位置已恢复为 npm 全局默认位置。"
+                        : $"DSh 安装位置已保存：{normalized}。现有运行时不会被自动移动；下次准备或修复时安装到这里。");
+                }
+
+                return true;
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                ShowNotice($"无法保存 DSh 安装位置：{ex.Message}");
+                return false;
+            }
         }
 
         refreshButton.Click += async (_, _) =>
@@ -1102,10 +1249,36 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             await RefreshNodeAsync();
             UpdateStatus();
         };
+        browseDshInstallButton.Click += async (_, _) =>
+        {
+            var selected = PickFolder(
+                "选择 DeepSeek Harness 安装位置",
+                dshInstallBox.Text,
+                showNewFolderButton: true);
+            if (selected is null)
+            {
+                return;
+            }
+
+            dshInstallBox.Text = selected;
+            await SaveDshInstallLocationAsync(showNotice: true);
+        };
+        saveDshInstallButton.Click += async (_, _) =>
+            await SaveDshInstallLocationAsync(showNotice: true);
         prepareButton.Click += async (_, _) =>
-            await PrepareRuntimeFromSettingsAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry);
+        {
+            if (await SaveDshInstallLocationAsync(showNotice: false))
+            {
+                await PrepareRuntimeFromSettingsAsync("Node.js 官方源", NodeInstallService.OfficialDistBase, DshInstallService.OfficialRegistry);
+            }
+        };
         prepareMirrorButton.Click += async (_, _) =>
-            await PrepareRuntimeFromSettingsAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry);
+        {
+            if (await SaveDshInstallLocationAsync(showNotice: false))
+            {
+                await PrepareRuntimeFromSettingsAsync("npmmirror 国内镜像", NodeInstallService.MirrorDistBase, DshInstallService.ChinaRegistry);
+            }
+        };
 
         _runtimePanelUpdateStatus = UpdateStatus;
         UpdateStatus();
@@ -1124,22 +1297,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 32, 0, 0)
         });
 
+        var globalCardContent = new StackPanel();
+        var globalCard = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = globalCardContent
+        };
         var syncAll = new System.Windows.Controls.CheckBox
         {
             Content = "和所有版本配置同步",
+            FontSize = 15,
             FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 14, 0, 0),
             IsChecked = _versionSettingsService.ReadLauncherSettings().SyncAllConfiguration
         };
-        panel.Children.Add(syncAll);
-        panel.Children.Add(new TextBlock
+        globalCardContent.Children.Add(syncAll);
+        globalCardContent.Children.Add(new TextBlock
         {
-            Text = "与版本设置中的同名开关一致，但作用于全部版本：开启后所有版本之间按全量策略同步对话、配置和模型 Provider，忽略各版本自己的独立/工作区选择。",
+            Text = "开启后，所有版本按全量策略同步对话与通用配置；模型 Provider 仍由每个版本下面的独立开关控制。",
             Foreground = (WpfBrush)FindResource("MutedBrush"),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 4, 0, 0)
+            Margin = new Thickness(0, 6, 0, 0)
         });
+        panel.Children.Add(globalCard);
 
         void HandleSyncAllChanged()
         {
@@ -1149,7 +1334,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _versionSettingsService.SaveLauncherSettings(settings);
             if (SelectedInstance is { } current)
             {
-                _ = SynchronizeModelProvidersAsync(current, notifyNoConfiguration: false);
                 _ = SynchronizeConversationsAsync(current);
             }
 
@@ -1161,67 +1345,321 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         syncAll.Checked += (_, _) => HandleSyncAllChanged();
         syncAll.Unchecked += (_, _) => HandleSyncAllChanged();
 
-        panel.Children.Add(new TextBlock
+        var versionCardContent = new StackPanel();
+        var versionCard = new Border
         {
-            Text = "对话同步工作区",
-            FontSize = 14,
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 18, 0, 0)
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = versionCardContent
+        };
+        versionCardContent.Children.Add(new TextBlock
+        {
+            Text = "单独调节版本配置",
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold
         });
-
-        var workspaceList = new TextBlock
+        versionCardContent.Children.Add(new TextBlock
         {
-            Foreground = (WpfBrush)FindResource("MutedBrush"),
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 4, 0, 0)
-        };
-        void RefreshWorkspaceList()
-        {
-            var names = _versionSettingsService.GetWorkspaceNames(Instances);
-            workspaceList.Text = names.Count == 0
-                ? "暂无工作区。"
-                : string.Join("、", names);
-        }
-
-        RefreshWorkspaceList();
-        panel.Children.Add(workspaceList);
-
-        var nameBox = new System.Windows.Controls.TextBox
-        {
-            Width = 260,
-            VerticalContentAlignment = System.Windows.VerticalAlignment.Center
-        };
-        var addButton = new System.Windows.Controls.Button
-        {
-            Content = "添加工作区",
-            Padding = new Thickness(12, 7, 12, 7),
-            Margin = new Thickness(8, 0, 0, 0)
-        };
-        var addRow = new StackPanel
-        {
-            Orientation = System.Windows.Controls.Orientation.Horizontal,
-            Margin = new Thickness(0, 10, 0, 0)
-        };
-        addRow.Children.Add(nameBox);
-        addRow.Children.Add(addButton);
-        panel.Children.Add(addRow);
-        panel.Children.Add(new TextBlock
-        {
-            Text = "添加的工作区会出现在版本设置“按工作区同步”的下拉列表中，供各版本选择。",
+            Text = "先选择版本，再设置它的对话同步范围和模型 Provider 同步。这里与“版本设置 → 配置”使用同一份数据。",
             Foreground = (WpfBrush)FindResource("MutedBrush"),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 8, 0, 0)
+            Margin = new Thickness(0, 5, 0, 14)
         });
+
+        var versionRow = new Grid();
+        versionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        versionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var versionLabel = new TextBlock
+        {
+            Text = "版本",
+            VerticalAlignment = VerticalAlignment.Center,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 14, 0)
+        };
+        var versionBox = new System.Windows.Controls.ComboBox
+        {
+            Height = 38,
+            DisplayMemberPath = "Name",
+            ItemsSource = Instances,
+            SelectedItem = SelectedInstance ?? Instances.FirstOrDefault()
+        };
+        Grid.SetColumn(versionBox, 1);
+        versionRow.Children.Add(versionLabel);
+        versionRow.Children.Add(versionBox);
+        versionCardContent.Children.Add(versionRow);
+
+        var versionSyncAll = new System.Windows.Controls.CheckBox
+        {
+            Content = "和所有版本配置同步",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 18, 0, 0)
+        };
+        versionCardContent.Children.Add(versionSyncAll);
+        versionCardContent.Children.Add(new TextBlock
+        {
+            Text = "该版本打开此项后，下面的对话文件选项会变灰，并按全量策略与其它版本同步。模型同步仍可单独开关。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+
+        var versionOptions = new StackPanel { Margin = new Thickness(0, 16, 0, 0) };
+        versionOptions.Children.Add(new TextBlock { Text = "对话文件同步", FontWeight = FontWeights.SemiBold });
+        var independentRadio = new System.Windows.Controls.RadioButton
+        {
+            Content = "该版本完全独立",
+            GroupName = "SettingsConversationSync",
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        var workspaceRadio = new System.Windows.Controls.RadioButton
+        {
+            Content = "按工作区同步",
+            GroupName = "SettingsConversationSync",
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        var versionWorkspaceBox = new System.Windows.Controls.ComboBox
+        {
+            IsEditable = true,
+            Height = 36,
+            Margin = new Thickness(24, 7, 0, 0),
+            ToolTip = "选择已有工作区，或输入新的工作区名称"
+        };
+        var allRadio = new System.Windows.Controls.RadioButton
+        {
+            Content = "全量同步（所有工作区和所有版本）",
+            GroupName = "SettingsConversationSync",
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        var syncProviders = new System.Windows.Controls.CheckBox
+        {
+            Content = "所有版本自动同步模型",
+            Margin = new Thickness(0, 18, 0, 0)
+        };
+        versionOptions.Children.Add(independentRadio);
+        versionOptions.Children.Add(workspaceRadio);
+        versionOptions.Children.Add(versionWorkspaceBox);
+        versionOptions.Children.Add(allRadio);
+        versionCardContent.Children.Add(versionOptions);
+        versionCardContent.Children.Add(syncProviders);
+        versionCardContent.Children.Add(new TextBlock
+        {
+            Text = "模型同步不受上面对话文件同步范围影响。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+        var saveVersionButton = new System.Windows.Controls.Button
+        {
+            Content = "保存此版本配置",
+            Style = (Style)FindResource("PrimaryButton"),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 18, 0, 0)
+        };
+        versionCardContent.Children.Add(saveVersionButton);
+        var versionStatus = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        versionCardContent.Children.Add(versionStatus);
+        panel.Children.Add(versionCard);
+
+        var workspaceCardContent = new StackPanel();
+        var workspaceCard = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = workspaceCardContent
+        };
+        workspaceCardContent.Children.Add(new TextBlock
+        {
+            Text = "工作区同步管理",
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold
+        });
+        workspaceCardContent.Children.Add(new TextBlock
+        {
+            Text = "重命名会同时更新成员版本；删除只解除同步关系，并把成员版本改为完全独立，不会删除对话。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 14)
+        });
+        var managedWorkspaceBox = new System.Windows.Controls.ComboBox
+        {
+            Height = 38,
+            ToolTip = "选择要管理的工作区"
+        };
+        workspaceCardContent.Children.Add(managedWorkspaceBox);
+        var workspaceMembersText = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 7, 0, 0)
+        };
+        workspaceCardContent.Children.Add(workspaceMembersText);
+
+        var workspaceNameBox = new System.Windows.Controls.TextBox
+        {
+            Height = 36,
+            VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+            Margin = new Thickness(0, 12, 0, 0),
+            ToolTip = "输入新工作区名称，或修改当前工作区名称"
+        };
+        workspaceCardContent.Children.Add(workspaceNameBox);
+        var workspaceButtons = new WrapPanel { Margin = new Thickness(0, 9, 0, 0) };
+        var addWorkspaceButton = new System.Windows.Controls.Button
+        {
+            Content = "添加工作区",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var renameWorkspaceButton = new System.Windows.Controls.Button
+        {
+            Content = "重命名",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var deleteWorkspaceButton = new System.Windows.Controls.Button
+        {
+            Content = "删除工作区",
+            Padding = new Thickness(12, 7, 12, 7)
+        };
+        workspaceButtons.Children.Add(addWorkspaceButton);
+        workspaceButtons.Children.Add(renameWorkspaceButton);
+        workspaceButtons.Children.Add(deleteWorkspaceButton);
+        workspaceCardContent.Children.Add(workspaceButtons);
+        panel.Children.Add(workspaceCard);
+
+        var loadingVersion = false;
+
+        void UpdateVersionOptionState()
+        {
+            var hasVersion = versionBox.SelectedItem is ManagerInstance;
+            versionOptions.IsEnabled = hasVersion && versionSyncAll.IsChecked != true;
+            versionWorkspaceBox.IsEnabled = versionOptions.IsEnabled && workspaceRadio.IsChecked == true;
+            syncProviders.IsEnabled = hasVersion;
+            saveVersionButton.IsEnabled = hasVersion;
+        }
+
+        void LoadSelectedVersion()
+        {
+            loadingVersion = true;
+            try
+            {
+                if (versionBox.SelectedItem is not ManagerInstance instance)
+                {
+                    versionSyncAll.IsChecked = false;
+                    independentRadio.IsChecked = true;
+                    syncProviders.IsChecked = true;
+                    versionWorkspaceBox.ItemsSource = Array.Empty<string>();
+                    versionWorkspaceBox.Text = string.Empty;
+                    versionStatus.Text = "当前没有可设置的版本。";
+                    return;
+                }
+
+                var settings = _versionSettingsService.Read(instance);
+                versionSyncAll.IsChecked = settings.SyncAllConfiguration;
+                independentRadio.IsChecked = settings.ConversationSyncMode == ConversationSyncMode.Independent;
+                workspaceRadio.IsChecked = settings.ConversationSyncMode == ConversationSyncMode.Workspace;
+                allRadio.IsChecked = settings.ConversationSyncMode == ConversationSyncMode.All;
+                syncProviders.IsChecked = settings.SyncModelProviders;
+                versionWorkspaceBox.ItemsSource = _versionSettingsService.GetWorkspaceNames(Instances);
+                versionWorkspaceBox.Text = settings.ConversationWorkspace ?? string.Empty;
+                versionStatus.Text = $"正在编辑：{instance.Name}";
+            }
+            catch (Exception ex)
+            {
+                versionStatus.Text = $"读取版本配置失败：{ex.Message}";
+            }
+            finally
+            {
+                loadingVersion = false;
+                UpdateVersionOptionState();
+            }
+        }
+
+        void UpdateWorkspaceDetails()
+        {
+            var selected = managedWorkspaceBox.SelectedItem as string;
+            renameWorkspaceButton.IsEnabled = !string.IsNullOrWhiteSpace(selected);
+            deleteWorkspaceButton.IsEnabled = renameWorkspaceButton.IsEnabled;
+            if (string.IsNullOrWhiteSpace(selected))
+            {
+                workspaceMembersText.Text = "暂无工作区。可在下方输入名称后添加。";
+                return;
+            }
+
+            workspaceNameBox.Text = selected;
+            var members = new List<string>();
+            foreach (var instance in Instances)
+            {
+                try
+                {
+                    if (string.Equals(
+                            _versionSettingsService.Read(instance).ConversationWorkspace,
+                            selected,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        members.Add(instance.Name);
+                    }
+                }
+                catch
+                {
+                    // 单个版本设置损坏时，仍允许管理其它正常版本的工作区。
+                }
+            }
+
+            workspaceMembersText.Text = members.Count == 0
+                ? "当前没有版本使用这个工作区。"
+                : $"包含版本：{string.Join("、", members)}";
+        }
+
+        void RefreshWorkspaceChoices(string? preferredWorkspace = null)
+        {
+            try
+            {
+                var previous = preferredWorkspace ?? managedWorkspaceBox.SelectedItem as string;
+                var names = _versionSettingsService.GetWorkspaceNames(Instances);
+                managedWorkspaceBox.ItemsSource = names;
+                managedWorkspaceBox.SelectedItem = names.FirstOrDefault(name =>
+                    string.Equals(name, previous, StringComparison.OrdinalIgnoreCase));
+                if (managedWorkspaceBox.SelectedItem is null && names.Count > 0)
+                {
+                    managedWorkspaceBox.SelectedIndex = 0;
+                }
+
+                var currentText = versionWorkspaceBox.Text;
+                versionWorkspaceBox.ItemsSource = names;
+                versionWorkspaceBox.Text = currentText;
+                UpdateWorkspaceDetails();
+            }
+            catch (Exception ex)
+            {
+                workspaceMembersText.Text = $"读取工作区失败：{ex.Message}";
+            }
+        }
 
         void AddWorkspace()
         {
             try
             {
-                var name = _versionSettingsService.AddLauncherWorkspace(nameBox.Text);
-                nameBox.Clear();
-                RefreshWorkspaceList();
+                var name = _versionSettingsService.AddLauncherWorkspace(workspaceNameBox.Text);
+                RefreshWorkspaceChoices(name);
                 ShowNotice($"已添加工作区：{name}。");
             }
             catch (ArgumentException ex)
@@ -1230,8 +1668,103 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
         }
 
-        addButton.Click += (_, _) => AddWorkspace();
-        nameBox.KeyDown += (_, keyArgs) =>
+        versionBox.SelectionChanged += (_, _) => LoadSelectedVersion();
+        versionSyncAll.Checked += (_, _) => { if (!loadingVersion) UpdateVersionOptionState(); };
+        versionSyncAll.Unchecked += (_, _) => { if (!loadingVersion) UpdateVersionOptionState(); };
+        workspaceRadio.Checked += (_, _) => { if (!loadingVersion) UpdateVersionOptionState(); };
+        independentRadio.Checked += (_, _) => { if (!loadingVersion) UpdateVersionOptionState(); };
+        allRadio.Checked += (_, _) => { if (!loadingVersion) UpdateVersionOptionState(); };
+        saveVersionButton.Click += (_, _) =>
+        {
+            if (versionBox.SelectedItem is not ManagerInstance instance)
+            {
+                versionStatus.Text = "请先选择版本。";
+                return;
+            }
+
+            try
+            {
+                var current = _versionSettingsService.Read(instance);
+                string? workspace = null;
+                if (workspaceRadio.IsChecked == true)
+                {
+                    workspace = _versionSettingsService.AddLauncherWorkspace(versionWorkspaceBox.Text);
+                }
+
+                var updated = new VersionSettingsData
+                {
+                    SyncAllConfiguration = versionSyncAll.IsChecked == true,
+                    ConversationSyncMode = workspaceRadio.IsChecked == true
+                        ? ConversationSyncMode.Workspace
+                        : allRadio.IsChecked == true
+                            ? ConversationSyncMode.All
+                            : ConversationSyncMode.Independent,
+                    ConversationWorkspace = workspace,
+                    SyncModelProviders = syncProviders.IsChecked == true,
+                    WindowTitle = current.WindowTitle,
+                    NodeExecutablePath = current.NodeExecutablePath
+                };
+                _versionSettingsService.Save(instance, updated);
+                RefreshWorkspaceChoices(workspace);
+                versionStatus.Text = $"已保存 {instance.Name} 的同步配置。";
+                _ = SynchronizeModelProvidersAsync(instance, notifyNoConfiguration: true);
+                _ = SynchronizeConversationsAsync(instance);
+            }
+            catch (Exception ex)
+            {
+                versionStatus.Text = $"保存失败：{ex.Message}";
+            }
+        };
+
+        managedWorkspaceBox.SelectionChanged += (_, _) => UpdateWorkspaceDetails();
+        addWorkspaceButton.Click += (_, _) => AddWorkspace();
+        renameWorkspaceButton.Click += (_, _) =>
+        {
+            if (managedWorkspaceBox.SelectedItem is not string current)
+            {
+                return;
+            }
+
+            try
+            {
+                var updated = workspaceNameBox.Text.Trim();
+                var affected = _versionSettingsService.RenameLauncherWorkspace(Instances, current, updated);
+                RefreshWorkspaceChoices(updated);
+                LoadSelectedVersion();
+                ShowNotice($"工作区已重命名为“{updated}”，已更新 {affected} 个版本。 ");
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"重命名工作区失败：{ex.Message}");
+            }
+        };
+        deleteWorkspaceButton.Click += (_, _) =>
+        {
+            if (managedWorkspaceBox.SelectedItem is not string current
+                || System.Windows.MessageBox.Show(
+                    this,
+                    $"确定删除工作区“{current}”？成员版本会改为完全独立，对话文件不会被删除。",
+                    "删除工作区",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            try
+            {
+                var affected = _versionSettingsService.DeleteLauncherWorkspace(Instances, current);
+                workspaceNameBox.Clear();
+                RefreshWorkspaceChoices();
+                LoadSelectedVersion();
+                ShowNotice($"已删除工作区“{current}”，{affected} 个版本已改为完全独立。 ");
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"删除工作区失败：{ex.Message}");
+            }
+        };
+        workspaceNameBox.KeyDown += (_, keyArgs) =>
         {
             if (keyArgs.Key == System.Windows.Input.Key.Enter)
             {
@@ -1239,6 +1772,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 keyArgs.Handled = true;
             }
         };
+
+        LoadSelectedVersion();
+        RefreshWorkspaceChoices();
     }
 
     /// <summary>
@@ -1301,6 +1837,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         progressWindow.Show();
         try
         {
+            var dshInstallDirectory = GetConfiguredDshInstallDirectory();
             var progress = new Progress<NodeDownloadProgress>(progressWindow.SetDownloadProgress);
             var nodeWasInstalled = false;
 
@@ -1325,6 +1862,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     return false;
                 }
 
+                RevealRuntimeAfterBootstrap(TestRuntimeKind.Node);
                 progressWindow.SetStatus("Node.js 安装完成，正在重新检测…");
                 for (var attempt = 0; attempt < 5 && !_nodeRuntime.IsAvailable; attempt++)
                 {
@@ -1360,14 +1898,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 await RefreshDshAsync();
             }
 
-            if (DshInstallService.ShouldInstallGlobalDSh(_dshRuntime.IsAvailable, target?.Kind))
+            var shouldInstallDsh = DshInstallService.ShouldInstallGlobalDSh(
+                    _dshRuntime.IsAvailable,
+                    target?.Kind)
+                || (target?.Kind is null or InstanceKind.Installed
+                    && !string.IsNullOrWhiteSpace(dshInstallDirectory)
+                    && !DshRuntimeDetector.IsExecutableInInstallDirectory(
+                        _dshRuntime.ExecutablePath,
+                        dshInstallDirectory));
+            if (shouldInstallDsh)
             {
                 var usingMirrorRegistry = string.Equals(npmRegistry, DshInstallService.ChinaRegistry, StringComparison.OrdinalIgnoreCase);
                 progressWindow.SetIndeterminate(true);
                 progressWindow.SetStatus(usingMirrorRegistry
                     ? "正在通过 npmmirror 国内镜像安装 DeepSeek Harness…"
                     : "正在通过 npm 官方源安装 DeepSeek Harness…");
-                var dshResult = await _dshInstaller.InstallAsync(_nodeRuntime, npmRegistry, cancellation.Token);
+                var dshResult = await _dshInstaller.InstallAsync(
+                    _nodeRuntime,
+                    npmRegistry,
+                    dshInstallDirectory,
+                    cancellation.Token);
                 if (!dshResult.IsSuccess)
                 {
                     progressWindow.SetStatus(dshResult.Error ?? "DSh 安装失败。");
@@ -1375,6 +1925,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     return false;
                 }
 
+                RevealRuntimeAfterBootstrap(TestRuntimeKind.Dsh);
                 progressWindow.SetStatus("DSh 安装完成，正在重新检测…");
                 for (var attempt = 0; attempt < 5 && !_dshRuntime.IsAvailable; attempt++)
                 {
@@ -1726,6 +2277,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (SelectedInstance is null)
         {
+            await RunFirstVersionSetupAsync();
             return;
         }
 
@@ -1774,20 +2326,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             selected = resolvedStartTarget;
 
-            var result = await StartManagedInstanceAsync(selected);
-            if (result is null)
-            {
-                return;
-            }
-
-            if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
-            {
-                ShowNotice(result.Error ?? "DSh 启动失败。");
-                return;
-            }
-
-            OpenChatWindow(selected.Id, result.WebUrl);
-            ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
+            await StartPreparedInstanceAndOpenAsync(selected);
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -2030,15 +2569,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            var result = await _dshInstaller.InstallAsync(_nodeRuntime, registry, _windowCancellation.Token);
+            var installDirectory = GetConfiguredDshInstallDirectory();
+            var result = await _dshInstaller.InstallAsync(
+                _nodeRuntime,
+                registry,
+                installDirectory,
+                _windowCancellation.Token);
             if (!result.IsSuccess)
             {
                 ShowNotice(result.Error ?? "DSh 安装失败。");
                 return;
             }
 
+            RevealRuntimeAfterBootstrap(TestRuntimeKind.Dsh);
             await RefreshDshAsync();
-            ShowNotice($"DSh 安装/更新完成：{_dshRuntime.VersionText}。可以重新检测并注册实例。");
+            ShowNotice(installDirectory is null
+                ? $"DSh 安装/更新完成：{_dshRuntime.VersionText}。可以重新检测并注册实例。"
+                : $"DSh 安装/更新完成：{_dshRuntime.VersionText} · {installDirectory}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -2186,13 +2733,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(InstanceEndpointText));
     }
 
-    private static string? PickFolder(string description, string? initialPath = null)
+    private static string? PickFolder(
+        string description,
+        string? initialPath = null,
+        bool showNewFolderButton = false)
     {
         using var dialog = new Forms.FolderBrowserDialog
         {
             Description = description,
             UseDescriptionForTitle = true,
-            ShowNewFolderButton = false,
+            ShowNewFolderButton = showNewFolderButton,
             SelectedPath = !string.IsNullOrWhiteSpace(initialPath) && Directory.Exists(initialPath)
                 ? initialPath
                 : string.Empty
@@ -2256,8 +2806,254 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         base.OnClosing(e);
     }
 
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        _windowSource = PresentationSource.FromVisual(this) as HwndSource;
+        _windowSource?.AddHook(WindowProcedure);
+    }
+
+    private IntPtr WindowProcedure(
+        IntPtr windowHandle,
+        int message,
+        IntPtr wordParameter,
+        IntPtr longParameter,
+        ref bool handled)
+    {
+        if (message != WindowMessageNonClientHitTest
+            || WindowState != WindowState.Normal
+            || ResizeMode != ResizeMode.CanResize)
+        {
+            return IntPtr.Zero;
+        }
+
+        var packedPoint = longParameter.ToInt64();
+        var screenPoint = new System.Windows.Point(
+            unchecked((short)(packedPoint & 0xFFFF)),
+            unchecked((short)((packedPoint >> 16) & 0xFFFF)));
+        var clientPoint = PointFromScreen(screenPoint);
+        var result = GetResizeHitTest(
+            ActualWidth,
+            ActualHeight,
+            clientPoint.X,
+            clientPoint.Y,
+            ResizeHitBorder);
+        if (result == HitTestClient)
+        {
+            return IntPtr.Zero;
+        }
+
+        handled = true;
+        return new IntPtr(result);
+    }
+
+    internal static int GetResizeHitTest(
+        double width,
+        double height,
+        double x,
+        double y,
+        double border)
+    {
+        if (width <= 0 || height <= 0 || border <= 0)
+        {
+            return HitTestClient;
+        }
+
+        var left = x < border;
+        var right = x >= width - border;
+        var top = y < border;
+        var bottom = y >= height - border;
+
+        if (top && left) return HitTestTopLeft;
+        if (top && right) return HitTestTopRight;
+        if (bottom && left) return HitTestBottomLeft;
+        if (bottom && right) return HitTestBottomRight;
+        if (left) return HitTestLeft;
+        if (right) return HitTestRight;
+        if (top) return HitTestTop;
+        if (bottom) return HitTestBottom;
+        return HitTestClient;
+    }
+
+    private void ResizeThumb_DragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (WindowState != WindowState.Normal
+            || ResizeMode != ResizeMode.CanResize
+            || sender is not Thumb { Tag: string direction })
+        {
+            return;
+        }
+
+        if (direction.Contains("Left", StringComparison.Ordinal))
+        {
+            var horizontalChange = Math.Min(e.HorizontalChange, ActualWidth - MinWidth);
+            Left += horizontalChange;
+            Width = Math.Max(MinWidth, ActualWidth - horizontalChange);
+        }
+        else if (direction.Contains("Right", StringComparison.Ordinal))
+        {
+            Width = Math.Max(MinWidth, ActualWidth + e.HorizontalChange);
+        }
+
+        if (direction.Contains("Top", StringComparison.Ordinal))
+        {
+            var verticalChange = Math.Min(e.VerticalChange, ActualHeight - MinHeight);
+            Top += verticalChange;
+            Height = Math.Max(MinHeight, ActualHeight - verticalChange);
+        }
+        else if (direction.Contains("Bottom", StringComparison.Ordinal))
+        {
+            Height = Math.Max(MinHeight, ActualHeight + e.VerticalChange);
+        }
+    }
+
+    private async Task PromptFirstRunSetupIfNeededAsync()
+    {
+        if (!ShouldPromptFirstRunSetup(
+                Instances.Count,
+                _instancesLoadedSuccessfully,
+                _firstRunSetupPromptShown))
+        {
+            return;
+        }
+
+        _firstRunSetupPromptShown = true;
+        await RunFirstVersionSetupAsync();
+    }
+
+    internal static bool ShouldPromptFirstRunSetup(
+        int instanceCount,
+        bool instancesLoadedSuccessfully,
+        bool promptAlreadyShown) =>
+        instancesLoadedSuccessfully
+        && instanceCount == 0
+        && !promptAlreadyShown;
+
+    internal static string BuildDefaultFirstVersionName(string? dshVersion)
+    {
+        var normalized = dshVersion?.Trim().TrimStart('v', 'V');
+        return string.IsNullOrWhiteSpace(normalized)
+            ? "DSh 默认版本"
+            : $"DSh {normalized}";
+    }
+
+    private async Task RunFirstVersionSetupAsync()
+    {
+        if (!_instancesLoadedSuccessfully)
+        {
+            ShowNotice("实例注册信息尚未读取完成，请稍候再试。");
+            return;
+        }
+
+        if (Instances.Count > 0)
+        {
+            SelectedInstance ??= Instances[0];
+            return;
+        }
+
+        var configuredDirectory = GetConfiguredDshInstallDirectory();
+        var runtimeReady = IsPreferredDshRuntimeReady(_dshRuntime, configuredDirectory)
+            && IsGlobalRuntimeReady(_nodeRuntime, _dshRuntime.NodeEngine);
+        var choice = FirstRunSetupWindow.Show(
+            this,
+            _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
+            _dshRuntime.IsAvailable ? _dshRuntime.VersionText : "未安装",
+            configuredDirectory,
+            runtimeReady);
+        if (choice is null)
+        {
+            ShowNotice("已暂缓首次运行配置；可点击“准备首个版本”重新打开引导。");
+            return;
+        }
+
+        if (!TryBeginLifecycleOperation())
+        {
+            return;
+        }
+
+        ManagerInstance? created = null;
+        try
+        {
+            var launcherSettings = _versionSettingsService.ReadLauncherSettings();
+            launcherSettings.DshInstallDirectory = choice.DshInstallDirectory;
+            _versionSettingsService.SaveLauncherSettings(launcherSettings);
+            await RefreshDshAsync();
+
+            var sourceName = choice.Source == FirstRunDownloadSource.ChinaMirror
+                ? "npmmirror 国内镜像"
+                : "Node.js 官方源";
+            var nodeDistBase = choice.Source == FirstRunDownloadSource.ChinaMirror
+                ? NodeInstallService.MirrorDistBase
+                : NodeInstallService.OfficialDistBase;
+            var npmRegistry = choice.Source == FirstRunDownloadSource.ChinaMirror
+                ? DshInstallService.ChinaRegistry
+                : DshInstallService.OfficialRegistry;
+            if (!await PrepareRuntimeAsync(sourceName, nodeDistBase, npmRegistry, null))
+            {
+                return;
+            }
+
+            if (Instances.Count > 0)
+            {
+                SelectedInstance ??= Instances[0];
+                return;
+            }
+
+            var template = GetVersionTemplate();
+            if (template is null)
+            {
+                ShowNotice("运行环境已准备，但没有解析到可用于创建版本的 DSh 运行目录。");
+                return;
+            }
+
+            created = await Task.Run(() => _versionPackageService.CreateCleanVersion(
+                template,
+                BuildDefaultFirstVersionName(_dshRuntime.Version)));
+            AddCreatedVersion(created);
+            ShowNotice($"首个版本已创建：{created.Name}。正在启动…");
+            await StartPreparedInstanceAndOpenAsync(created);
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (created is not null)
+            {
+                UpdateInstanceStatus(created, InstanceRuntimeStatus.Error, ex.Message);
+            }
+
+            ShowNotice($"首次运行配置失败：{ex.Message}");
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
+    }
+
+    private async Task<bool> StartPreparedInstanceAndOpenAsync(ManagerInstance selected)
+    {
+        var result = await StartManagedInstanceAsync(selected);
+        if (result is null)
+        {
+            return false;
+        }
+
+        if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
+        {
+            ShowNotice(result.Error ?? "DSh 启动失败。");
+            return false;
+        }
+
+        OpenChatWindow(selected.Id, result.WebUrl);
+        ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
+        return true;
+    }
+
     protected override void OnClosed(EventArgs e)
     {
+        _windowSource?.RemoveHook(WindowProcedure);
+        _windowSource = null;
         try
         {
             _providerRefreshCancellation?.Cancel();

@@ -19,17 +19,29 @@
         Loaded="Window_OnLoaded">
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0"
-                            ResizeBorderThickness="12"
+                            ResizeBorderThickness="0"
                             GlassFrameThickness="0"
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <Style x:Key="ResizeThumbStyle" TargetType="Thumb">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="{TemplateBinding Background}" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
 
     <Border Margin="4"
             Background="{StaticResource PageBrush}"
             BorderBrush="#D6E4F1"
             BorderThickness="1"
             CornerRadius="18">
-        <Grid>
+            <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="72" />
                 <RowDefinition Height="*" />
@@ -282,12 +294,12 @@
                                             <Border Width="58" Height="58" Background="#EAF3FC" CornerRadius="18" HorizontalAlignment="Center">
                                                 <TextBlock Text="＋" Foreground="{StaticResource BlueBrush}" FontSize="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             </Border>
-                                            <TextBlock Text="尚未添加 DSh 实例"
+                                            <TextBlock Text="尚未创建 DSh 版本"
                                                        HorizontalAlignment="Center"
                                                        FontSize="15"
                                                        FontWeight="SemiBold"
                                                        Margin="0,16,0,0" />
-                                            <TextBlock Text="可在这里注册 installed 或 source 实例。"
+                                            <TextBlock Text="点击下方“准备首个版本”，按引导准备运行环境并创建独立 DSH_HOME。"
                                                        Foreground="{StaticResource MutedBrush}"
                                                        TextWrapping="Wrap"
                                                        TextAlignment="Center"
@@ -448,6 +460,69 @@
                                         VerticalContentAlignment="Stretch" />
                     </StackPanel>
                 </ScrollViewer>
+            </Grid>
+
+            <Grid Grid.RowSpan="2" Panel.ZIndex="1000">
+                <Thumb Tag="Left"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Width="6"
+                       Margin="0,6,0,6"
+                       HorizontalAlignment="Left"
+                       Cursor="SizeWE"
+                       DragDelta="ResizeThumb_DragDelta" />
+                <Thumb Tag="Right"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Width="6"
+                       Margin="0,6,0,6"
+                       HorizontalAlignment="Right"
+                       Cursor="SizeWE"
+                       DragDelta="ResizeThumb_DragDelta" />
+                <Thumb Tag="Top"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Height="6"
+                       Margin="6,0,6,0"
+                       VerticalAlignment="Top"
+                       Cursor="SizeNS"
+                       DragDelta="ResizeThumb_DragDelta" />
+                <Thumb Tag="Bottom"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Height="6"
+                       Margin="6,0,6,0"
+                       VerticalAlignment="Bottom"
+                       Cursor="SizeNS"
+                       DragDelta="ResizeThumb_DragDelta" />
+                <Thumb Tag="TopLeft"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Width="10"
+                       Height="10"
+                       HorizontalAlignment="Left"
+                       VerticalAlignment="Top"
+                       Cursor="SizeNWSE"
+                       DragDelta="ResizeThumb_DragDelta" />
+                <Thumb Tag="TopRight"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Width="10"
+                       Height="10"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Top"
+                       Cursor="SizeNESW"
+                       DragDelta="ResizeThumb_DragDelta" />
+                <Thumb Tag="BottomLeft"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Width="10"
+                       Height="10"
+                       HorizontalAlignment="Left"
+                       VerticalAlignment="Bottom"
+                       Cursor="SizeNESW"
+                       DragDelta="ResizeThumb_DragDelta" />
+                <Thumb Tag="BottomRight"
+                       Style="{StaticResource ResizeThumbStyle}"
+                       Width="10"
+                       Height="10"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Bottom"
+                       Cursor="SizeNWSE"
+                       DragDelta="ResizeThumb_DragDelta" />
             </Grid>
 
         </Grid>

@@ -109,6 +109,10 @@ public partial class ExtensionWindow : UserControl
         {
             _skillMarketSnapshot = cached;
             RenderSkillMarketItems(cached);
+            if (cached.Any(item => item.ValidationVersion != SkillMarketService.CurrentValidationVersion))
+            {
+                _ = RefreshSkillMarketAsync();
+            }
         }
         else
         {
@@ -119,19 +123,22 @@ public partial class ExtensionWindow : UserControl
     private void RenderSkillMarketItems(IReadOnlyList<SkillMarketItem> items)
     {
         var query = SkillMarketSearchBox.Text.Trim();
+        var category = (SkillMarketCategoryList.SelectedItem as ListBoxItem)?.Tag?.ToString() ?? string.Empty;
         var instanceStopped = _instance.RuntimeStatus != InstanceRuntimeStatus.Running
             && _instance.RuntimeOwnership == InstanceRuntimeOwnership.None;
         var rendered = items
+            .Where(item => string.IsNullOrWhiteSpace(category)
+                || string.Equals(item.Category, category, StringComparison.Ordinal))
             .Where(item => string.IsNullOrWhiteSpace(query)
-                || (item.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                || (item.Repository?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || item.Repository.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || (item.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
             .Select(item => new SkillMarketItemViewModel(item, instanceStopped))
             .ToArray();
         SkillMarketList.ItemsSource = rendered;
         SkillMarketStatusText.Text = items.Count == 0
             ? "目录为空；点击“刷新目录”从 GitHub 搜索。"
-            : $"显示 {rendered.Length} / {items.Count} 个 Skill 仓库 · 安装要求实例已停止";
+            : $"显示 {rendered.Length} / {items.Count} 个 Skill · 安装要求实例已停止";
     }
 
     private async Task RefreshSkillMarketAsync()
@@ -146,7 +153,20 @@ public partial class ExtensionWindow : UserControl
         SkillMarketStatusText.Text = "正在从 GitHub 搜索并校验 SKILL.md…";
         try
         {
-            var items = await Task.Run(() => _skillMarketService.SearchAsync());
+            var progress = new Progress<SkillMarketRefreshProgress>(state =>
+            {
+                if (!_isSkillMarketLoading)
+                {
+                    return;
+                }
+
+                _skillMarketSnapshot = state.Items;
+                RenderSkillMarketItems(state.Items);
+                SkillMarketStatusText.Text = state.Total == 0
+                    ? $"{state.Stage}…"
+                    : $"{state.Stage}：{state.Completed} / {state.Total}";
+            });
+            var items = await _skillMarketService.SearchAsync(progress: progress);
             _skillMarketSnapshot = items;
             RenderSkillMarketItems(items);
         }
@@ -164,6 +184,14 @@ public partial class ExtensionWindow : UserControl
     private void SkillMarketRefresh_Click(object sender, RoutedEventArgs e) => _ = RefreshSkillMarketAsync();
 
     private void SkillMarketSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_skillMarketSnapshot.Count > 0)
+        {
+            RenderSkillMarketItems(_skillMarketSnapshot);
+        }
+    }
+
+    private void SkillMarketCategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_skillMarketSnapshot.Count > 0)
         {
@@ -210,10 +238,12 @@ public partial class ExtensionWindow : UserControl
         public string Name => Item.Name;
         public string Repository => Item.Repository;
         public string? Description => Item.Description;
-        public string StarsText => $"★ {Item.Stars} · {(Item.UpdatedAt?.ToLocalTime().ToString("yyyy-MM-dd") ?? "时间未知")}";
+        public string StarsText => $"{Item.Category} · ★ {Item.Stars} · {(Item.UpdatedAt?.ToLocalTime().ToString("yyyy-MM-dd") ?? "时间未知")}";
         public string StatusText => Item.Verified
-            ? "根目录 SKILL.md 已校验"
-            : "未校验根目录 SKILL.md";
+            ? "SKILL.md 已校验"
+            : Item.ValidationVersion == SkillMarketService.CurrentValidationVersion
+                ? "SKILL.md 未通过格式校验"
+                : "校验暂未完成，可刷新重试";
         public bool CanInstall { get; }
     }
 
@@ -1010,6 +1040,23 @@ public partial class ExtensionWindow : UserControl
 
         SelectedName.Text = entry.Name;
         SelectedDetails.Text = $"类型：{entry.Kind}\n状态：{(entry.Enabled ? "已启用" : "已禁用")}\n来源：{entry.Location}\n{entry.Description}";
+        var protectedBuiltIn = entry.Kind == ExtensionKind.Plugin
+            && ExtensionService.IsProtectedBuiltInPlugin(entry.Name);
+        if (protectedBuiltIn)
+        {
+            EnableButton.IsEnabled = false;
+            DisableButton.IsEnabled = false;
+            UpdateButton.IsEnabled = false;
+            RemoveButton.IsEnabled = false;
+            HintText.Text = "这是 DSh 默认 Plugin，由运行时管理，Launcher 不允许启用、禁用、更新或删除。";
+            return;
+        }
+
+        EnableButton.IsEnabled = true;
+        DisableButton.IsEnabled = true;
+        UpdateButton.IsEnabled = true;
+        RemoveButton.IsEnabled = true;
+        HintText.Text = "修改前请停止实例。Plugin 和 MCP 会在下次启动时生效。";
     }
 
     private void ShowError(Exception ex)

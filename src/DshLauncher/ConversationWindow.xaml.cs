@@ -38,10 +38,13 @@ public partial class ConversationWindow : UserControl
 
     private ObservableCollection<ConversationEntry> Entries { get; } = new();
 
+    private ObservableCollection<ConversationBackupEntry> Backups { get; } = new();
+
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
         await SynchronizeAsync();
         await RefreshAsync();
+        await RefreshBackupsAsync(updateStatus: false);
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
@@ -75,6 +78,35 @@ public partial class ConversationWindow : UserControl
 
             StatusText.Text = $"已读取 {Entries.Count} 个对话文件。压缩 session.jsonl.zstd 可查看、打开和导入，导入时保留原始格式。";
             UpdateSelection();
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private async void RefreshBackups_Click(object sender, RoutedEventArgs e) =>
+        await RefreshBackupsAsync();
+
+    private async Task RefreshBackupsAsync(bool updateStatus = true)
+    {
+        try
+        {
+            var selectedPath = (BackupList.SelectedItem as ConversationBackupEntry)?.FullPath;
+            var backups = await Task.Run(() => _service.ListBackups(_instance));
+            Backups.Clear();
+            foreach (var backup in backups) Backups.Add(backup);
+            BackupList.ItemsSource = Backups;
+            if (selectedPath is not null)
+            {
+                BackupList.SelectedItem = Backups.FirstOrDefault(backup =>
+                    string.Equals(backup.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (updateStatus)
+            {
+                StatusText.Text = $"已读取 {Backups.Count} 个对话备份。";
+            }
         }
         catch (Exception ex)
         {
@@ -315,9 +347,48 @@ public partial class ConversationWindow : UserControl
         try
         {
             var target = await Task.Run(() => _service.Backup(_instance, entry));
+            await RefreshBackupsAsync(updateStatus: false);
             StatusText.Text = $"对话已备份：{target}";
         }
         catch (Exception ex) { ShowError(ex); }
+    }
+
+    private async void RestoreBackup_Click(object sender, RoutedEventArgs e)
+    {
+        if (BackupList.SelectedItem is not ConversationBackupEntry backup)
+        {
+            StatusText.Text = "请先在“备份与恢复”中选择一个备份。";
+            return;
+        }
+
+        if (!backup.HasValidHeader)
+        {
+            StatusText.Text = "选中的备份无法读取会话 header，不能恢复。";
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"确定把“{backup.DisplayName}”恢复到当前实例？已有相同会话 ID 时不会覆盖。",
+                "恢复对话备份",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var target = await Task.Run(() => _service.RestoreBackup(_instance, backup));
+            await SynchronizeAsync();
+            await RefreshAsync();
+            await RefreshBackupsAsync(updateStatus: false);
+            StatusText.Text = $"对话已恢复：{target}";
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
     }
 
     private async void Delete_Click(object sender, RoutedEventArgs e)
@@ -356,6 +427,16 @@ public partial class ConversationWindow : UserControl
     }
 
     private void ConversationList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelection();
+
+    private void BackupList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (BackupList.SelectedItem is ConversationBackupEntry backup)
+        {
+            StatusText.Text = backup.HasValidHeader
+                ? $"已选择备份：{backup.DisplayName} · {backup.BackedUpAt:yyyy-MM-dd HH:mm:ss}"
+                : "已选择无法读取的备份；为避免恢复损坏文件，恢复按钮不会执行。";
+        }
+    }
 
     private static string ExportFileName(ConversationEntry entry)
     {

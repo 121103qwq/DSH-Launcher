@@ -205,72 +205,90 @@
                             Margin="8,0,0,0" />
                 </Grid>
 
-                <StackPanel Grid.Row="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center"
-                            Margin="0,10,0,0">
-                    <TextBlock Text="分类" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <ListBox x:Name="MarketplaceCategoryList"
-                             Width="440"
-                             Height="34"
-                             BorderThickness="0"
-                             Background="Transparent"
-                             SelectedIndex="0"
-                             SelectionChanged="MarketplaceFilter_SelectionChanged">
-                        <ListBox.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" />
-                            </ItemsPanelTemplate>
-                        </ListBox.ItemsPanel>
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="Padding" Value="10,6" />
-                                <Setter Property="Margin" Value="0,0,4,0" />
-                                <Setter Property="Background" Value="Transparent" />
-                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-                                <Setter Property="HorizontalContentAlignment" Value="Center" />
-                                <Style.Triggers>
-                                    <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="#E3F0FD" />
-                                        <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
-                        <ListBoxItem Tag="">全部</ListBoxItem>
-                        <ListBoxItem Tag="UI">UI</ListBoxItem>
-                        <ListBoxItem Tag="工具">工具</ListBoxItem>
-                        <ListBoxItem Tag="工作流">工作流</ListBoxItem>
-                        <ListBoxItem Tag="Agent">Agent</ListBoxItem>
-                        <ListBoxItem Tag="模型">模型</ListBoxItem>
-                        <ListBoxItem Tag="主题">主题</ListBoxItem>
-                        <ListBoxItem Tag="开发">开发</ListBoxItem>
-                    </ListBox>
-                    <ComboBox x:Name="MarketplaceSortBox"
-                              Width="126"
-                              Height="38"
-                              Margin="8,0,0,0"
-                              SelectedIndex="0"
-                              ToolTip="排序方式"
-                              SelectionChanged="MarketplaceFilter_SelectionChanged">
-                        <ComboBoxItem Tag="Relevance">默认排序</ComboBoxItem>
-                        <ComboBoxItem Tag="PublishedAt">最新发布</ComboBoxItem>
-                        <ComboBoxItem Tag="Stars">热门（Star）</ComboBoxItem>
-                    </ComboBox>
-                    <ComboBox x:Name="MarketplaceSourceBox"
-                              Width="150"
-                              Height="38"
-                              Margin="8,0,0,0"
-                              SelectedIndex="0"
-                              ToolTip="次级来源筛选"
-                              SelectionChanged="MarketplaceFilter_SelectionChanged">
-                        <ComboBoxItem Tag="">来源：全部</ComboBoxItem>
-                        <ComboBoxItem Tag="Official">DSh 官方</ComboBoxItem>
-                        <ComboBoxItem Tag="CommunityCatalog">社区目录</ComboBoxItem>
-                        <ComboBoxItem Tag="GitHubTopic">GitHub 发现</ComboBoxItem>
-                        <ComboBoxItem Tag="Custom">自定义目录</ComboBoxItem>
-                    </ComboBox>
-                </StackPanel>
+                <Grid Grid.Row="1" Margin="0,10,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="分类"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0" />
+                        <ListBox Grid.Column="1"
+                                 x:Name="MarketplaceCategoryList"
+                                 Height="34"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 SelectedIndex="0"
+                                 SelectionChanged="MarketplaceFilter_SelectionChanged">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="10,6" />
+                                    <Setter Property="Margin" Value="0,0,4,0" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="#E3F0FD" />
+                                            <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBoxItem Tag="">全部</ListBoxItem>
+                            <ListBoxItem Tag="UI">UI</ListBoxItem>
+                            <ListBoxItem Tag="工具">工具</ListBoxItem>
+                            <ListBoxItem Tag="工作流">工作流</ListBoxItem>
+                            <ListBoxItem Tag="Agent">Agent</ListBoxItem>
+                            <ListBoxItem Tag="模型">模型</ListBoxItem>
+                            <ListBoxItem Tag="主题">主题</ListBoxItem>
+                            <ListBoxItem Tag="开发">开发</ListBoxItem>
+                        </ListBox>
+                    </Grid>
+                    <WrapPanel Grid.Row="1" Margin="0,8,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="排序"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0" />
+                        <ComboBox x:Name="MarketplaceSortBox"
+                                  Width="148"
+                                  Height="38"
+                                  SelectedIndex="0"
+                                  ToolTip="排序方式"
+                                  SelectionChanged="MarketplaceFilter_SelectionChanged">
+                            <ComboBoxItem Tag="Relevance">综合排序</ComboBoxItem>
+                            <ComboBoxItem Tag="PublishedAt">最新发布</ComboBoxItem>
+                            <ComboBoxItem Tag="Stars">热门（Star）</ComboBoxItem>
+                        </ComboBox>
+                        <TextBlock Text="来源"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="18,0,8,0" />
+                        <ComboBox x:Name="MarketplaceSourceBox"
+                                  Width="168"
+                                  Height="38"
+                                  SelectedIndex="0"
+                                  ToolTip="次级来源筛选"
+                                  SelectionChanged="MarketplaceFilter_SelectionChanged">
+                            <ComboBoxItem Tag="">全部来源</ComboBoxItem>
+                            <ComboBoxItem Tag="Official">DSh 官方</ComboBoxItem>
+                            <ComboBoxItem Tag="CommunityCatalog">社区目录</ComboBoxItem>
+                            <ComboBoxItem Tag="GitHubTopic">GitHub 发现</ComboBoxItem>
+                            <ComboBoxItem Tag="Custom">自定义目录</ComboBoxItem>
+                        </ComboBox>
+                    </WrapPanel>
+                </Grid>
 
                 <StackPanel Grid.Row="2" Margin="0,14,0,12">
                     <TextBlock Text="插件市场" FontSize="21" FontWeight="SemiBold" />
@@ -448,6 +466,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
@@ -461,7 +480,7 @@
                              Height="38"
                              Padding="12,8"
                              VerticalContentAlignment="Center"
-                             ToolTip="按仓库名或描述筛选 Skill"
+                             ToolTip="按 Skill 名称、仓库或描述筛选"
                              TextChanged="SkillMarketSearchBox_TextChanged" />
                     <Button Grid.Column="1"
                             x:Name="SkillMarketRefreshButton"
@@ -472,14 +491,58 @@
 
                 <StackPanel Grid.Row="1" Margin="0,14,0,12">
                     <TextBlock Text="Skill 市场" FontSize="21" FontWeight="SemiBold" />
-                    <TextBlock Text="GitHub 上名称含 skill 且根目录带 SKILL.md 的仓库；安装即导入当前实例的 skills 目录（需实例已停止）。"
+                    <TextBlock Text="从 GitHub 仓库中发现并校验单个 Skill；安装会导入所选 Skill 目录及配套文件（需实例已停止）。"
                                Foreground="{StaticResource MutedBrush}"
                                FontSize="11"
                                TextWrapping="Wrap"
                                Margin="0,4,0,0" />
                 </StackPanel>
 
-                <ListBox Grid.Row="2"
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="0,0,0,12">
+                    <TextBlock Text="分类"
+                               Foreground="{StaticResource MutedBrush}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <ListBox x:Name="SkillMarketCategoryList"
+                             Height="34"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             SelectedIndex="0"
+                             SelectionChanged="SkillMarketCategoryList_SelectionChanged">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="10,6" />
+                                <Setter Property="Margin" Value="0,0,4,0" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#E3F0FD" />
+                                        <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBoxItem Tag="">全部</ListBoxItem>
+                        <ListBoxItem Tag="开发">开发</ListBoxItem>
+                        <ListBoxItem Tag="设计">设计</ListBoxItem>
+                        <ListBoxItem Tag="文档">文档</ListBoxItem>
+                        <ListBoxItem Tag="效率">效率</ListBoxItem>
+                        <ListBoxItem Tag="Agent">Agent</ListBoxItem>
+                        <ListBoxItem Tag="其他">其他</ListBoxItem>
+                    </ListBox>
+                </StackPanel>
+
+                <ListBox Grid.Row="3"
                          x:Name="SkillMarketList"
                          BorderThickness="0"
                          Background="Transparent"
@@ -535,7 +598,7 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <TextBlock Grid.Row="3"
+                <TextBlock Grid.Row="4"
                            x:Name="SkillMarketStatusText"
                            Foreground="{StaticResource MutedBrush}"
                            TextWrapping="Wrap"
