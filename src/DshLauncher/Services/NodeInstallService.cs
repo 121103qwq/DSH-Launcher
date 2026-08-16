@@ -63,10 +63,11 @@ public sealed class NodeInstallService
                 : $"无法解析满足要求（{requiredNodeEngine}）的 Node.js 版本，请稍后重试或改用国内镜像。");
         }
 
-        var fileName = $"node-{version}{WindowsMsiFileNameSuffix}";
-        var downloadUrl = $"{distBase}/{version}/{fileName}";
+        var canonicalFileName = $"node-{version}{WindowsMsiFileNameSuffix}";
+        var downloadUrl = $"{distBase}/{version}/{canonicalFileName}";
         var destinationDirectory = Path.Combine(Path.GetTempPath(), "DSH Launcher");
-        var destination = Path.Combine(destinationDirectory, fileName);
+        // 每次调用使用唯一文件名，多个 Launcher 进程并发准备同一版本时互不干扰。
+        var destination = Path.Combine(destinationDirectory, $"node-{version}-{Guid.NewGuid():N}{WindowsMsiFileNameSuffix}");
 
         try
         {

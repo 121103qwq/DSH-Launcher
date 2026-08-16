@@ -221,6 +221,16 @@ public sealed class ConversationService
     private static IReadOnlyDictionary<string, string?> ReadSessionTitles(ManagerInstance instance)
     {
         var path = Path.Combine(instance.DshHome, "storages", SessionTitleCacheFileName);
+        try
+        {
+            EnsureNoReparseComponents(path, instance.DshHome);
+        }
+        catch (IOException)
+        {
+            // 标题缓存路径经过符号链接/重解析点时拒绝读取，避免混入其它实例的元数据。
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+
         if (!File.Exists(path) || IsReparsePoint(path))
         {
             return new Dictionary<string, string?>(StringComparer.Ordinal);

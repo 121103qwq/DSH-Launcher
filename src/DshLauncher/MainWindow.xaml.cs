@@ -47,6 +47,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isRuntimePrepareInProgress;
     private bool _isProviderDetectionInProgress;
     private bool _blockWindowCloseForMsi;
+    private Action? _runtimePanelUpdateStatus;
 
     public MainWindow()
     {
@@ -336,6 +337,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanInstallDsh));
+            _runtimePanelUpdateStatus?.Invoke();
         }
     }
 
@@ -986,6 +988,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             UpdateStatus();
         };
 
+        _runtimePanelUpdateStatus = UpdateStatus;
         UpdateStatus();
         return panel;
     }
@@ -1224,7 +1227,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             var message = "当前 Node.js 版本与 DeepSeek Harness 要求不兼容。\n\n"
                 + string.Join("\n", missing.Select(item => "• " + item))
-                + "\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本（Node.js 22 LTS 或 24+）后重试。";
+                + $"\n\nLauncher 不会自动卸载现有 Node.js。请安装满足要求（{requirement}）的兼容版本后重试。";
             System.Windows.MessageBox.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }
@@ -1248,7 +1251,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // 重新安装/重绑定后按最初目标 ID 重新解析实例，并重新读取其 engines.node；
         // 不能用准备开始前缓存的 requirement 判断最终兼容性。
-        var current = ResolveInstanceById(Instances, instance.Id) ?? instance;
+        var current = ResolveInstanceById(Instances, instance.Id);
+        if (current is null)
+        {
+            ShowNotice("目标实例已被删除，无法继续启动。");
+            return false;
+        }
+
         var currentRequirement = GetNodeEngineRequirement(current);
         if (!IsRuntimeReadyAfterPreparation(_nodeRuntime, currentRequirement, current))
         {
@@ -1410,9 +1419,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        // runtime 准备窗口是非模态的，期间用户可能切换了 SelectedInstance；
-        // 必须继续启动最初点击的实例（重绑定后按 ID 取最新状态）。
-        selected = ResolveInstanceById(Instances, selected.Id) ?? selected;
+        // runtime 准备窗口是非模态的，期间用户可能切换 SelectedInstance 或删除目标；
+        // 必须按最初点击的实例 ID 重新解析（重绑定后取最新状态），目标不存在则中止。
+        selected = ResolveInstanceById(Instances, selected.Id);
+        if (selected is null)
+        {
+            ShowNotice("目标实例已被删除，无法继续启动。");
+            return;
+        }
         SetLifecycleBusy(true);
         try
         {
@@ -2045,6 +2059,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
+        // 对话触发的自动启动同样先做运行环境准备，缺 Node/DSh 时提供一键准备。
+        if (!await EnsureRuntimeReadyAsync(instance))
+        {
+            return false;
+        }
+
+        var resolvedTarget = ResolveInstanceById(Instances, instance.Id);
+        if (resolvedTarget is null)
+        {
+            ShowNotice("目标实例已被删除，无法打开对话。");
+            return false;
+        }
+
+        instance = resolvedTarget;
         SetLifecycleBusy(true);
         try
         {
