@@ -99,10 +99,16 @@ public sealed class NodeRuntimeDetector
 
         foreach (var directory in commonDirectories.Where(static value => !string.IsNullOrWhiteSpace(value)))
         {
-            var candidate = Path.Combine(directory, "Programs", "nodejs", "node.exe");
-            if (seen.Add(candidate))
+            // Official Node.js MSI installs to <ProgramFiles>\nodejs; zip/nvm
+            // style installs typically live under <dir>\Programs\nodejs. Both
+            // must be found without a Launcher restart after installation.
+            foreach (var relative in new[] { Path.Combine("Programs", "nodejs"), "nodejs" })
             {
-                yield return candidate;
+                var candidate = Path.Combine(directory, relative, "node.exe");
+                if (seen.Add(candidate))
+                {
+                    yield return candidate;
+                }
             }
         }
     }

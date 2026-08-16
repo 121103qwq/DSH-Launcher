@@ -37,7 +37,21 @@ public sealed record ConversationEntry(
     DateTimeOffset UpdatedAt,
     long SizeBytes,
     bool IsCompressed,
-    bool HasValidHeader);
+    bool HasValidHeader,
+    string DisplayName,
+    string InstanceName);
+
+public sealed record ConversationBackupEntry(
+    string FileName,
+    string FullPath,
+    string? SessionId,
+    string? WorkingDirectory,
+    DateTimeOffset BackedUpAt,
+    long SizeBytes,
+    bool IsCompressed,
+    bool HasValidHeader,
+    string DisplayName,
+    string InstanceName);
 
 public sealed record ModelProviderInfo(
     string Provider,

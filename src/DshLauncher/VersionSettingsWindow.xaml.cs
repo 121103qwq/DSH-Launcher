@@ -399,7 +399,7 @@ public partial class VersionSettingsWindow : UserControl
         }
 
         var options = new VersionExportOptions(
-            IncludeProviderConfigurationCheckBox.IsChecked == true,
+            IncludeProviderConfiguration: false,
             IncludePluginConfigurationCheckBox.IsChecked == true);
         try
         {

@@ -15,8 +15,16 @@ public partial class ExtensionWindow : UserControl
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
     private readonly bool _agentOnly;
     private readonly MarketplaceService? _marketplaceService;
+    private readonly IReadOnlyList<ManagerInstance>? _instances;
+    private readonly Action<ManagerInstance>? _selectInstance;
+    private readonly SkillMarketService? _skillMarketService;
+    private bool _instanceSelectorReady;
     private readonly DshMarketThemeService _themeService = new();
-    private readonly ObservableCollection<MarketplaceItem> MarketplaceItems = new();
+    private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
+    private bool _isSkillMarketLoading;
+    private bool _isSkillMarketMutating;
+    private int _lastSkillProgressItemCount = -1;
+    private DateTimeOffset _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
     private IReadOnlyList<MarketplaceItem> _marketplaceSnapshot = Array.Empty<MarketplaceItem>();
     private IReadOnlyList<ExtensionEntry> _installedPlugins = Array.Empty<ExtensionEntry>();
     private bool _marketplaceCanMutate;
@@ -26,26 +34,51 @@ public partial class ExtensionWindow : UserControl
     private DshMarketThemeState _themeState = DshMarketThemeState.Unavailable("尚未检测当前实例的 dsh-market。 ");
     private CancellationTokenSource? _marketplaceCancellation;
     private CancellationTokenSource? _searchDebounceCancellation;
+    private CancellationTokenSource? _skillSearchDebounceCancellation;
 
     public ExtensionWindow(
         ManagerInstance instance,
         ExtensionService service,
         Func<NodeRuntimeInfo?> nodeRuntime,
         bool agentOnly = false,
-        MarketplaceService? marketplaceService = null)
+        MarketplaceService? marketplaceService = null,
+        IReadOnlyList<ManagerInstance>? instances = null,
+        Action<ManagerInstance>? selectInstance = null,
+        SkillMarketService? skillMarketService = null)
     {
         _instance = instance;
         _service = service;
         _nodeRuntime = nodeRuntime;
         _agentOnly = agentOnly;
         _marketplaceService = marketplaceService;
+        _instances = instances;
+        _selectInstance = selectInstance;
+        _skillMarketService = skillMarketService;
         InitializeComponent();
         CurrentInstanceNameText.Text = instance.Name;
         CurrentInstanceDetailsText.Text = $"{instance.KindText} · {instance.RootPath}\nDSH_HOME：{instance.DshHome}";
+        if (_instances is { Count: > 1 } && _selectInstance is not null)
+        {
+            InstanceSelectorBox.ItemsSource = _instances;
+            InstanceSelectorBox.SelectedItem = _instances.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, instance.Id, StringComparison.Ordinal));
+            InstanceSelectorBox.Visibility = Visibility.Visible;
+            _instanceSelectorReady = true;
+        }
+
         if (_agentOnly)
         {
+            if (_skillMarketService is not null)
+            {
+                SkillMarketPanel.Visibility = Visibility.Visible;
+                SetupSkillMarket();
+            }
+            else
+            {
+                Grid.SetColumnSpan(InstalledPanel, 3);
+            }
+
             MarketplacePanel.Visibility = Visibility.Collapsed;
-            Grid.SetColumnSpan(InstalledPanel, 3);
             InstallPluginButton.Visibility = Visibility.Collapsed;
             AddMcpButton.Visibility = Visibility.Collapsed;
             EnableButton.Visibility = Visibility.Collapsed;
@@ -58,24 +91,209 @@ public partial class ExtensionWindow : UserControl
             ImportSkillButton.Visibility = Visibility.Collapsed;
             ImportPresetButton.Visibility = Visibility.Collapsed;
         }
-        MarketplaceList.ItemsSource = MarketplaceItems;
     }
 
-    private ObservableCollection<ExtensionEntry> Entries { get; } = new();
+    private void InstanceSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_instanceSelectorReady
+            || InstanceSelectorBox.SelectedItem is not ManagerInstance target
+            || string.Equals(target.Id, _instance.Id, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _selectInstance?.Invoke(target);
+    }
+
+    private void SetupSkillMarket()
+    {
+        _ = SetupSkillMarketAsync();
+    }
+
+    private async Task SetupSkillMarketAsync()
+    {
+        var cached = await Task.Run(() => _skillMarketService!.ReadCached());
+        if (cached.Count > 0)
+        {
+            _skillMarketSnapshot = cached;
+            RenderSkillMarketItems(cached);
+            if (cached.Any(item => item.ValidationVersion != SkillMarketService.CurrentValidationVersion))
+            {
+                _ = RefreshSkillMarketAsync();
+            }
+        }
+        else
+        {
+            _ = RefreshSkillMarketAsync();
+        }
+    }
+
+    private void RenderSkillMarketItems(IReadOnlyList<SkillMarketItem> items)
+    {
+        var query = SkillMarketSearchBox.Text.Trim();
+        var category = (SkillMarketCategoryList.SelectedItem as ListBoxItem)?.Tag?.ToString() ?? string.Empty;
+        var instanceStopped = _instance.RuntimeStatus != InstanceRuntimeStatus.Running
+            && _instance.RuntimeOwnership == InstanceRuntimeOwnership.None;
+        var rendered = items
+            .Where(item => string.IsNullOrWhiteSpace(category)
+                || string.Equals(item.Category, category, StringComparison.Ordinal))
+            .Where(item => string.IsNullOrWhiteSpace(query)
+                || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || item.Repository.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || (item.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+            .Select(item => new SkillMarketItemViewModel(item, instanceStopped))
+            .ToArray();
+        SkillMarketList.ItemsSource = rendered;
+        SkillMarketStatusText.Text = items.Count == 0
+            ? "目录为空；点击“刷新目录”从 GitHub 搜索。"
+            : $"显示 {rendered.Length} / {items.Count} 个 Skill · 安装要求实例已停止";
+    }
+
+    private async Task RefreshSkillMarketAsync()
+    {
+        if (_skillMarketService is null || _isSkillMarketLoading)
+        {
+            return;
+        }
+
+        _isSkillMarketLoading = true;
+        _lastSkillProgressItemCount = -1;
+        _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
+        SkillMarketRefreshButton.IsEnabled = false;
+        SkillMarketStatusText.Text = "正在从 GitHub 搜索并校验 SKILL.md…";
+        try
+        {
+            var progress = new Progress<SkillMarketRefreshProgress>(state =>
+            {
+                if (!_isSkillMarketLoading)
+                {
+                    return;
+                }
+
+                _skillMarketSnapshot = state.Items;
+                var now = DateTimeOffset.UtcNow;
+                var shouldRender = state.Items.Count != _lastSkillProgressItemCount
+                    && (now - _lastSkillProgressRenderAt >= TimeSpan.FromMilliseconds(150)
+                        || state.Completed >= state.Total);
+                if (shouldRender)
+                {
+                    RenderSkillMarketItems(state.Items);
+                    _lastSkillProgressItemCount = state.Items.Count;
+                    _lastSkillProgressRenderAt = now;
+                }
+
+                SkillMarketStatusText.Text = state.Total == 0
+                    ? $"{state.Stage}…"
+                    : $"{state.Stage}：{state.Completed} / {state.Total}";
+            });
+            var items = await _skillMarketService.SearchAsync(progress: progress);
+            _skillMarketSnapshot = items;
+            RenderSkillMarketItems(items);
+        }
+        catch (Exception ex)
+        {
+            SkillMarketStatusText.Text = $"刷新 Skill 目录失败：{ex.Message}";
+        }
+        finally
+        {
+            _isSkillMarketLoading = false;
+            SkillMarketRefreshButton.IsEnabled = true;
+        }
+    }
+
+    private void SkillMarketRefresh_Click(object sender, RoutedEventArgs e) => _ = RefreshSkillMarketAsync();
+
+    private async void SkillMarketSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _skillSearchDebounceCancellation?.Cancel();
+        _skillSearchDebounceCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _skillSearchDebounceCancellation = cancellation;
+        try
+        {
+            await Task.Delay(180, cancellation.Token);
+            if (!cancellation.IsCancellationRequested && _skillMarketSnapshot.Count > 0)
+            {
+                RenderSkillMarketItems(_skillMarketSnapshot);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A new keystroke superseded this local filter.
+        }
+    }
+
+    private void SkillMarketCategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_skillMarketSnapshot.Count > 0)
+        {
+            RenderSkillMarketItems(_skillMarketSnapshot);
+        }
+    }
+
+    private async void SkillInstall_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isSkillMarketMutating
+            || (sender as FrameworkElement)?.DataContext is not SkillMarketItemViewModel viewModel)
+        {
+            return;
+        }
+
+        _isSkillMarketMutating = true;
+        SkillMarketStatusText.Text = $"正在下载并安装 {viewModel.Item.Repository}…";
+        try
+        {
+            var installedName = await Task.Run(() =>
+                _skillMarketService!.InstallAsync(_instance, viewModel.Item));
+            SkillMarketStatusText.Text = $"已安装 Skill：{installedName}。";
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            SkillMarketStatusText.Text = $"安装 Skill 失败：{ex.Message}";
+        }
+        finally
+        {
+            _isSkillMarketMutating = false;
+        }
+    }
+
+    private sealed class SkillMarketItemViewModel
+    {
+        public SkillMarketItemViewModel(SkillMarketItem item, bool instanceStopped)
+        {
+            Item = item;
+            CanInstall = item.Verified && instanceStopped;
+        }
+
+        public SkillMarketItem Item { get; }
+        public string Name => Item.Name;
+        public string Repository => Item.Repository;
+        public string? Description => Item.Description;
+        public string StarsText => $"{Item.Category} · ★ {Item.Stars} · {(Item.UpdatedAt?.ToLocalTime().ToString("yyyy-MM-dd") ?? "时间未知")}";
+        public string StatusText => Item.Verified
+            ? "SKILL.md 已校验"
+            : Item.ValidationVersion == SkillMarketService.CurrentValidationVersion
+                ? "SKILL.md 未通过格式校验"
+                : "校验暂未完成，可刷新重试";
+        public bool CanInstall { get; }
+    }
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
         _controlLoaded = true;
         if (!_agentOnly)
         {
-            await LoadCachedMarketplaceAsync();
+            // Show the cached catalog first; only go online when there is no
+            // cache yet (first run) or when the user explicitly refreshes.
+            var hasCache = await LoadCachedMarketplaceAsync();
+            if (!hasCache)
+            {
+                _ = RefreshMarketplaceAsync();
+            }
         }
 
         await RefreshAsync();
-        if (!_agentOnly)
-        {
-            _ = RefreshMarketplaceAsync();
-        }
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
@@ -85,21 +303,20 @@ public partial class ExtensionWindow : UserControl
         try
         {
             var selectedId = (ExtensionList.SelectedItem as ExtensionEntry)?.Id;
-            var entries = await _service.ListAsync(_instance);
-            entries = (_agentOnly
+            var entries = await Task.Run(async () => await _service.ListAsync(_instance));
+            var rendered = (_agentOnly
                     ? entries.Where(entry => entry.Kind is ExtensionKind.Skill or ExtensionKind.Preset or ExtensionKind.Workflow)
                     : entries.Where(entry => entry.Kind is ExtensionKind.Plugin or ExtensionKind.Mcp))
-                .ToArray();
-            Entries.Clear();
-            foreach (var entry in entries) Entries.Add(entry);
-            ExtensionList.ItemsSource = Entries;
+                .ToList();
+            // 整批替换 ItemsSource，避免逐条 Add 触发多次布局。
+            ExtensionList.ItemsSource = rendered;
             if (selectedId is not null)
             {
-                ExtensionList.SelectedItem = Entries.FirstOrDefault(entry => entry.Id == selectedId);
+                ExtensionList.SelectedItem = rendered.FirstOrDefault(entry => entry.Id == selectedId);
             }
             StatusText.Text = _agentOnly
-                ? $"已读取 {Entries.Count} 个 Skill / Agent Preset / Workflow。"
-                : $"已读取 {Entries.Count} 个 Plugin / MCP。";
+                ? $"已读取 {rendered.Count} 个 Skill / Agent Preset / Workflow。"
+                : $"已读取 {rendered.Count} 个 Plugin / MCP。";
             UpdateSelection();
         }
         catch (Exception ex)
@@ -149,27 +366,30 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    private async Task LoadCachedMarketplaceAsync()
+    private async Task<bool> LoadCachedMarketplaceAsync()
     {
         if (_marketplaceService is null)
         {
-            return;
+            return false;
         }
 
         try
         {
-            var cached = _marketplaceService.ReadCached(_instance);
+            // 缓存可达 MB 级 JSON；解析放到后台线程，打开页面不阻塞 UI。
+            var cached = await Task.Run(() => _marketplaceService.ReadCached(_instance));
             if (cached is null)
             {
-                MarketplaceStatusText.Text = "还没有本地缓存；正在后台读取插件目录。";
-                return;
+                MarketplaceStatusText.Text = "还没有本地缓存；点击“刷新目录”可从在线来源读取插件目录。";
+                return false;
             }
 
             await SetMarketplaceSnapshotAsync(cached, fromCache: true);
+            return true;
         }
         catch (Exception ex)
         {
             MarketplaceStatusText.Text = $"读取插件市场缓存失败：{ex.Message}";
+            return false;
         }
     }
 
@@ -219,11 +439,16 @@ public partial class ExtensionWindow : UserControl
         CancellationToken cancellationToken = default)
     {
         _marketplaceSnapshot = result.Items;
-        var installed = await _service.ListAsync(_instance, cancellationToken);
+        var (installed, themeState) = await Task.Run(async () =>
+        {
+            var scanned = await _service.ListAsync(_instance, cancellationToken);
+            var theme = await _themeService.ReadAsync(_instance, cancellationToken);
+            return (scanned, theme);
+        }, cancellationToken);
         _installedPlugins = installed
             .Where(entry => entry.Kind == ExtensionKind.Plugin)
             .ToArray();
-        _themeState = await _themeService.ReadAsync(_instance, cancellationToken);
+        _themeState = themeState;
         _marketplaceCanMutate = !_isMarketplaceMutating
             && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
             && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
@@ -233,9 +458,11 @@ public partial class ExtensionWindow : UserControl
         if (fromCache)
         {
             MarketplaceStatusText.Text = result.Warnings.FirstOrDefault()
-                ?? "先显示本地缓存，在线目录会在后台更新。";
+                ?? "当前显示本地缓存；需要在线更新时请点击“刷新目录”。";
         }
     }
+
+    private int _marketplaceRenderVersion;
 
     private void RenderMarketplaceItems()
     {
@@ -244,16 +471,74 @@ public partial class ExtensionWindow : UserControl
             return;
         }
 
-        var items = MarketplaceService.FilterAndSort(
-            _marketplaceSnapshot,
-            query: MarketplaceSearchBox.Text,
-            sourceKind: GetSelectedSourceKind(),
-            sortOrder: GetSelectedSortOrder(),
-            category: GetSelectedCategory());
-        MarketplaceItems.Clear();
+        // 筛选、排序和逐条投影全部放到后台线程（目录可达千余条，切分类/搜索
+        // 时在 UI 线程同步重算会明显卡顿）；UI 线程只做一次 ItemsSource 替换。
+        // 渲染版本号防止慢的旧结果覆盖新的选择。
+        var renderVersion = ++_marketplaceRenderVersion;
+        var snapshot = _marketplaceSnapshot;
+        var query = MarketplaceSearchBox.Text;
+        var sourceKind = GetSelectedSourceKind();
+        var sortOrder = GetSelectedSortOrder();
+        var category = GetSelectedCategory();
+        var installedPlugins = _installedPlugins;
+        var canMutate = _marketplaceCanMutate;
+        var themeState = _themeState;
+        var instanceRunning = _instance.RuntimeStatus == InstanceRuntimeStatus.Running;
+        var instanceAttached = _instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached;
+        var mutating = _isMarketplaceMutating;
+
+        _ = Task.Run(() =>
+        {
+            var rendered = BuildMarketplaceItems(
+                snapshot,
+                query,
+                sourceKind,
+                sortOrder,
+                category,
+                installedPlugins,
+                canMutate,
+                themeState,
+                instanceRunning,
+                instanceAttached,
+                mutating);
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (renderVersion != _marketplaceRenderVersion)
+                {
+                    return;
+                }
+
+                MarketplaceList.ItemsSource = rendered;
+                MarketplaceSummaryText.Text = rendered.Count == snapshot.Count
+                    ? $"找到 {snapshot.Count} 个候选插件"
+                    : $"显示 {rendered.Count} / {snapshot.Count} 个候选插件";
+            });
+        });
+    }
+
+    internal static List<MarketplaceItem> BuildMarketplaceItems(
+        IReadOnlyList<MarketplaceItem> snapshot,
+        string? query,
+        MarketplaceSourceKind? sourceKind,
+        MarketplaceSortOrder sortOrder,
+        string? category,
+        IReadOnlyList<ExtensionEntry> installedPlugins,
+        bool canMutate,
+        DshMarketThemeState themeState,
+        bool instanceRunning,
+        bool instanceAttached,
+        bool mutating)
+    {
+        var items = MarketplaceService.FilterAndSortMerged(
+            snapshot,
+            query: query,
+            sourceKind: sourceKind,
+            sortOrder: sortOrder,
+            category: category);
+        var rendered = new List<MarketplaceItem>(items.Count);
         foreach (var item in items)
         {
-            var installedEntry = MarketplaceService.FindInstalledPlugin(item, _installedPlugins);
+            var installedEntry = MarketplaceService.FindInstalledPlugin(item, installedPlugins);
             var isInstalled = installedEntry is not null;
             var isTheme = string.Equals(
                 MarketplaceService.NormalizeCategory(item.Category),
@@ -262,14 +547,14 @@ public partial class ExtensionWindow : UserControl
             var themePackageName = installedEntry?.Name;
             var themeMarketAvailable = isTheme
                 && themePackageName is not null
-                && _themeState.IsAvailable
-                && _themeState.InstalledNames.Contains(themePackageName);
+                && themeState.IsAvailable
+                && themeState.InstalledNames.Contains(themePackageName);
             var themeCanApply = themeMarketAvailable
                 && installedEntry!.Managed
-                && _instance.RuntimeStatus == InstanceRuntimeStatus.Running
-                && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
-                && !_isMarketplaceMutating;
-            MarketplaceItems.Add(item with
+                && instanceRunning
+                && !instanceAttached
+                && !mutating;
+            rendered.Add(item with
             {
                 IsInstalled = isInstalled,
                 IsManaged = isInstalled && installedEntry!.Managed,
@@ -277,20 +562,18 @@ public partial class ExtensionWindow : UserControl
                 UpdateStatus = isInstalled
                     ? MarketplaceService.GetUpdateStatus(item.Version, installedEntry?.Version)
                     : MarketplaceUpdateStatus.Unknown,
-                CanMutate = _marketplaceCanMutate,
+                CanMutate = canMutate,
                 IsTheme = isTheme,
                 ThemeMarketAvailable = themeMarketAvailable,
                 ThemeCanApply = themeCanApply,
                 ThemePackageName = themePackageName,
                 ThemeStatusText = isTheme
-                    ? GetThemeStatusText(isInstalled, themeMarketAvailable, themePackageName)
+                    ? GetThemeStatusText(isInstalled, themeMarketAvailable, themePackageName, themeState, instanceRunning, instanceAttached)
                     : null
             });
         }
 
-        MarketplaceSummaryText.Text = _marketplaceSnapshot.Count == items.Count
-            ? $"找到 {_marketplaceSnapshot.Count} 个候选插件"
-            : $"显示 {items.Count} / {_marketplaceSnapshot.Count} 个候选插件";
+        return rendered;
     }
 
     private MarketplaceSourceKind? GetSelectedSourceKind()
@@ -313,24 +596,30 @@ public partial class ExtensionWindow : UserControl
         return string.IsNullOrWhiteSpace(tag) ? null : tag;
     }
 
-    private string GetThemeStatusText(bool isInstalled, bool themeMarketAvailable, string? packageName)
+    private static string GetThemeStatusText(
+        bool isInstalled,
+        bool themeMarketAvailable,
+        string? packageName,
+        DshMarketThemeState themeState,
+        bool instanceRunning,
+        bool instanceAttached)
     {
         if (!isInstalled)
         {
             return "主题资源 · 安装后可通过 dsh-market 应用";
         }
 
-        if (_instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        if (instanceAttached)
         {
             return "当前连接的是外部实例，Launcher 不会修改其主题";
         }
 
-        if (_instance.RuntimeStatus != InstanceRuntimeStatus.Running)
+        if (!instanceRunning)
         {
             return "启动当前实例后可检测 dsh-market 并应用主题";
         }
 
-        if (!_themeState.IsAvailable)
+        if (!themeState.IsAvailable)
         {
             return "未检测到 dsh-market；当前只能管理主题 Plugin";
         }
@@ -340,7 +629,7 @@ public partial class ExtensionWindow : UserControl
             return "dsh-market 未将该安装包识别为主题资源";
         }
 
-        return _themeState.LiveNames.Contains(packageName)
+        return themeState.LiveNames.Contains(packageName)
             ? "dsh-market 已热加载该主题"
             : "dsh-market 可应用该主题";
     }
@@ -783,6 +1072,23 @@ public partial class ExtensionWindow : UserControl
 
         SelectedName.Text = entry.Name;
         SelectedDetails.Text = $"类型：{entry.Kind}\n状态：{(entry.Enabled ? "已启用" : "已禁用")}\n来源：{entry.Location}\n{entry.Description}";
+        var protectedBuiltIn = entry.Kind == ExtensionKind.Plugin
+            && ExtensionService.IsProtectedBuiltInPlugin(entry.Name);
+        if (protectedBuiltIn)
+        {
+            EnableButton.IsEnabled = false;
+            DisableButton.IsEnabled = false;
+            UpdateButton.IsEnabled = false;
+            RemoveButton.IsEnabled = false;
+            HintText.Text = "这是 DSh 默认 Plugin，由运行时管理，Launcher 不允许启用、禁用、更新或删除。";
+            return;
+        }
+
+        EnableButton.IsEnabled = true;
+        DisableButton.IsEnabled = true;
+        UpdateButton.IsEnabled = true;
+        RemoveButton.IsEnabled = true;
+        HintText.Text = "修改前请停止实例。Plugin 和 MCP 会在下次启动时生效。";
     }
 
     private void ShowError(Exception ex)

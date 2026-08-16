@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.IO.Compression;
 using System.Text;
+using DshLauncher;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using ZstdSharp;
@@ -18,21 +19,41 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
+    ("Node install version resolution", TestNodeInstallVersionResolution),
+    ("Node installer download progress", TestNodeInstallerDownloadProgress),
+    ("Node install result states", TestNodeInstallResultStates),
+    ("Node download cancel cleans part", TestNodeDownloadCancelCleansPart),
+    ("Node MSI verification and deferred cleanup", TestNodeMsiVerificationAndDeferredCleanup),
+    ("Lifecycle busy guard", TestLifecycleBusyGuard),
+    ("Window resize hit testing", TestWindowResizeHitTesting),
+    ("Conversation title cache reparse rejection", TestConversationTitleCacheReparseRejection),
+    ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
+    ("Node engine requirement resolution", TestNodeEngineRequirementResolution),
+    ("Runtime progress window close guard", TestRuntimeProgressCloseGuard),
+    ("Node version selection uses source engine", TestNodeVersionSelectionUsesEngine),
+    ("DSh global install target decision", TestDshInstallTargetDecision),
+    ("Start flow decisions", TestStartFlowDecisions),
+    ("First run setup decisions", TestFirstRunSetupDecisions),
+    ("Node path propagation", TestNodePathPropagation),
     ("DSh install guard", TestDshInstallGuard),
+    ("DSh custom install prefix", TestDshCustomInstallPrefix),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
     ("Source runner lifecycle", TestSourceRunnerLifecycle),
     ("DSh early exit cleanup", TestDshEarlyExitCleanup),
     ("DSh instance lifecycle", TestDshInstanceLifecycle),
     ("Attached runtime lifecycle", TestAttachedRuntimeLifecycle),
+    ("Instance adoption after abnormal exit", TestInstanceAdoptionAfterAbnormalExit),
     ("Extension ecosystem isolation", TestExtensionEcosystemIsolation),
     ("dsh-market theme bridge", TestDshMarketThemeBridge),
     ("Plugin command supplies pnpm runtime", TestPluginCommandSuppliesPnpmRuntime),
     ("Marketplace discovery and verification", TestMarketplaceDiscoveryAndVerification),
+    ("Skill marketplace discovery and validation", TestSkillMarketplaceDiscoveryAndValidation),
     ("Version copy, clean version and package import", TestVersionPackageOperations),
     ("Model settings round-trip", TestModelSettingsRoundTrip),
     ("Provider state and diagnostics", TestProviderStateAndDiagnostics),
     ("Model provider synchronization", TestModelProviderSynchronization),
+    ("Launcher settings and workspaces", TestLauncherSettingsAndWorkspaces),
     ("Conversation file management", TestConversationFileManagement),
     ("Conversation synchronization", TestConversationSynchronization)
 };
@@ -241,6 +262,600 @@ static Task TestNodeRuntimeCompatibility()
     return Task.CompletedTask;
 }
 
+static Task TestNodeInstallVersionResolution()
+{
+    var index = "[{\"version\":\"v20.11.0\",\"lts\":false},{\"version\":\"v22.23.2\",\"lts\":\"Jod\"},{\"version\":\"v24.5.0\",\"lts\":false}]";
+    Assert(NodeInstallService.SelectLtsVersion(index) == "v22.23.2", "应优先选择兼容的 22.x LTS。");
+
+    var indexWith24 = "[{\"version\":\"v22.18.0\",\"lts\":true},{\"version\":\"v24.10.0\",\"lts\":\"Krypton\"}]";
+    Assert(NodeInstallService.SelectLtsVersion(indexWith24) == "v24.10.0", "22.18 低于 DSh 兼容下限时应选择 24+ LTS。");
+
+    var nonLts = "[{\"version\":\"v25.0.0\",\"lts\":false}]";
+    Assert(NodeInstallService.SelectLtsVersion(nonLts) is null, "没有可用兼容 LTS 时应返回 null 并使用固定版本兜底。");
+    Assert(NodeInstallService.SelectLtsVersion("not json") is null, "损坏的版本索引应返回 null。");
+    Assert(NodeInstallService.SelectLtsVersion("{\"error\":\"Service Unavailable\"}") is null,
+        "形状错误的合法 JSON 索引（错误对象）应返回 null 并走固定版本兜底，而不是抛异常。");
+    Assert(NodeInstallService.SelectLtsVersion("[\"v22.23.2\",{\"version\":\"v24.5.0\",\"lts\":\"Krypton\"}]") == "v24.5.0",
+        "数组中混入原始值时应跳过无效项并继续选择可用 LTS。");
+    return Task.CompletedTask;
+}
+
+static async Task TestNodeInstallerDownloadProgress()
+{
+    var payload = new byte[1_200_000];
+    new Random(42).NextBytes(payload);
+    var handler = new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new ByteArrayContent(payload)
+    });
+    var service = new NodeInstallService(handler);
+    using var temporary = new TestDirectory();
+    var destination = Path.Combine(temporary.Path, "node.msi");
+    var sink = new NodeProgressSink();
+    var result = await service.DownloadAsync(
+        new Uri("https://nodejs.org/dist/v22.23.2/node-v22.23.2-x64.msi"),
+        destination,
+        sink,
+        CancellationToken.None);
+    Assert(result.Percent is 100, "下载完成时返回进度应为 100%。");
+    Assert(File.Exists(destination) && new FileInfo(destination).Length == payload.Length, "下载文件应与响应内容一致。");
+    Assert(sink.Last.Percent is 100, "进度回调最终应报告 100%。");
+
+    var smallService = new NodeInstallService(new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new ByteArrayContent(new byte[512])
+    }));
+    var rejected = false;
+    try
+    {
+        await smallService.DownloadAsync(
+            new Uri("https://nodejs.org/dist/v22.23.2/node-v22.23.2-x64.msi"),
+            Path.Combine(temporary.Path, "small.msi"),
+            null,
+            CancellationToken.None);
+    }
+    catch (IOException)
+    {
+        rejected = true;
+    }
+
+    Assert(rejected, "过小的下载结果应被拒绝，避免把 HTML 错误页当成安装程序。");
+}
+
+static Task TestNodeInstallResultStates()
+{
+    var cancelled = NodeInstallService.MapExitCode(-3, "v22.23.2");
+    Assert(cancelled.IsCancelled && !cancelled.IsSuccess && cancelled.ExitCode == -3,
+        "用户取消必须返回独立取消状态，不能与真实超时混淆。");
+    var timeout = NodeInstallService.MapExitCode(-2, "v22.23.2");
+    Assert(!timeout.IsCancelled && !timeout.IsSuccess && timeout.ExitCode == -2 && timeout.Error?.Contains("10 分钟") == true,
+        "真实安装超时必须保持失败状态并提示超时，不能是取消状态。");
+    var success = NodeInstallService.MapExitCode(0, "v22.23.2");
+    Assert(success.IsSuccess && success.Version == "22.23.2", "安装成功应返回 Node 路径与版本。");
+    var failed = NodeInstallService.MapExitCode(1603, "v22.23.2");
+    Assert(!failed.IsCancelled && !failed.IsSuccess && failed.ExitCode == 1603, "其它退出码应保留为安装失败。");
+    return Task.CompletedTask;
+}
+
+static async Task TestNodeDownloadCancelCleansPart()
+{
+    var payload = new byte[4_000_000];
+    new Random(7).NextBytes(payload);
+    var handler = new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StreamContent(new SlowCancelStream(payload))
+    });
+    var service = new NodeInstallService(handler);
+    using var temporary = new TestDirectory();
+    var destination = Path.Combine(temporary.Path, "node.msi");
+    using var cts = new CancellationTokenSource();
+    var download = service.DownloadAsync(
+        new Uri("https://nodejs.org/dist/v22.23.2/node-v22.23.2-x64.msi"),
+        destination,
+        null,
+        cts.Token);
+    for (var attempt = 0; attempt < 50 && !Directory.GetFiles(temporary.Path).Any(); attempt++)
+    {
+        await Task.Delay(50);
+    }
+
+    Assert(Directory.GetFiles(temporary.Path).Any(name => name.EndsWith(".part", StringComparison.OrdinalIgnoreCase)),
+        "下载进行中应存在 .part 临时文件。");
+    cts.Cancel();
+    await AssertThrowsAsync<OperationCanceledException>(() => download, "取消下载应抛 OperationCanceledException。");
+    Assert(Directory.GetFiles(temporary.Path).Length == 0, "取消下载后不得残留 .part 临时文件或目标文件。");
+}
+
+static async Task TestNodeMsiVerificationAndDeferredCleanup()
+{
+    using var temporary = new TestDirectory();
+    var unsigned = Path.Combine(temporary.Path, "unsigned.msi");
+    await File.WriteAllTextAsync(unsigned, "not a real msi");
+    Assert(!MsiAuthenticodeVerifier.HasValidSignature(unsigned),
+        "未签名的下载结果不能通过 Authenticode 链验证。");
+    Assert(!MsiAuthenticodeVerifier.IsTrustedNodeInstaller(unsigned),
+        "签名验证失败的 MSI 绝不能进入提权安装。");
+    Assert(!MsiAuthenticodeVerifier.IsAllowedNodePublisher(null), "没有签名者证书时必须拒绝。");
+
+    // 发布者必须是 DN 中 Organization 的精确匹配；CN/OU 或 O 值后缀里
+    // 出现 "OpenJS Foundation" 字样的证书不能冒充官方发布者。
+    Assert(MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=OpenJS Foundation, O=OpenJS Foundation, L=Redwood City, S=California, C=US"),
+        "O=OpenJS Foundation 的证书应被接受。");
+    Assert(MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=\"Joyent, Inc.\", O=\"Joyent, Inc.\", C=US"),
+        "带引号逗号的合法 DN 也必须正确解析。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=Evil Corp, O=OpenJS Foundation Evil Branch, C=US"),
+        "O 值只是包含官方名称前缀时必须拒绝。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=OpenJS Foundation, OU=OpenJS Foundation, C=US"),
+        "只在 CN/OU 出现官方名称而缺少匹配 O 时必须拒绝。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"),
+        "其它组织的有效证书必须拒绝。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization(null) && !MsiAuthenticodeVerifier.HasAllowedNodeOrganization(""),
+        "缺少 Subject 时必须拒绝。");
+
+    // 系统 DLL 多为 catalog 签名（无内嵌 Authenticode），用内嵌签名的 dotnet.exe
+    // 验证签名链基础设施与发布者白名单；机器上没有该文件时跳过这部分自检。
+    var signedBinary = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
+    if (File.Exists(signedBinary))
+    {
+        Assert(MsiAuthenticodeVerifier.HasValidSignature(signedBinary),
+            "内嵌 Authenticode 签名的文件应通过链验证（验证基础设施自检）。");
+        using var microsoftSigner = MsiAuthenticodeVerifier.ReadSignerCertificate(signedBinary);
+        Assert(microsoftSigner is not null && !MsiAuthenticodeVerifier.IsAllowedNodePublisher(microsoftSigner),
+            "签名有效但发布者不是 Node.js 官方（如 Microsoft）时仍必须拒绝提权安装。");
+        Assert(!MsiAuthenticodeVerifier.IsTrustedNodeInstaller(signedBinary),
+            "签名链有效但发布者不在名单内时整体判定仍为不信任。");
+    }
+
+    // 超时路径下 msiexec 仍可能后台运行：清理必须等它退出后再删安装包。
+    var installerPath = Path.Combine(temporary.Path, "node-v22.23.2-deferred.msi");
+    await File.WriteAllTextAsync(installerPath, "installer payload");
+    var exited = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c exit 0") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(exited is not null, "测试需要能启动辅助进程。");
+    await exited!.WaitForExitAsync();
+    NodeInstallService.CleanupInstallerFile(exited, installerPath);
+    Assert(!File.Exists(installerPath), "安装程序已退出时应立即清理 MSI。");
+
+    var lingeringPath = Path.Combine(temporary.Path, "node-v22.23.2-lingering.msi");
+    await File.WriteAllTextAsync(lingeringPath, "installer payload");
+    var lingering = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 4 127.0.0.1 > nul") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(lingering is not null, "测试需要能启动辅助进程。");
+    NodeInstallService.CleanupInstallerFile(lingering!, lingeringPath);
+    Assert(File.Exists(lingeringPath), "安装程序仍在运行时不能立即删除仍被占用的 MSI。");
+    for (var attempt = 0; attempt < 100 && File.Exists(lingeringPath); attempt++)
+    {
+        await Task.Delay(100);
+    }
+
+    Assert(!File.Exists(lingeringPath), "安装程序退出后必须补做 MSI 清理。");
+
+    // lingering msiexec 退出前必须阻止第二次 Node 安装，避免 Windows Installer 重叠。
+    Assert(!NodeInstallService.IsProcessAlive(null), "没有残留进程时不应视为安装仍在运行。");
+    var handlerInvoked = false;
+    var guardedService = new NodeInstallService(new NodeTestHandler(() =>
+    {
+        handlerInvoked = true;
+        return new HttpResponseMessage(HttpStatusCode.OK);
+    }));
+    var guardedLingering = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 4 127.0.0.1 > nul") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(guardedLingering is not null, "测试需要能启动辅助进程。");
+    Assert(NodeInstallService.IsProcessAlive(guardedLingering!), "存活中的安装进程必须被视为仍在运行。");
+    guardedService.LingeringInstaller = guardedLingering;
+    var refused = await guardedService.InstallAsync(NodeInstallService.OfficialDistBase);
+    Assert(!refused.IsSuccess && refused.Error?.Contains("仍在后台", StringComparison.Ordinal) == true,
+        "上一次超时的 Node 安装仍在后台运行时必须拒绝再次安装。");
+    Assert(!handlerInvoked, "拒绝发生在任何下载之前。");
+    guardedLingering!.Kill();
+    await guardedLingering.WaitForExitAsync();
+    Assert(!NodeInstallService.IsProcessAlive(guardedLingering),
+        "已退出的残留安装进程不能再阻止新的准备。");
+
+    // 残留安装进程退出后必须发出完成通知并解除“仍在运行”状态（Launcher 据此恢复关闭）。
+    var tracked = new NodeInstallService(new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)));
+    Assert(!tracked.HasLingeringInstaller, "没有残留进程时 HasLingeringInstaller 应为 false。");
+    var trackedFile = Path.Combine(temporary.Path, "node-v22.23.2-tracked.msi");
+    await File.WriteAllTextAsync(trackedFile, "installer payload");
+    var trackedProcess = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 5 127.0.0.1 > nul") { UseShellExecute = false, CreateNoWindow = true });
+    Assert(trackedProcess is not null, "测试需要能启动辅助进程。");
+    tracked.LingeringInstaller = trackedProcess;
+    Assert(tracked.HasLingeringInstaller, "残留安装进程存活期间 HasLingeringInstaller 必须为 true。");
+    var completed = new TaskCompletionSource();
+    NodeInstallService.CleanupInstallerFile(trackedProcess, trackedFile, () => completed.TrySetResult());
+    trackedProcess!.Kill();
+    // 不直接 await 进程句柄：延迟清理任务会 Dispose 它；完成事件即代表退出+清理。
+    await completed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+    Assert(!tracked.HasLingeringInstaller, "残留安装进程退出并清理完成后必须解除运行状态。");
+    Assert(!File.Exists(trackedFile), "完成通知触发时 MSI 必须已被清理。");
+}
+
+static Task TestLifecycleBusyGuard()
+{
+    var guard = new LifecycleBusyGuard();
+    Assert(!guard.IsBusy && guard.TryBegin(), "空闲时应允许占用生命周期 guard。");
+    Assert(guard.IsBusy, "占用后 guard 必须处于 busy 状态。");
+    Assert(!guard.TryBegin(), "A 正在 runtime 准备/启停时，B 的 Start/Stop/Restart/对话自动启动不能并发进入。");
+    guard.End();
+    Assert(!guard.IsBusy && guard.TryBegin(), "释放后应允许下一个生命周期操作占用。");
+    guard.End();
+
+    Assert(MainWindow.CanStopInstanceCore(false, false, true), "空闲且实例受管时允许 Stop/Restart。");
+    Assert(!MainWindow.CanStopInstanceCore(true, false, true),
+        "其它生命周期操作进行中时不能 Stop/Restart。");
+    Assert(!MainWindow.CanStopInstanceCore(false, true, true),
+        "runtime 准备进行中（非模态窗口等待下载/安装）时不能 Stop/Restart。");
+    Assert(!MainWindow.CanStopInstanceCore(false, false, false), "非受管实例不能 Stop/Restart。");
+    // 设置页准备与实例生命周期共用同一 guard：guard 被占用（无论来自哪一侧）
+    // 时 Start/Stop/Restart/对话自动启动全部被拒绝。
+    var settingsGuard = new LifecycleBusyGuard();
+    Assert(settingsGuard.TryBegin(), "设置页准备应能占用同一 guard。");
+    Assert(!settingsGuard.TryBegin(), "guard 已被设置页准备占用时，实例生命周期操作不能进入。");
+    Assert(!MainWindow.CanStopInstanceCore(true, false, true) && !MainWindow.CanStartInstanceCore(true, false, false, true, false),
+        "设置页准备进行中 Start/Stop/Restart 都必须不可用。");
+    settingsGuard.End();
+    return Task.CompletedTask;
+}
+
+static Task TestWindowResizeHitTesting()
+{
+    const double width = 100;
+    const double height = 80;
+    const double border = 5;
+
+    Assert(MainWindow.GetResizeHitTest(width, height, 2, 2, border) == 13,
+        "左上角必须返回窗口缩放命中。 ");
+    Assert(MainWindow.GetResizeHitTest(width, height, 98, 2, border) == 14,
+        "右上角必须返回窗口缩放命中。 ");
+    Assert(MainWindow.GetResizeHitTest(width, height, 2, 78, border) == 16,
+        "左下角必须返回窗口缩放命中。 ");
+    Assert(MainWindow.GetResizeHitTest(width, height, 98, 78, border) == 17,
+        "右下角必须返回窗口缩放命中。 ");
+    Assert(MainWindow.GetResizeHitTest(width, height, 50, 78, border) == 15,
+        "底边必须返回窗口缩放命中。 ");
+    Assert(MainWindow.GetResizeHitTest(width, height, 50, 40, border) == 1,
+        "窗口内容区域不能被误判成缩放边缘。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestConversationTitleCacheReparseRejection()
+{
+    using var temporary = new TestDirectory();
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    var sessionsDirectory = Path.Combine(home, "sessions", "--C-work-demo--", "session-9");
+    Directory.CreateDirectory(sessionsDirectory);
+    File.WriteAllText(
+        Path.Combine(sessionsDirectory, "session.jsonl"),
+        "{\"type\":\"session\",\"version\":0,\"id\":\"session-9\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\",\"delegationDepth\":0}\n",
+        new UTF8Encoding(false));
+
+    // 实例边界外的标题缓存目录；通过 junction 挂进实例 storages。
+    var outsideStorages = Path.Combine(temporary.Path, "outside", "storages");
+    Directory.CreateDirectory(outsideStorages);
+    File.WriteAllText(
+        Path.Combine(outsideStorages, "session_projcache.json"),
+        "{\"tables\":{\"sessions\":{\"session-9\":{\"rows\":{\"title\":{\"val\":\"外部实例标题\"}}}}}}",
+        new UTF8Encoding(false));
+
+    var junction = Path.Combine(home, "storages");
+    var junctionCreated = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{junction}\" \"{outsideStorages}\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+    Assert(junctionCreated is not null, "测试需要能启动 cmd 创建 junction。");
+    junctionCreated!.WaitForExit();
+    Assert(Directory.Exists(junction), "测试环境需要支持创建 junction（mklink /J）。");
+
+    var service = new ConversationService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var instance = CreateTestInstance("conversation-reparse", Path.Combine(temporary.Path, "workspace"), home);
+    var entries = service.List(instance);
+    var session = entries.Single(entry => entry.SessionId == "session-9");
+    Assert(session.HasValidHeader, "标题缓存是可选增强，storages 是重解析点时会话列表必须继续工作。");
+    Assert(session.DisplayName.Contains("未命名", StringComparison.Ordinal) && session.DisplayName != "外部实例标题",
+        "经过重解析点读到实例边界外的标题缓存必须被拒绝，不能泄露其它实例的标题。");
+    return Task.CompletedTask;
+}
+
+static Task TestInstanceRuntimeRebinding()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var oldRoot = Path.Combine(temporary.Path, "old-dsh");
+    Directory.CreateDirectory(oldRoot);
+    var oldExe = Path.Combine(oldRoot, "dsh.cmd");
+    File.WriteAllText(oldExe, "@echo off\r\n", new UTF8Encoding(false));
+
+    var newRoot = Path.Combine(temporary.Path, "new-dsh", "node_modules", "@deepseek-ai", "dsh");
+    Directory.CreateDirectory(newRoot);
+    File.WriteAllText(
+        Path.Combine(newRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"}}",
+        new UTF8Encoding(false));
+    var newExe = Path.Combine(temporary.Path, "new-dsh", "dsh.cmd");
+    File.WriteAllText(newExe, "@echo off\r\n", new UTF8Encoding(false));
+
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var stale = registry.Register("旧 DSh", oldRoot, InstanceKind.Installed, oldExe, "0.1.0", "npm");
+    var home = stale.DshHome;
+
+    // Simulate the old DSh install being deleted (or npm prefix changed).
+    Directory.Delete(oldRoot, recursive: true);
+
+    var detected = new DshRuntimeInfo(true, newExe, "0.2.0", newRoot, null, "^22.19.0 || >=24.0.0");
+    var rebound = InstanceRuntimeRebinder.RebindInstalledInstance(stale, detected);
+    Assert(rebound is not null, "旧路径失效的 Installed 实例应被重新绑定到新检测到的 DSh。");
+    Assert(rebound!.Id == stale.Id && rebound.DshHome == home, "重绑定必须保留实例 Id 与 DSH_HOME。");
+    Assert(rebound.RootPath == Path.GetFullPath(newRoot), "重绑定应更新为重新检测到的 package root。");
+    Assert(rebound.DshExecutablePath == Path.GetFullPath(newExe), "重绑定应更新为重新检测到的 executable。");
+    Assert(rebound.DetectedVersion == "0.2.0" && rebound.RuntimeStatus == InstanceRuntimeStatus.Ready,
+        "重绑定应同步版本与 Ready 状态。");
+
+    var sourceRoot = Path.Combine(temporary.Path, "source");
+    Directory.CreateDirectory(sourceRoot);
+    var source = registry.Register("Source", sourceRoot, InstanceKind.Source, null, null, "pnpm");
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(source, detected) is null,
+        "Source 实例不能被重绑定成 installed runtime。");
+
+    var validRoot = Path.Combine(temporary.Path, "valid-dsh");
+    Directory.CreateDirectory(validRoot);
+    File.WriteAllText(
+        Path.Combine(validRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\"}",
+        new UTF8Encoding(false));
+    var validExe = Path.Combine(validRoot, "dsh.cmd");
+    File.WriteAllText(validExe, "@echo off\r\n", new UTF8Encoding(false));
+    var valid = registry.Register("有效 DSh", validRoot, InstanceKind.Installed, validExe, "0.2.0", "npm");
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(valid, detected) is null,
+        "绑定仍有效的实例不应被重绑定。");
+
+    var attachedStale = stale with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Attached,
+        ProcessId = 4242,
+        Port = 19000,
+        WebUrl = "http://127.0.0.1:19000"
+    };
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(attachedStale, detected) is null,
+        "Attached 实例不能被重绑定成 Ready。");
+
+    var runningStale = stale with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Managed,
+        ProcessId = 4243,
+        Port = 19001,
+        WebUrl = "http://127.0.0.1:19001"
+    };
+    Assert(InstanceRuntimeRebinder.RebindInstalledInstance(runningStale, detected) is null,
+        "运行中的实例不能被重绑定成 Ready。");
+    return Task.CompletedTask;
+}
+
+static Task TestNodeEngineRequirementResolution()
+{
+    using var temporary = new TestDirectory();
+
+    var sourceRoot = Path.Combine(temporary.Path, "source");
+    Directory.CreateDirectory(Path.Combine(sourceRoot, "apps", "cli"));
+    File.WriteAllText(
+        Path.Combine(sourceRoot, "package.json"),
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\",\"engines\":{\"node\":\">=20.0.0\"},\"packageManager\":\"pnpm@10.0.0\"}",
+        new UTF8Encoding(false));
+    var source = new ManagerInstance(
+        "source-engine",
+        "Source",
+        sourceRoot,
+        InstanceKind.Source,
+        Path.Combine(temporary.Path, "source-home"),
+        null,
+        null,
+        InstanceRuntimeStatus.Ready,
+        "pnpm",
+        null,
+        DateTimeOffset.UtcNow);
+    const string globalEngine = "^22.19.0 || >=24.0.0";
+    Assert(DshRuntimeDetector.ResolveNodeEngine(source, globalEngine) == ">=20.0.0",
+        "Source 声明 engines.node 时应优先使用 Source 自己的要求。");
+
+    var undeclaredRoot = Path.Combine(temporary.Path, "source-undeclared");
+    Directory.CreateDirectory(undeclaredRoot);
+    File.WriteAllText(
+        Path.Combine(undeclaredRoot, "package.json"),
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\",\"packageManager\":\"pnpm@10.0.0\"}",
+        new UTF8Encoding(false));
+    Assert(DshRuntimeDetector.ResolveNodeEngine(source with { Id = "source-undeclared", RootPath = undeclaredRoot }, globalEngine) is null,
+        "Source 未声明 engines.node 时不能继承全局 installed DSh 的版本要求。");
+
+    var installedRoot = Path.Combine(temporary.Path, "installed-dsh");
+    Directory.CreateDirectory(installedRoot);
+    File.WriteAllText(
+        Path.Combine(installedRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"}}",
+        new UTF8Encoding(false));
+    var installed = new ManagerInstance(
+        "installed-engine",
+        "Installed",
+        installedRoot,
+        InstanceKind.Installed,
+        Path.Combine(temporary.Path, "installed-home"),
+        Path.Combine(installedRoot, "dsh.cmd"),
+        "0.2.0",
+        InstanceRuntimeStatus.Ready,
+        "npm",
+        null,
+        DateTimeOffset.UtcNow);
+    Assert(DshRuntimeDetector.ResolveNodeEngine(installed, ">=30.0.0") == "^22.19.0 || >=24.0.0",
+        "Installed 实例声明 engines.node 时应优先使用实例自己的 metadata。");
+
+    var installedUndeclaredRoot = Path.Combine(temporary.Path, "installed-undeclared");
+    Directory.CreateDirectory(installedUndeclaredRoot);
+    File.WriteAllText(
+        Path.Combine(installedUndeclaredRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\"}",
+        new UTF8Encoding(false));
+    Assert(DshRuntimeDetector.ResolveNodeEngine(installed with { Id = "installed-fallback", RootPath = installedUndeclaredRoot }, globalEngine) is null,
+        "有效 Installed 实例未声明 engines.node 时应保持未声明，不继承其它 DSh 的要求。");
+
+    var staleRoot = Path.Combine(temporary.Path, "installed-stale");
+    Directory.CreateDirectory(staleRoot);
+    File.WriteAllText(
+        Path.Combine(staleRoot, "package.json"),
+        "{\"name\":\"unrelated\",\"version\":\"1.0.0\"}",
+        new UTF8Encoding(false));
+    Assert(DshRuntimeDetector.ResolveNodeEngine(installed with { Id = "installed-stale", RootPath = staleRoot }, globalEngine) == globalEngine,
+        "runtime 已失效的 Installed 实例在重装/重绑定时才可以使用重新检测到的 DSh metadata。");
+
+    Assert(DshRuntimeDetector.ResolveNodeEngine(null, globalEngine) == globalEngine,
+        "未选择实例时诊断页应使用全局 DSh engine。");
+    return Task.CompletedTask;
+}
+
+static Task TestRuntimeProgressCloseGuard()
+{
+    Assert(RuntimeProgressWindow.IsCloseAllowed(false), "Node 下载阶段应允许关闭窗口。");
+    Assert(!RuntimeProgressWindow.IsCloseAllowed(true), "MSI 安装阶段必须阻止窗口关闭。");
+    return Task.CompletedTask;
+}
+
+static Task TestNodeVersionSelectionUsesEngine()
+{
+    var index = "[{\"version\":\"v24.5.0\",\"lts\":\"Krypton\"},{\"version\":\"v22.23.2\",\"lts\":\"Jod\"},{\"version\":\"v20.19.0\",\"lts\":\"Iron\"},{\"version\":\"v18.20.4\",\"lts\":false}]";
+    Assert(NodeInstallService.SelectLtsVersion(index, "^20.0.0") == "v20.19.0",
+        "Source 声明 ^20.0.0 时应选择兼容的 Node 20 LTS，而不是全局 DSh 的 22/24 范围。");
+    Assert(NodeInstallService.SelectLtsVersion(index, "^18.0.0") is null,
+        "版本索引中没有兼容 LTS 时应返回 null，由固定版本兜底。");
+    Assert(NodeInstallService.SelectLtsVersion(index) == "v24.5.0",
+        "未指定 engine 时保持官方 DSh 默认兼容策略（22.19+ 或 24+）。");
+    Assert(NodeInstallService.SelectLtsVersion(index, "^22.19.0 || >=24.0.0") == "v24.5.0",
+        "Installed 场景应优先选择满足官方 DSh engine 的新版 LTS。");
+    Assert(NodeInstallService.DefaultVersionSatisfies(null),
+        "无 engine 要求时固定版本兜底可用。");
+    Assert(NodeInstallService.DefaultVersionSatisfies("^22.19.0 || >=24.0.0"),
+        "固定版本满足官方 DSh 要求时允许兜底。");
+    Assert(!NodeInstallService.DefaultVersionSatisfies("^20.0.0"),
+        "固定版本不满足 Source engine 时不能兜底安装。");
+    return Task.CompletedTask;
+}
+
+static Task TestDshInstallTargetDecision()
+{
+    Assert(DshInstallService.ShouldInstallGlobalDSh(false, InstanceKind.Installed),
+        "Installed 实例缺 DSh 时应安装全局 DSh。");
+    Assert(!DshInstallService.ShouldInstallGlobalDSh(false, InstanceKind.Source),
+        "Source 实例缺全局 DSh 时不应安装全局 @deepseek-ai/dsh。");
+    Assert(!DshInstallService.ShouldInstallGlobalDSh(true, InstanceKind.Installed),
+        "已检测到 DSh 时不应重复安装。");
+    Assert(DshInstallService.ShouldInstallGlobalDSh(false, null),
+        "设置页未指定实例且缺 DSh 时应允许安装全局 DSh。");
+    return Task.CompletedTask;
+}
+
+static Task TestNodePathPropagation()
+{
+    const string nodeExe = @"C:\Program Files\nodejs\node.exe";
+    const string existing = @"C:\Windows\System32;D:\Tools";
+    var updated = MainWindow.BuildPathWithNodeDirectory(nodeExe, existing);
+    Assert(updated.StartsWith(@"C:\Program Files\nodejs" + Path.PathSeparator, StringComparison.OrdinalIgnoreCase),
+        "新安装的 Node 目录应补到进程 PATH 最前面。");
+    Assert(updated.Contains(@"D:\Tools", StringComparison.OrdinalIgnoreCase),
+        "原有 PATH 条目应保留。");
+
+    var alreadyInPath = @"C:\Program Files\nodejs;" + existing;
+    Assert(MainWindow.BuildPathWithNodeDirectory(nodeExe, alreadyInPath) == alreadyInPath,
+        "Node 目录已在 PATH 中时不应重复添加。");
+
+    Assert(MainWindow.BuildPathWithNodeDirectory(null, existing) == existing,
+        "没有可用的 Node 路径时不应改动 PATH。");
+    return Task.CompletedTask;
+}
+
+static Task TestStartFlowDecisions()
+{
+    Assert(!MainWindow.CanStartInstanceCore(false, false, true, true, false),
+        "Node 检测进行中不能点击启动。");
+    Assert(MainWindow.CanStartInstanceCore(false, false, false, true, false),
+        "检测完成后且实例可启动时应允许启动。");
+    Assert(!MainWindow.CanStartInstanceCore(false, true, false, true, false),
+        "runtime 准备进行中不能再次启动。");
+    Assert(!MainWindow.CanStartInstanceCore(false, false, false, false, false),
+        "没有选中实例时不能启动。");
+    Assert(!MainWindow.CanStartInstanceCore(false, false, false, true, true),
+        "运行中且没有 Web 地址的实例不能启动。");
+
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "dsh");
+    Directory.CreateDirectory(root);
+    var first = CreateTestInstance("target-first", root, Path.Combine(temporary.Path, "home-1"));
+    var second = CreateTestInstance("target-second", root, Path.Combine(temporary.Path, "home-2"));
+    Assert(MainWindow.ResolveInstanceById(new[] { first, second }, "target-second") == second,
+        "启动目标必须按最初点击的实例 ID 解析，而不是当前 SelectedInstance。");
+    Assert(MainWindow.ResolveInstanceById(new[] { first, second }, "missing") is null,
+        "按 ID 找不到目标时应返回 null。");
+
+    var node = new NodeRuntimeInfo(true, "node.exe", "24.19.0", null);
+    var packageRoot = Path.Combine(temporary.Path, "dsh-package");
+    Directory.CreateDirectory(packageRoot);
+    File.WriteAllText(
+        Path.Combine(packageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"}}",
+        new UTF8Encoding(false));
+    var installedExe = Path.Combine(packageRoot, "dsh.cmd");
+    File.WriteAllText(installedExe, "@echo off\r\n", new UTF8Encoding(false));
+    var installedReady = CreateTestInstance("installed-ready", packageRoot, Path.Combine(temporary.Path, "home-3"))
+        with { DshExecutablePath = installedExe, DetectedVersion = "0.2.0" };
+    var installedStale = CreateTestInstance("installed-stale", root, Path.Combine(temporary.Path, "home-4"));
+    var installedRootGone = CreateTestInstance("installed-root-gone", root, Path.Combine(temporary.Path, "home-5"))
+        with { DshExecutablePath = Path.Combine(packageRoot, "dsh.cmd") };
+    Assert(MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedReady),
+        "重绑定后重新读取的 engine 兼容、入口和 package 目录都有效时应判定就绪。");
+    Assert(!MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedStale),
+        "Installed 实例入口仍缺失时不能判定就绪（覆盖 npm 成功但重检测失败场景）。");
+    Assert(!MainWindow.IsRuntimeReadyAfterPreparation(node, "^22.19.0 || >=24.0.0", installedRootGone),
+        "入口 shim 还在但 package 目录已删除的实例不能判定就绪，应路由到一键修复。");
+    Assert(MainWindow.IsRuntimeReadyAfterPreparation(node, null,
+        CreateTestInstance("source-ok", root, Path.Combine(temporary.Path, "home-6")) with { Kind = InstanceKind.Source }),
+        "Source 实例无需全局 DSh 入口即可判定就绪。");
+    Assert(!MainWindow.IsRuntimeReadyAfterPreparation(NodeRuntimeInfo.Missing(), null,
+        CreateTestInstance("source-no-node", root, Path.Combine(temporary.Path, "home-7")) with { Kind = InstanceKind.Source }),
+        "Node 仍缺失时不能判定就绪。");
+
+    Assert(MainWindow.IsGlobalRuntimeReady(node, null), "全局环境 DSh 未声明 engine 时就绪只看 Node 可用。");
+    Assert(!MainWindow.IsGlobalRuntimeReady(node, ">=26.0.0"),
+        "新装 DSh 声明的 engine 与现有 Node 不兼容时全局环境不能判定就绪。");
+    Assert(!MainWindow.IsGlobalRuntimeReady(NodeRuntimeInfo.Missing(), null),
+        "Node 缺失时全局环境不能判定就绪。");
+    return Task.CompletedTask;
+}
+
+static Task TestFirstRunSetupDecisions()
+{
+    Assert(MainWindow.ShouldPromptFirstRunSetup(0, true, false),
+        "实例列表成功读取且为空时，应自动显示首次运行引导。");
+    Assert(!MainWindow.ShouldPromptFirstRunSetup(1, true, false),
+        "已有版本时不能显示首次运行引导。");
+    Assert(!MainWindow.ShouldPromptFirstRunSetup(0, false, false),
+        "实例注册文件读取失败时不能把错误状态当作首次运行。");
+    Assert(!MainWindow.ShouldPromptFirstRunSetup(0, true, true),
+        "同一次启动中取消引导后不能反复自动弹出。");
+
+    Assert(MainWindow.CanStartFirstVersionSetupCore(false, false, false, 0, true),
+        "没有版本时，主启动按钮应允许重新打开首次运行引导。");
+    Assert(!MainWindow.CanStartFirstVersionSetupCore(false, false, true, 0, true),
+        "Node.js 检测期间不能开始首次运行配置。");
+    Assert(!MainWindow.CanStartFirstVersionSetupCore(false, false, false, 1, true),
+        "已有版本后不能继续走首次运行入口。");
+    Assert(MainWindow.BuildDefaultFirstVersionName("v0.1.0-rc.6") == "DSh 0.1.0-rc.6",
+        "首个版本名称应使用检测到的 DSh 版本且不重复 v 前缀。");
+    Assert(MainWindow.BuildDefaultFirstVersionName(null) == "DSh 默认版本",
+        "DSh 未返回版本号时应使用稳定的默认名称。");
+    return Task.CompletedTask;
+}
+
 static async Task TestDshInstallGuard()
 {
     var result = await new DshInstallService().InstallAsync(NodeRuntimeInfo.Missing("测试中模拟 Node.js 缺失"));
@@ -253,6 +868,55 @@ static async Task TestDshInstallGuard()
         "https://example.invalid/registry");
     Assert(!unsupportedRegistry.IsSuccess && unsupportedRegistry.Error?.Contains("安装源", StringComparison.Ordinal) == true,
         "DSh 安装只能选择官方 npm 源或国内镜像，不能接受任意 registry。");
+}
+
+static Task TestDshCustomInstallPrefix()
+{
+    using var temporary = new TestDirectory();
+    var prefix = Path.Combine(temporary.Path, "runtime & tools", "dsh");
+    var normalized = DshInstallService.NormalizeInstallDirectory(prefix);
+    Assert(normalized == Path.GetFullPath(prefix), "DSh 自定义安装位置应保存为绝对路径。");
+
+    var startInfo = DshInstallService.CreateStartInfo(
+        "npm.cmd",
+        DshInstallService.ChinaRegistry,
+        normalized);
+    Assert(startInfo.Environment.TryGetValue("NPM_CONFIG_PREFIX", out var configuredPrefix)
+        && configuredPrefix == normalized,
+        "npm 安装必须通过 NPM_CONFIG_PREFIX 使用用户选择的位置。");
+    Assert(!startInfo.Arguments.Contains(prefix, StringComparison.Ordinal),
+        "用户选择的路径不能拼入 cmd.exe 命令文本，避免空格或 shell 字符破坏命令。");
+
+    var preferredCandidates = DshRuntimeDetector.GetCandidates(prefix).Take(3).ToArray();
+    Assert(preferredCandidates.Length == 3
+        && preferredCandidates[0] == Path.Combine(Path.GetFullPath(prefix), "dsh.cmd"),
+        "DSh 检测应优先检查自定义 npm prefix 下的命令入口。");
+    Assert(DshRuntimeDetector.IsExecutableInInstallDirectory(
+            Path.Combine(prefix, "dsh.cmd"),
+            prefix),
+        "自定义目录内的 dsh.cmd 应被识别为目标运行时。");
+    Assert(!DshRuntimeDetector.IsExecutableInInstallDirectory(
+            Path.Combine(temporary.Path, "outside", "dsh.cmd"),
+            prefix),
+        "其它全局 dsh 命令不能冒充自定义目录中的运行时。");
+
+    var runtime = new DshRuntimeInfo(
+        true,
+        Path.Combine(prefix, "dsh.cmd"),
+        "0.1.0",
+        Path.Combine(prefix, "node_modules", "@deepseek-ai", "dsh"),
+        null);
+    Assert(MainWindow.IsPreferredDshRuntimeReady(runtime, prefix),
+        "检测到目标目录中的 DSh 后，设置页应判定安装位置已就绪。");
+    Assert(!MainWindow.IsPreferredDshRuntimeReady(
+            runtime with { ExecutablePath = Path.Combine(temporary.Path, "global", "dsh.cmd") },
+            prefix),
+        "只检测到其它全局 DSh 时，所选安装位置不能被误报为已就绪。");
+
+    AssertThrows<ArgumentException>(
+        () => DshInstallService.NormalizeInstallDirectory(Path.GetPathRoot(prefix)),
+        "DSh 安装位置不能选择磁盘根目录。");
+    return Task.CompletedTask;
 }
 
 static async Task TestSourceRunnerGuard()
@@ -493,8 +1157,94 @@ static async Task TestDshInstanceLifecycle()
     await competingRunner.StopAsync(instance.Id, cancellation.Token);
 }
 
-static async Task TestAttachedRuntimeLifecycle()
+static async Task TestInstanceAdoptionAfterAbnormalExit()
 {
+    using var temporary = new TestDirectory();
+    using var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            while (true)
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                await using var stream = client.GetStream();
+                var request = new byte[2048];
+                _ = await stream.ReadAsync(request);
+                var response = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+                await stream.WriteAsync(response);
+            }
+        }
+        catch
+        {
+            // 测试结束后监听已停止。
+        }
+    });
+
+    var lingering = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 600 127.0.0.1 > nul")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+    Assert(lingering is not null, "测试需要能启动辅助 cmd 进程。");
+    try
+    {
+        var instance = CreateTestInstance("adopt-test", temporary.Path, Path.Combine(temporary.Path, "dsh-home"))
+            with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Running,
+                ProcessId = lingering!.Id,
+                Port = port,
+                WebUrl = $"http://127.0.0.1:{port}/"
+            };
+
+        await using var runner = new DshInstanceRunner();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Assert(await runner.TryAdoptRunningProcessAsync(instance, cancellation.Token),
+            "Launcher 异常退出遗留的实例（PID 存活且端口仍在服务）应被收编回 Managed。");
+        Assert(runner.IsManaged(instance.Id), "收编后 Stop/Restart/删除应恢复可用。");
+        var stopped = await runner.StopAsync(instance.Id, cancellation.Token);
+        Assert(stopped.IsSuccess, stopped.Error ?? "收编后的遗留实例必须可以停止。");
+        Assert(lingering.HasExited, "停止收编实例必须终止遗留的进程树。");
+
+        var mismatched = instance with
+        {
+            Id = "adopt-mismatch",
+            DshHome = Path.Combine(temporary.Path, "home-mismatch"),
+            ProcessId = Environment.ProcessId
+        };
+        Assert(!await runner.TryAdoptRunningProcessAsync(mismatched, cancellation.Token),
+            "记录的 PID 指向非 cmd/node 进程（PID 复用）时必须拒绝收编。");
+
+        using var deadPortListener = new TcpListener(IPAddress.Loopback, 0);
+        deadPortListener.Start();
+        var deadPort = ((IPEndPoint)deadPortListener.LocalEndpoint).Port;
+        deadPortListener.Stop();
+        var orphan = instance with
+        {
+            Id = "adopt-dead-port",
+            DshHome = Path.Combine(temporary.Path, "home-dead-port"),
+            Port = deadPort,
+            WebUrl = $"http://127.0.0.1:{deadPort}/"
+        };
+        Assert(!await runner.TryAdoptRunningProcessAsync(orphan, cancellation.Token),
+            "端口不再服务时不能收编，应回退 Attached/Stopped 语义。");
+    }
+    finally
+    {
+        if (!lingering!.HasExited)
+        {
+            lingering.Kill();
+        }
+
+        listener.Stop();
+    }
+}
+
+static async Task TestAttachedRuntimeLifecycle(){
     using var temporary = new TestDirectory();
     using var listener = new TcpListener(IPAddress.Loopback, 0);
     listener.Start();
@@ -555,13 +1305,26 @@ static async Task TestExtensionEcosystemIsolation()
     Directory.CreateDirectory(profile);
     File.WriteAllText(
         Path.Combine(profile, "package.json"),
-        "{\"dependencies\":{\"@deepseek-ai/dsh-base\":\"1.0.0\",\"demo-plugin\":\"1.2.3\",\"@deepseek-ai/dsh-mcp-client\":\"1.0.0\"},\"dsh\":{\"profile\":{\"bundles\":[\"@deepseek-ai/dsh-base\",\"demo-plugin\"]}}}",
+        "{\"dependencies\":{\"@deepseek-ai/dsh-base\":\"1.0.0\",\"@deepseek-ai/dsh-web-app\":\"1.0.0\",\"demo-plugin\":\"1.2.3\",\"@deepseek-ai/dsh-mcp-client\":\"1.0.0\"},\"dsh\":{\"profile\":{\"bundles\":[\"@deepseek-ai/dsh-base\",\"@deepseek-ai/dsh-web-app\",\"demo-plugin\"]}}}",
         new UTF8Encoding(false));
 
     var service = new ExtensionService();
     var initial = await service.ListAsync(instance);
     var plugin = initial.Single(entry => entry.Kind == ExtensionKind.Plugin && entry.Name == "demo-plugin");
     Assert(plugin.Enabled, "profile bundles 中的 Plugin 应被列为已启用。");
+    var builtInBase = initial.Single(entry => entry.Name == "@deepseek-ai/dsh-base");
+    var builtInWeb = initial.Single(entry => entry.Name == "@deepseek-ai/dsh-web-app");
+    Assert(!builtInBase.Managed && !builtInWeb.Managed,
+        "DSh 默认的 base 和 web-app Plugin 必须显示为不可管理。");
+    await AssertThrowsAsync<InvalidOperationException>(
+        () => service.SetPluginEnabledAsync(instance, builtInBase, false),
+        "DSh 默认 base Plugin 不能被禁用。");
+    await AssertThrowsAsync<InvalidOperationException>(
+        () => service.UpdatePluginAsync(instance, "@deepseek-ai/dsh-web-app@latest", null),
+        "DSh 默认 web-app Plugin 不能通过带版本的 spec 更新。");
+    await AssertThrowsAsync<InvalidOperationException>(
+        () => service.RemovePluginAsync(instance, "@deepseek-ai/dsh-base", null),
+        "DSh 默认 base Plugin 不能被删除。");
 
     await service.SetPluginEnabledAsync(instance, plugin, false);
     var profileAfterDisable = File.ReadAllText(Path.Combine(profile, "package.json"));
@@ -1025,6 +1788,174 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     Assert(oldCachedOfficial[0].SourceKind != MarketplaceSourceKind.Official, "旧缓存中的本地依赖不能继续显示为官方来源。 ");
 }
 
+static async Task TestSkillMarketplaceDiscoveryAndValidation()
+{
+    using var temporary = new TestDirectory();
+    var validationLock = new object();
+    var activeValidations = 0;
+    var maxConcurrentValidations = 0;
+    var goodRawRequests = 0;
+    var badRawRequests = 0;
+    var treeRequests = 0;
+    using var httpClient = new HttpClient(new AsyncTestHandler(async (request, cancellationToken) =>
+    {
+        var uri = request.RequestUri ?? throw new InvalidOperationException("Skill 市场请求缺少 URI。");
+        if (uri.Host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            if (uri.AbsolutePath.Equals("/search/repositories", StringComparison.OrdinalIgnoreCase))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """
+                        {"items":[
+                          {"full_name":"demo/good-skill","name":"good-skill","description":"valid","stargazers_count":12,"default_branch":"develop","pushed_at":"2026-08-16T10:00:00Z"},
+                          {"full_name":"demo/bad-skill","name":"bad-skill","description":"invalid","stargazers_count":3,"default_branch":"main","pushed_at":"2026-08-15T10:00:00Z"},
+                          {"full_name":"demo/not-a-candidate","name":"toolbox","description":"ignored","stargazers_count":99,"default_branch":"main"}
+                        ]}
+                        """,
+                        Encoding.UTF8,
+                        "application/json")
+                };
+            }
+
+            treeRequests++;
+            if (uri.AbsolutePath.Contains("/repos/demo/good-skill/git/trees/develop", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """
+                        {"tree":[
+                          {"path":"skills/good-skill/SKILL.md","type":"blob"},
+                          {"path":"skills/good-skill/references/help.md","type":"blob"},
+                          {"path":"skills/ui-review/SKILL.md","type":"blob"},
+                          {"path":"cli/assets/skills/ui-review/SKILL.md","type":"blob"}
+                        ]}
+                        """,
+                        Encoding.UTF8,
+                        "application/json")
+                };
+            }
+
+            if (uri.AbsolutePath.Contains("/repos/demo/bad-skill/git/trees/main", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"tree":[{"path":"skills/bad-skill/SKILL.md","type":"blob"}]}""",
+                        Encoding.UTF8,
+                        "application/json")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+
+        if (uri.Host.Equals("codeload.github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(CreateSkillMarketArchive())
+            };
+        }
+
+        lock (validationLock)
+        {
+            activeValidations++;
+            maxConcurrentValidations = Math.Max(maxConcurrentValidations, activeValidations);
+            if (uri.AbsolutePath.Contains("/demo/good-skill/", StringComparison.Ordinal)) goodRawRequests++;
+            if (uri.AbsolutePath.Contains("/demo/bad-skill/", StringComparison.Ordinal)) badRawRequests++;
+        }
+
+        try
+        {
+            await Task.Delay(80, cancellationToken);
+            if (uri.AbsolutePath.EndsWith("/demo/good-skill/develop/skills/good-skill/SKILL.md", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("---\nname: good-skill\ndescription: API coding and debugging helper\n---\n# Skill\n", Encoding.UTF8)
+                };
+            }
+
+            if (uri.AbsolutePath.EndsWith("/demo/good-skill/develop/skills/ui-review/SKILL.md", StringComparison.Ordinal)
+                || uri.AbsolutePath.EndsWith("/demo/good-skill/develop/cli/assets/skills/ui-review/SKILL.md", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("---\nname: ui-review\ndescription: Review UI and visual design\n---\n# UI Review\n", Encoding.UTF8)
+                };
+            }
+
+            if (uri.AbsolutePath.EndsWith("/demo/bad-skill/main/skills/bad-skill/SKILL.md", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("---\nname: bad-skill\n---\n", Encoding.UTF8)
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+        finally
+        {
+            lock (validationLock)
+            {
+                activeValidations--;
+            }
+        }
+    }));
+    var launcherPaths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+    var service = new SkillMarketService(new ExtensionService(), launcherPaths, httpClient);
+    var items = await service.SearchAsync();
+
+    Assert(items.Count == 2 && items.All(item => item.Repository == "demo/good-skill"),
+        "市场应按嵌套 SKILL.md 生成条目，并隐藏未通过格式校验的文件。 ");
+    var goodSkill = items.Single(item => item.Name == "good-skill");
+    var uiSkill = items.Single(item => item.Name == "ui-review");
+    Assert(goodSkill.SkillPath == "skills/good-skill/SKILL.md" && goodSkill.Category == "开发",
+        "Skill 应保留实际仓库路径并归入开发分类。 ");
+    Assert(uiSkill.SkillPath == "skills/ui-review/SKILL.md" && uiSkill.Category == "设计",
+        "重复 Skill 应优先保留标准 skills 目录并归入设计分类。 ");
+    Assert(maxConcurrentValidations >= 2, "Skill 文件校验应并行执行，不能逐个串行等待。 ");
+    Assert(service.ReadCached().Count == 2, "Skill 市场只应缓存校验通过的单个 Skill。 ");
+
+    var root = Path.Combine(temporary.Path, "runtime");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(home);
+    var instance = CreateTestInstance("skill-market-install", root, home);
+    var installedName = await service.InstallAsync(instance, goodSkill);
+    Assert(installedName == "good-skill"
+        && File.Exists(Path.Combine(home, "skills", "good-skill", "SKILL.md"))
+        && File.Exists(Path.Combine(home, "skills", "good-skill", "references", "help.md")),
+        "市场安装应只复制所选嵌套 Skill 目录，并保留它的配套文件。 ");
+
+    var refreshed = await service.SearchAsync();
+    Assert(refreshed.Count == 2 && goodRawRequests == 3 && badRawRequests == 2 && treeRequests == 3,
+        "仓库分支和更新时间未变化时应复用已发现 Skill 的缓存。 ");
+}
+
+static byte[] CreateSkillMarketArchive()
+{
+    using var stream = new MemoryStream();
+    using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+    {
+        var skill = archive.CreateEntry("good-skill-develop/skills/good-skill/SKILL.md");
+        using (var writer = new StreamWriter(skill.Open(), new UTF8Encoding(false)))
+        {
+            writer.Write("---\nname: good-skill\ndescription: API coding and debugging helper\n---\n# Skill\n");
+        }
+
+        var reference = archive.CreateEntry("good-skill-develop/skills/good-skill/references/help.md");
+        using var referenceWriter = new StreamWriter(reference.Open(), new UTF8Encoding(false));
+        referenceWriter.Write("supporting file");
+    }
+
+    return stream.ToArray();
+}
+
 static Task TestVersionPackageOperations()
 {
     using var temporary = new TestDirectory();
@@ -1044,7 +1975,7 @@ static Task TestVersionPackageOperations()
     var clean = packages.CreateCleanVersion(source, "干净版本");
     Assert(clean.DshHome != source.DshHome && !Directory.EnumerateFileSystemEntries(clean.DshHome).Any(), "干净版本不能带入旧版本文件。 ");
 
-    var settingsService = new VersionSettingsService();
+    var settingsService = new VersionSettingsService(new LauncherPaths(launcherRoot));
     settingsService.Save(source, new VersionSettingsData
     {
         ConversationSyncMode = ConversationSyncMode.Workspace,
@@ -1197,6 +2128,40 @@ static Task TestVersionPackageOperations()
     Assert(!registry.Load().Any(item => item.Id == deletable.Id), "删除版本后注册记录必须移除。 ");
     Assert(!Directory.Exists(deletable.DshHome), "删除版本后必须清理 DSH_HOME。 ");
     Assert(!Directory.Exists(backupDirectory), "删除版本后必须清理该版本的 Launcher 备份。 ");
+
+    // DSh 会在 profiles\node_modules 下创建指向共享运行目录的 junction；
+    // 删除/复制/导出必须跳过链接本身而不是失败，更不能穿透影响共享目录。
+    var sharedPackage = Path.Combine(temporary.Path, "shared-runtime", "accepts");
+    Directory.CreateDirectory(sharedPackage);
+    var sharedFile = Path.Combine(sharedPackage, "shared.txt");
+    File.WriteAllText(sharedFile, "keep", new UTF8Encoding(false));
+    var junctionParent = Path.Combine(source.DshHome, "profiles", "node_modules");
+    Directory.CreateDirectory(junctionParent);
+    var junction = Path.Combine(junctionParent, "accepts");
+    var junctionCreated = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{junction}\" \"{sharedPackage}\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+    Assert(junctionCreated is not null, "测试需要能启动 cmd 创建 junction。 ");
+    junctionCreated!.WaitForExit();
+    Assert(Directory.Exists(junction), "测试环境需要支持创建 junction（mklink /J）。 ");
+
+    var junctionClone = packages.CloneVersion(source, "含链接版本");
+    Assert(!Directory.Exists(Path.Combine(junctionClone.DshHome, "profiles", "node_modules", "accepts")),
+        "复制版本应跳过源 DSH_HOME 中的 junction，而不是复制或跟随。 ");
+    Assert(File.ReadAllText(sharedFile) == "keep", "复制版本不能改动 junction 目标内容。 ");
+
+    packages.ExportPackage(
+        source,
+        Path.Combine(temporary.Path, "junction.dshpack"),
+        new VersionExportOptions(IncludeProviderConfiguration: false, IncludePluginConfiguration: false));
+
+    packages.DeleteVersion(source);
+    Assert(!registry.Load().Any(item => item.Id == source.Id), "删除含 junction 的版本应成功并移除注册记录。 ");
+    Assert(!Directory.Exists(source.DshHome), "删除含 junction 的版本必须清理 DSH_HOME。 ");
+    Assert(File.Exists(sharedFile), "删除版本只能移除 junction 本身，不能删除共享运行目录中的文件。 ");
     return Task.CompletedTask;
 }
 
@@ -1236,6 +2201,16 @@ static async Task TestModelSettingsRoundTrip()
     Assert(deepseek.Models.SequenceEqual(new[] { "deepseek-chat", "deepseek-reasoner" }), "读取模型列表应保持顺序。");
     Assert(providers.Any(provider => provider.Provider == "existing"), "读取时应保留既有 Provider。");
     Assert(providers.Any(provider => provider.Provider == "gateway" && provider.Models.Contains("model-a")), "读取时应识别新 Provider 的模型。");
+
+    var skeletonHome = Path.Combine(temporary.Path, "skeleton-home");
+    Directory.CreateDirectory(skeletonHome);
+    File.WriteAllText(
+        Path.Combine(skeletonHome, "settings.yaml"),
+        "llm-pi-ai:\n  providers:\n    skeleton:\n",
+        new UTF8Encoding(false));
+    var skeletonProviders = service.Read(CreateTestInstance("model-skeleton", root, skeletonHome));
+    Assert(skeletonProviders.All(provider => !provider.Configured),
+        "只有条目名、没有配置内容的 Provider 骨架不能算已配置。 ");
 
     await AssertThrowsAsync<ArgumentException>(
         () => service.SaveDeepSeekAsync(instance, "BAD-NAME", "https://api.deepseek.com", Array.Empty<string>()),
@@ -1310,7 +2285,7 @@ static Task TestModelProviderSynchronization()
     var first = registry.Register("模型版本 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var second = registry.Register("模型版本 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var independent = registry.Register("独立模型版本", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
-    var settings = new VersionSettingsService();
+    var settings = new VersionSettingsService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
     settings.Save(first, new VersionSettingsData { SyncModelProviders = true });
     settings.Save(second, new VersionSettingsData { SyncModelProviders = true });
     settings.Save(independent, new VersionSettingsData { SyncModelProviders = false });
@@ -1367,6 +2342,85 @@ static Task TestModelProviderSynchronization()
     return Task.CompletedTask;
 }
 
+static Task TestLauncherSettingsAndWorkspaces()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var runtime = Path.Combine(temporary.Path, "runtime");
+    Directory.CreateDirectory(runtime);
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var first = registry.Register("全局同步 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var second = registry.Register("全局同步 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var settings = new VersionSettingsService(new LauncherPaths(launcherRoot));
+    settings.Save(first, new VersionSettingsData { SyncModelProviders = false });
+    settings.Save(second, new VersionSettingsData { SyncModelProviders = false });
+
+    Assert(!settings.ShouldSyncConversations(first, second), "独立模式下默认不应同步对话。");
+    var launcherSettings = settings.ReadLauncherSettings();
+    launcherSettings.SyncAllConfiguration = true;
+    launcherSettings.DshInstallDirectory = Path.Combine(temporary.Path, "managed-dsh");
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(settings.ReadLauncherSettings().DshInstallDirectory
+            == Path.GetFullPath(Path.Combine(temporary.Path, "managed-dsh")),
+        "Launcher 设置应持久化 DSh 自定义安装位置。");
+    Assert(settings.ShouldSyncConfiguration(first, second), "全局“和所有版本配置同步”开启后任意版本对应同步配置。");
+    Assert(settings.ShouldSyncConversations(first, second), "全局开关应覆盖各版本自己的独立模式。");
+    Assert(!settings.ShouldSyncModelProviders(first, second), "全局配置开关不能覆盖独立的模型 Provider 同步开关。");
+    launcherSettings.SyncAllConfiguration = false;
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(!settings.ShouldSyncConversations(first, second), "关闭全局开关后应恢复各版本自己的设置。");
+
+    Assert(settings.AddLauncherWorkspace("团队项目") == "团队项目", "添加工作区应返回规范化名称。");
+    settings.AddLauncherWorkspace("团队项目");
+    var names = settings.GetWorkspaceNames(new[] { first, second });
+    Assert(names.Count(name => string.Equals(name, "团队项目", StringComparison.Ordinal)) == 1, "重复添加同一工作区不能产生重复条目。");
+    AssertThrows<ArgumentException>(
+        () => settings.AddLauncherWorkspace("   "),
+        "空白工作区名称必须被拒绝。");
+
+    settings.Save(second, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Workspace,
+        ConversationWorkspace = "版本工作区"
+    });
+    names = settings.GetWorkspaceNames(new[] { first, second });
+    Assert(names.Any(name => string.Equals(name, "版本工作区", StringComparison.Ordinal)), "版本使用中的工作区仍应出现在列表里。");
+    Assert(names.Any(name => string.Equals(name, "团队项目", StringComparison.Ordinal)), "Launcher 级工作区应与版本工作区合并显示。");
+
+    var renamedVersions = settings.RenameLauncherWorkspace(new[] { first, second }, "版本工作区", "重命名工作区");
+    Assert(renamedVersions == 1, "重命名工作区应更新使用它的版本。 ");
+    Assert(settings.Read(second).ConversationWorkspace == "重命名工作区", "版本设置应跟随工作区重命名。 ");
+    Assert(!settings.GetWorkspaceNames(new[] { first, second }).Contains("版本工作区", StringComparer.Ordinal),
+        "重命名后不应保留旧工作区名称。 ");
+    AssertThrows<InvalidOperationException>(
+        () => settings.RenameLauncherWorkspace(new[] { first, second }, "重命名工作区", "团队项目"),
+        "工作区不能重命名为已存在的名称。 ");
+    var detachedVersions = settings.DeleteLauncherWorkspace(new[] { first, second }, "重命名工作区");
+    var detachedSettings = settings.Read(second);
+    Assert(detachedVersions == 1
+        && detachedSettings.ConversationSyncMode == ConversationSyncMode.Independent
+        && detachedSettings.ConversationWorkspace is null,
+        "删除工作区应把成员版本切回完全独立，但不删除版本。 ");
+
+    // Provider 同步已开启但没有任何版本带 llm 配置时，必须显式报告“无配置来源”，
+    // 而不是让开关看起来毫无作用。
+    launcherSettings.SyncAllConfiguration = false;
+    settings.SaveLauncherSettings(launcherSettings);
+    settings.Save(first, new VersionSettingsData { SyncModelProviders = true });
+    settings.Save(second, new VersionSettingsData { SyncModelProviders = true });
+    var modelService = new ModelService();
+    var sync = new ModelProviderSyncService(settings, modelService, new ProviderStateService());
+    var noConfig = sync.Synchronize(first, new[] { first, second });
+    Assert(noConfig.NoConfigurationSource && noConfig.CopiedVersions == 0,
+        "没有 llm Provider 配置时同步应报告 NoConfigurationSource。");
+
+    modelService.SaveDeepSeekAsync(first, "DEEPSEEK_API_KEY", "https://api.deepseek.com", new[] { "deepseek-chat" }).Wait();
+    var copied = sync.Synchronize(first, new[] { first, second });
+    Assert(!copied.NoConfigurationSource && copied.CopiedVersions >= 1, "存在 llm 配置后同步应真正复制。");
+    Assert(File.Exists(Path.Combine(second.DshHome, "settings.yaml")), "同步应把 Provider 配置写入目标版本。");
+    return Task.CompletedTask;
+}
+
 static Task TestConversationFileManagement()
 {
     using var temporary = new TestDirectory();
@@ -1403,6 +2457,26 @@ static Task TestConversationFileManagement()
     var entries = service.List(instance);
     var session = entries.Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
     Assert(session.HasValidHeader && session.SessionId == "session-1", "应读取 JSONL 首行会话头部。");
+    var projectionCacheDirectory = Path.Combine(home, "storages");
+    Directory.CreateDirectory(projectionCacheDirectory);
+    File.WriteAllText(
+        Path.Combine(projectionCacheDirectory, "session_projcache.json"),
+        "{\"tables\":{\"sessions\":{\"session-1\":{\"rows\":{\"title\":{\"val\":\"测试标题\"}}}}}}",
+        new UTF8Encoding(false));
+    var titled = service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(sourcePath));
+    Assert(titled.DisplayName == "测试标题", "应优先显示 DSh session 投影缓存中的标题。");
+    Assert(service.List(instance).Single(entry => entry.FullPath == Path.GetFullPath(compressedPath)).DisplayName.Contains("demo"), "无标题会话应回退到工作目录名称。");
+    Assert(service.List(instance).All(entry => entry.InstanceName == instance.Name),
+        "对话列表应显示对应实例名称，不把内部工作目录当作归属信息。");
+    File.WriteAllText(
+        Path.Combine(projectionCacheDirectory, "session_projcache.json"),
+        "{\"tables\":[\"unexpected\"],\"sessions\":{\"session-1\":\"bad\"}}",
+        new UTF8Encoding(false));
+    var corruptedCacheEntries = service.List(instance);
+    Assert(corruptedCacheEntries.Any(entry => entry.FullPath == Path.GetFullPath(sourcePath) && entry.HasValidHeader),
+        "标题缓存结构损坏（意外值类型）时不能中断会话列表。");
+    Assert(corruptedCacheEntries.Single(entry => entry.FullPath == Path.GetFullPath(sourcePath)).DisplayName.Contains("未命名"),
+        "标题缓存损坏时会话应回退为未命名显示。");
     var compressedSession = entries.Single(entry => entry.FullPath == Path.GetFullPath(compressedPath));
     Assert(compressedSession.IsCompressed && compressedSession.HasValidHeader && compressedSession.SessionId == "session-2", "应解压压缩会话的首个 Zstandard frame 并读取会话头部。");
     Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(invalidCompressedPath)), "损坏的压缩会话应列出但标记为不可解析。");
@@ -1436,9 +2510,34 @@ static Task TestConversationFileManagement()
     AssertThrows<InvalidOperationException>(() => service.Delete(instance, forged), "会话操作不能通过 FullPath 逃出 sessions 根目录。");
     service.Delete(instance, session);
     Assert(!File.Exists(sourcePath), "删除操作应只删除明确选中的 session 文件。");
+    var listedBackup = service.ListBackups(instance).Single(entry =>
+        string.Equals(entry.FullPath, backup, StringComparison.OrdinalIgnoreCase));
+    Assert(listedBackup.HasValidHeader && listedBackup.SessionId == "session-1", "备份列表应读取会话名称和 header。 ");
+    Assert(listedBackup.InstanceName == instance.Name,
+        "备份列表应显示对应实例名称，不把会话工作目录暴露为归属信息。");
+    var restoredPath = service.RestoreBackup(instance, listedBackup);
+    Assert(File.Exists(restoredPath)
+        && service.List(instance).Any(entry => entry.SessionId == "session-1"),
+        "选中备份应能恢复回当前实例的 sessions 目录。 ");
+    AssertThrows<IOException>(
+        () => service.RestoreBackup(instance, listedBackup),
+        "恢复备份不能覆盖已经存在的同 ID 会话。 ");
 
     var guarded = new ConversationService(isRunning: _ => true);
     AssertThrows<InvalidOperationException>(() => guarded.Export(importedInstance, entries[0], Path.Combine(temporary.Path, "blocked.jsonl")), "实例运行时不能导出可能正在写入的会话快照。");
+
+    // 导入时可指定目标工作区来决定 sessions 落位目录，同时保留原始会话内容。
+    var overriddenHome = Path.Combine(temporary.Path, "overridden-home");
+    Directory.CreateDirectory(overriddenHome);
+    var overriddenInstance = CreateTestInstance("conversation-override", root, overriddenHome);
+    var overriddenPath = service.Import(
+        overriddenInstance,
+        exportPath,
+        "C:\\Users\\demo\\Projects\\skill-lab");
+    Assert(overriddenPath.Contains("--C-Users-demo-Projects-skill-lab--", StringComparison.Ordinal),
+        "指定工作区导入必须落到该工作区的 sessions 目录。");
+    Assert(File.ReadAllBytes(overriddenPath).SequenceEqual(File.ReadAllBytes(exportPath)),
+        "按工作区导入不能改写原始会话内容。");
     return Task.CompletedTask;
 }
 
@@ -1451,7 +2550,7 @@ static Task TestConversationSynchronization()
     var first = registry.Register("工作区 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var second = registry.Register("工作区 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var independent = registry.Register("独立版本", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
-    var settings = new VersionSettingsService();
+    var settings = new VersionSettingsService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
     settings.Save(first, new VersionSettingsData
     {
         ConversationSyncMode = ConversationSyncMode.Workspace,
@@ -1631,4 +2730,74 @@ file sealed class ProviderTestHandler : HttpMessageHandler
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         Task.FromResult(_handler(request));
+}
+
+file sealed class AsyncTestHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _handler;
+
+    public AsyncTestHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
+    {
+        _handler = handler;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        _handler(request, cancellationToken);
+}
+
+file sealed class NodeTestHandler : HttpMessageHandler
+{
+    private readonly Func<HttpResponseMessage> _factory;
+
+    public NodeTestHandler(Func<HttpResponseMessage> factory)
+    {
+        _factory = factory;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        Task.FromResult(_factory());
+}
+
+file sealed class NodeProgressSink : IProgress<NodeDownloadProgress>
+{
+    public NodeDownloadProgress Last { get; private set; } = new(0, null, null);
+
+    public void Report(NodeDownloadProgress value) => Last = value;
+}
+
+file sealed class SlowCancelStream : Stream
+{
+    private readonly byte[] _payload;
+    private bool _started;
+
+    public SlowCancelStream(byte[] payload)
+    {
+        _payload = payload;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        if (!_started)
+        {
+            _started = true;
+            var count = Math.Min(buffer.Length, _payload.Length);
+            _payload.AsMemory(0, count).CopyTo(buffer);
+            return count;
+        }
+
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        return 0;
+    }
+
+    public override void Flush() { }
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) { }
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

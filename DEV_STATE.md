@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-收口长期分支 `agent/harden-node-detection`：把 `origin/main`（早期 README 提交）合并进当前分支，更新 README 与维护文档，验证完整 Launcher，并将 PR #1 合并到 `main`。本轮不开发新功能。
+当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.1.11`。Agent/Skill 市场性能优化已完成：缓存解析离开 UI 线程，搜索增加防抖，刷新时减少重复快照计算和列表重绘。
 
 ## 已完成内容
 
@@ -10,39 +10,55 @@
 - 主窗口采用 PCL2 参考的信息层级：启动、扩展、Agent、对话和设置在主窗口内切换；Chat WebView2 为无 Owner 的独立窗口，使用黑色 DeepSeek 图标。
 - 支持 installed/source DSh 实例、独立端口、健康检查、停止/重启、跨 Runner 互斥锁，以及 `Managed` / `Attached` 运行态。Attached 实例可打开 Web UI，但不会被 Stop/Restart 或退出清理误杀。
 - 每个版本使用独立 `DSH_HOME` 和 `DSH_AGENTS_HOME`。实例级 Plugin、Skill、MCP、Provider 状态、Agent Preset、Settings 和 Conversation 文件均以该目录为边界；对话和模型 Provider 支持 Independent、Workspace、All/全配置同步策略。运行中的版本不会被同步写入。
+- 设置/诊断页可选择任意版本并编辑与“版本设置 → 配置”相同的同步选项；工作区管理支持显示成员、添加、重命名和删除。删除工作区只解除成员版本的同步关系并切回 Independent，不删除版本或对话文件。
 - Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、进度反馈和完成后刷新。
-- 版本控制支持复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。整合包会清理 API Key、Token、密码、环境变量值和 sessions；导入始终创建新版本。版本设置页不能修改版本名称，名称只由版本控制维护。
+- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter 及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`；扩展和 Agent 页在存在多个版本时可直接切换当前实例。
+- 全局 ComboBox 的点击层使用不绘制悬停背景的专用模板，鼠标移入时只改变外框颜色，不再覆盖选中文字和箭头；可编辑 ComboBox 的内部文本框显式清除重复 Padding，工作区名称不再被垂直裁切。
+- 版本控制支持复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。整合包会清理 API Key、Token、密码、环境变量值和 sessions，并不导出 Provider 配置；导入始终创建新版本。版本设置个性化页可以修改版本名称并更新实例注册记录。
 - Provider 启动页支持启用/禁用、`/models` 只读诊断、模型列表/思考档位显示和问题说明；模型设置只保存环境变量名，不保存 API Key 明文。
-- 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。
-- `v0.1.9` 已构建、推送并发布；Release 资产和本地发布文件的 SHA-256 已核对一致。
-- 本轮把 `origin/main`（`d5cfa78`，早期 README 更新）合并进 `agent/harden-node-detection`：仅 README.md 一处冲突，已按 v0.1.9 真实状态重写并解决；其余文件自动合并。
-
-## 已暂存（未并入本轮 PR，保留在 stash@{0}）
-
-- 对话列表显示会话名称（读取 DSh 投影缓存标题，不再显示原始 session ID）。
-- 扩展/插件市场页卡顿修复（后台扫描 + 列表虚拟化 + 打开页面不再每次联网）。
-- 运行环境一键准备（NodeInstallService 下载/安装 Node、一键准备按钮、启动前环境拦截、检测器补 Program Files 路径）。
+- `v0.1.9` 已构建、推送并发布；PR #1 已合并到 `main`（merge commit `1eb5f65`）。
+- 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。对话列表优先显示会话名称：读取 DSh `storages/session_projcache.json` 的标题，无标题时回退为“未命名 · 项目 · 时间”，不再把原始 session ID 作为首列。导入时可选择目标版本和 sessions 工作区落位，并保留原始会话内容。
+- 对话文件和备份列表的归属列显示对应实例名称，不再显示会话 header 中的工作目录路径；底层仍保留该字段用于会话解析和恢复。
+- 对话页新增“备份与恢复”列表，可选择当前实例的有效备份恢复；已有相同会话 ID 时拒绝覆盖，恢复后按当前会话策略同步。
+- 插件市场的分类保留在主浏览行，“排序”和“来源”改为带独立文字标签的次级筛选，默认项显示为“综合排序 / 全部来源”。
+- 扩展页卡顿修复：已安装插件扫描和插件市场安装状态/主题扫描移到后台线程；已安装列表与市场列表启用虚拟化（Recycling）。打开“扩展”页只读取本地市场缓存，不再每次联网刷新目录；仅在首次无缓存或用户点击“刷新目录”时才联网。缓存载入只按 identity 索引合并一次，搜索、分类和排序不再重复合并；虚拟化列表滚轮改为逐条滚动。
+- 一键运行环境准备：设置/诊断页显示 Node/DSh 状态，缺失时提供“准备运行环境（官方源 / 国内镜像）”按钮。Node 缺失时通过 NodeInstallService 下载 Windows x64 Node.js 官方 MSI 并显示真实字节/百分比进度，经系统授权（msiexec /qn）安装后重新运行 NodeRuntimeDetector，无需重启 Launcher；Node 就绪但 DSh 缺失时复用 DshInstallService 通过 npm 安装 `@deepseek-ai/dsh`（不确定进度），安装后重新运行 DshRuntimeDetector。Node 版本不兼容时只提示安装兼容版本，不自动卸载。启动实例时若运行环境缺失会弹出缺失项并询问是否准备，准备成功后继续原启动流程。Launcher 启动时不静默下载或安装任何内容。Node 检测覆盖 `<ProgramFiles>\nodejs`（官方 MSI 默认位置）。
+- 首次运行引导：实例列表成功读取且为空时，在 Node/DSh 检测结束后自动弹出引导，但不会未经确认下载。引导允许选择官方源或 npmmirror、设置 DSh 安装位置；准备成功后创建带独立 `DSH_HOME` 的首个干净版本并继续启动。取消后主启动按钮显示“准备首个版本”，可再次打开引导；实例注册读取失败时不会误当成首次运行。
+- DSh 默认 Plugin 保护：`@deepseek-ai/dsh-base` 与 `@deepseek-ai/dsh-web-app` 保留在已安装列表中，但扩展页操作按钮禁用；`ExtensionService` 同时拒绝对它们执行安装、启用、禁用、更新和删除，包含带 npm 版本后缀的 spec。
+- runtime bootstrap 边界修复：Node 下载阶段可取消并清理 `.part` 临时文件，关闭进度窗口等价于取消下载；MSI 安装开始后禁用取消按钮、阻止通过窗口 X 关闭进度窗口并阻止主窗口关闭（流程结束恢复后自动解除）、不强制终止 Windows Installer，安装结束后删除下载的 MSI，用户取消与真实 10 分钟超时用独立结果状态区分。DSh 重新安装并检测成功后，绑定失效的 Installed 实例经 `InstanceRuntimeRebinder` 重绑定到重新检测到的 package root / executable / version，保留实例 Id 与 DSH_HOME、不创建新实例、不修改 Source 实例；运行中或 Attached 实例不参与重绑定。Node 兼容判断以 metadata 为准：Installed 实例优先读取自身 package root 的 `engines.node`，有效但未声明时保持未声明，仅当其 runtime 失效且重装/重绑定时才使用重新检测到的 DSh metadata；Source 实例只读取自身项目 metadata，未声明时保持未声明，不继承全局 installed DSh 的版本要求；未选择实例的诊断场景使用全局 DSh engine。手动安装提示按实际 `engines.node` 要求给出；对话触发的自动启动同样先经过 runtime 准备；准备期间目标实例被删除则中止启动；会话标题缓存路径包含重解析点组件或 ACL 拒绝读取属性时拒绝/放弃读取，缓存结构损坏（意外值类型）时按无标题处理、不中断会话列表。MSI 提权安装前验证 Authenticode 签名链与 Node.js 官方发布者（OpenJS/Node.js Foundation/Joyent），验证失败不执行安装；msiexec 超时后仍可能在后台运行，MSI 清理推迟到进程真正退出，且残留安装进程结束前拒绝再次启动 Node 安装；版本索引返回形状错误的合法 JSON 时走固定版本兜底。实例 package 运行目录已删除但入口 shim 仍在时同样视为缺失并进入一键修复，准备完成时自动重绑定自愈；DSh 安装/更新后按最新 engines.node 复查 Node 兼容性，不兼容时报失败且不自动卸载，设置页就绪判定包含该兼容性。Restart 在停止完成后与 Start 使用相同语义：先 runtime readiness（可能触发一键准备）、再按最初目标实例 ID 重解析。Start/Stop/Restart/对话自动启动在 handler 入口占用 `LifecycleBusyGuard` 串行化 guard 并持有到状态更新结束，只有占用者释放；runtime 准备进行中 Stop/Restart 按钮不可用且入口拒绝。MSI 安装后把新检测到的 Node 目录补入当前进程 PATH，DSh 检测/启动可解析 node；设置/诊断页准备按钮面向全局运行环境（不传实例目标），Node 检测进行中禁止启动与一键准备，后台检测结束后自动恢复准备按钮；版本索引不可用且固定兜底版本不满足目标 engine 时停止安装并提示，不装出与 engine 不兼容的 Node；每次安装调用使用唯一 MSI 文件名避免并发干扰。
 
 ## 当前主要相关文件
 
-- `src/DshLauncher/MainWindow.xaml(.cs)`：主窗口导航、启动页、Provider、实例生命周期和内嵌页面切换。
-- `src/DshLauncher/Services/DshInstanceRunner.cs`、`NodeRuntimeDetector.cs`、`DshRuntimeDetector.cs`：DSh/Node 检测和 Managed/Attached 生命周期。
+- `src/DshLauncher/MainWindow.xaml(.cs)`：主窗口导航、启动页、Provider、实例生命周期、运行环境准备与内嵌页面切换。
+- `src/DshLauncher/Services/NodeInstallService.cs`、`RuntimeProgressWindow.cs`：Node 下载（真实进度）、系统安装与准备进度窗口。
+- `src/DshLauncher/Services/DshInstallService.cs`、`DshRuntimeDetector.cs`、`NodeRuntimeDetector.cs`：DSh/Node 检测与 npm 安装。
 - `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`：Plugin、Skill、MCP、Agent Preset 和市场入口。
 - `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`：市场缓存、来源合并、搜索、排序、校验和安装状态。
-- `src/DshLauncher/Services/VersionPackageService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`：版本复制、删除、设置和 `.dshpack`。
+- `src/DshLauncher/Services/SkillMarketService.cs`、`Models/SkillMarketModels.cs`：Skill 市场缓存、GitHub 发现、SKILL.md 校验和实例导入。
+- `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionPackageService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`：版本同步策略、工作区管理、版本复制/删除、设置和 `.dshpack`。
 - `src/DshLauncher/Services/ModelService.cs`、`ModelProviderSyncService.cs`、`ProviderStateService.cs`：Provider 配置、同步和启用状态。
 - `src/DshLauncher/Services/ConversationService.cs`、`ConversationSyncService.cs`、`ConversationWindow.xaml(.cs)`：会话文件管理、打开入口和同步策略。
-- `src/DshLauncher/Services/DshMarketThemeService.cs`：dsh-market loopback 主题状态和应用桥接；不修改 DSh Web UI。
 - `tests/DshLauncher.SelfTest/Program.cs`：当前最小自测入口。
 - `CURRENT_DESIGN.md`：当前有效设计约束。
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `agent/harden-node-detection`，已合并 `origin/main`；合并提交尚未创建。
-- 合并后 `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：26/26 通过。
-- 合并后 Release 单文件自包含发布：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `7220D23C8DA300AFBC22AC201CF13AA34DE2FBC2B0B5F8782F33A3BA047E645B`。
+- 当前 Git 分支为 `feature/runtime-bootstrap`；本地 `artifacts/` 与 `src/DshLauncher/artifacts/` 是未跟踪诊断/构建目录，不纳入源码提交或 Release。
+- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：46/46 通过；WPF XAML 编译通过，对话与备份条目新增实例名称断言；既有首次运行、默认 Plugin 保护、Skill 市场、工作区和对话恢复测试继续通过。
+- Agent/Skill 市场性能修复后再次运行同一自测：46/46 通过；实际缓存包含 234 个 Skill（约 130 KB），冷读取约 31 ms，现已移到后台线程。
+- 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-agent-performance-final-20260816-2300`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
+- `v0.1.11` 版本号更新后再次运行自测：46/46 通过；Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-v0.1.11-20260816-2305`，确认 13 个文件。
+- `v0.1.11` Release 单文件自包含 publish：0 errors；`DSH Launcher.exe` 72,362,930 字节，文件版本 `0.1.11.0`，SHA-256 `A451CE524904BFCCB4E0F68F99E255165BBDED244584429310FA3D7020D828D2`。已复制到桌面顶层 `DSH Launcher.exe` 和 `release-v0.1.11-20260816-2305`；因桌面已有用户启动的测试版进程，本轮未强行关闭它执行独立冒烟。
+- `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
+- 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-first-run-plugin-20260816`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
+- 对话实例名称显示测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-conversation-instance-20260816`，确认 `DSH Launcher.exe` 存在。
+- 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-combobox-hover-20260816-220500`，确认 `DSH Launcher.exe` 存在，共 12 个文件。
+- `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
+- 真实 1035 项本地市场缓存只读复测：`ReadCached` 从修复前约 5.9 秒降至 85 ms；包含兼容性合并入口的 UI 分类筛选为 8 ms（176 项）。
+- Release 单文件自包含 publish（README 规范参数）：0 errors；`DSH Launcher.exe` 72,362,321 字节，SHA-256 `1C2D2AECBA6CBD3DD1E33C553FF4E1F9BB3405F934BA2186A96EF52C7022F56A`。已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\DSH Launcher.exe` 和 `release-v0.1.10-20260816` 并确认存在；因桌面已有用户运行的 Launcher 进程，本轮未强行关闭它执行独立冒烟。
+- 该发布文件在 Windows 中约为 69 MiB；体积来自压缩后的 .NET 8 自包含运行时、WPF、WebView2 和 Zstandard 依赖，不是内置 Node.js 或 DSh。
+- 崩溃取证：`%LOCALAPPDATA%\CrashDumps\DSH Launcher.exe.35640.dmp`（17:01:29）经 dotnet-dump 分析为 `RefreshProvidersAsync` 入口 ObjectDisposedException → `Window_OnLoaded` async void 未捕获。
 - `git diff --check`：通过。
-- GitHub：PR #1 待更新标题/描述并从 Draft 转为 Ready；随后合并到 `main`。
 
 ## 已知问题
 
@@ -54,23 +70,28 @@
 - 主题当前是市场资源、文字信息预览和 dsh-market 应用桥接，尚未建立视觉预览图或 Wallpaper 资源格式，也未在用户真实实例上做主题视觉验收。
 - GitHub Topic 发现仍未做分页加载；真实 Plugin CLI 失败回滚和启动冲突检查仍缺少更多异常边界覆盖。
 - 官方已安装 DSh 的 package metadata 当前未声明 `engines.node` 时，Node 兼容性只能显示“未声明/Unknown”，不会凭空套用固定版本限制。
-- `src/DshLauncher/artifacts/` 是未跟踪的本地构建产物目录，未纳入源码提交和 Release。
+- 一键运行环境准备的端到端链路（真实无 Node 机器上：下载、UAC 授权、msiexec 安装、自动重检测）仍需实机人工验证。
+- 空实例首次运行引导已通过代码测试，但官方源/国内镜像选择、DSh 自定义位置、自动创建并启动首个版本仍需人工走完整安装流程。
+- Skill 市场当前只取 GitHub 搜索前 30 个名称含 `skill` 的仓库；没有聚合社区 catalog，也没有分页。
+- 根目录 `artifacts/` 和 `src/DshLauncher/artifacts/` 是未跟踪的本地诊断/构建目录，未纳入源码提交和 Release。
 
 ## 尚未完成内容
 
+- 本轮新增设置、工作区、备份恢复、市场筛选及首次运行引导的实机 UI 验收。
+- 一键运行环境准备的实机端到端验证与后续打磨。
 - 官方 Session deep link。
 - 完整 MCP Manager 状态/认证/工具发现整合。
 - 主题视觉预览、Wallpaper 资源格式和用户真实实例视觉验收。
 - GitHub Topic 分页、更多 Plugin 失败回滚异常和启动冲突检查。
 - 多个运行中 DSh 的实时会话共享写入。
-- 对话名称显示、扩展页卡顿修复与运行环境一键准备（已 stash 保留，留待后续分支）。
 
 ## 已尝试但已放弃的方案
 
 - 不再把扩展、Agent 和对话作为管理弹窗；它们统一在主窗口右侧切换，只有 Chat WebView2 保持独立窗口。
 - 不再把 GitHub topic 候选直接视为可安装 Plugin；现在必须先读取 package.json、检查 DSh bundle 和入口，再调用官方 CLI。
 - 不再硬编码 Node.js 版本兼容规则；现在优先读取 DSh 或 Source 的 package metadata，缺失时保留 Unknown/未声明状态。
+- 一键运行环境准备不建立 RuntimeManager/InstallerProvider 等大型抽象框架；仅新增 NodeInstallService 并复用 DshInstallService。
 
 ## 下一步最直接的任务
 
-合并 PR #1 到 `main` 并验证 `main`；随后从最新 `main` 新建 `feature/runtime-bootstrap`，恢复 `stash@{0}` 继续运行环境一键准备。
+人工验收 Agent 页缓存首屏、连续输入搜索、分类切换、列表滚动和刷新期间的响应；随后继续首次运行环境准备的真实无 Node/DSh 安装链路验收。

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.IO;
+using System.Globalization;
 using DshLauncher.Models;
 using ZstdSharp;
 
@@ -36,7 +37,8 @@ public sealed class ConversationService
         }
 
         var result = new List<ConversationEntry>();
-        Walk(root, root, result);
+        var titles = ReadSessionTitles(instance);
+        Walk(root, root, result, titles, instance.Name);
         return result
             .OrderByDescending(entry => entry.UpdatedAt)
             .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
@@ -61,6 +63,99 @@ public sealed class ConversationService
 
         File.Copy(source, destination, overwrite: false);
         return destination;
+    }
+
+    public IReadOnlyList<ConversationBackupEntry> ListBackups(ManagerInstance instance)
+    {
+        var root = Path.GetFullPath(_paths.GetInstanceBackupDirectory(instance.Id));
+        if (!Directory.Exists(root) || IsReparsePoint(root))
+        {
+            return Array.Empty<ConversationBackupEntry>();
+        }
+
+        var titles = ReadSessionTitles(instance);
+        var result = new List<ConversationBackupEntry>();
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (IsReparsePoint(path) || !IsSessionFileName(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var info = new FileInfo(path);
+                    var header = ReadHeader(path);
+                    var backedUpAt = ReadBackupTimestamp(info);
+                    result.Add(new ConversationBackupEntry(
+                        info.Name,
+                        info.FullName,
+                        header?.SessionId,
+                        header?.WorkingDirectory,
+                        backedUpAt,
+                        info.Length,
+                        info.Name.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase),
+                        header is not null,
+                        header?.SessionId is null
+                            ? "无法读取的备份"
+                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, backedUpAt),
+                        instance.Name));
+                }
+                catch (IOException)
+                {
+                    // 备份可能在刷新期间被其它 Launcher 操作移走。
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // 单个不可读备份不阻断整个列表。
+                }
+            }
+        }
+        catch (IOException)
+        {
+            return Array.Empty<ConversationBackupEntry>();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Array.Empty<ConversationBackupEntry>();
+        }
+
+        return result
+            .OrderByDescending(entry => entry.BackedUpAt)
+            .ThenBy(entry => entry.FileName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public string RestoreBackup(ManagerInstance instance, ConversationBackupEntry backup)
+    {
+        EnsureStopped(instance);
+        ArgumentNullException.ThrowIfNull(backup);
+        var root = Path.GetFullPath(_paths.GetInstanceBackupDirectory(instance.Id));
+        var source = Path.GetFullPath(backup.FullPath);
+        EnsureBackupPathDoesNotEscape(source, root);
+        EnsureNoReparseComponents(source, root);
+        if (!File.Exists(source) || IsReparsePoint(source))
+        {
+            throw new FileNotFoundException("选中的对话备份不存在，或是符号链接。", source);
+        }
+
+        if (!IsSessionFileName(source))
+        {
+            throw new InvalidDataException("只能恢复 DSh session.jsonl 或 session.jsonl.zstd 备份。");
+        }
+
+        if (ReadHeader(source) is null)
+        {
+            throw new InvalidDataException("备份不是可识别的 DSh session 文件，不能恢复。");
+        }
+
+        var restored = Import(instance, source);
+        // 恢复代表重新创建会话。使用当前时间可让同步服务识别它晚于旧删除标记，
+        // 从而在下一次同步时清除该标记，而不是把刚恢复的文件再次删除。
+        File.SetLastWriteTimeUtc(restored, DateTime.UtcNow);
+        return restored;
     }
 
     public string Export(ManagerInstance instance, ConversationEntry entry, string destinationPath)
@@ -90,7 +185,7 @@ public sealed class ConversationService
         return destination;
     }
 
-    public string Import(ManagerInstance instance, string sourcePath)
+    public string Import(ManagerInstance instance, string sourcePath, string? workingDirectoryOverride = null)
     {
         EnsureStopped(instance);
         if (string.IsNullOrWhiteSpace(sourcePath))
@@ -117,7 +212,11 @@ public sealed class ConversationService
         }
 
         var sessionsRoot = GetSessionsRoot(instance);
-        var projectDirectory = ProjectDirectory(sessionsRoot, header.WorkingDirectory);
+        // 导入时可覆盖文件自带的工作目录，把会话放进目标版本指定的 workspace。
+        var effectiveWorkingDirectory = !string.IsNullOrWhiteSpace(workingDirectoryOverride)
+            ? workingDirectoryOverride.Trim()
+            : header.WorkingDirectory;
+        var projectDirectory = ProjectDirectory(sessionsRoot, effectiveWorkingDirectory);
         var sessionDirectory = Path.Combine(projectDirectory, EncodeSegment(header.SessionId));
         var target = Path.Combine(sessionDirectory, compressed ? "session.jsonl.zstd" : "session.jsonl");
         EnsurePathDoesNotEscape(target, sessionsRoot);
@@ -152,7 +251,12 @@ public sealed class ConversationService
         File.Delete(source);
     }
 
-    private void Walk(string directory, string root, ICollection<ConversationEntry> result)
+    private void Walk(
+        string directory,
+        string root,
+        ICollection<ConversationEntry> result,
+        IReadOnlyDictionary<string, string?> titles,
+        string instanceName)
     {
         try
         {
@@ -165,7 +269,7 @@ public sealed class ConversationService
 
                 if (Directory.Exists(entry))
                 {
-                    Walk(entry, root, result);
+                    Walk(entry, root, result, titles, instanceName);
                     continue;
                 }
 
@@ -180,15 +284,20 @@ public sealed class ConversationService
                 {
                     var info = new FileInfo(entry);
                     var header = ReadHeader(entry);
+                    var updatedAt = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
                     result.Add(new ConversationEntry(
                         Path.GetRelativePath(root, entry),
                         Path.GetFullPath(entry),
                         header?.SessionId,
                         header?.WorkingDirectory,
-                        new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
+                        updatedAt,
                         info.Length,
                         fileName.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase),
-                        header is not null));
+                        header is not null,
+                        header?.SessionId is null
+                            ? "无法读取会话"
+                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, updatedAt),
+                        instanceName));
                 }
                 catch (IOException)
                 {
@@ -210,6 +319,125 @@ public sealed class ConversationService
         }
     }
 
+
+    private const string SessionTitleCacheFileName = "session_projcache.json";
+
+    private static IReadOnlyDictionary<string, string?> ReadSessionTitles(ManagerInstance instance)
+    {
+        var path = Path.Combine(instance.DshHome, "storages", SessionTitleCacheFileName);
+        try
+        {
+            EnsureNoReparseComponents(path, instance.DshHome);
+        }
+        catch (IOException)
+        {
+            // 标题缓存路径经过符号链接/重解析点时拒绝读取，避免混入其它实例的元数据。
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // ACL 拒绝读取路径属性时同样放弃标题缓存；它只是可选增强，
+            // 不能让整个会话列表随可选标题一起失败。
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+
+        if (!File.Exists(path) || IsReparsePoint(path))
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+            // 标题缓存损坏或 schema 变化时可能持有意外类型；标题只是可选
+            // 增强信息，逐层校验 ValueKind，不让格式异常中断整个会话列表。
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("tables", out var tables)
+                || tables.ValueKind != JsonValueKind.Object
+                || !tables.TryGetProperty("sessions", out var sessions)
+                || sessions.ValueKind != JsonValueKind.Object)
+            {
+                return new Dictionary<string, string?>(StringComparer.Ordinal);
+            }
+
+            var result = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var session in sessions.EnumerateObject())
+            {
+                if (session.Value.ValueKind != JsonValueKind.Object
+                    || !session.Value.TryGetProperty("rows", out var rows)
+                    || rows.ValueKind != JsonValueKind.Object
+                    || !rows.TryGetProperty("title", out var titleRow)
+                    || titleRow.ValueKind != JsonValueKind.Object
+                    || !titleRow.TryGetProperty("val", out var titleValue))
+                {
+                    continue;
+                }
+
+                result[session.Name] = titleValue.ValueKind == JsonValueKind.String
+                    ? titleValue.GetString()
+                    : null;
+            }
+
+            return result;
+        }
+        catch (IOException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, string?>(StringComparer.Ordinal);
+        }
+    }
+
+    private static string BuildDisplayName(
+        IReadOnlyDictionary<string, string?> titles,
+        string sessionId,
+        string? workingDirectory,
+        DateTimeOffset updatedAt)
+    {
+        if (titles.TryGetValue(sessionId, out var title) && !string.IsNullOrWhiteSpace(title))
+        {
+            var normalized = string.Join(" ", title!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return normalized.Length <= 120 ? normalized : normalized[..120];
+        }
+
+        var project = string.IsNullOrWhiteSpace(workingDirectory)
+            ? null
+            : Path.GetFileName(workingDirectory!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var when = updatedAt.ToLocalTime().ToString("MM-dd HH:mm");
+        return string.IsNullOrEmpty(project)
+            ? $"未命名 · {when}"
+            : $"未命名 · {project} · {when}";
+    }
+
+    private static DateTimeOffset ReadBackupTimestamp(FileInfo info)
+    {
+        var prefix = info.Name.Length >= 15 ? info.Name[..15] : string.Empty;
+        if (DateTime.TryParseExact(
+                prefix,
+                "yyyyMMdd-HHmmss",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeLocal,
+                out var parsed))
+        {
+            return new DateTimeOffset(parsed);
+        }
+
+        return new DateTimeOffset(info.CreationTimeUtc, TimeSpan.Zero);
+    }
+
+    private static bool IsSessionFileName(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        return fileName.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase);
+    }
     private string ValidateEntry(ManagerInstance instance, ConversationEntry entry)
     {
         var root = GetSessionsRoot(instance);
@@ -503,6 +731,16 @@ public sealed class ConversationService
             && !normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("会话文件不在当前实例 sessions 目录内。");
+        }
+    }
+
+    private static void EnsureBackupPathDoesNotEscape(string path, string root)
+    {
+        var normalizedPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("选中的文件不在当前实例的对话备份目录内。");
         }
     }
 
