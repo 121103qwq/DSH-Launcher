@@ -34,10 +34,10 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `feature/runtime-bootstrap`，最新提交 `cb6f712`（单实例守护 + 关闭竞态崩溃修复 + Provider 区隐藏），已推送 origin。
-- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：41/41 通过。
+- 当前 Git：分支 `feature/runtime-bootstrap`，最新提交 `133c465`（设置页新增全局“和所有版本配置同步”+ 添加工作区；Provider 同步无配置来源时显式提示），已推送 origin。
+- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：42/42 通过（新增 Launcher 设置与工作区测试；既有三处 `VersionSettingsService` 构造改为测试内隔离路径，避免读写真实 launcher-settings.json）。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
-- Release 单文件自包含 publish（README 规范参数）：0 errors；`DSH Launcher.exe` 72,326,467 字节，SHA-256 `91C2F265E0E7868983DDF3678988E73B349C9666282A22C6153108423A2AA555`，已复制到桌面 `DSH Launcher\DSH Launcher.exe`、`VIDEO-CANDIDATE-v0.1.10`、`video-candidate-20260816` 并确认存在；冒烟：60 秒干净目录存活，第二次启动 exit 0 并唤起已有窗口。
+- Release 单文件自包含 publish（README 规范参数）：0 errors；`DSH Launcher.exe` 72,328,385 字节，SHA-256 `EBA7C3B8235071DB36168185A8ED548F6DD889FACE945D68CC5E43243EA2FC3A`，已复制到桌面 `DSH Launcher\DSH Launcher.exe`、`VIDEO-CANDIDATE-v0.1.10`、`video-candidate-20260816` 并确认存在；冒烟：60 秒存活，第二次启动 exit 0 并唤起已有窗口。
 - 崩溃取证：`%LOCALAPPDATA%\CrashDumps\DSH Launcher.exe.35640.dmp`（17:01:29）经 dotnet-dump 分析为 `RefreshProvidersAsync` 入口 ObjectDisposedException → `Window_OnLoaded` async void 未捕获。
 - `git diff --check`：通过。
 
