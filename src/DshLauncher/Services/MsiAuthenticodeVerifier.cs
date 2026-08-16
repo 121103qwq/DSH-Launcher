@@ -1,3 +1,4 @@
+using System.Text;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 
@@ -86,22 +87,95 @@ internal static class MsiAuthenticodeVerifier
         }
     }
 
-    internal static bool IsAllowedNodePublisher(X509Certificate2? certificate)
+    internal static bool IsAllowedNodePublisher(X509Certificate2? certificate) =>
+        HasAllowedNodeOrganization(certificate?.Subject);
+
+    /// <summary>
+    /// 解析证书 Subject 的 DN，要求 Organization（O=）与 Node.js 官方发布者
+    /// 精确相等。不能对整个 Subject 做子串匹配：任意 CA 签出的证书都可能把
+    /// "OpenJS Foundation" 写进 CN/OU 或 O 的后缀里，从而冒充官方发布者。
+    /// </summary>
+    internal static bool HasAllowedNodeOrganization(string? subject)
     {
-        if (certificate is null)
+        if (string.IsNullOrWhiteSpace(subject))
         {
             return false;
         }
 
-        foreach (var publisher in new[] { "OpenJS Foundation", "Node.js Foundation", "Joyent" })
+        foreach (var component in SplitDistinguishedName(subject))
         {
-            if (certificate.Subject.Contains(publisher, StringComparison.OrdinalIgnoreCase))
+            var separator = component.IndexOf('=');
+            if (separator <= 0)
             {
-                return true;
+                continue;
+            }
+
+            var key = component[..separator].Trim();
+            if (!string.Equals(key, "O", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(key, "OID.2.5.4.10", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = component[(separator + 1)..].Trim().Trim('"');
+            foreach (var publisher in AllowedNodePublishers)
+            {
+                if (string.Equals(value, publisher, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    private static readonly string[] AllowedNodePublishers =
+        { "OpenJS Foundation", "Node.js Foundation", "Joyent, Inc.", "Joyent" };
+
+    /// <summary>按 RFC4514 风格拆分 DN：逗号分隔，忽略引号内的逗号与转义。</summary>
+    private static IEnumerable<string> SplitDistinguishedName(string subject)
+    {
+        var current = new StringBuilder();
+        var quoted = false;
+        var escaped = false;
+        foreach (var character in subject)
+        {
+            if (escaped)
+            {
+                current.Append(character);
+                escaped = false;
+                continue;
+            }
+
+            if (character == '\\')
+            {
+                current.Append(character);
+                escaped = true;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                current.Append(character);
+                quoted = !quoted;
+                continue;
+            }
+
+            if (character == ',' && !quoted)
+            {
+                yield return current.ToString();
+                current.Clear();
+                continue;
+            }
+
+            current.Append(character);
+        }
+
+        if (current.Length > 0)
+        {
+            yield return current.ToString();
+        }
     }
 
     [DllImport("wintrust.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]

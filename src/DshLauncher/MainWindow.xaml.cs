@@ -138,7 +138,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ? "选择实例后检测 Provider 的连接、模型列表和思考能力"
         : _isProviderDetectionInProgress
             ? $"正在检测 {SelectedInstance.Name} 的 Provider…"
-            : $"{ProviderCards.Count} 个 Provider · 仅调用只读模型列表接口";
+            : ProviderCards.Count == 0
+                ? "尚未配置 Provider · 可在版本设置的配置页添加"
+                : $"{ProviderCards.Count} 个 Provider · 仅调用只读模型列表接口";
 
     public bool CanRefreshProviders => !_isProviderDetectionInProgress && SelectedInstance is not null;
 
@@ -393,6 +395,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 var instance = storedInstance;
                 if (storedInstance.RuntimeStatus == InstanceRuntimeStatus.Running
+                    && await _instanceRunner.TryAdoptRunningProcessAsync(storedInstance, _windowCancellation.Token))
+                {
+                    // 上次 Launcher 异常退出遗留的受管实例：按记录的 PID/端口收编回
+                    // Managed，Stop/Restart/删除保持可用；只读 Attached 只留给真正
+                    // 由外部启动的服务。
+                    instance = storedInstance with
+                    {
+                        RuntimeOwnership = InstanceRuntimeOwnership.Managed,
+                        LastError = null
+                    };
+                }
+                else if (storedInstance.RuntimeStatus == InstanceRuntimeStatus.Running
                     && await _instanceRunner.TryAttachAsync(storedInstance, _windowCancellation.Token))
                 {
                     instance = storedInstance with
@@ -469,7 +483,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             await SynchronizeModelProvidersAsync(instance, cancellation.Token);
             var states = _providerStateService.Read(instance);
             var providers = _modelService.Read(instance);
-            foreach (var provider in providers)
+            // 启动页只显示实际配置过的 Provider：settings.yaml 没有 llm 段时不
+            // 显示占位默认卡，全新实例显示空状态而不是假列表。
+            foreach (var provider in providers.Where(static item => item.Configured))
             {
                 var isEnabled = !states.TryGetValue(provider.Provider, out var storedEnabled) || storedEnabled;
                 ProviderCards.Add(new ProviderCardViewModel(provider, isEnabled));
@@ -1063,6 +1079,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             var progress = new Progress<NodeDownloadProgress>(progressWindow.SetDownloadProgress);
+            var nodeWasInstalled = false;
 
             if (!_nodeRuntime.IsAvailable)
             {
@@ -1101,6 +1118,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     System.Windows.MessageBox.Show(this, "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
+
+                nodeWasInstalled = true;
             }
 
             // MSI 只更新系统环境，当前 Launcher 进程的 PATH 仍是旧值；
@@ -1110,12 +1129,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             progressWindow.SetInstallPhase(false);
             SetRuntimeInstallPhase(false);
 
+            if (nodeWasInstalled && !_dshRuntime.IsAvailable)
+            {
+                // 启动时缺 Node 会让已有的 dsh shim 无法执行、DSh 检测误报缺失；
+                // Node 就绪后先重新检测 DSh 再决定是否安装，避免无谓重装
+                // （npm 失败时还会把本来已可用的环境误报为准备失败）。
+                await RefreshDshAsync();
+            }
+
             if (DshInstallService.ShouldInstallGlobalDSh(_dshRuntime.IsAvailable, target?.Kind))
             {
+                var usingMirrorRegistry = string.Equals(npmRegistry, DshInstallService.ChinaRegistry, StringComparison.OrdinalIgnoreCase);
                 progressWindow.SetIndeterminate(true);
-                progressWindow.SetStatus(npmRegistry is null
-                    ? "正在通过 npm 官方源安装 DeepSeek Harness…"
-                    : "正在通过 npmmirror 国内镜像安装 DeepSeek Harness…");
+                progressWindow.SetStatus(usingMirrorRegistry
+                    ? "正在通过 npmmirror 国内镜像安装 DeepSeek Harness…"
+                    : "正在通过 npm 官方源安装 DeepSeek Harness…");
                 var dshResult = await _dshInstaller.InstallAsync(_nodeRuntime, npmRegistry, cancellation.Token);
                 if (!dshResult.IsSuccess)
                 {
@@ -1142,10 +1170,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
-            // DSh 刚被安装/更新，或目标实例原绑定的运行目录已失效：把失效的
-            // Installed 实例重绑定到当前检测到的 DSh，准备流程才能自愈“入口在、
-            // 目录没了”的实例；无失效实例时这里是空操作。
-            RebindInstalledInstancesToDetectedDSh();
+            // 重绑定只针对本次用户确认修复的目标实例：Source 只需 Node，不能
+            // 顺手改写其它（例如位于临时断开卷上的）stale Installed 注册。
+            if (target is { Kind: InstanceKind.Installed })
+            {
+                var staleTarget = ResolveInstanceById(Instances, target.Id);
+                var reboundTarget = staleTarget is null
+                    ? null
+                    : InstanceRuntimeRebinder.RebindInstalledInstance(staleTarget, _dshRuntime);
+                if (reboundTarget is not null)
+                {
+                    UpdateInstance(reboundTarget);
+                }
+            }
 
             // 新检测到的 DSh metadata 可能声明与现有 Node 不兼容的 engines.node，
             // 成功提示前必须按最新要求复查，不能沿用准备开始前的结论。
@@ -1354,18 +1391,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return true;
     }
-    private void RebindInstalledInstancesToDetectedDSh()
-    {
-        foreach (var instance in Instances.Where(static item => item.Kind == InstanceKind.Installed).ToArray())
-        {
-            var rebound = InstanceRuntimeRebinder.RebindInstalledInstance(instance, _dshRuntime);
-            if (rebound is not null)
-            {
-                UpdateInstance(rebound);
-            }
-        }
-    }
-
     private void SetNavigationSelection(string section)
     {
         var buttons = new[]

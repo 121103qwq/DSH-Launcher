@@ -101,6 +101,13 @@ public sealed class NodeInstallService
                     "下载的 Node.js 安装程序未通过官方发布者签名验证，已停止安装。请更换下载源或手动安装。");
             }
 
+            // 下载/验证期间用户可能已点取消：进入不可取消的 msiexec 阶段前
+            // 最后检查一次，已取消的请求绝不能启动提权安装。
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return NodeInstallResult.Cancelled("Node.js 下载已取消。");
+            }
+
             onInstallStarted?.Invoke();
             installerRun = await RunInstallerAsync(destination, cancellationToken);
             LingeringInstaller = installerRun.LingeringProcess;

@@ -16,7 +16,6 @@ public partial class ExtensionWindow : UserControl
     private readonly bool _agentOnly;
     private readonly MarketplaceService? _marketplaceService;
     private readonly DshMarketThemeService _themeService = new();
-    private readonly ObservableCollection<MarketplaceItem> MarketplaceItems = new();
     private IReadOnlyList<MarketplaceItem> _marketplaceSnapshot = Array.Empty<MarketplaceItem>();
     private IReadOnlyList<ExtensionEntry> _installedPlugins = Array.Empty<ExtensionEntry>();
     private bool _marketplaceCanMutate;
@@ -58,10 +57,7 @@ public partial class ExtensionWindow : UserControl
             ImportSkillButton.Visibility = Visibility.Collapsed;
             ImportPresetButton.Visibility = Visibility.Collapsed;
         }
-        MarketplaceList.ItemsSource = MarketplaceItems;
     }
-
-    private ObservableCollection<ExtensionEntry> Entries { get; } = new();
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
@@ -88,20 +84,19 @@ public partial class ExtensionWindow : UserControl
         {
             var selectedId = (ExtensionList.SelectedItem as ExtensionEntry)?.Id;
             var entries = await Task.Run(async () => await _service.ListAsync(_instance));
-            entries = (_agentOnly
+            var rendered = (_agentOnly
                     ? entries.Where(entry => entry.Kind is ExtensionKind.Skill or ExtensionKind.Preset or ExtensionKind.Workflow)
                     : entries.Where(entry => entry.Kind is ExtensionKind.Plugin or ExtensionKind.Mcp))
-                .ToArray();
-            Entries.Clear();
-            foreach (var entry in entries) Entries.Add(entry);
-            ExtensionList.ItemsSource = Entries;
+                .ToList();
+            // 整批替换 ItemsSource，避免逐条 Add 触发多次布局。
+            ExtensionList.ItemsSource = rendered;
             if (selectedId is not null)
             {
-                ExtensionList.SelectedItem = Entries.FirstOrDefault(entry => entry.Id == selectedId);
+                ExtensionList.SelectedItem = rendered.FirstOrDefault(entry => entry.Id == selectedId);
             }
             StatusText.Text = _agentOnly
-                ? $"已读取 {Entries.Count} 个 Skill / Agent Preset / Workflow。"
-                : $"已读取 {Entries.Count} 个 Plugin / MCP。";
+                ? $"已读取 {rendered.Count} 个 Skill / Agent Preset / Workflow。"
+                : $"已读取 {rendered.Count} 个 Plugin / MCP。";
             UpdateSelection();
         }
         catch (Exception ex)
@@ -160,7 +155,8 @@ public partial class ExtensionWindow : UserControl
 
         try
         {
-            var cached = _marketplaceService.ReadCached(_instance);
+            // 缓存可达 MB 级 JSON；解析放到后台线程，打开页面不阻塞 UI。
+            var cached = await Task.Run(() => _marketplaceService.ReadCached(_instance));
             if (cached is null)
             {
                 MarketplaceStatusText.Text = "还没有本地缓存；点击“刷新目录”可从在线来源读取插件目录。";
@@ -259,7 +255,9 @@ public partial class ExtensionWindow : UserControl
             sourceKind: GetSelectedSourceKind(),
             sortOrder: GetSelectedSortOrder(),
             category: GetSelectedCategory());
-        MarketplaceItems.Clear();
+        // 整批构建后一次性替换 ItemsSource：逐条 Add 会为每个条目触发一次
+        // 集合变更与布局，目录有几百条时打开页面/搜索都会明显卡顿。
+        var rendered = new List<MarketplaceItem>(items.Count);
         foreach (var item in items)
         {
             var installedEntry = MarketplaceService.FindInstalledPlugin(item, _installedPlugins);
@@ -278,7 +276,7 @@ public partial class ExtensionWindow : UserControl
                 && _instance.RuntimeStatus == InstanceRuntimeStatus.Running
                 && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
                 && !_isMarketplaceMutating;
-            MarketplaceItems.Add(item with
+            rendered.Add(item with
             {
                 IsInstalled = isInstalled,
                 IsManaged = isInstalled && installedEntry!.Managed,
@@ -297,6 +295,7 @@ public partial class ExtensionWindow : UserControl
             });
         }
 
+        MarketplaceList.ItemsSource = rendered;
         MarketplaceSummaryText.Text = _marketplaceSnapshot.Count == items.Count
             ? $"找到 {_marketplaceSnapshot.Count} 个候选插件"
             : $"显示 {items.Count} / {_marketplaceSnapshot.Count} 个候选插件";

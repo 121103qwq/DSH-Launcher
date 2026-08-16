@@ -90,6 +90,100 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 收编一个由本 Launcher 之前启动、因异常退出而遗留的运行实例：按注册记录中的
+    /// ProcessId 重新取得进程句柄并纳入 Managed 管理，使 Stop/Restart/删除恢复可用。
+    /// 仅当记录的端口仍在服务且 PID 仍存活（且进程名与启动包装一致）时收编，
+    /// 避免 PID 复用误伤无关进程；失败时回退到只读 Attached 语义。
+    /// </summary>
+    public async Task<bool> TryAdoptRunningProcessAsync(
+        ManagerInstance instance,
+        CancellationToken cancellationToken = default)
+    {
+        if (instance.ProcessId is not > 0 || instance.Port is not > 0 || string.IsNullOrWhiteSpace(instance.DshHome))
+        {
+            return false;
+        }
+
+        if (!TryGetAttachEndpoint(instance, out var endpoint))
+        {
+            return false;
+        }
+
+        if (!await ProbeEndpointAsync(endpoint, cancellationToken))
+        {
+            return false;
+        }
+
+        await _operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (IsManaged(instance.Id) || IsAttached(instance.Id))
+            {
+                return false;
+            }
+
+            Process? process = null;
+            InstanceLock? instanceLock = null;
+            try
+            {
+                process = Process.GetProcessById(instance.ProcessId.Value);
+                // Launcher 只通过 cmd.exe 包装或 node.exe 直接启动实例；进程名
+                // 不一致视为 PID 已被复用，拒绝收编。
+                if (!string.Equals(process.ProcessName, "cmd", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(process.ProcessName, "node", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                if (process.HasExited)
+                {
+                    return false;
+                }
+
+                instanceLock = TryAcquireInstanceLock(instance.DshHome);
+                if (instanceLock is null)
+                {
+                    return false;
+                }
+
+                var webUrl = instance.WebUrl ?? $"http://127.0.0.1:{instance.Port.Value}/";
+                lock (_running)
+                {
+                    _running[instance.Id] = new RunningDshProcess(
+                        process,
+                        instance.Port.Value,
+                        webUrl,
+                        new StringBuilder(),
+                        instanceLock);
+                }
+
+                // 所有权已移交 _running；finally 不能释放仍被管理的句柄。
+                process = null;
+                instanceLock = null;
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                // ProcessId 已不存在：实例实际没有在运行。
+                return false;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return false;
+            }
+            finally
+            {
+                process?.Dispose();
+                instanceLock?.Dispose();
+            }
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
     public async Task<DshInstanceRunResult> StartAsync(
         ManagerInstance instance,
         CancellationToken cancellationToken = default)

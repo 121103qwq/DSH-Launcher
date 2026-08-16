@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-PR #2 最终收口：第六轮 3 条 P2 已修复（78cd204）；第七轮（针对 520401c）发现 1 P1 + 1 P2 已修复——MSI 签名验证开启整链吊销检查（WTD_REVOKE_WHOLECHAIN，吊销状态无法确立时拒绝提权）、重绑定只发生在用户确认的准备/修复流程（RefreshDshAsync/LoadInstancesAsync 的被动检测不再改写注册，避免临时不可用卷上的自定义 runtime 被覆盖）；版本号升级 0.1.10。修复后 push、回复 resolve、再触发一轮 Review；干净即 merge 并创建 v0.1.10-rc.1。
+用户实测反馈 3 个 bug 已修复：启动页只显示实际配置过的 Provider（未配置显示空状态，不再出现占位默认卡）；Launcher 异常退出遗留的受管实例在下次启动时按记录 PID/端口收编回 Managed（Stop/Restart/删除恢复可用，Attached 只留给真正外部进程，带 PID 复用与端口校验）；扩展页 1MB 级市场缓存解析移到后台线程、已安装与市场列表改为整批替换 ItemsSource（不再逐条 Add 触发布局）。另完成第八轮 Review 5 条修复（精确 DN 组织匹配、msiexec 前取消检查、Node 装后重测 DSh、仅重绑定修复目标实例、npm 源文案）。发布/merge 流程暂停，等待用户验证。
 
 ## 已完成内容
 

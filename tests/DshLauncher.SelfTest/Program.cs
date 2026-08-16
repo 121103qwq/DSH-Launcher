@@ -40,6 +40,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("DSh early exit cleanup", TestDshEarlyExitCleanup),
     ("DSh instance lifecycle", TestDshInstanceLifecycle),
     ("Attached runtime lifecycle", TestAttachedRuntimeLifecycle),
+    ("Instance adoption after abnormal exit", TestInstanceAdoptionAfterAbnormalExit),
     ("Extension ecosystem isolation", TestExtensionEcosystemIsolation),
     ("dsh-market theme bridge", TestDshMarketThemeBridge),
     ("Plugin command supplies pnpm runtime", TestPluginCommandSuppliesPnpmRuntime),
@@ -370,6 +371,21 @@ static async Task TestNodeMsiVerificationAndDeferredCleanup()
     Assert(!MsiAuthenticodeVerifier.IsTrustedNodeInstaller(unsigned),
         "签名验证失败的 MSI 绝不能进入提权安装。");
     Assert(!MsiAuthenticodeVerifier.IsAllowedNodePublisher(null), "没有签名者证书时必须拒绝。");
+
+    // 发布者必须是 DN 中 Organization 的精确匹配；CN/OU 或 O 值后缀里
+    // 出现 "OpenJS Foundation" 字样的证书不能冒充官方发布者。
+    Assert(MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=OpenJS Foundation, O=OpenJS Foundation, L=Redwood City, S=California, C=US"),
+        "O=OpenJS Foundation 的证书应被接受。");
+    Assert(MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=\"Joyent, Inc.\", O=\"Joyent, Inc.\", C=US"),
+        "带引号逗号的合法 DN 也必须正确解析。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=Evil Corp, O=OpenJS Foundation Evil Branch, C=US"),
+        "O 值只是包含官方名称前缀时必须拒绝。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=OpenJS Foundation, OU=OpenJS Foundation, C=US"),
+        "只在 CN/OU 出现官方名称而缺少匹配 O 时必须拒绝。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization("CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"),
+        "其它组织的有效证书必须拒绝。");
+    Assert(!MsiAuthenticodeVerifier.HasAllowedNodeOrganization(null) && !MsiAuthenticodeVerifier.HasAllowedNodeOrganization(""),
+        "缺少 Subject 时必须拒绝。");
 
     // 系统 DLL 多为 catalog 签名（无内嵌 Authenticode），用内嵌签名的 dotnet.exe
     // 验证签名链基础设施与发布者白名单；机器上没有该文件时跳过这部分自检。
@@ -1042,8 +1058,94 @@ static async Task TestDshInstanceLifecycle()
     await competingRunner.StopAsync(instance.Id, cancellation.Token);
 }
 
-static async Task TestAttachedRuntimeLifecycle()
+static async Task TestInstanceAdoptionAfterAbnormalExit()
 {
+    using var temporary = new TestDirectory();
+    using var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            while (true)
+            {
+                using var client = await listener.AcceptTcpClientAsync();
+                await using var stream = client.GetStream();
+                var request = new byte[2048];
+                _ = await stream.ReadAsync(request);
+                var response = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+                await stream.WriteAsync(response);
+            }
+        }
+        catch
+        {
+            // 测试结束后监听已停止。
+        }
+    });
+
+    var lingering = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 600 127.0.0.1 > nul")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+    Assert(lingering is not null, "测试需要能启动辅助 cmd 进程。");
+    try
+    {
+        var instance = CreateTestInstance("adopt-test", temporary.Path, Path.Combine(temporary.Path, "dsh-home"))
+            with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Running,
+                ProcessId = lingering!.Id,
+                Port = port,
+                WebUrl = $"http://127.0.0.1:{port}/"
+            };
+
+        await using var runner = new DshInstanceRunner();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Assert(await runner.TryAdoptRunningProcessAsync(instance, cancellation.Token),
+            "Launcher 异常退出遗留的实例（PID 存活且端口仍在服务）应被收编回 Managed。");
+        Assert(runner.IsManaged(instance.Id), "收编后 Stop/Restart/删除应恢复可用。");
+        var stopped = await runner.StopAsync(instance.Id, cancellation.Token);
+        Assert(stopped.IsSuccess, stopped.Error ?? "收编后的遗留实例必须可以停止。");
+        Assert(lingering.HasExited, "停止收编实例必须终止遗留的进程树。");
+
+        var mismatched = instance with
+        {
+            Id = "adopt-mismatch",
+            DshHome = Path.Combine(temporary.Path, "home-mismatch"),
+            ProcessId = Environment.ProcessId
+        };
+        Assert(!await runner.TryAdoptRunningProcessAsync(mismatched, cancellation.Token),
+            "记录的 PID 指向非 cmd/node 进程（PID 复用）时必须拒绝收编。");
+
+        using var deadPortListener = new TcpListener(IPAddress.Loopback, 0);
+        deadPortListener.Start();
+        var deadPort = ((IPEndPoint)deadPortListener.LocalEndpoint).Port;
+        deadPortListener.Stop();
+        var orphan = instance with
+        {
+            Id = "adopt-dead-port",
+            DshHome = Path.Combine(temporary.Path, "home-dead-port"),
+            Port = deadPort,
+            WebUrl = $"http://127.0.0.1:{deadPort}/"
+        };
+        Assert(!await runner.TryAdoptRunningProcessAsync(orphan, cancellation.Token),
+            "端口不再服务时不能收编，应回退 Attached/Stopped 语义。");
+    }
+    finally
+    {
+        if (!lingering!.HasExited)
+        {
+            lingering.Kill();
+        }
+
+        listener.Stop();
+    }
+}
+
+static async Task TestAttachedRuntimeLifecycle(){
     using var temporary = new TestDirectory();
     using var listener = new TcpListener(IPAddress.Loopback, 0);
     listener.Start();
