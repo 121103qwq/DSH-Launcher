@@ -166,7 +166,6 @@ public sealed class SkillMarketService
                     scanGate.Release();
                 }
 
-                IReadOnlyList<SkillMarketItem> snapshot;
                 int current;
                 lock (scanSync)
                 {
@@ -180,11 +179,10 @@ public sealed class SkillMarketService
                     }
 
                     current = ++scanCompleted;
-                    snapshot = BuildSkillSnapshot(reusable);
                 }
 
                 progress?.Report(new SkillMarketRefreshProgress(
-                    snapshot,
+                    reusableSnapshot,
                     current,
                     candidates.Count,
                     "正在扫描仓库目录"));
@@ -232,7 +230,7 @@ public sealed class SkillMarketService
                     validationGate.Release();
                 }
 
-                IReadOnlyList<SkillMarketItem> snapshot;
+                SkillMarketRefreshProgress? progressUpdate = null;
                 int current;
                 lock (validationSync)
                 {
@@ -254,16 +252,20 @@ public sealed class SkillMarketService
                     }
 
                     current = ++validationCompleted;
-                    snapshot = BuildSkillSnapshot(validItems);
+                    if (progress is not null
+                        && (current == validationCandidates.Length || current % 8 == 0))
+                    {
+                        progressUpdate = new SkillMarketRefreshProgress(
+                            BuildSkillSnapshot(validItems),
+                            current,
+                            validationCandidates.Length,
+                            "正在校验 Skill 文件");
+                    }
                 }
 
-                if (current == validationCandidates.Length || current % 4 == 0)
+                if (progressUpdate is not null)
                 {
-                    progress?.Report(new SkillMarketRefreshProgress(
-                        snapshot,
-                        current,
-                        validationCandidates.Length,
-                        "正在校验 Skill 文件"));
+                    progress?.Report(progressUpdate);
                 }
             }).ToArray();
 

@@ -23,6 +23,8 @@ public partial class ExtensionWindow : UserControl
     private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
     private bool _isSkillMarketLoading;
     private bool _isSkillMarketMutating;
+    private int _lastSkillProgressItemCount = -1;
+    private DateTimeOffset _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
     private IReadOnlyList<MarketplaceItem> _marketplaceSnapshot = Array.Empty<MarketplaceItem>();
     private IReadOnlyList<ExtensionEntry> _installedPlugins = Array.Empty<ExtensionEntry>();
     private bool _marketplaceCanMutate;
@@ -32,6 +34,7 @@ public partial class ExtensionWindow : UserControl
     private DshMarketThemeState _themeState = DshMarketThemeState.Unavailable("尚未检测当前实例的 dsh-market。 ");
     private CancellationTokenSource? _marketplaceCancellation;
     private CancellationTokenSource? _searchDebounceCancellation;
+    private CancellationTokenSource? _skillSearchDebounceCancellation;
 
     public ExtensionWindow(
         ManagerInstance instance,
@@ -104,7 +107,12 @@ public partial class ExtensionWindow : UserControl
 
     private void SetupSkillMarket()
     {
-        var cached = _skillMarketService!.ReadCached();
+        _ = SetupSkillMarketAsync();
+    }
+
+    private async Task SetupSkillMarketAsync()
+    {
+        var cached = await Task.Run(() => _skillMarketService!.ReadCached());
         if (cached.Count > 0)
         {
             _skillMarketSnapshot = cached;
@@ -149,6 +157,8 @@ public partial class ExtensionWindow : UserControl
         }
 
         _isSkillMarketLoading = true;
+        _lastSkillProgressItemCount = -1;
+        _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
         SkillMarketRefreshButton.IsEnabled = false;
         SkillMarketStatusText.Text = "正在从 GitHub 搜索并校验 SKILL.md…";
         try
@@ -161,7 +171,17 @@ public partial class ExtensionWindow : UserControl
                 }
 
                 _skillMarketSnapshot = state.Items;
-                RenderSkillMarketItems(state.Items);
+                var now = DateTimeOffset.UtcNow;
+                var shouldRender = state.Items.Count != _lastSkillProgressItemCount
+                    && (now - _lastSkillProgressRenderAt >= TimeSpan.FromMilliseconds(150)
+                        || state.Completed >= state.Total);
+                if (shouldRender)
+                {
+                    RenderSkillMarketItems(state.Items);
+                    _lastSkillProgressItemCount = state.Items.Count;
+                    _lastSkillProgressRenderAt = now;
+                }
+
                 SkillMarketStatusText.Text = state.Total == 0
                     ? $"{state.Stage}…"
                     : $"{state.Stage}：{state.Completed} / {state.Total}";
@@ -183,11 +203,23 @@ public partial class ExtensionWindow : UserControl
 
     private void SkillMarketRefresh_Click(object sender, RoutedEventArgs e) => _ = RefreshSkillMarketAsync();
 
-    private void SkillMarketSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    private async void SkillMarketSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_skillMarketSnapshot.Count > 0)
+        _skillSearchDebounceCancellation?.Cancel();
+        _skillSearchDebounceCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _skillSearchDebounceCancellation = cancellation;
+        try
         {
-            RenderSkillMarketItems(_skillMarketSnapshot);
+            await Task.Delay(180, cancellation.Token);
+            if (!cancellation.IsCancellationRequested && _skillMarketSnapshot.Count > 0)
+            {
+                RenderSkillMarketItems(_skillMarketSnapshot);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A new keystroke superseded this local filter.
         }
     }
 

@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前工作区位于 `feature/runtime-bootstrap`。本轮已把对话和备份列表中的工作目录列改为对应实例名称，并完成扩展市场秒级卡顿、虚拟化列表滚轮跳跃及可编辑工作区下拉框文字裁切修复；当前发布目标为 `v0.1.10`。
+当前工作区位于 `feature/runtime-bootstrap`，`v0.1.10` 已发布。Agent/Skill 市场性能优化已完成：缓存解析离开 UI 线程，搜索增加防抖，刷新时减少重复快照计算和列表重绘。
 
 ## 已完成内容
 
@@ -12,7 +12,7 @@
 - 每个版本使用独立 `DSH_HOME` 和 `DSH_AGENTS_HOME`。实例级 Plugin、Skill、MCP、Provider 状态、Agent Preset、Settings 和 Conversation 文件均以该目录为边界；对话和模型 Provider 支持 Independent、Workspace、All/全配置同步策略。运行中的版本不会被同步写入。
 - 设置/诊断页可选择任意版本并编辑与“版本设置 → 配置”相同的同步选项；工作区管理支持显示成员、添加、重命名和删除。删除工作区只解除成员版本的同步关系并切回 Independent，不删除版本或对话文件。
 - Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、进度反馈和完成后刷新。
-- Agent 页提供缓存优先的 Skill 市场：刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter 及非空 `name`、`description`；通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`；扩展和 Agent 页在存在多个版本时可直接切换当前实例。
+- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter 及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`；扩展和 Agent 页在存在多个版本时可直接切换当前实例。
 - 全局 ComboBox 的点击层使用不绘制悬停背景的专用模板，鼠标移入时只改变外框颜色，不再覆盖选中文字和箭头；可编辑 ComboBox 的内部文本框显式清除重复 Padding，工作区名称不再被垂直裁切。
 - 版本控制支持复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。整合包会清理 API Key、Token、密码、环境变量值和 sessions，并不导出 Provider 配置；导入始终创建新版本。版本设置个性化页可以修改版本名称并更新实例注册记录。
 - Provider 启动页支持启用/禁用、`/models` 只读诊断、模型列表/思考档位显示和问题说明；模型设置只保存环境变量名，不保存 API Key 明文。
@@ -45,6 +45,8 @@
 
 - 当前 Git 分支为 `feature/runtime-bootstrap`；本地 `artifacts/` 与 `src/DshLauncher/artifacts/` 是未跟踪诊断/构建目录，不纳入源码提交或 Release。
 - `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：46/46 通过；WPF XAML 编译通过，对话与备份条目新增实例名称断言；既有首次运行、默认 Plugin 保护、Skill 市场、工作区和对话恢复测试继续通过。
+- Agent/Skill 市场性能修复后再次运行同一自测：46/46 通过；实际缓存包含 234 个 Skill（约 130 KB），冷读取约 31 ms，现已移到后台线程。
+- 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-agent-performance-final-20260816-2300`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
 - 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-first-run-plugin-20260816`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - 对话实例名称显示测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-conversation-instance-20260816`，确认 `DSH Launcher.exe` 存在。
@@ -90,4 +92,4 @@
 
 ## 下一步最直接的任务
 
-人工验收 `v0.1.10` 的扩展页搜索、分类、滚动和工作区下拉框显示；随后继续首次运行环境准备的真实无 Node/DSh 安装链路验收。
+人工验收 Agent 页缓存首屏、连续输入搜索、分类切换、列表滚动和刷新期间的响应；随后继续首次运行环境准备的真实无 Node/DSh 安装链路验收。

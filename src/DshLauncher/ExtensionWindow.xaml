@@ -548,7 +548,8 @@
                          Background="Transparent"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          VirtualizingStackPanel.IsVirtualizing="True"
-                         VirtualizingStackPanel.VirtualizationMode="Recycling">
+                         VirtualizingStackPanel.VirtualizationMode="Recycling"
+                         ScrollViewer.CanContentScroll="True">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Border Padding="12"
