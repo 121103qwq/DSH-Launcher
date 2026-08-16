@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前在 `feature/runtime-bootstrap` 上收口最新本地增量：Agent 页 Skill 市场、扩展/Agent 当前实例切换、对话导入目标版本与工作区、版本设置改名入口，以及整合包不再导出 Provider 配置。对话名称和扩展页卡顿修复已在此前提交中完成。当前任务是验证后提交并推送到现有 PR #2；本轮不合并 PR，也不创建 Release。
+`feature/runtime-bootstrap` 的最新增量已作为 `fb901a7` 提交并推送到 PR #2：Agent 页 Skill 市场、扩展/Agent 当前实例切换、对话导入目标版本与工作区、版本设置改名入口，以及整合包不再导出 Provider 配置。对话名称和扩展页卡顿修复已在此前提交中完成。当前进入实机 UI 验证与代码审查阶段；尚未合并 PR，也未创建 Release。
 
 ## 已完成内容
 
@@ -36,7 +36,7 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `feature/runtime-bootstrap`，远端 PR #2 为 OPEN、非 Draft，目标 `main`；本轮只提交源码、测试和维护文档，排除本地 `artifacts/` 诊断与构建目录。
+- 当前 Git：分支 `feature/runtime-bootstrap` 已推送并跟踪同名远端分支；PR #2 为 OPEN、非 Draft，目标 `main`。本轮提交只包含源码、测试和维护文档，本地 `artifacts/` 诊断与构建目录未上传。
 - `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：42/42 通过（新增 Launcher 设置与工作区测试；既有三处 `VersionSettingsService` 构造改为测试内隔离路径，避免读写真实 launcher-settings.json）。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
 - Release 单文件自包含 publish（README 规范参数）：0 errors；`DSH Launcher.exe` 72,328,385 字节，SHA-256 `EBA7C3B8235071DB36168185A8ED548F6DD889FACE945D68CC5E43243EA2FC3A`，已复制到桌面 `DSH Launcher\DSH Launcher.exe`、`VIDEO-CANDIDATE-v0.1.10`、`video-candidate-20260816` 并确认存在；冒烟：60 秒存活，第二次启动 exit 0 并唤起已有窗口。
