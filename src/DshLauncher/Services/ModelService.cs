@@ -65,7 +65,7 @@ public sealed class ModelService
                 ReadScalar(providerLines, "apiKeyEnv"),
                 ReadScalar(providerLines, "baseURL"),
                 ReadModels(providerLines),
-                true));
+                providerLines.Count > 0));
         }
 
         return result;

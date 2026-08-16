@@ -188,7 +188,7 @@
                                         </StackPanel>
                                     </Grid>
                                     <Grid Grid.Row="1" Margin="0,16,0,14">
-                                        <TextBlock Text="当前没有可显示的 Provider。请先在 DSh 的 settings.yaml 中配置 Provider。"
+                                        <TextBlock Text="未在当前实例的 settings.yaml 中检测到 llm Provider 配置；通过 DSh 登录页连接的 Provider 不会显示在这里。"
                                                    Visibility="{Binding NoProvidersVisibility}"
                                                    Foreground="{StaticResource MutedBrush}"
                                                    TextWrapping="Wrap" />

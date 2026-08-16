@@ -139,7 +139,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         : _isProviderDetectionInProgress
             ? $"正在检测 {SelectedInstance.Name} 的 Provider…"
             : ProviderCards.Count == 0
-                ? "尚未配置 Provider · 可在版本设置的配置页添加"
+                ? "未检测到实例 settings.yaml 中的 llm Provider 配置"
                 : $"{ProviderCards.Count} 个 Provider · 仅调用只读模型列表接口";
 
     public bool CanRefreshProviders => !_isProviderDetectionInProgress && SelectedInstance is not null;

@@ -597,7 +597,12 @@ public sealed class VersionPackageService
     {
         foreach (var entry in Directory.EnumerateFileSystemEntries(root))
         {
-            RejectReparsePoint(entry, "整合包源目录中的文件");
+            // 跳过 DSh 生成的 junction 等链接，导出内容只包含实例自己的文件。
+            if (IsReparsePoint(entry))
+            {
+                continue;
+            }
+
             if (Directory.Exists(entry))
             {
                 foreach (var nested in EnumerateSafeFiles(entry))
@@ -731,7 +736,13 @@ public sealed class VersionPackageService
         Directory.CreateDirectory(target);
         foreach (var entry in Directory.EnumerateFileSystemEntries(source))
         {
-            RejectReparsePoint(entry, "版本源 DSH_HOME 中的文件");
+            // DSh 生成的 junction（如 profiles\node_modules）指向共享运行目录，
+            // 不能跟随复制；新版本首次启动时 DSh 会自行重建这些链接。
+            if (IsReparsePoint(entry))
+            {
+                continue;
+            }
+
             var destination = Path.Combine(target, Path.GetFileName(entry));
             if (Directory.Exists(entry))
             {
@@ -793,7 +804,12 @@ public sealed class VersionPackageService
         RejectReparsePoint(path, label);
         foreach (var entry in Directory.EnumerateFileSystemEntries(path).ToArray())
         {
-            RejectReparsePoint(entry, label);
+            if (IsReparsePoint(entry))
+            {
+                DeleteReparseLink(entry);
+                continue;
+            }
+
             if (Directory.Exists(entry))
             {
                 DeleteGeneratedDirectory(entry, label);
@@ -805,6 +821,21 @@ public sealed class VersionPackageService
         }
 
         Directory.Delete(path, recursive: false);
+    }
+
+    private static void DeleteReparseLink(string path)
+    {
+        // DSh 会在 profiles\node_modules 下生成指向共享运行目录的 junction。
+        // RemoveDirectory/DeleteFile 作用于重解析点时只移除链接本身，不会进入
+        // 目标目录，因此共享的 DSh 安装不会被误删。
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: false);
+        }
+        else
+        {
+            File.Delete(path);
+        }
     }
 
     private static string? ReadString(JsonElement element, string propertyName) =>

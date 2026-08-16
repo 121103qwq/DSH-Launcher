@@ -1848,6 +1848,40 @@ static Task TestVersionPackageOperations()
     Assert(!registry.Load().Any(item => item.Id == deletable.Id), "删除版本后注册记录必须移除。 ");
     Assert(!Directory.Exists(deletable.DshHome), "删除版本后必须清理 DSH_HOME。 ");
     Assert(!Directory.Exists(backupDirectory), "删除版本后必须清理该版本的 Launcher 备份。 ");
+
+    // DSh 会在 profiles\node_modules 下创建指向共享运行目录的 junction；
+    // 删除/复制/导出必须跳过链接本身而不是失败，更不能穿透影响共享目录。
+    var sharedPackage = Path.Combine(temporary.Path, "shared-runtime", "accepts");
+    Directory.CreateDirectory(sharedPackage);
+    var sharedFile = Path.Combine(sharedPackage, "shared.txt");
+    File.WriteAllText(sharedFile, "keep", new UTF8Encoding(false));
+    var junctionParent = Path.Combine(source.DshHome, "profiles", "node_modules");
+    Directory.CreateDirectory(junctionParent);
+    var junction = Path.Combine(junctionParent, "accepts");
+    var junctionCreated = System.Diagnostics.Process.Start(
+        new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{junction}\" \"{sharedPackage}\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+    Assert(junctionCreated is not null, "测试需要能启动 cmd 创建 junction。 ");
+    junctionCreated!.WaitForExit();
+    Assert(Directory.Exists(junction), "测试环境需要支持创建 junction（mklink /J）。 ");
+
+    var junctionClone = packages.CloneVersion(source, "含链接版本");
+    Assert(!Directory.Exists(Path.Combine(junctionClone.DshHome, "profiles", "node_modules", "accepts")),
+        "复制版本应跳过源 DSH_HOME 中的 junction，而不是复制或跟随。 ");
+    Assert(File.ReadAllText(sharedFile) == "keep", "复制版本不能改动 junction 目标内容。 ");
+
+    packages.ExportPackage(
+        source,
+        Path.Combine(temporary.Path, "junction.dshpack"),
+        new VersionExportOptions(IncludeProviderConfiguration: false, IncludePluginConfiguration: false));
+
+    packages.DeleteVersion(source);
+    Assert(!registry.Load().Any(item => item.Id == source.Id), "删除含 junction 的版本应成功并移除注册记录。 ");
+    Assert(!Directory.Exists(source.DshHome), "删除含 junction 的版本必须清理 DSH_HOME。 ");
+    Assert(File.Exists(sharedFile), "删除版本只能移除 junction 本身，不能删除共享运行目录中的文件。 ");
     return Task.CompletedTask;
 }
 
@@ -1887,6 +1921,16 @@ static async Task TestModelSettingsRoundTrip()
     Assert(deepseek.Models.SequenceEqual(new[] { "deepseek-chat", "deepseek-reasoner" }), "读取模型列表应保持顺序。");
     Assert(providers.Any(provider => provider.Provider == "existing"), "读取时应保留既有 Provider。");
     Assert(providers.Any(provider => provider.Provider == "gateway" && provider.Models.Contains("model-a")), "读取时应识别新 Provider 的模型。");
+
+    var skeletonHome = Path.Combine(temporary.Path, "skeleton-home");
+    Directory.CreateDirectory(skeletonHome);
+    File.WriteAllText(
+        Path.Combine(skeletonHome, "settings.yaml"),
+        "llm-pi-ai:\n  providers:\n    skeleton:\n",
+        new UTF8Encoding(false));
+    var skeletonProviders = service.Read(CreateTestInstance("model-skeleton", root, skeletonHome));
+    Assert(skeletonProviders.All(provider => !provider.Configured),
+        "只有条目名、没有配置内容的 Provider 骨架不能算已配置。 ");
 
     await AssertThrowsAsync<ArgumentException>(
         () => service.SaveDeepSeekAsync(instance, "BAD-NAME", "https://api.deepseek.com", Array.Empty<string>()),
