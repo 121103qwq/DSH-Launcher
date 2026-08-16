@@ -40,6 +40,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
     ("Source runner lifecycle", TestSourceRunnerLifecycle),
+    ("Port conflict retry", TestPortConflictRetry),
     ("DSh early exit cleanup", TestDshEarlyExitCleanup),
     ("DSh instance lifecycle", TestDshInstanceLifecycle),
     ("Attached runtime lifecycle", TestAttachedRuntimeLifecycle),
@@ -50,6 +51,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Marketplace discovery and verification", TestMarketplaceDiscoveryAndVerification),
     ("Skill marketplace discovery and validation", TestSkillMarketplaceDiscoveryAndValidation),
     ("Version copy, clean version and package import", TestVersionPackageOperations),
+    ("Version health inspection and repair", TestVersionHealthInspectionAndRepair),
+    ("Encrypted version snapshot rollback", TestEncryptedVersionSnapshotRollback),
     ("Model settings round-trip", TestModelSettingsRoundTrip),
     ("Provider state and diagnostics", TestProviderStateAndDiagnostics),
     ("Model provider synchronization", TestModelProviderSynchronization),
@@ -228,6 +231,36 @@ static Task TestSourceInspectorRejectsUnrelatedWorkspace()
 
 static async Task TestDshRuntimeDetection()
 {
+    using (var temporary = new TestDirectory())
+    {
+        var prefix = Path.Combine(temporary.Path, "dsh-prefix");
+        var packageRoot = Path.Combine(prefix, "node_modules", "@deepseek-ai", "dsh");
+        Directory.CreateDirectory(packageRoot);
+        File.WriteAllText(
+            Path.Combine(packageRoot, "package.json"),
+            "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"1.2.3\",\"engines\":{\"node\":\">=24\"}}",
+            new UTF8Encoding(false));
+        var fakeCommand = Path.Combine(prefix, "dsh.cmd");
+
+        File.WriteAllText(fakeCommand, "@echo not-a-version\r\n", Encoding.ASCII);
+        var malformed = await new DshRuntimeDetector().DetectAsync(prefix);
+        Assert(!string.Equals(malformed.ExecutablePath, fakeCommand, StringComparison.OrdinalIgnoreCase),
+            "只输出任意文本的 dsh 命令不能被判定为可用。 ");
+
+        File.WriteAllText(fakeCommand, "@echo 9.9.9\r\n", Encoding.ASCII);
+        var stale = await new DshRuntimeDetector().DetectAsync(prefix);
+        Assert(!string.Equals(stale.ExecutablePath, fakeCommand, StringComparison.OrdinalIgnoreCase),
+            "命令版本与 package.json 不一致的 DSh 入口不能被判定为可用。 ");
+
+        File.WriteAllText(fakeCommand, "@echo dsh v1.2.3\r\n", Encoding.ASCII);
+        var usable = await new DshRuntimeDetector().DetectAsync(prefix);
+        Assert(usable.IsAvailable
+            && string.Equals(usable.ExecutablePath, fakeCommand, StringComparison.OrdinalIgnoreCase)
+            && usable.Version == "1.2.3"
+            && string.Equals(usable.PackageRoot, packageRoot, StringComparison.OrdinalIgnoreCase),
+            "只有命令可执行、安装包可解析且版本一致时才能判定 DSh 可用。 ");
+    }
+
     Console.WriteLine("INFO DSh candidates: " + string.Join(" | ", DshRuntimeDetector.GetCandidates().Where(File.Exists)));
     var runtime = await new DshRuntimeDetector().DetectAsync();
     Console.WriteLine($"INFO DSh detection: available={runtime.IsAvailable}, executable={runtime.ExecutablePath}, error={runtime.Error}");
@@ -1049,6 +1082,55 @@ static async Task TestSourceRunnerLifecycle()
     var stopped = await runner.StopAsync(instance.Id, cancellation.Token);
     Assert(stopped.IsSuccess, stopped.Error ?? "Source 生命周期停止失败。");
     Assert(!runner.IsRunning(instance.Id), "Source 停止后不能继续报告运行中。");
+}
+
+static async Task TestPortConflictRetry()
+{
+    var runtime = await new NodeRuntimeDetector().DetectAsync();
+    if (!runtime.IsAvailable || runtime.ExecutablePath is null)
+    {
+        Console.WriteLine("INFO Port retry skipped because Node.js is not installed");
+        return;
+    }
+
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "deepseek-harness");
+    var entrypointDirectory = Path.Combine(root, "apps", "cli", "lib");
+    Directory.CreateDirectory(entrypointDirectory);
+    File.WriteAllText(
+        Path.Combine(root, "package.json"),
+        "{\"name\":\"deepseek-harness\",\"version\":\"0.1.0\"}",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(entrypointDirectory, "bin.js"),
+        "const http = require('http');\n"
+        + "const args = process.argv;\n"
+        + "const port = Number(args[args.indexOf('--port') + 1]);\n"
+        + "const host = args[args.indexOf('--host') + 1];\n"
+        + "http.createServer((request, response) => { response.statusCode = 200; response.end('ok'); }).listen(port, host);\n",
+        new UTF8Encoding(false));
+
+    using var occupied = new TcpListener(IPAddress.Loopback, 0);
+    occupied.Start();
+    var occupiedPort = ((IPEndPoint)occupied.LocalEndpoint).Port;
+    using var candidate = new TcpListener(IPAddress.Loopback, 0);
+    candidate.Start();
+    var retryPort = ((IPEndPoint)candidate.LocalEndpoint).Port;
+    candidate.Stop();
+    var ports = new Queue<int>(new[] { occupiedPort, retryPort });
+    var instance = CreateTestInstance("port-retry-test", root, Path.Combine(temporary.Path, "dsh-home")) with
+    {
+        Kind = InstanceKind.Source,
+        DshExecutablePath = null
+    };
+
+    await using var runner = new DshInstanceRunner(() => ports.Dequeue());
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+    var result = await runner.StartAsync(instance, runtime, cancellation.Token);
+    Assert(result.IsSuccess, result.Error ?? "端口被抢占后应自动换端口重试。 ");
+    Assert(result.Port == retryPort, "端口冲突重试必须使用下一次分配的端口。 ");
+    Assert(ports.Count == 0, "端口冲突场景应发生一次重试。 ");
+    await runner.StopAsync(instance.Id, cancellation.Token);
 }
 
 static async Task TestDshEarlyExitCleanup()
@@ -1956,6 +2038,91 @@ static byte[] CreateSkillMarketArchive()
     return stream.ToArray();
 }
 
+static Task TestVersionHealthInspectionAndRepair()
+{
+    using var temporary = new TestDirectory();
+    var packageRoot = Path.Combine(temporary.Path, "runtime", "node_modules", "@deepseek-ai", "dsh");
+    Directory.CreateDirectory(packageRoot);
+    File.WriteAllText(
+        Path.Combine(packageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.2.0\",\"engines\":{\"node\":\">=24\"}}",
+        new UTF8Encoding(false));
+    var executable = Path.Combine(temporary.Path, "runtime", "dsh.cmd");
+    File.WriteAllText(executable, "@echo off\r\nexit /b 0\r\n", new UTF8Encoding(false));
+    var missingHome = Path.Combine(temporary.Path, "missing-home");
+    var stale = CreateTestInstance("health-repair", Path.Combine(temporary.Path, "missing-runtime"), missingHome) with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Managed,
+        ProcessId = 999999,
+        Port = 39999,
+        WebUrl = "http://127.0.0.1:39999/"
+    };
+    var detected = new DshRuntimeInfo(true, executable, "0.2.0", packageRoot, null, ">=24");
+    var node = new NodeRuntimeInfo(true, "C:\\nodejs\\node.exe", "24.1.0", null);
+    var service = new VersionHealthService();
+
+    var report = service.Inspect(stale, node, detected, isActuallyRunning: false);
+    Assert(report.ErrorCount >= 2 && report.RepairableCount >= 3,
+        "缺失 DSH_HOME、失效 runtime 和旧运行记录应被检查并标记为可修复。 ");
+    var repaired = service.Repair(stale, detected, isActuallyRunning: false);
+    Assert(Directory.Exists(missingHome), "自动修复应重新创建缺失的 DSH_HOME。 ");
+    Assert(repaired.Instance.RuntimeStatus == InstanceRuntimeStatus.Ready
+        && repaired.Instance.RuntimeOwnership == InstanceRuntimeOwnership.None
+        && repaired.Instance.ProcessId is null,
+        "自动修复应清除不再存活的旧运行记录。 ");
+    Assert(string.Equals(repaired.Instance.RootPath, packageRoot, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(repaired.Instance.DshExecutablePath, executable, StringComparison.OrdinalIgnoreCase),
+        "自动修复应把失效 Installed 版本重新绑定到已验证的 DSh runtime。 ");
+    Assert(repaired.Actions.Count == 3, "修复结果应逐项说明实际执行的动作。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestEncryptedVersionSnapshotRollback()
+{
+    using var temporary = new TestDirectory();
+    var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+    var instance = CreateTestInstance(
+        "snapshot-test",
+        Path.Combine(temporary.Path, "runtime"),
+        paths.GetInstanceDshHome("snapshot-test"));
+    Directory.CreateDirectory(Path.Combine(instance.DshHome, "profiles", "web"));
+    Directory.CreateDirectory(Path.Combine(instance.DshHome, "sessions", "demo"));
+    var settingsPath = Path.Combine(instance.DshHome, "settings.yaml");
+    var credentialsPath = Path.Combine(instance.DshHome, ".credentials.yaml");
+    var pluginPath = Path.Combine(instance.DshHome, "profiles", "web", "package.json");
+    var conversationPath = Path.Combine(instance.DshHome, "sessions", "demo", "session.jsonl");
+    const string secret = "sk-secret-must-not-appear-in-snapshot";
+    File.WriteAllText(settingsPath, "llm-deepseek:\n  apiKeyEnv: DEEPSEEK_API_KEY\n", new UTF8Encoding(false));
+    File.WriteAllText(credentialsPath, $"DEEPSEEK_API_KEY: {secret}\n", new UTF8Encoding(false));
+    File.WriteAllText(pluginPath, "{\"dependencies\":{\"demo\":\"1.0.0\"}}", new UTF8Encoding(false));
+    File.WriteAllText(conversationPath, "before", new UTF8Encoding(false));
+    var service = new VersionSnapshotService(paths);
+
+    var snapshot = service.CreateSnapshot(instance, "安全回滚测试");
+    var raw = File.ReadAllBytes(snapshot.FilePath);
+    Assert(!Encoding.UTF8.GetString(raw).Contains(secret, StringComparison.Ordinal),
+        "版本快照不能以明文保存 API Key。 ");
+    Assert(service.ListSnapshots(instance).Count == 1,
+        "创建后的加密快照应能由当前 Windows 用户读取元数据。 ");
+
+    File.WriteAllText(settingsPath, "broken", new UTF8Encoding(false));
+    File.WriteAllText(credentialsPath, "DEEPSEEK_API_KEY: changed", new UTF8Encoding(false));
+    File.Delete(pluginPath);
+    File.WriteAllText(conversationPath, "after", new UTF8Encoding(false));
+    var rollbackPoint = service.RestoreSnapshot(instance, snapshot.FilePath);
+    Assert(File.ReadAllText(settingsPath).Contains("llm-deepseek", StringComparison.Ordinal),
+        "回滚应恢复 Provider 配置。 ");
+    Assert(File.ReadAllText(credentialsPath).Contains(secret, StringComparison.Ordinal),
+        "回滚应恢复由当前用户加密保护的官方凭据文件。 ");
+    Assert(File.Exists(pluginPath), "回滚应恢复 Plugin profile 配置。 ");
+    Assert(File.ReadAllText(conversationPath) == "after",
+        "版本快照不能包含或覆盖会话文件。 ");
+    Assert(File.Exists(rollbackPoint.FilePath) && service.ListSnapshots(instance).Count == 2,
+        "执行回滚前必须自动保留当前状态作为新的恢复点。 ");
+    return Task.CompletedTask;
+}
+
 static Task TestVersionPackageOperations()
 {
     using var temporary = new TestDirectory();
@@ -2009,8 +2176,14 @@ static Task TestVersionPackageOperations()
     var sourceSettings = Path.Combine(source.DshHome, "settings.yaml");
     File.WriteAllText(
         sourceSettings,
-        "llm-deepseek:\n  apiKey: super-secret\n  apiKeyEnv: DEEPSEEK_API_KEY\n  baseURL: https://api.example\n  models:\n    - deepseek-chat\n",
+        "llm-deepseek:\n  apiKey: super-secret\n  apiKeyEnv: DEEPSEEK_API_KEY\n  ARK_API_KEY: ark-inline-secret\n  baseURL: https://share-user:url-password@api.example/v1?token=url-query-secret\n  models:\n    - deepseek-chat\n",
         new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(source.DshHome, ".credentials.yaml"),
+        "DEEPSEEK_API_KEY: credential-file-secret\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(source.DshHome, ".env"), "PRIVATE_ENV=env-secret\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(source.DshHome, ".env.local"), "PRIVATE_ENV=local-env-secret\n", new UTF8Encoding(false));
     var sourceProfile = Path.Combine(source.DshHome, "profiles", "web");
     File.WriteAllText(
         Path.Combine(sourceProfile, "package.json"),
@@ -2037,11 +2210,18 @@ static Task TestVersionPackageOperations()
     {
         Assert(exported.Entries.All(entry => !entry.FullName.Contains("sessions", StringComparison.OrdinalIgnoreCase)),
             "版本整合包不能包含 sessions。 ");
+        Assert(exported.Entries.All(entry => !entry.FullName.Contains("credential", StringComparison.OrdinalIgnoreCase)
+            && !Path.GetFileName(entry.FullName).StartsWith(".env", StringComparison.OrdinalIgnoreCase)),
+            "版本整合包不能包含 DSh 凭据文件或 dotenv 文件。 ");
         var exportedSettings = exported.GetEntry("dsh-home/settings.yaml");
         Assert(exportedSettings is not null, "导出模型提供商配置时应包含 settings.yaml。 ");
         using var settingsReader = new StreamReader(exportedSettings!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var safeSettings = settingsReader.ReadToEnd();
         Assert(!safeSettings.Contains("super-secret", StringComparison.Ordinal)
+            && !safeSettings.Contains("ark-inline-secret", StringComparison.Ordinal)
+            && !safeSettings.Contains("url-password", StringComparison.Ordinal)
+            && !safeSettings.Contains("url-query-secret", StringComparison.Ordinal)
+            && !safeSettings.Contains("share-user@", StringComparison.Ordinal)
             && safeSettings.Contains("DEEPSEEK_API_KEY", StringComparison.Ordinal),
             "导出 Provider 配置必须删除 API Key 值但保留环境变量名。 ");
         Assert(exported.GetEntry("dsh-home/profiles/web/package.json") is not null,
@@ -2105,13 +2285,39 @@ static Task TestVersionPackageOperations()
         }
 
         var data = archive.CreateEntry("dsh-home/imported.txt");
-        using var dataWriter = new StreamWriter(data.Open(), Encoding.UTF8, leaveOpen: false);
-        dataWriter.Write("imported");
+        using (var dataWriter = new StreamWriter(data.Open(), Encoding.UTF8, leaveOpen: false))
+        {
+            dataWriter.Write("imported");
+        }
+
+        var credential = archive.CreateEntry("dsh-home/.credentials.yaml");
+        using (var credentialWriter = new StreamWriter(credential.Open(), Encoding.UTF8, leaveOpen: false))
+        {
+            credentialWriter.Write("ARK_API_KEY: malicious-credential\n");
+        }
+
+        var dotenv = archive.CreateEntry("dsh-home/.env.local");
+        using (var dotenvWriter = new StreamWriter(dotenv.Open(), Encoding.UTF8, leaveOpen: false))
+        {
+            dotenvWriter.Write("ARK_API_KEY=malicious-dotenv\n");
+        }
+
+        var config = archive.CreateEntry("dsh-home/config.json");
+        using var configWriter = new StreamWriter(config.Open(), Encoding.UTF8, leaveOpen: false);
+        configWriter.Write("{\"ARK_API_KEY\":\"malicious-inline\",\"url\":\"https://user:password@example.test/v1?token=malicious-query\"}");
     }
 
     var imported = packages.ImportPackage(packPath, source);
     Assert(imported.DetectedVersion == "0.2.0", "整合包 manifest 应能携带版本信息。 ");
     Assert(File.ReadAllText(Path.Combine(imported.DshHome, "imported.txt")) == "imported", "整合包应解压到新版本的 DSH_HOME。 ");
+    Assert(!File.Exists(Path.Combine(imported.DshHome, ".credentials.yaml"))
+        && !File.Exists(Path.Combine(imported.DshHome, ".env.local")),
+        "导入整合包必须忽略凭据文件和 dotenv 变体。 ");
+    var importedConfig = File.ReadAllText(Path.Combine(imported.DshHome, "config.json"));
+    Assert(!importedConfig.Contains("malicious-inline", StringComparison.Ordinal)
+        && !importedConfig.Contains("password@", StringComparison.Ordinal)
+        && !importedConfig.Contains("malicious-query", StringComparison.Ordinal),
+        "导入整合包中的文本配置也必须清理内联密钥与 URL 凭据。 ");
     packages.SavePackageExtension("zip");
     Assert(packages.PackageExtension == ".zip", "整合包扩展名设置应自动补点并保存。 ");
 
@@ -2201,6 +2407,20 @@ static async Task TestModelSettingsRoundTrip()
     Assert(deepseek.Models.SequenceEqual(new[] { "deepseek-chat", "deepseek-reasoner" }), "读取模型列表应保持顺序。");
     Assert(providers.Any(provider => provider.Provider == "existing"), "读取时应保留既有 Provider。");
     Assert(providers.Any(provider => provider.Provider == "gateway" && provider.Models.Contains("model-a")), "读取时应识别新 Provider 的模型。");
+
+    var officialHome = Path.Combine(temporary.Path, "official-home");
+    Directory.CreateDirectory(officialHome);
+    File.WriteAllText(
+        Path.Combine(officialHome, "settings.yaml"),
+        "llm-pi-ai:\n  providers:\n    {\n      ark:\n        {\n          apiKeyEnv: ARK_API_KEY,\n          api: openai-completions,\n          baseURL: https://ark.example/v3,\n          models: [{ id: doubao-pro, name: Doubao Pro }]\n        }\n    }\n",
+        new UTF8Encoding(false));
+    var officialProvider = service.Read(CreateTestInstance("model-official", root, officialHome))
+        .Single(provider => provider.SettingsNamespace == "llm-pi-ai");
+    Assert(officialProvider.Provider == "ark"
+        && officialProvider.ApiKeyEnvironment == "ARK_API_KEY"
+        && officialProvider.BaseUrl == "https://ark.example/v3"
+        && officialProvider.Models.SequenceEqual(new[] { "doubao-pro" }),
+        "模型读取必须兼容 DSh Web UI 写入的花括号映射、尾逗号和内联模型目录。 ");
 
     var skeletonHome = Path.Combine(temporary.Path, "skeleton-home");
     Directory.CreateDirectory(skeletonHome);
@@ -2307,6 +2527,18 @@ static Task TestModelProviderSynchronization()
         "INDEPENDENT_KEY",
         "https://independent.example/v1",
         new[] { "independent-model" }).GetAwaiter().GetResult();
+    File.WriteAllText(
+        Path.Combine(first.DshHome, ".credentials.yaml"),
+        "FIRST_KEY: old-first-credential\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(second.DshHome, ".credentials.yaml"),
+        "SECOND_KEY: synchronized-credential\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(independent.DshHome, ".credentials.yaml"),
+        "INDEPENDENT_KEY: independent-credential\n",
+        new UTF8Encoding(false));
 
     File.SetLastWriteTimeUtc(
         Path.Combine(first.DshHome, "settings.yaml"),
@@ -2314,6 +2546,9 @@ static Task TestModelProviderSynchronization()
     File.SetLastWriteTimeUtc(
         Path.Combine(second.DshHome, "settings.yaml"),
         DateTime.UtcNow.AddMinutes(-1));
+    File.SetLastWriteTimeUtc(
+        Path.Combine(second.DshHome, ".credentials.yaml"),
+        DateTime.UtcNow);
 
     var states = new ProviderStateService();
     states.SetEnabled(second, "gateway", false);
@@ -2327,10 +2562,16 @@ static Task TestModelProviderSynchronization()
         && gateway.Models.SequenceEqual(new[] { "second-model" }), "同步后应保留最新 Provider 的地址和模型列表。 ");
     Assert(!synchronized.Any(provider => provider.Configured && provider.SettingsNamespace == "llm-deepseek"), "同步 Provider 不能保留源版本已经不存在的 DeepSeek 配置。 ");
     Assert(!states.IsEnabled(first, "gateway"), "同步后应复制 Provider 的禁用状态。 ");
+    Assert(File.ReadAllText(Path.Combine(first.DshHome, ".credentials.yaml"), Encoding.UTF8)
+            == File.ReadAllText(Path.Combine(second.DshHome, ".credentials.yaml"), Encoding.UTF8),
+        "同步 Provider 时必须同步官方 .credentials.yaml 凭据存储。 ");
 
     var independentProvider = models.Read(independent).Single(provider => provider.SettingsNamespace == "llm-deepseek");
     Assert(independentProvider.BaseUrl == "https://independent.example/v1"
         && independentProvider.Models.SequenceEqual(new[] { "independent-model" }), "关闭自动同步的版本不能被其它版本覆盖。 ");
+    Assert(File.ReadAllText(Path.Combine(independent.DshHome, ".credentials.yaml"), Encoding.UTF8)
+            .Contains("independent-credential", StringComparison.Ordinal),
+        "关闭自动同步的版本不能被其它版本覆盖凭据。 ");
 
     var runningSecond = second with
     {

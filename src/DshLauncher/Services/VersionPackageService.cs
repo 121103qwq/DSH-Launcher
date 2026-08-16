@@ -26,7 +26,7 @@ public sealed class VersionPackageService
         Converters = { new JsonStringEnumConverter() }
     };
     private static readonly Regex SensitiveInlineValue = new(
-        @"(?i)([""']?(?:api[-_]?key|token|secret|password|access[-_]?token|refresh[-_]?token|credential(?:s)?|key)[""']?\s*:\s*)([""'][^""']*[""']|[^,\r\n}\]]+)",
+        @"(?i)([""']?(?:[A-Za-z0-9_]*(?:api[-_]?key|token|secret|password)|credential(?:s)?|key)[""']?\s*:\s*)([""'][^""']*[""']|[^,\r\n}\]]+)",
         RegexOptions.CultureInvariant);
     private static readonly Regex SensitiveUrlUserInfo = new(
         @"(?i)(https?://)[^/\s:@]+(?::[^/\s@]*)?@",
@@ -417,10 +417,7 @@ public sealed class VersionPackageService
             return;
         }
 
-        if (IsShareableTextFile(relative)
-            && (relative.StartsWith("skills/", StringComparison.OrdinalIgnoreCase)
-                || relative.StartsWith(".agents/skills/", StringComparison.OrdinalIgnoreCase)
-                || relative.StartsWith(".agent-presets/", StringComparison.OrdinalIgnoreCase)))
+        if (IsShareableTextFile(relative))
         {
             using var resourceStream = entry.Open();
             using var resourceReader = new StreamReader(resourceStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
@@ -684,7 +681,9 @@ public sealed class VersionPackageService
         }
 
         var sanitized = string.Join('\n', lines);
-        return SensitiveInlineValue.Replace(sanitized, "$1\"<redacted>\"");
+        sanitized = SensitiveInlineValue.Replace(sanitized, "$1\"<redacted>\"");
+        sanitized = SensitiveUrlUserInfo.Replace(sanitized, "$1");
+        return SensitiveUrlQuery.Replace(sanitized, "$1<redacted>");
     }
 
     private static string SanitizeVersionSettingsText(string content)
@@ -707,7 +706,8 @@ public sealed class VersionPackageService
         var segments = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Any(segment =>
                 string.Equals(segment, "sessions", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(segment, ".env", StringComparison.OrdinalIgnoreCase)))
+                || string.Equals(segment, ".env", StringComparison.OrdinalIgnoreCase)
+                || segment.StartsWith(".env.", StringComparison.OrdinalIgnoreCase)))
         {
             return true;
         }

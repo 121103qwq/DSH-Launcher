@@ -20,6 +20,8 @@ public partial class VersionSettingsWindow : UserControl
     private readonly ExtensionService _extensionService;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntimeProvider;
     private readonly VersionPackageService _packageService;
+    private readonly VersionSnapshotService _snapshotService;
+    private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
     private readonly Action _settingsSaved;
     private VersionSettingsData _settings = new();
 
@@ -30,6 +32,8 @@ public partial class VersionSettingsWindow : UserControl
         ExtensionService extensionService,
         Func<NodeRuntimeInfo?> nodeRuntimeProvider,
         VersionPackageService packageService,
+        VersionSnapshotService snapshotService,
+        Func<ManagerInstance, string, ManagerInstance> renameVersion,
         Action settingsSaved)
     {
         _instance = instance;
@@ -38,6 +42,8 @@ public partial class VersionSettingsWindow : UserControl
         _extensionService = extensionService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _packageService = packageService;
+        _snapshotService = snapshotService;
+        _renameVersion = renameVersion;
         _settingsSaved = settingsSaved;
 
         InitializeComponent();
@@ -59,6 +65,7 @@ public partial class VersionSettingsWindow : UserControl
             : "版本设置";
         VersionIdentityText.Text = _instance?.Name ?? "尚未选择版本";
         PersonalizationVersionText.Text = _instance?.Name ?? "请先创建或选择一个版本";
+        VersionNameBox.Text = _instance?.Name ?? string.Empty;
         PersonalizationDetailsText.Text = _instance is null
             ? "版本设置需要绑定到一个真实版本。请先在启动页选择实例，或在版本控制中创建版本。"
             : $"{_instance.KindText} · {_instance.RootPath}\n状态：{_instance.StatusText}";
@@ -83,6 +90,29 @@ public partial class VersionSettingsWindow : UserControl
         }
 
         await LoadPluginsAsync();
+    }
+
+    private void SaveVersionName_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            PersonalizationStatusText.Text = "请先选择一个版本。";
+            return;
+        }
+
+        try
+        {
+            _instance = _renameVersion(_instance, VersionNameBox.Text);
+            VersionNameBox.Text = _instance.Name;
+            VersionSettingsHeaderText.Text = $"版本设置 - {_instance.Name}";
+            VersionIdentityText.Text = _instance.Name;
+            PersonalizationVersionText.Text = _instance.Name;
+            PersonalizationStatusText.Text = $"版本名称已更新为：{_instance.Name}";
+        }
+        catch (Exception ex)
+        {
+            PersonalizationStatusText.Text = $"保存版本名称失败：{ex.Message}";
+        }
     }
 
     private void LoadWorkspaceNames()
@@ -208,9 +238,12 @@ public partial class VersionSettingsWindow : UserControl
         try
         {
             var updated = ReadConfigurationSettings();
+            var snapshot = TryCreateSnapshot("保存版本同步配置前");
             _settingsService.Save(_instance, updated);
             _settings = updated;
-            ConfigurationStatusText.Text = "配置已保存。对话文件按当前选项处理，模型按“所有版本自动同步模型”设置处理。";
+            ConfigurationStatusText.Text = snapshot is null
+                ? "配置已保存。对话文件按当前选项处理，模型按“所有版本自动同步模型”设置处理。"
+                : "配置已保存，并已保留修改前快照。";
             _settingsSaved();
         }
         catch (Exception ex)
@@ -351,9 +384,12 @@ public partial class VersionSettingsWindow : UserControl
                 WindowTitle = WindowTitleBox.Text,
                 NodeExecutablePath = nodePath
             };
+            var snapshot = TryCreateSnapshot("保存窗口与 Node 设置前");
             _settingsService.Save(_instance, updated);
             _settings = updated;
-            PluginStatusText.Text = "窗口标题和 Node.js 设置已保存。";
+            PluginStatusText.Text = snapshot is null
+                ? "窗口标题和 Node.js 设置已保存。"
+                : "窗口标题和 Node.js 设置已保存，并已保留修改前快照。";
             NodeRuntimeText.Text = FormatNodeRuntime();
             _settingsSaved();
         }
@@ -418,5 +454,17 @@ public partial class VersionSettingsWindow : UserControl
         var invalid = Path.GetInvalidFileNameChars();
         var result = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
         return string.IsNullOrWhiteSpace(result) ? "dsh-version" : result;
+    }
+
+    private VersionSnapshotInfo? TryCreateSnapshot(string reason)
+    {
+        if (_instance is null
+            || _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            || _instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            return null;
+        }
+
+        return _snapshotService.CreateSnapshot(_instance, reason);
     }
 }

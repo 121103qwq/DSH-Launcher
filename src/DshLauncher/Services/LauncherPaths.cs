@@ -31,6 +31,9 @@ public sealed class LauncherPaths
     public string GetInstanceBackupDirectory(string instanceId) =>
         Path.Combine(BackupsDirectory, instanceId);
 
+    public string GetVersionSnapshotDirectory(string instanceId) =>
+        Path.Combine(GetInstanceBackupDirectory(instanceId), "snapshots");
+
     private static string GetDefaultRoot()
     {
         var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);

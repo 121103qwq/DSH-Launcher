@@ -79,6 +79,27 @@
                                        Foreground="{StaticResource MutedBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,8,0,0" />
+                            <TextBlock Text="版本名称"
+                                       FontWeight="SemiBold"
+                                       Margin="0,20,0,0" />
+                            <Grid Margin="0,7,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="VersionNameBox"
+                                         MaxLength="80"
+                                         VerticalContentAlignment="Center" />
+                                <Button Grid.Column="1"
+                                        Content="保存名称"
+                                        Click="SaveVersionName_Click"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Margin="8,0,0,0" />
+                            </Grid>
+                            <TextBlock x:Name="PersonalizationStatusText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
                             <Border Background="#F5F9FD" CornerRadius="10" Padding="18" Margin="0,22,0,0">
                                 <StackPanel>
                                     <TextBlock Text="版本数据位置" FontWeight="SemiBold" />

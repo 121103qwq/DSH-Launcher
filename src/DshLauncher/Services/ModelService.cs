@@ -13,6 +13,9 @@ namespace DshLauncher.Services;
 public sealed class ModelService
 {
     private static readonly Regex TopLevelSection = new("^(?<name>[A-Za-z0-9_-]+):\\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex InlineModelId = new(
+        @"\bid\s*:\s*(?<value>""(?:\\.|[^""\\])*""|'[^']*'|[^,\]}\s]+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly Func<string, bool> _isRunning;
 
     public ModelService(Func<string, bool>? isRunning = null)
@@ -499,7 +502,34 @@ public sealed class ModelService
         var start = FindTopLevelStart(lines, name);
         if (start < 0) return new List<string>();
         var end = FindTopLevelEnd(lines, start);
-        return lines.Skip(start + 1).Take(end - start - 1).ToList();
+        return NormalizeMappingBraces(lines.Skip(start + 1).Take(end - start - 1));
+    }
+
+    private static List<string> NormalizeMappingBraces(IEnumerable<string> lines)
+    {
+        var result = new List<string>();
+        var braceDepth = 0;
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed == "{")
+            {
+                braceDepth++;
+                continue;
+            }
+
+            if (trimmed.TrimEnd(',') == "}")
+            {
+                braceDepth = Math.Max(0, braceDepth - 1);
+                continue;
+            }
+
+            var indentation = line.Length - line.TrimStart().Length;
+            var remove = Math.Min(indentation, braceDepth * 2);
+            result.Add(line[remove..]);
+        }
+
+        return result;
     }
 
     private static List<string> ReadNestedSection(IReadOnlyList<string> section, string parent, string child)
@@ -536,8 +566,8 @@ public sealed class ModelService
         {
             var trimmed = line.TrimStart();
             if (!trimmed.StartsWith(key + ":", StringComparison.Ordinal)) continue;
-            var value = trimmed[(key.Length + 1)..].Trim();
-            return value.Trim('"', '\'');
+            var value = trimmed[(key.Length + 1)..].Trim().TrimEnd(',').Trim();
+            return ParseYamlScalar(value);
         }
 
         return null;
@@ -548,7 +578,7 @@ public sealed class ModelService
         var modelsStart = -1;
         for (var index = 0; index < lines.Count; index++)
         {
-            if (lines[index].TrimStart().Equals("models:", StringComparison.Ordinal))
+            if (lines[index].TrimStart().StartsWith("models:", StringComparison.Ordinal))
             {
                 modelsStart = index;
                 break;
@@ -556,6 +586,17 @@ public sealed class ModelService
         }
 
         if (modelsStart < 0) return Array.Empty<string>();
+        var inlineModels = InlineModelId.Matches(lines[modelsStart])
+            .Cast<Match>()
+            .Select(match => ParseYamlScalar(match.Groups["value"].Value))
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (inlineModels.Length > 0)
+        {
+            return inlineModels;
+        }
+
         var baseIndent = lines[modelsStart].Length - lines[modelsStart].TrimStart().Length;
         var result = new List<string>();
         for (var index = modelsStart + 1; index < lines.Count; index++)
@@ -569,6 +610,29 @@ public sealed class ModelService
         }
 
         return result;
+    }
+
+    private static string ParseYamlScalar(string value)
+    {
+        var trimmed = value.Trim().TrimEnd(',').Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"')
+        {
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<string>(trimmed) ?? string.Empty;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return trimmed[1..^1];
+            }
+        }
+
+        if (trimmed.Length >= 2 && trimmed[0] == '\'' && trimmed[^1] == '\'')
+        {
+            return trimmed[1..^1].Replace("''", "'", StringComparison.Ordinal);
+        }
+
+        return trimmed;
     }
 
     private static string NormalizeKey(string value, string label)

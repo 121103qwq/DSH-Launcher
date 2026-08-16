@@ -44,6 +44,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SkillMarketService _skillMarketService;
     private readonly VersionPackageService _versionPackageService;
     private readonly VersionSettingsService _versionSettingsService = new();
+    private readonly VersionHealthService _versionHealthService;
+    private readonly VersionSnapshotService _versionSnapshotService;
     private readonly ConversationService _conversationService;
     private readonly ConversationSyncService _conversationSyncService;
     private readonly ModelService _modelService;
@@ -65,6 +67,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isDshInstallInProgress;
     private bool _isRuntimePrepareInProgress;
     private bool _isProviderDetectionInProgress;
+    private string? _providerCardsInstanceId;
     private bool _blockWindowCloseForMsi;
     private bool _instancesLoadedSuccessfully;
     private bool _firstRunSetupPromptShown;
@@ -73,13 +76,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public MainWindow()
     {
-        _extensionService = new(id => _instanceRunner.IsRunning(id));
+        _versionSnapshotService = new(isRunning: id => _instanceRunner.IsRunning(id));
+        _extensionService = new(
+            id => _instanceRunner.IsRunning(id),
+            snapshotService: _versionSnapshotService);
         _marketplaceService = new();
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _conversationSyncService = new(_versionSettingsService, id => _instanceRunner.IsRunning(id));
         _modelService = new(id => _instanceRunner.IsRunning(id));
+        _versionHealthService = new(_versionSettingsService, _modelService);
         _modelProviderSyncService = new(
             _versionSettingsService,
             _modelService,
@@ -586,7 +593,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         _providerRefreshCancellation = cancellation;
         _isProviderDetectionInProgress = instance is not null;
-        ProviderCards.Clear();
+        if (instance is null
+            || !string.Equals(_providerCardsInstanceId, instance.Id, StringComparison.Ordinal))
+        {
+            ProviderCards.Clear();
+            _providerCardsInstanceId = null;
+        }
         OnPropertyChanged(nameof(NoProvidersVisibility));
         OnPropertyChanged(nameof(ProviderCardsVisibility));
         OnPropertyChanged(nameof(ProviderSummaryText));
@@ -606,25 +618,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            await SynchronizeModelProvidersAsync(instance, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
             var states = _providerStateService.Read(instance);
             var providers = _modelService.Read(instance);
+            var cards = new List<ProviderCardViewModel>();
             // 启动页只显示实际配置过的 Provider：settings.yaml 没有 llm 段时不
             // 显示占位默认卡，全新实例显示空状态而不是假列表。
             foreach (var provider in providers.Where(static item => item.Configured))
             {
                 var isEnabled = !states.TryGetValue(provider.Provider, out var storedEnabled) || storedEnabled;
-                ProviderCards.Add(new ProviderCardViewModel(provider, isEnabled));
+                cards.Add(new ProviderCardViewModel(provider, isEnabled));
             }
+
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(_providerRefreshCancellation, cancellation))
+            {
+                return;
+            }
+
+            ProviderCards.Clear();
+            foreach (var card in cards)
+            {
+                ProviderCards.Add(card);
+            }
+
+            _providerCardsInstanceId = instance.Id;
 
             OnPropertyChanged(nameof(NoProvidersVisibility));
             OnPropertyChanged(nameof(ProviderCardsVisibility));
             OnPropertyChanged(nameof(ProviderSummaryText));
             UpdateProviderSectionVisibility();
 
-            var checks = ProviderCards.Select(async card =>
+            var checks = cards.Select(async card =>
                 (Card: card, Result: await _providerDiagnosticService.CheckAsync(card.Provider, cancellation.Token)));
             var results = await Task.WhenAll(checks);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(_providerRefreshCancellation, cancellation))
+            {
+                return;
+            }
+
             foreach (var result in results)
             {
                 result.Card.SetDiagnostic(result.Result);
@@ -954,7 +987,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             GetVersionTemplate,
             AddCreatedVersion,
             RemoveDeletedVersion,
-            version => SelectedInstance = version));
+            version => SelectedInstance = version,
+            _versionHealthService,
+            _versionSnapshotService,
+            () => _nodeRuntime,
+            () => _dshRuntime,
+            id => _instanceRunner.IsRunning(id),
+            updated =>
+            {
+                UpdateInstance(updated);
+                return Instances.First(instance =>
+                    string.Equals(instance.Id, updated.Id, StringComparison.Ordinal));
+            },
+            () =>
+            {
+                ApplySelectedVersionSettings(SelectedInstance);
+                if (SelectedInstance is { } current)
+                {
+                    _ = RefreshProvidersAsync(current);
+                }
+            }));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -974,6 +1026,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _extensionService,
             () => _nodeRuntime,
             _versionPackageService,
+            _versionSnapshotService,
+            (current, name) =>
+            {
+                var updated = current with { Name = name };
+                UpdateInstance(updated);
+                var saved = Instances.First(instance =>
+                    string.Equals(instance.Id, current.Id, StringComparison.Ordinal));
+                PageTitle = $"版本设置 - {saved.Name}";
+                PageSubtitle = $"当前实例：{saved.Name} · 管理个性化、配置、插件和分享导出";
+                OnPropertyChanged(nameof(PageTitle));
+                OnPropertyChanged(nameof(PageSubtitle));
+                return saved;
+            },
             () =>
             {
                 ApplySelectedVersionSettings(SelectedInstance);
@@ -1222,7 +1287,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             dshStatus.Text = $"DeepSeek Harness：{DshStatusText}";
             dshDetail.Text = _dshRuntime.IsAvailable
                 ? $"{_dshRuntime.VersionText} · {(_dshRuntime.ExecutablePath ?? "路径未知")}"
-                : "未安装";
+                : _dshRuntime.Error ?? "未安装";
             // 设置页按全局环境判定就绪：DSh 声明的 engines.node 与现有 Node
             // 不兼容时保持“未就绪”，让状态和不兼容提示可见，而不是隐藏准备按钮。
             var ready = IsPreferredDshRuntimeReady(_dshRuntime, preferredDshDirectory)
@@ -1727,9 +1792,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     WindowTitle = current.WindowTitle,
                     NodeExecutablePath = current.NodeExecutablePath
                 };
+                var snapshot = instance.RuntimeStatus != InstanceRuntimeStatus.Running
+                    && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
+                    && !_instanceRunner.IsRunning(instance.Id)
+                    ? _versionSnapshotService.CreateSnapshot(instance, "保存设置页版本同步配置前")
+                    : null;
                 _versionSettingsService.Save(instance, updated);
                 RefreshWorkspaceChoices(workspace);
-                versionStatus.Text = $"已保存 {instance.Name} 的同步配置。";
+                versionStatus.Text = snapshot is null
+                    ? $"已保存 {instance.Name} 的同步配置。"
+                    : $"已保存 {instance.Name} 的同步配置，并保留修改前快照。";
                 _ = SynchronizeModelProvidersAsync(instance, notifyNoConfiguration: true);
                 _ = SynchronizeConversationsAsync(instance);
             }
@@ -2703,7 +2775,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void UpdateInstance(ManagerInstance updated)
     {
-        _instanceRegistry.Update(updated);
+        updated = _instanceRegistry.Update(updated);
         var wasSelected = string.Equals(SelectedInstance?.Id, updated.Id, StringComparison.Ordinal);
         var index = Instances.ToList().FindIndex(instance => string.Equals(instance.Id, updated.Id, StringComparison.Ordinal));
         if (index >= 0)
@@ -2980,7 +3052,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var choice = FirstRunSetupWindow.Show(
             this,
             _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
-            _dshRuntime.IsAvailable ? _dshRuntime.VersionText : "未安装",
+            _dshRuntime.IsAvailable ? _dshRuntime.VersionText : _dshRuntime.Error ?? "未安装",
             configuredDirectory,
             runtimeReady);
         if (choice is null)
