@@ -15,8 +15,17 @@ public sealed class VersionSettingsService
         Converters = { new JsonStringEnumConverter() }
     };
 
+    private readonly LauncherPaths _paths;
+
+    public VersionSettingsService(LauncherPaths? paths = null)
+    {
+        _paths = paths ?? new LauncherPaths();
+    }
+
     public string GetSettingsPath(ManagerInstance instance) =>
         Path.Combine(instance.DshHome, ".dsh-launcher", "version-settings.json");
+
+    public string LauncherSettingsPath => Path.Combine(_paths.RootDirectory, "launcher-settings.json");
 
     public VersionSettingsData Read(ManagerInstance instance)
     {
@@ -43,16 +52,20 @@ public sealed class VersionSettingsService
     public void Save(ManagerInstance instance, VersionSettingsData settings)
     {
         Normalize(settings);
-        var path = GetSettingsPath(instance);
+        WriteSettingsFile(GetSettingsPath(instance), JsonSerializer.Serialize(settings, JsonOptions));
+    }
+
+    private static void WriteSettingsFile(string path, string json)
+    {
         var directory = Path.GetDirectoryName(path)
-            ?? throw new InvalidOperationException("版本设置没有父目录。 ");
+            ?? throw new InvalidOperationException("设置文件没有父目录。");
         Directory.CreateDirectory(directory);
         var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
             File.WriteAllText(
                 temporary,
-                JsonSerializer.Serialize(settings, JsonOptions),
+                json,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             File.Move(temporary, path, overwrite: true);
         }
@@ -63,6 +76,70 @@ public sealed class VersionSettingsService
                 File.Delete(temporary);
             }
         }
+    }
+
+    public LauncherSettingsData ReadLauncherSettings()
+    {
+        if (!File.Exists(LauncherSettingsPath))
+        {
+            return new LauncherSettingsData();
+        }
+
+        try
+        {
+            var settings = JsonSerializer.Deserialize<LauncherSettingsData>(
+                File.ReadAllText(LauncherSettingsPath, Encoding.UTF8), JsonOptions);
+            if (settings is null)
+            {
+                return new LauncherSettingsData();
+            }
+
+            settings.Workspaces.RemoveAll(string.IsNullOrWhiteSpace);
+            return settings;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Launcher 级设置损坏时按默认值工作，不阻断设置页。
+            return new LauncherSettingsData();
+        }
+    }
+
+    public void SaveLauncherSettings(LauncherSettingsData settings)
+    {
+        settings.Workspaces.RemoveAll(string.IsNullOrWhiteSpace);
+        WriteSettingsFile(LauncherSettingsPath, JsonSerializer.Serialize(settings, JsonOptions));
+    }
+
+    /// <summary>
+    /// 添加一个 Launcher 级工作区名称：出现在所有版本“按工作区同步”的下拉中，
+    /// 不依赖某个版本先使用它。
+    /// </summary>
+    public string AddLauncherWorkspace(string name)
+    {
+        var normalized = name?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+        {
+            throw new ArgumentException("工作区名称不能为空。", nameof(name));
+        }
+
+        if (normalized.Length > 80)
+        {
+            throw new ArgumentException("工作区名称不能超过 80 个字符。", nameof(name));
+        }
+
+        if (normalized.Any(char.IsControl))
+        {
+            throw new ArgumentException("工作区名称不能包含控制字符。", nameof(name));
+        }
+
+        var settings = ReadLauncherSettings();
+        if (!settings.Workspaces.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+        {
+            settings.Workspaces.Add(normalized);
+            SaveLauncherSettings(settings);
+        }
+
+        return normalized;
     }
 
     public IReadOnlyList<string> GetWorkspaceNames(IEnumerable<ManagerInstance> instances)
@@ -77,6 +154,14 @@ public sealed class VersionSettingsService
             }
         }
 
+        foreach (var workspace in ReadLauncherSettings().Workspaces)
+        {
+            if (!string.IsNullOrWhiteSpace(workspace))
+            {
+                workspaces.Add(workspace);
+            }
+        }
+
         return workspaces.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
@@ -84,14 +169,18 @@ public sealed class VersionSettingsService
     {
         var leftSettings = Read(left);
         var rightSettings = Read(right);
-        return leftSettings.SyncAllConfiguration || rightSettings.SyncAllConfiguration;
+        return ReadLauncherSettings().SyncAllConfiguration
+            || leftSettings.SyncAllConfiguration
+            || rightSettings.SyncAllConfiguration;
     }
 
     public bool ShouldSyncConversations(ManagerInstance left, ManagerInstance right)
     {
         var leftSettings = Read(left);
         var rightSettings = Read(right);
-        if (leftSettings.SyncAllConfiguration || rightSettings.SyncAllConfiguration)
+        if (ReadLauncherSettings().SyncAllConfiguration
+            || leftSettings.SyncAllConfiguration
+            || rightSettings.SyncAllConfiguration)
         {
             return true;
         }

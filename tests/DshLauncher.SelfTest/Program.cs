@@ -49,6 +49,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Model settings round-trip", TestModelSettingsRoundTrip),
     ("Provider state and diagnostics", TestProviderStateAndDiagnostics),
     ("Model provider synchronization", TestModelProviderSynchronization),
+    ("Launcher settings and workspaces", TestLauncherSettingsAndWorkspaces),
     ("Conversation file management", TestConversationFileManagement),
     ("Conversation synchronization", TestConversationSynchronization)
 };
@@ -1695,7 +1696,7 @@ static Task TestVersionPackageOperations()
     var clean = packages.CreateCleanVersion(source, "干净版本");
     Assert(clean.DshHome != source.DshHome && !Directory.EnumerateFileSystemEntries(clean.DshHome).Any(), "干净版本不能带入旧版本文件。 ");
 
-    var settingsService = new VersionSettingsService();
+    var settingsService = new VersionSettingsService(new LauncherPaths(launcherRoot));
     settingsService.Save(source, new VersionSettingsData
     {
         ConversationSyncMode = ConversationSyncMode.Workspace,
@@ -2005,7 +2006,7 @@ static Task TestModelProviderSynchronization()
     var first = registry.Register("模型版本 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var second = registry.Register("模型版本 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var independent = registry.Register("独立模型版本", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
-    var settings = new VersionSettingsService();
+    var settings = new VersionSettingsService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
     settings.Save(first, new VersionSettingsData { SyncModelProviders = true });
     settings.Save(second, new VersionSettingsData { SyncModelProviders = true });
     settings.Save(independent, new VersionSettingsData { SyncModelProviders = false });
@@ -2059,6 +2060,64 @@ static Task TestModelProviderSynchronization()
     };
     var skipped = sync.Synchronize(first, new[] { first, runningSecond });
     Assert(skipped.SkippedRunningVersions == 1 && skipped.CopiedVersions == 0, "运行中的版本不能被 Provider 同步写入。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestLauncherSettingsAndWorkspaces()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var runtime = Path.Combine(temporary.Path, "runtime");
+    Directory.CreateDirectory(runtime);
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var first = registry.Register("全局同步 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var second = registry.Register("全局同步 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
+    var settings = new VersionSettingsService(new LauncherPaths(launcherRoot));
+
+    Assert(!settings.ShouldSyncConversations(first, second), "独立模式下默认不应同步对话。");
+    var launcherSettings = settings.ReadLauncherSettings();
+    launcherSettings.SyncAllConfiguration = true;
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(settings.ShouldSyncConfiguration(first, second), "全局“和所有版本配置同步”开启后任意版本对应同步配置。");
+    Assert(settings.ShouldSyncConversations(first, second), "全局开关应覆盖各版本自己的独立模式。");
+    Assert(settings.ShouldSyncModelProviders(first, second), "全局开关应让所有版本同步模型 Provider。");
+    launcherSettings.SyncAllConfiguration = false;
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(!settings.ShouldSyncConversations(first, second), "关闭全局开关后应恢复各版本自己的设置。");
+
+    Assert(settings.AddLauncherWorkspace("团队项目") == "团队项目", "添加工作区应返回规范化名称。");
+    settings.AddLauncherWorkspace("团队项目");
+    var names = settings.GetWorkspaceNames(new[] { first, second });
+    Assert(names.Count(name => string.Equals(name, "团队项目", StringComparison.Ordinal)) == 1, "重复添加同一工作区不能产生重复条目。");
+    AssertThrows<ArgumentException>(
+        () => settings.AddLauncherWorkspace("   "),
+        "空白工作区名称必须被拒绝。");
+
+    settings.Save(second, new VersionSettingsData
+    {
+        ConversationSyncMode = ConversationSyncMode.Workspace,
+        ConversationWorkspace = "版本工作区"
+    });
+    names = settings.GetWorkspaceNames(new[] { first, second });
+    Assert(names.Any(name => string.Equals(name, "版本工作区", StringComparison.Ordinal)), "版本使用中的工作区仍应出现在列表里。");
+    Assert(names.Any(name => string.Equals(name, "团队项目", StringComparison.Ordinal)), "Launcher 级工作区应与版本工作区合并显示。");
+
+    // Provider 同步已开启但没有任何版本带 llm 配置时，必须显式报告“无配置来源”，
+    // 而不是让开关看起来毫无作用。
+    launcherSettings.SyncAllConfiguration = false;
+    settings.SaveLauncherSettings(launcherSettings);
+    settings.Save(first, new VersionSettingsData { SyncModelProviders = true });
+    settings.Save(second, new VersionSettingsData { SyncModelProviders = true });
+    var modelService = new ModelService();
+    var sync = new ModelProviderSyncService(settings, modelService, new ProviderStateService());
+    var noConfig = sync.Synchronize(first, new[] { first, second });
+    Assert(noConfig.NoConfigurationSource && noConfig.CopiedVersions == 0,
+        "没有 llm Provider 配置时同步应报告 NoConfigurationSource。");
+
+    modelService.SaveDeepSeekAsync(first, "DEEPSEEK_API_KEY", "https://api.deepseek.com", new[] { "deepseek-chat" }).Wait();
+    var copied = sync.Synchronize(first, new[] { first, second });
+    Assert(!copied.NoConfigurationSource && copied.CopiedVersions >= 1, "存在 llm 配置后同步应真正复制。");
+    Assert(File.Exists(Path.Combine(second.DshHome, "settings.yaml")), "同步应把 Provider 配置写入目标版本。");
     return Task.CompletedTask;
 }
 
@@ -2164,7 +2223,7 @@ static Task TestConversationSynchronization()
     var first = registry.Register("工作区 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var second = registry.Register("工作区 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var independent = registry.Register("独立版本", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
-    var settings = new VersionSettingsService();
+    var settings = new VersionSettingsService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
     settings.Save(first, new VersionSettingsData
     {
         ConversationSyncMode = ConversationSyncMode.Workspace,

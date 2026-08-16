@@ -22,6 +22,16 @@ public sealed class VersionSettingsData
     public string? NodeExecutablePath { get; set; }
 }
 
+/// <summary>
+/// Launcher 级设置：作用域是全部版本，而不是某一个版本的 DSH_HOME。
+/// </summary>
+public sealed class LauncherSettingsData
+{
+    public bool SyncAllConfiguration { get; set; }
+
+    public List<string> Workspaces { get; set; } = new();
+}
+
 public sealed record VersionExportOptions(
     bool IncludeProviderConfiguration,
     bool IncludePluginConfiguration);

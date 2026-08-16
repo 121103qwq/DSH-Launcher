@@ -6,7 +6,8 @@ namespace DshLauncher.Services;
 public sealed record ModelProviderSyncResult(
     int CopiedVersions,
     int SkippedRunningVersions,
-    IReadOnlyList<string> Errors)
+    IReadOnlyList<string> Errors,
+    bool NoConfigurationSource = false)
 {
     public bool HasErrors => Errors.Count > 0;
 }
@@ -64,7 +65,9 @@ public sealed class ModelProviderSyncService
             .FirstOrDefault();
         if (configurationSource is null && stateSource is null)
         {
-            return new ModelProviderSyncResult(0, skippedRunning, Array.Empty<string>());
+            // 同步已开启但没有任何版本带有 llm Provider 配置：明确告知调用方，
+            // 而不是让“打开同步”看起来毫无作用。
+            return new ModelProviderSyncResult(0, skippedRunning, Array.Empty<string>(), NoConfigurationSource: true);
         }
 
         var sourceStates = stateSource is null ? null : _providerStateService.Read(stateSource);
@@ -104,7 +107,11 @@ public sealed class ModelProviderSyncService
             }
         }
 
-        return new ModelProviderSyncResult(copied, skippedRunning, errors);
+        return new ModelProviderSyncResult(
+            copied,
+            skippedRunning,
+            errors,
+            NoConfigurationSource: configurationSource is null);
     }
 
     private IReadOnlyList<ManagerInstance> FindComponent(

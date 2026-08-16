@@ -843,7 +843,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 _ = RefreshNodeAsync();
                 if (SelectedInstance is { } current)
                 {
-                    _ = SynchronizeModelProvidersAsync(current);
+                    _ = SynchronizeModelProvidersAsync(current, notifyNoConfiguration: true);
                     _ = SynchronizeConversationsAsync(current);
                 }
             }));
@@ -1062,7 +1062,136 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         _runtimePanelUpdateStatus = UpdateStatus;
         UpdateStatus();
+
+        AddVersionSyncSection(panel);
         return panel;
+    }
+
+    private void AddVersionSyncSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "版本数据同步",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var syncAll = new System.Windows.Controls.CheckBox
+        {
+            Content = "和所有版本配置同步",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 14, 0, 0),
+            IsChecked = _versionSettingsService.ReadLauncherSettings().SyncAllConfiguration
+        };
+        panel.Children.Add(syncAll);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "与版本设置中的同名开关一致，但作用于全部版本：开启后所有版本之间按全量策略同步对话、配置和模型 Provider，忽略各版本自己的独立/工作区选择。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0)
+        });
+
+        void HandleSyncAllChanged()
+        {
+            var enabled = syncAll.IsChecked == true;
+            var settings = _versionSettingsService.ReadLauncherSettings();
+            settings.SyncAllConfiguration = enabled;
+            _versionSettingsService.SaveLauncherSettings(settings);
+            if (SelectedInstance is { } current)
+            {
+                _ = SynchronizeModelProvidersAsync(current, notifyNoConfiguration: false);
+                _ = SynchronizeConversationsAsync(current);
+            }
+
+            ShowNotice(enabled
+                ? "已开启全局“和所有版本配置同步”，将按全量策略同步所有已停止版本。"
+                : "已关闭全局“和所有版本配置同步”，各版本恢复使用自己的同步设置。");
+        }
+
+        syncAll.Checked += (_, _) => HandleSyncAllChanged();
+        syncAll.Unchecked += (_, _) => HandleSyncAllChanged();
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "对话同步工作区",
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 18, 0, 0)
+        });
+
+        var workspaceList = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        void RefreshWorkspaceList()
+        {
+            var names = _versionSettingsService.GetWorkspaceNames(Instances);
+            workspaceList.Text = names.Count == 0
+                ? "暂无工作区。"
+                : string.Join("、", names);
+        }
+
+        RefreshWorkspaceList();
+        panel.Children.Add(workspaceList);
+
+        var nameBox = new System.Windows.Controls.TextBox
+        {
+            Width = 260,
+            VerticalContentAlignment = System.Windows.VerticalAlignment.Center
+        };
+        var addButton = new System.Windows.Controls.Button
+        {
+            Content = "添加工作区",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        var addRow = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        addRow.Children.Add(nameBox);
+        addRow.Children.Add(addButton);
+        panel.Children.Add(addRow);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "添加的工作区会出现在版本设置“按工作区同步”的下拉列表中，供各版本选择。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        });
+
+        void AddWorkspace()
+        {
+            try
+            {
+                var name = _versionSettingsService.AddLauncherWorkspace(nameBox.Text);
+                nameBox.Clear();
+                RefreshWorkspaceList();
+                ShowNotice($"已添加工作区：{name}。");
+            }
+            catch (ArgumentException ex)
+            {
+                ShowNotice(ex.Message);
+            }
+        }
+
+        addButton.Click += (_, _) => AddWorkspace();
+        nameBox.KeyDown += (_, keyArgs) =>
+        {
+            if (keyArgs.Key == System.Windows.Input.Key.Enter)
+            {
+                AddWorkspace();
+                keyArgs.Handled = true;
+            }
+        };
     }
 
     /// <summary>
@@ -1926,7 +2055,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task<DshInstanceRunResult?> StartManagedInstanceAsync(ManagerInstance instance)
     {
-        await SynchronizeModelProvidersAsync(instance);
+        await SynchronizeModelProvidersAsync(instance, notifyNoConfiguration: true);
         await SynchronizeConversationsAsync(instance);
         if (!await PrepareSourceAsync(instance))
         {
@@ -2205,7 +2334,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task SynchronizeModelProvidersAsync(
         ManagerInstance focus,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool notifyNoConfiguration = false)
     {
         try
         {
@@ -2216,6 +2346,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (result.CopiedVersions > 0)
             {
                 ShowNotice($"已按版本设置同步模型 Provider 到 {result.CopiedVersions} 个版本。 ");
+            }
+
+            if (notifyNoConfiguration && result.NoConfigurationSource && result.CopiedVersions == 0)
+            {
+                ShowNotice("Provider 同步已开启，但这些版本的 settings.yaml 中都没有 llm Provider 配置，无可同步内容；经 DSh 登录页连接的 Provider 不写入该文件。");
             }
 
             if (result.HasErrors)
