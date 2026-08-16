@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-处理 PR #2 第三轮 Codex Review：手动安装提示按实际 engine、对话触发启动走 runtime 准备、目标被删除时中止、后台检测后恢复准备按钮、唯一 MSI 文件名、标题缓存拒绝重解析点；完成后重新触发 Review。
+收口 `feature/runtime-bootstrap`：等待 PR #2 第四轮 Codex Review 结果；若仍有真实 P1/P2 继续修复并重新 Review，干净后保留真实无 Node Windows 的实机人工验收（Installed 与 Source 两条链路），验收通过再合并 main。
 
 ## 已完成内容
 
@@ -34,7 +34,7 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）；最新提交为本轮 Review 修复提交 `Address PR #2 review findings`（哈希见 git log）。
+- 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）；最新提交 `d3b3c7d`（Address PR #2 third-round review findings），已推送 origin，相对 main ahead 6 / behind 0。
 - `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：37/37 通过（新增：Source engine 驱动 Node 版本选择、Source 不装全局 DSh、有效 Installed 未声明 engine 保持未声明、Node 检测期间禁止启动、启动目标按原实例 ID 解析、重绑定后重算 engine 的启动就绪判定、Running/Attached 不重绑定、Node 目录补入 PATH 的纯逻辑、固定版本兜底兼容性）。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
 - Release 单文件自包含 publish：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `63FE7F24EA0F28B62DAF5580CF2B541BC51CBD131A494309C9B5E8FDAF29FEAA`，已复制到桌面 `runtime-bootstrap-review-fix4-20260816`；实际启动验证：窗口正常出现且可正常退出（exit 0）。
@@ -71,4 +71,4 @@
 
 ## 下一步最直接的任务
 
-已推送第三轮 Review 修复提交：重新触发 Codex Review 并逐条确认；Review 干净后仍保留真实无 Node Windows 的实机人工验收（Installed 与 Source 两条链路），验收通过再合并 main。
+接手点：第四轮 `@codex review` 已针对 `d3b3c7d` 触发但结果尚未返回（前 21 条 review 评论已全部回复确认并 resolve）。下一步：等待/拉取第四轮 Review 结果，处理新增真实 P1/P2（不要机械照改，先核对调用链），全部通过后再做真实无 Node Windows 的 Installed/Source 实机人工验收，验收通过才合并 main。
