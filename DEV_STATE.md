@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-处理 PR #2 第六轮 Codex Review（3 条 P2，全部确认为真实问题并已修复）：设置页“准备运行环境”入口接入同一个 `LifecycleBusyGuard`（与 Start/Stop/Restart/对话自动启动互斥）；超时残留的 msiexec 存活期间阻止关闭 Launcher（方案 A，不跨进程持久化），退出后经 `LingeringInstallerCompleted` 事件解除保护并清理 MSI；CURRENT_DESIGN.md 的 runtime 准备段落压缩为 durable 设计原则，实现细节只留在 DEV_STATE.md。完成后触发第七轮 Review。
+PR #2 最终收口：第六轮 3 条 P2 已修复（78cd204）；第七轮（针对 520401c）发现 1 P1 + 1 P2 已修复——MSI 签名验证开启整链吊销检查（WTD_REVOKE_WHOLECHAIN，吊销状态无法确立时拒绝提权）、重绑定只发生在用户确认的准备/修复流程（RefreshDshAsync/LoadInstancesAsync 的被动检测不再改写注册，避免临时不可用卷上的自定义 runtime 被覆盖）；版本号升级 0.1.10。修复后 push、回复 resolve、再触发一轮 Review；干净即 merge 并创建 v0.1.10-rc.1。
 
 ## 已完成内容
 

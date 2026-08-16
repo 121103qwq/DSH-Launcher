@@ -5,15 +5,19 @@ namespace DshLauncher.Services;
 
 /// <summary>
 /// 下载的 Node.js MSI 会以管理员权限执行；执行前必须确认文件带有完整
-/// Authenticode 签名链，且签名者是 Node.js 官方发布者，避免下载源或镜像
-/// 被污染时把任意 payload 直接交给 msiexec 提权安装。
+/// Authenticode 签名链（含整链吊销检查），且签名者是 Node.js 官方发布者，
+/// 避免下载源或镜像被污染、或签名证书被吊销后把任意 payload 交给 msiexec
+/// 提权安装。任何一环无法确立时按不信任处理。
 /// </summary>
 internal static class MsiAuthenticodeVerifier
 {
     private static readonly Guid WinTrustActionGenericVerify2 = new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
 
     private const uint WtdUiNone = 2;
-    private const uint WtdRevokeNone = 0;
+    // 整链吊销检查（CRL/OCSP）：签名证书私钥泄露被吊销后，用它签出的恶意 MSI
+    // 不能再通过验证；吊销状态无法确立（如离线）时 WinVerifyTrust 返回失败，
+    // 按不信任处理——验证发生在下载完成之后，此时网络理应可用。
+    private const uint WtdRevokeWholeChain = 1;
     private const uint WtdChoiceFile = 1;
     private const uint WtdStateActionVerify = 1;
     private const uint WtdStateActionClose = 2;
@@ -42,7 +46,7 @@ internal static class MsiAuthenticodeVerifier
                 {
                     cbSize = Marshal.SizeOf<WinTrustData>(),
                     dwUIChoice = WtdUiNone,
-                    fdwRevocationChecks = WtdRevokeNone,
+                    fdwRevocationChecks = WtdRevokeWholeChain,
                     dwUnionChoice = WtdChoiceFile,
                     pFile = fileInfoPointer,
                     dwStateAction = WtdStateActionVerify

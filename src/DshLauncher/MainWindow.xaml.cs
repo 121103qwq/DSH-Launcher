@@ -379,7 +379,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanInstallDsh));
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(DshInstallButtonText));
-        RebindInstalledInstancesToDetectedDSh();
+        // 注意：被动检测不触发重绑定。实例 root 位于临时不可用的卷（可移动盘/
+        // 网络盘断开）时按“失效”持久化改写注册，会在卷恢复后丢失原 runtime 选择；
+        // 重绑定只发生在用户确认的准备/修复流程（PrepareRuntimeAsync）。
     }
 
     private async Task LoadInstancesAsync()
@@ -428,7 +430,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshRunningInstances();
             OnPropertyChanged(nameof(ProviderSummaryText));
             OnPropertyChanged(nameof(CanRefreshProviders));
-            RebindInstalledInstancesToDetectedDSh();
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
