@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-用户实测 4 个问题已修复（29e078d + c934b45）：启动页只显示实际配置过的 Provider；Launcher 异常退出遗留实例按 PID/端口收编回 Managed（Stop/删除恢复可用）；扩展页已安装/市场列表整批替换 ItemsSource 且市场列表的筛选/排序/投影整体移后台线程（分类切换不再卡顿）；"无法双击打开"根因是发布命令回归——正式发布必须按 README 使用 `-p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true`（72MB 单文件可独立运行；缺省参数的 155MB 产物依赖旁边散装原生 DLL，复制单 EXE 会在 10-25 秒后崩溃），已按正确参数重发并 60 秒干净目录验证。发布/merge 流程暂停，等待用户验证。
+用户实测问题持续修复中（29e078d + c934b45 + 5372650）：启动页只显示实际配置过的 Provider（空 llm-pi-ai 骨架不算已配置，空态文案不再指向不存在的配置页，并说明经 DSh 登录连接的 Provider 不在此显示）；删除版本失败"DSH_HOME 不能是符号链接或重解析点"的根因是 DSh 会在 dsh-home `profiles\node_modules` 下创建指向共享运行目录的 junction——删除/复制/导出现在跳过或只移除链接本身，绝不穿透共享目录；Launcher 异常退出遗留实例按 PID/端口收编回 Managed（Stop/删除恢复可用）；扩展页列表整批替换 ItemsSource 且市场筛选/排序/投影整体移后台线程；"无法双击打开"根因是发布命令回归——正式发布必须按 README 使用 `-p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true`（72MB 单文件可独立运行；缺省参数的 155MB 产物依赖旁边散装原生 DLL，复制单 EXE 会在 10-25 秒后崩溃），已按正确参数重发并 60 秒干净目录验证。发布/merge 流程暂停，等待用户验证。
 
 ## 已完成内容
 
@@ -34,10 +34,10 @@
 
 ## 已执行测试及结果
 
-- 当前 Git：分支 `feature/runtime-bootstrap`，基于 `main`（含 PR #1 合并 `1eb5f65`）；最新提交为第六轮 Review 修复提交（哈希见 git log），已推送 origin。
-- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release`：40/40 通过（第六轮新增断言：设置页准备与实例生命周期共用 guard、`HasLingeringInstaller` 状态转换与残留安装完成通知/清理时序）。
+- 当前 Git：分支 `feature/runtime-bootstrap`，最新提交 `5372650`（DSh junction 跳过 + Provider 显示修复），已推送 origin。
+- `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：41/41 通过（新增：含 junction 的删除/复制/导出回归断言、空 pi-ai 骨架不算已配置）。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
-- Release 单文件自包含 publish：0 errors、0 warnings；`DSH Launcher.exe` 的 SHA-256 为 `C784C68F2F544EFBCCE9240437979FDBA8C9DA61D78E693AC3A4A930821E8137`，已复制到桌面 `runtime-bootstrap-review-fix7-20260816` 与 `video-candidate-20260816`（视频录制候选，与最终 publish 字节一致）；启动冒烟验证通过。
+- Release 单文件自包含 publish（README 规范参数）：0 errors；`DSH Launcher.exe` 72,325,277 字节，SHA-256 `DA33E65220D414FAD9296235FA9AE5D55EEF96A35C5F54E865B674B2C8296BBC`，已复制到桌面 `DSH Launcher\DSH Launcher.exe`、`VIDEO-CANDIDATE-v0.1.10`、`video-candidate-20260816` 并确认存在；60 秒干净目录运行存活（一次中途退出经事件日志排查为窗口被手动关闭，非崩溃）。
 - `git diff --check`：通过。
 
 ## 已知问题
@@ -71,4 +71,4 @@
 
 ## 下一步最直接的任务
 
-接手点：第六轮 Review 的 3 条 P2 已全部修复并推送，3 条线程已回复并 resolve，第七轮 `@codex review` 已触发。第七轮干净（0 P1/0 P2）即标记 Code Review 收敛、不再触发下一轮，直接准备 Fresh Windows 实机验收（Installed 与 Source 两条链路）。
+接手点：用户实测反馈的"删除版本失败（DSH_HOME 重解析点）"与"Provider 显示错误"已在 `5372650` 修复并推送，桌面 EXE / VIDEO-CANDIDATE 已刷新。等待用户验证（删除 test/test2、Provider 空态文案）。用户确认后恢复被暂停的收口流程：第七轮干净（0 P1/0 P2）即标记 Code Review 收敛 → merge PR #2 → 从合并后 main 做发布版 publish → GitHub Pre-release v0.1.10-rc.1。
