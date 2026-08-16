@@ -4,7 +4,7 @@
 
 ## 当前版本
 
-当前为 Launcher Core v0.1.10，已实现：
+当前为 Launcher Core v0.1.11，已实现：
 
 - Windows x64 自包含单文件 WPF 启动器。
 - 实例 / 版本管理：每个版本使用独立 `DSH_HOME` 与 `DSH_AGENTS_HOME`，支持已安装 DSh 与 Source 项目的注册与隔离。

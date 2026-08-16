@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前工作区位于 `feature/runtime-bootstrap`，`v0.1.10` 已发布。Agent/Skill 市场性能优化已完成：缓存解析离开 UI 线程，搜索增加防抖，刷新时减少重复快照计算和列表重绘。
+当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.1.11`。Agent/Skill 市场性能优化已完成：缓存解析离开 UI 线程，搜索增加防抖，刷新时减少重复快照计算和列表重绘。
 
 ## 已完成内容
 
@@ -47,6 +47,8 @@
 - `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：46/46 通过；WPF XAML 编译通过，对话与备份条目新增实例名称断言；既有首次运行、默认 Plugin 保护、Skill 市场、工作区和对话恢复测试继续通过。
 - Agent/Skill 市场性能修复后再次运行同一自测：46/46 通过；实际缓存包含 234 个 Skill（约 130 KB），冷读取约 31 ms，现已移到后台线程。
 - 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-agent-performance-final-20260816-2300`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
+- `v0.1.11` 版本号更新后再次运行自测：46/46 通过；Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-v0.1.11-20260816-2305`，确认 13 个文件。
+- `v0.1.11` Release 单文件自包含 publish：0 errors；`DSH Launcher.exe` 72,362,930 字节，文件版本 `0.1.11.0`，SHA-256 `A451CE524904BFCCB4E0F68F99E255165BBDED244584429310FA3D7020D828D2`。已复制到桌面顶层 `DSH Launcher.exe` 和 `release-v0.1.11-20260816-2305`；因桌面已有用户启动的测试版进程，本轮未强行关闭它执行独立冒烟。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors。
 - 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-first-run-plugin-20260816`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - 对话实例名称显示测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-conversation-instance-20260816`，确认 `DSH Launcher.exe` 存在。
