@@ -2907,7 +2907,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var result = await _instanceRunner.StartAsync(
             instance,
-            instance.Kind == InstanceKind.Source ? _nodeRuntime : null,
+            _nodeRuntime,
             _windowCancellation.Token);
         if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
         {

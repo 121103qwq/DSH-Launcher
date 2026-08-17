@@ -19,6 +19,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
     ("Detected DSh runtime auto registration", TestDetectedDshRuntimeAutoRegistration),
+    ("Manual DSh detect, register and start", TestManualDshDetectRegisterAndStart),
     ("DeepSeek Desktop bundled runtime detection", TestDeepSeekDesktopRuntimeDetection),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
     ("Node install version resolution", TestNodeInstallVersionResolution),
@@ -288,6 +289,17 @@ static async Task TestDshRuntimeDetection()
         {
             Environment.SetEnvironmentVariable("PATH", originalPath);
         }
+
+        var refreshedPathDirectories = RuntimeSearchPaths.GetDirectories(
+            processPath: string.Empty,
+            userPath: secondPrefix,
+            machinePath: null);
+        Assert(DshRuntimeDetector.GetCandidates(
+                preferredInstallDirectory: null,
+                Array.Empty<DeepSeekDesktopInstallation>(),
+                refreshedPathDirectories)
+            .Contains(secondCommand, StringComparer.OrdinalIgnoreCase),
+            "Launcher 进程 PATH 过期时，仍应从当前用户 PATH 找到手动安装的 DSh。 ");
     }
 
     Console.WriteLine("INFO DSh candidates: " + string.Join(" | ", DshRuntimeDetector.GetCandidates().Where(File.Exists)));
@@ -343,6 +355,50 @@ static Task TestDetectedDshRuntimeAutoRegistration()
     Assert(second.AddedInstances.Count == 0 && registry.Load().Count == 2,
         "同一个 DSh 安装目录再次被扫描时不能重复添加版本。 ");
     return Task.CompletedTask;
+}
+
+static async Task TestManualDshDetectRegisterAndStart()
+{
+    var runtimes = await new DshRuntimeDetector().DetectAllAsync(preferredInstallDirectory: null);
+    var runtime = runtimes.FirstOrDefault(item => item.IsAvailable
+        && item.ExecutablePath is not null
+        && item.PackageRoot is not null);
+    if (runtime is null)
+    {
+        Console.WriteLine("INFO manual DSh end-to-end skipped because DSh is not installed");
+        return;
+    }
+
+    var node = await new NodeRuntimeDetector().DetectAsync();
+    if (!node.IsAvailable)
+    {
+        Console.WriteLine("INFO manual DSh end-to-end skipped because Node.js is not installed");
+        return;
+    }
+
+    using var temporary = new TestDirectory();
+    var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var registration = new DetectedRuntimeRegistrationService(registry).RegisterMissing(
+        Array.Empty<ManagerInstance>(),
+        runtimes);
+    var instance = registration.AddedInstances.FirstOrDefault(item => string.Equals(
+        item.RootPath,
+        runtime.PackageRoot,
+        StringComparison.OrdinalIgnoreCase));
+    Assert(instance is not null, "手动安装的 DSh 被检测后必须自动添加为独立版本。 ");
+
+    await using var runner = new DshInstanceRunner();
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+    var started = await runner.StartAsync(instance!, node, cancellation.Token);
+    try
+    {
+        Assert(started.IsSuccess && started.WebUrl is not null,
+            started.Error ?? "自动添加的手动 DSh 版本必须可以成功启动。 ");
+    }
+    finally
+    {
+        await runner.StopAsync(instance!.Id, CancellationToken.None);
+    }
 }
 
 static async Task TestDeepSeekDesktopRuntimeDetection()
@@ -943,6 +999,15 @@ static Task TestNodePathPropagation()
     var childPath = DshInstanceRunner.BuildPathWithNodeDirectory(nodeExe, existing);
     Assert(childPath.StartsWith(@"C:\Program Files\nodejs" + Path.PathSeparator, StringComparison.OrdinalIgnoreCase),
         "启动 DSh 子进程时必须把已检测到但不在系统 PATH 中的 Node 目录补到最前面。");
+
+    var currentDirectories = RuntimeSearchPaths.GetDirectories(
+        processPath: @"C:\Old",
+        userPath: @"D:\Fresh;C:\Old",
+        machinePath: @"C:\Windows\System32");
+    Assert(currentDirectories.SequenceEqual(
+            new[] { @"C:\Old", @"D:\Fresh", @"C:\Windows\System32" },
+            StringComparer.OrdinalIgnoreCase),
+        "运行环境检测必须合并当前进程、用户和系统 PATH，并去除重复目录。 ");
     return Task.CompletedTask;
 }
 

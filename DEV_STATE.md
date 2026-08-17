@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.2.3`。DSh 检测会自动注册扫描到的全部不同安装；Plugin 支持快速/兼容两种安装模式，快速模式失败可直接兼容重试。当前改动已通过完整自检和真实 Plugin 安装，发布产物已生成。
+当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.2.4`。本轮已修复“终端手动 `dsh` 可用，但 Launcher 因父进程 PATH 过期而无法识别或启动”的问题；真实手动 DSh 已完成检测、临时注册、独立 `DSH_HOME` 启动和停止验证。
 
 ## 已完成内容
 
@@ -27,7 +27,7 @@
 - 一键运行环境准备：设置/诊断页显示 Node/DSh 状态，缺失时提供“准备运行环境（官方源 / 国内镜像）”按钮。Node 缺失时通过 NodeInstallService 下载 Windows x64 Node.js 官方 MSI 并显示真实字节/百分比进度，经系统授权（msiexec /qn）安装后重新运行 NodeRuntimeDetector，无需重启 Launcher；Node 就绪但 DSh 缺失时复用 DshInstallService 通过 npm 安装 `@deepseek-ai/dsh`（不确定进度），安装后重新运行 DshRuntimeDetector。Node 版本不兼容时只提示安装兼容版本，不自动卸载。启动实例时若运行环境缺失会弹出缺失项并询问是否准备，准备成功后继续原启动流程。Launcher 启动时不静默下载或安装任何内容。Node 检测覆盖 `<ProgramFiles>\nodejs`（官方 MSI 默认位置）。
 - DeepSeek Desktop 自动检测：扫描 `%LOCALAPPDATA%\Programs\DeepSeek Desktop`、Program Files 等标准目录，并读取 Windows 卸载注册表中的自定义安装位置；读取 Desktop 版本、内置 `runtime\node.exe`、官方 DSh package 版本和 `app\node_modules\.bin\dsh` 启动文件，命令版本与 package metadata 一致后才标记可用。首次无版本时会显示 Desktop 与 DSh 两个版本，并可直接创建独立版本，不重复安装环境。手动选择 Desktop 根目录也能解析 DSh package 和启动文件。检测、实例启动及 Plugin CLI 都会给子进程临时加入内置 Node 路径。
 - DSh 可用性检测要求命令返回可解析的语义版本、附近存在官方 `@deepseek-ai/dsh` package root，且命令版本与 `package.json` 一致；残留 shim、损坏包和版本错配不会再被报告为可用，设置页会显示修复原因。
-- DSh 检测不再只保留第一个结果：PATH、设置中的安装位置、npm 默认位置和 DeepSeek Desktop 范围内扫描到的每个不同有效 package root 都会自动注册为 Installed 版本；已有 root 会去重，每个新增版本创建独立 `DSH_HOME`，相同版本号使用不重复名称。
+- DSh 检测不再只保留第一个结果：Launcher 进程 PATH、当前用户/系统 PATH、设置中的安装位置、npm 默认位置和 DeepSeek Desktop 范围内扫描到的每个不同有效 package root 都会自动注册为 Installed 版本；已有 root 会去重，每个新增版本创建独立 `DSH_HOME`，相同版本号使用不重复名称。DSh 校验和 Installed 实例启动都会临时注入已检测 Node 路径，避免父进程 PATH 过期时 `dsh.cmd` 找不到 `node`。
 - 插件市场地址解析已区分 GitHub `owner/repository` 与 scoped npm `@scope/package`；后者不再生成 `https://github.com/@scope/package`，安装前校验继续走 npm registry。
 - Plugin 安装模式由 Launcher 全局设置控制，默认为快速安装；兼容模式给 pnpm 使用 copy/force 参数。快速模式失败会先展示原始根因，再询问是否用兼容模式重试。实机通过快速模式安装 `dsh-at-file` 成功；安装后的 GitHub 条目可按 package name 立即识别为已安装。
 - 首次运行引导：实例列表成功读取且为空时，在 Node/DSh 检测结束后自动弹出引导，但不会未经确认下载。引导允许选择官方源或 npmmirror、设置 DSh 安装位置；准备成功后创建带独立 `DSH_HOME` 的首个干净版本并继续启动。取消后主启动按钮显示“准备首个版本”，可再次打开引导；实例注册读取失败时不会误当成首次运行。
@@ -45,6 +45,7 @@
 - `src/DshLauncher/MainWindow.xaml(.cs)`、`ChatWindow.xaml(.cs)`、`WindowSizeHelper.cs`：主窗口导航、启动页、Provider、实例生命周期、运行环境准备、低分辨率初始尺寸约束和独立 Chat 窗口。
 - `src/DshLauncher/Services/NodeInstallService.cs`、`RuntimeProgressWindow.cs`：Node 下载（真实进度）、系统安装与准备进度窗口。
 - `src/DshLauncher/Services/DshInstallService.cs`、`DshRuntimeDetector.cs`、`DetectedRuntimeRegistrationService.cs`、`NodeRuntimeDetector.cs`、`DeepSeekDesktopDetector.cs`：DSh/Node/DeepSeek Desktop 检测、扫描结果自动注册与 npm 安装。
+- `src/DshLauncher/Services/RuntimeSearchPaths.cs`：合并进程、当前用户和系统 PATH，供 Node/DSh 校验及子进程启动使用。
 - `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`、`PluginProgressWindow.cs`：Plugin、Skill、MCP、Agent Preset、市场入口和插件安装进度弹窗。
 - `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`、`ThemePreviewWindow.cs`：市场缓存、来源合并、搜索、排序、GitHub/monorepo 校验、安装状态和 README 图片预览。
 - `src/DshLauncher/Services/SkillMarketService.cs`、`Models/SkillMarketModels.cs`：Skill 市场缓存、GitHub 发现、SKILL.md 校验和实例导入。
@@ -57,6 +58,7 @@
 
 ## 已执行测试及结果
 
+- 手动 DSh 发现与启动修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release` 52/52 通过。新增端到端测试直接检测 `D:\DevTools\Scoop\apps\nodejs-lts\current\bin\dsh.cmd`，在临时 Launcher 根目录自动注册对应 Installed 版本并创建独立 `DSH_HOME`，启动至 Web 健康检查通过后成功停止；现有用户实例注册文件未修改。Release 构建同时为 0 warnings、0 errors；Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-manual-dsh-detection-20260817-133127`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.3` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release` 51/51 通过。Computer Use 在停止的独立实例 `DSh 0.1.0-rc.6 (2)` 中通过快速模式成功安装 `dsh-at-file`，独立进度弹窗正常显示，完成后实例列表变为 3 个 Plugin；修复 identity 后发布版搜索卡片显示为“已安装 / 更新状态未知”，无效的 `github.com/@scope/package` 已不再生成。Windows x64 自包含单文件 `DSH Launcher.exe` 为 72,408,444 字节，文件版本 `0.2.3.0`，SHA-256 `DB992B693E513F9E9446FD9504ABD84AFE60086FBA0A3F8E892973DAD8C34B0D`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.3-20260817-1300`，桌面同名文件夹顶层发布文件哈希一致。
 - DSh 多安装自动注册与 GitHub 地址修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj --no-restore` 51/51 通过；WPF Debug 构建 0 warnings、0 errors。新增覆盖两个有效 DSh 同时被扫描、不同 package root 自动注册、独立 `DSH_HOME`、重复扫描去重，以及 scoped npm 包不生成 GitHub 地址且继续通过 npm registry 校验。最终测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-dsh-auto-register-github-url-final-20260817-122024`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.2` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 50/50 通过；WPF Release 构建 0 warnings、0 errors。Windows x64 自包含单文件 `DSH Launcher.exe` 为 72,401,273 字节，文件版本 `0.2.2.0`，SHA-256 `AEE6C509709C71A5D1809350C868C858F5067856ED555F27D842144E49BAAD20`。完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.2-20260817-115854`，桌面同名文件夹顶层发布文件也已更新并核对哈希。
@@ -125,4 +127,4 @@
 
 ## 下一步最直接的任务
 
-找一个能稳定触发 pnpm 链接失败、但 copy/force 可以成功的真实 Plugin，实机走一次“快速安装失败 → 兼容模式重试”分支；当前快速安装成功路径和两种命令参数已验证。
+在一台真正没有 Node/DSh 的 Windows 电脑上完成“一键准备运行环境 → 自动创建首个版本 → 启动”的完整人工验收；当前手动安装 DSh 的发现、自动添加和启动链路已经验证。

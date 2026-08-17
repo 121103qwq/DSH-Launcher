@@ -141,4 +141,4 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v0.2.3**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v0.2.4**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。

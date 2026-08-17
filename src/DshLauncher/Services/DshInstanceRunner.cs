@@ -731,9 +731,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         if (nodeRuntime?.IsAvailable == true
             && !string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
         {
-            var currentPath = startInfo.Environment.TryGetValue("PATH", out var inheritedPath)
-                ? inheritedPath ?? string.Empty
-                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            var currentPath = RuntimeSearchPaths.BuildCurrentPath();
             startInfo.Environment["PATH"] = BuildPathWithNodeDirectory(
                 nodeRuntime.ExecutablePath,
                 currentPath);

@@ -71,20 +71,13 @@ public sealed class NodeRuntimeDetector
     }
 
     internal static IEnumerable<string> GetCandidates(
-        IReadOnlyList<DeepSeekDesktopInstallation>? desktopInstallations = null)
+        IReadOnlyList<DeepSeekDesktopInstallation>? desktopInstallations = null,
+        IReadOnlyList<string>? pathDirectories = null)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-
-        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var directory in pathDirectories ?? RuntimeSearchPaths.GetCurrentDirectories())
         {
-            var trimmed = directory.Trim().Trim('"');
-            if (trimmed.Length == 0)
-            {
-                continue;
-            }
-
-            var candidate = Path.Combine(trimmed, "node.exe");
+            var candidate = Path.Combine(directory, "node.exe");
             if (seen.Add(candidate))
             {
                 yield return candidate;

@@ -321,7 +321,8 @@ public sealed class DshRuntimeDetector
 
     internal static IEnumerable<string> GetCandidates(
         string? preferredInstallDirectory,
-        IReadOnlyList<DeepSeekDesktopInstallation> desktopInstallations)
+        IReadOnlyList<DeepSeekDesktopInstallation> desktopInstallations,
+        IReadOnlyList<string>? pathDirectories = null)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var normalizedPreferred = TryNormalizeDirectory(preferredInstallDirectory);
@@ -337,19 +338,11 @@ public sealed class DshRuntimeDetector
             }
         }
 
-        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-
-        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var directory in pathDirectories ?? RuntimeSearchPaths.GetCurrentDirectories())
         {
-            var trimmed = directory.Trim().Trim('"');
-            if (trimmed.Length == 0)
-            {
-                continue;
-            }
-
             foreach (var fileName in new[] { "dsh.cmd", "dsh.exe", "dsh" })
             {
-                var candidate = Path.Combine(trimmed, fileName);
+                var candidate = Path.Combine(directory, fileName);
                 if (seen.Add(candidate))
                 {
                     yield return candidate;
@@ -530,15 +523,10 @@ public sealed class DshRuntimeDetector
             startInfo.Arguments = "--version";
         }
 
-        if (!string.IsNullOrWhiteSpace(bundledNodeExecutablePath))
-        {
-            var inheritedPath = startInfo.Environment.TryGetValue("PATH", out var configuredPath)
-                ? configuredPath ?? string.Empty
-                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            startInfo.Environment["PATH"] = DshInstanceRunner.BuildPathWithNodeDirectory(
-                bundledNodeExecutablePath,
-                inheritedPath);
-        }
+        // Explorer/another long-running parent process may have started Launcher with
+        // an old PATH. Read the current user and machine PATH for every validation so
+        // a dsh.cmd installed after that parent was started can still resolve node.exe.
+        startInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(bundledNodeExecutablePath);
 
         return startInfo;
     }
