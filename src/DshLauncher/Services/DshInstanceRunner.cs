@@ -229,10 +229,9 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 return DshInstanceRunResult.Failure("Source 尚未完成构建，找不到 apps/cli/lib/bin.js 或 dist/bin.js。");
             }
         }
-        else if (string.IsNullOrWhiteSpace(instance.DshExecutablePath)
-            || !File.Exists(instance.DshExecutablePath))
+        else if (!DshRuntimeCommandFactory.IsUsable(instance.EffectiveDshLaunchSpec))
         {
-            return DshInstanceRunResult.Failure("实例的 DSh 可执行入口不存在，请重新检测或重新注册实例。");
+            return DshInstanceRunResult.Failure("实例的 DSh 启动入口不存在或不完整，请重新检测或重新注册实例。");
         }
 
         if (!Directory.Exists(instance.RootPath))
@@ -675,69 +674,33 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         NodeRuntimeInfo? nodeRuntime,
         string? sourceEntrypoint)
     {
-        var startInfo = new ProcessStartInfo
+        var spec = instance.Kind == InstanceKind.Source
+            ? new DshRuntimeLaunchSpec(
+                DshRuntimeLaunchMode.NodeScript,
+                nodeRuntime!.ExecutablePath!,
+                sourceEntrypoint,
+                NodeExecutablePath: nodeRuntime.ExecutablePath)
+            : DshRuntimeCommandFactory.Resolve(instance)
+                ?? throw new InvalidOperationException("实例没有可用的 DSh 启动描述。");
+        var arguments = new List<string> { "web" };
+        var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
+        if (IsRegularFile(patchPath))
         {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = instance.RootPath,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-
-        if (instance.Kind == InstanceKind.Source)
-        {
-            startInfo.FileName = nodeRuntime!.ExecutablePath!;
-            startInfo.ArgumentList.Add(sourceEntrypoint!);
-            startInfo.ArgumentList.Add("web");
-            AddLauncherPatch(startInfo, instance);
-            startInfo.ArgumentList.Add("--host");
-            startInfo.ArgumentList.Add("127.0.0.1");
-            startInfo.ArgumentList.Add("--port");
-            startInfo.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        }
-        else
-        {
-            var executablePath = instance.DshExecutablePath!;
-            if (Path.GetExtension(executablePath).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
-                || Path.GetExtension(executablePath).Equals(".bat", StringComparison.OrdinalIgnoreCase))
-            {
-                startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-                var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
-                var patchArgument = IsRegularFile(patchPath)
-                    ? $" --patch \"{patchPath}\""
-                    : string.Empty;
-                var commandArguments = $"web{patchArgument} --host 127.0.0.1 --port "
-                    + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                startInfo.Arguments = $"/d /c \"\"{executablePath}\" {commandArguments}\"";
-            }
-            else
-            {
-                startInfo.FileName = executablePath;
-                startInfo.ArgumentList.Add("web");
-                AddLauncherPatch(startInfo, instance);
-                startInfo.ArgumentList.Add("--host");
-                startInfo.ArgumentList.Add("127.0.0.1");
-                startInfo.ArgumentList.Add("--port");
-                startInfo.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            }
+            arguments.Add("--patch");
+            arguments.Add(patchPath);
         }
 
-        startInfo.Environment["DSH_HOME"] = instance.DshHome;
-        // Keep the second default skill root isolated as well. Without this
-        // variable DSh falls back to the user's global %USERPROFILE%\.agents.
-        startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(instance.DshHome, ".agents");
-        if (nodeRuntime?.IsAvailable == true
-            && !string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
-        {
-            var currentPath = RuntimeSearchPaths.BuildCurrentPath();
-            startInfo.Environment["PATH"] = BuildPathWithNodeDirectory(
-                nodeRuntime.ExecutablePath,
-                currentPath);
-        }
-
-        return startInfo;
+        arguments.Add("--host");
+        arguments.Add("127.0.0.1");
+        arguments.Add("--port");
+        arguments.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return DshRuntimeCommandFactory.Create(
+            spec,
+            arguments,
+            instance.RootPath,
+            instance.DshHome,
+            Path.Combine(instance.DshHome, ".agents"),
+            nodeRuntime?.ExecutablePath);
     }
 
     internal static string BuildPathWithNodeDirectory(string? nodeExecutablePath, string currentPath)

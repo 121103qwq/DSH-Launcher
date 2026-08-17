@@ -6,4 +6,6 @@ public sealed record DeepSeekDesktopInstallation(
     string NodeExecutablePath,
     string DshExecutablePath,
     string DshPackageRoot,
-    string DshVersion);
+    string DshVersion,
+    DshRuntimeLaunchSpec? LaunchSpec = null,
+    string ProductName = "DeepSeek Desktop");

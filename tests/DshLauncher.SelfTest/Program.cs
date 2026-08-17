@@ -22,6 +22,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Detected DSh runtime auto registration", TestDetectedDshRuntimeAutoRegistration),
     ("Manual DSh detect, register and start", TestManualDshDetectRegisterAndStart),
     ("DeepSeek Desktop bundled runtime detection", TestDeepSeekDesktopRuntimeDetection),
+    ("DSH Desktop 2 packaged runtime compatibility", TestDshDesktopV2RuntimeCompatibility),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
     ("Node install version resolution", TestNodeInstallVersionResolution),
     ("Node installer download progress", TestNodeInstallerDownloadProgress),
@@ -465,6 +466,76 @@ static async Task TestDeepSeekDesktopRuntimeDetection()
         "界面应同时显示 DeepSeek Desktop 与 DSh 版本。 ");
     Assert(MainWindow.BuildDefaultFirstVersionNameForRuntime(detected) == "DeepSeek Desktop 0.4.2 · DSh 1.2.3",
         "首次创建版本时应保留自动检测到的 Desktop 与 DSh 版本。 ");
+}
+
+static Task TestDshDesktopV2RuntimeCompatibility()
+{
+    using var temporary = new TestDirectory();
+    var installRoot = Path.Combine(temporary.Path, "DSH Desktop");
+    var unpackedRoot = Path.Combine(installRoot, "resources", "app.asar.unpacked");
+    var packageRoot = Path.Combine(unpackedRoot, "node_modules", "@deepseek-ai", "dsh");
+    var dshEntry = Path.Combine(packageRoot, "lib", "bin.js");
+    var desktopCli = Path.Combine(unpackedRoot, "lib", "desktop-cli.js");
+    var pnpmEntry = Path.Combine(unpackedRoot, "node_modules", "pnpm", "bin", "pnpm.mjs");
+    var host = Path.Combine(installRoot, "DSH Desktop.exe");
+    Directory.CreateDirectory(Path.GetDirectoryName(dshEntry)!);
+    Directory.CreateDirectory(Path.GetDirectoryName(desktopCli)!);
+    Directory.CreateDirectory(Path.GetDirectoryName(pnpmEntry)!);
+    File.WriteAllText(host, string.Empty, Encoding.ASCII);
+    File.WriteAllText(
+        Path.Combine(packageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.1.0-rc.6\",\"engines\":{\"node\":\"^22.19.0 || >=24.0.0\"},\"bin\":{\"dsh\":\"lib/bin.js\"}}",
+        new UTF8Encoding(false));
+    File.WriteAllText(dshEntry, "", Encoding.ASCII);
+    File.WriteAllText(desktopCli, "", Encoding.ASCII);
+    File.WriteAllText(pnpmEntry, "", Encoding.ASCII);
+
+    var installation = DeepSeekDesktopDetector.TryDetect(installRoot);
+    Assert(installation is not null, "DSH Desktop 2 完整的 unpacked runtime 应被识别。");
+    Assert(installation!.ProductName == "DSH Desktop", "封装应用名称应按 DSH Desktop 显示。");
+    var launchSpec = installation.LaunchSpec;
+    Assert(launchSpec?.Mode == DshRuntimeLaunchMode.ElectronBootstrap,
+        "DSH Desktop 2 必须使用 Electron Run-as-Node bootstrap，而不是把 JavaScript 当作可执行文件。");
+    Assert(installation.DshExecutablePath == Path.GetFullPath(dshEntry),
+        "应记录封装包中的官方 DSh CLI 入口。");
+    Assert(launchSpec!.EntryPointPath == Path.GetFullPath(desktopCli),
+        "应通过 Desktop 自带的 desktop-cli 清理 Electron 环境后进入官方 DSh CLI。");
+    Assert(launchSpec.PnpmScriptPath == Path.GetFullPath(pnpmEntry),
+        "Plugin 管理必须定位 DSH Desktop 内置 pnpm。");
+
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(home);
+    var startInfo = DshRuntimeCommandFactory.Create(
+        launchSpec,
+        new[] { "web", "--port", "47831" },
+        packageRoot,
+        home);
+    Assert(startInfo.FileName == Path.GetFullPath(host), "Electron bootstrap 应以 DSH Desktop.exe 作为宿主。");
+    Assert(startInfo.Environment.TryGetValue("ELECTRON_RUN_AS_NODE", out var runAsNode)
+        && runAsNode == "1", "调用封装 CLI 时必须只对子进程启用 Electron Run-as-Node。");
+    Assert(startInfo.ArgumentList.SequenceEqual(new[] { Path.GetFullPath(desktopCli), "web", "--port", "47831" }),
+        "封装 CLI 参数必须保持普通 dsh argv 语义。");
+    Assert(startInfo.Environment["DSH_HOME"] == Path.GetFullPath(home),
+        "封装运行时仍必须使用版本自己的 DSH_HOME。");
+
+    var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    var instance = registry.Register(
+        "DSH Desktop 2",
+        packageRoot,
+        InstanceKind.Installed,
+        host,
+        "0.1.0-rc.6",
+        "packaged",
+        dshLaunchSpec: launchSpec);
+    var loaded = registry.Load().Single();
+    Assert(loaded.DshLaunchSpec == launchSpec,
+        "封装运行时启动描述必须随版本注册信息持久化。");
+    Assert(MainWindow.IsRuntimeReadyAfterPreparation(
+            NodeRuntimeInfo.Missing(),
+            "^22.19.0 || >=24.0.0",
+            instance),
+        "DSH Desktop 2 自带 Node 时不应要求系统再安装 Node.js。");
+    return Task.CompletedTask;
 }
 
 static Task TestNodeRuntimeCompatibility()

@@ -298,7 +298,8 @@ public sealed class VersionPackageService
             template.Kind,
             template.DshExecutablePath,
             manifest.DshVersion ?? manifest.DetectedVersion ?? template.DetectedVersion,
-            manifest.PackageManager ?? template.PackageManager);
+            manifest.PackageManager ?? template.PackageManager,
+            dshLaunchSpec: template.DshLaunchSpec);
         try
         {
             foreach (var entry in archive.Entries)
@@ -323,7 +324,8 @@ public sealed class VersionPackageService
             template.Kind,
             template.DshExecutablePath,
             template.DetectedVersion,
-            template.PackageManager);
+            template.PackageManager,
+            dshLaunchSpec: template.DshLaunchSpec);
 
     private string ReadPackageExtension()
     {

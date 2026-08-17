@@ -390,6 +390,14 @@
                                                     Padding="12,0">
                                                 <TextBlock Text="重启" />
                                             </Button>
+                                            <Button Click="OpenDesktopShell_Click"
+                                                    Visibility="{Binding DesktopShellVisibility}"
+                                                    Height="38"
+                                                    Margin="8,0,0,0"
+                                                    Padding="12,0"
+                                                    ToolTip="实验功能：使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口">
+                                                <TextBlock Text="桌面窗口" />
+                                            </Button>
                                         </StackPanel>
                                     </StackPanel>
                                     <StackPanel Grid.Row="6">

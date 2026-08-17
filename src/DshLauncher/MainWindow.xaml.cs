@@ -74,6 +74,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _blockWindowCloseForMsi;
     private bool _instancesLoadedSuccessfully;
     private bool _firstRunSetupPromptShown;
+    private bool _lastDshScanWasFromCache;
     private Action? _runtimePanelUpdateStatus;
     private HwndSource? _windowSource;
 
@@ -143,6 +144,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
             OnPropertyChanged(nameof(CanRestartInstance));
+            OnPropertyChanged(nameof(DesktopShellVisibility));
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeVersionText));
@@ -243,6 +245,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public bool CanRestartInstance => CanStopInstance;
 
+    public Visibility DesktopShellVisibility => SelectedInstance?.CanOpenDesktopShell == true
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
     internal static bool CanStopInstanceCore(
         bool lifecycleInProgress,
         bool runtimePrepareInProgress,
@@ -288,12 +294,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string NodeVersionText => _isNodeDetectionInProgress
         ? "请稍候"
+        : GetCurrentRuntimeLaunchSpec()?.UsesPackagedNode == true
+            ? "由封装应用内置，无需系统 Node.js"
         : !_nodeRuntime.IsAvailable
             ? "需要安装 Node.js"
             : $"{_nodeRuntime.VersionText} · {GetNodeRequirementText()}";
 
     public string NodePathText => _isNodeDetectionInProgress
         ? "正在检查 PATH、Windows 常见安装位置和 DeepSeek Desktop…"
+        : GetCurrentRuntimeLaunchSpec() is { UsesPackagedNode: true } packagedRuntime
+            ? packagedRuntime.NodeExecutablePath ?? packagedRuntime.HostPath
         : _nodeRuntime.IsAvailable
             ? (_nodeRuntime.ExecutablePath ?? "已找到 node.exe，但路径不可用")
             : _nodeRuntime.Error ?? "没有发现可用的 node.exe";
@@ -310,6 +320,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private NodeRuntimeCompatibility GetSelectedNodeCompatibility()
     {
+        if (GetCurrentRuntimeLaunchSpec() is { UsesPackagedNode: true } packagedRuntime
+            && DshRuntimeCommandFactory.IsUsable(packagedRuntime))
+        {
+            return NodeRuntimeCompatibility.Compatible;
+        }
+
         if (!_nodeRuntime.IsAvailable)
         {
             return NodeRuntimeCompatibility.Missing;
@@ -317,6 +333,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return _nodeRuntime.GetCompatibility(GetNodeEngineRequirement(SelectedInstance));
     }
+
+    private DshRuntimeLaunchSpec? GetCurrentRuntimeLaunchSpec() =>
+        SelectedInstance?.EffectiveDshLaunchSpec ?? _dshRuntime.EffectiveLaunchSpec;
 
     private string GetNodeRequirementText()
     {
@@ -335,12 +354,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
-            await RefreshDshAsync();
-            await LoadInstancesAsync();
             SwitchSection("启动");
+            await LoadInstancesAsync();
+            await RefreshDshAsync();
             await RefreshNodeAsync();
             await RefreshProvidersAsync(SelectedInstance);
             await PromptFirstRunSetupIfNeededAsync();
+            if (_lastDshScanWasFromCache)
+            {
+                _ = RefreshDshInBackgroundAsync();
+            }
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -353,7 +376,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void RefreshNode_Click(object sender, RoutedEventArgs e)
     {
-        await RefreshDshAsync();
+        await RefreshDshAsync(forceRefresh: true);
         var runtime = await RefreshNodeAsync();
         if (runtime is null)
         {
@@ -430,8 +453,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private async Task RefreshDshAsync()
+    private async Task RefreshDshAsync(bool forceRefresh = false)
     {
+        _lastDshScanWasFromCache = false;
         try
         {
             if (IsRuntimeHiddenForBootstrapTest(TestRuntimeKind.Dsh))
@@ -443,9 +467,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 var scan = await _dshDetector.ScanAsync(
                     GetConfiguredDshInstallDirectory(),
+                    forceRefresh,
                     _windowCancellation.Token);
                 _detectedDshRuntimes = scan.Runtimes;
                 _dshRuntime = scan.PrimaryRuntime;
+                _lastDshScanWasFromCache = scan.FromCache;
             }
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -475,6 +501,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 注意：被动检测不触发重绑定。实例 root 位于临时不可用的卷（可移动盘/
         // 网络盘断开）时按“失效”持久化改写注册，会在卷恢复后丢失原 runtime 选择；
         // 重绑定只发生在用户确认的准备/修复流程（PrepareRuntimeAsync）。
+    }
+
+    private async Task RefreshDshInBackgroundAsync()
+    {
+        await RefreshDshAsync(forceRefresh: true);
+        await RefreshNodeAsync();
     }
 
     private string? GetConfiguredDshInstallDirectory() =>
@@ -1318,6 +1350,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 0, 8, 0),
             HorizontalAlignment = System.Windows.HorizontalAlignment.Left
         };
+        var scanDirectoryButton = new System.Windows.Controls.Button
+        {
+            Content = "扫描自定义目录",
+            Padding = new Thickness(14, 9, 14, 9),
+            Margin = new Thickness(0, 0, 8, 0),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            ToolTip = "只扫描你选择的目录；适用于手动解压或自定义位置安装的 DSH Desktop / DeepSeek Harness"
+        };
         var prepareButton = new System.Windows.Controls.Button
         {
             Content = "准备运行环境（官方源）",
@@ -1341,6 +1381,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 8, 0, 0)
         };
         buttons.Children.Add(refreshButton);
+        buttons.Children.Add(scanDirectoryButton);
         buttons.Children.Add(prepareButton);
         buttons.Children.Add(prepareMirrorButton);
         panel.Children.Add(buttons);
@@ -1360,7 +1401,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // 设置页按全局环境判定就绪：DSh 声明的 engines.node 与现有 Node
             // 不兼容时保持“未就绪”，让状态和不兼容提示可见，而不是隐藏准备按钮。
             var ready = IsPreferredDshRuntimeReady(_dshRuntime, preferredDshDirectory)
-                && IsGlobalRuntimeReady(_nodeRuntime, _dshRuntime.NodeEngine);
+                && IsDetectedRuntimeReady(_nodeRuntime, _dshRuntime);
             prepareButton.Content = string.IsNullOrWhiteSpace(preferredDshDirectory)
                 ? "准备运行环境（官方源）"
                 : "安装到所选位置（官方源）";
@@ -1382,7 +1423,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 launcherSettings.DshInstallDirectory = normalized;
                 _versionSettingsService.SaveLauncherSettings(launcherSettings);
                 dshInstallBox.Text = normalized ?? string.Empty;
-                await RefreshDshAsync();
+                await RefreshDshAsync(forceRefresh: true);
                 UpdateStatus();
                 if (showNotice)
                 {
@@ -1402,9 +1443,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         refreshButton.Click += async (_, _) =>
         {
-            await RefreshDshAsync();
+            await RefreshDshAsync(forceRefresh: true);
             await RefreshNodeAsync();
             UpdateStatus();
+        };
+        scanDirectoryButton.Click += async (_, _) =>
+        {
+            var selected = PickFolder("扫描自定义 DSH Desktop / DeepSeek Harness 目录");
+            if (selected is not null)
+            {
+                await ScanAndRegisterRuntimeDirectoryAsync(selected);
+                UpdateStatus();
+            }
         };
         browseDshInstallButton.Click += async (_, _) =>
         {
@@ -2063,14 +2113,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
-        if (_isNodeDetectionInProgress)
+        var packagedRuntime = ResolveUsablePackagedRuntime(target, _dshRuntime);
+        if (_isNodeDetectionInProgress && packagedRuntime is null)
         {
             ShowNotice("Node.js 检测进行中，请稍候再准备运行环境。");
             return false;
         }
 
         var prepareNodeEngine = GetNodeEngineRequirement(target);
-        if (_nodeRuntime.IsAvailable
+        if (packagedRuntime is null
+            && _nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
             && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
         {
@@ -2093,7 +2145,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var progress = new Progress<NodeDownloadProgress>(progressWindow.SetDownloadProgress);
             var nodeWasInstalled = false;
 
-            if (!_nodeRuntime.IsAvailable)
+            if (packagedRuntime is null && !_nodeRuntime.IsAvailable)
             {
                 progressWindow.SetIndeterminate(false);
                 progressWindow.SetStatus($"正在通过 {sourceName} 解析 Node.js 版本并下载安装程序…");
@@ -2137,7 +2189,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             // MSI 只更新系统环境，当前 Launcher 进程的 PATH 仍是旧值；
             // 把新检测到的 Node 目录补到进程 PATH，DSh 检测/启动才能解析 node。
-            EnsureNodeDirectoryOnPath(_nodeRuntime.ExecutablePath);
+            if (packagedRuntime is null)
+            {
+                EnsureNodeDirectoryOnPath(_nodeRuntime.ExecutablePath);
+            }
 
             progressWindow.SetInstallPhase(false);
             SetRuntimeInstallPhase(false);
@@ -2147,17 +2202,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 // 启动时缺 Node 会让已有的 dsh shim 无法执行、DSh 检测误报缺失；
                 // Node 就绪后先重新检测 DSh 再决定是否安装，避免无谓重装
                 // （npm 失败时还会把本来已可用的环境误报为准备失败）。
-                await RefreshDshAsync();
+                await RefreshDshAsync(forceRefresh: true);
             }
 
-            var shouldInstallDsh = DshInstallService.ShouldInstallGlobalDSh(
+            var shouldInstallDsh = packagedRuntime is null
+                && (DshInstallService.ShouldInstallGlobalDSh(
                     _dshRuntime.IsAvailable,
                     target?.Kind)
                 || (target?.Kind is null or InstanceKind.Installed
                     && !string.IsNullOrWhiteSpace(dshInstallDirectory)
                     && !DshRuntimeDetector.IsExecutableInInstallDirectory(
                         _dshRuntime.ExecutablePath,
-                        dshInstallDirectory));
+                        dshInstallDirectory)));
             if (shouldInstallDsh)
             {
                 var usingMirrorRegistry = string.Equals(npmRegistry, DshInstallService.ChinaRegistry, StringComparison.OrdinalIgnoreCase);
@@ -2181,7 +2237,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 progressWindow.SetStatus("DSh 安装完成，正在重新检测…");
                 for (var attempt = 0; attempt < 5 && !_dshRuntime.IsAvailable; attempt++)
                 {
-                    await RefreshDshAsync();
+                    await RefreshDshAsync(forceRefresh: true);
                     if (!_dshRuntime.IsAvailable)
                     {
                         await Task.Delay(1000, cancellation.Token);
@@ -2213,7 +2269,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // 新检测到的 DSh metadata 可能声明与现有 Node 不兼容的 engines.node，
             // 成功提示前必须按最新要求复查，不能沿用准备开始前的结论。
             var finalRequirement = GetNodeEngineRequirement(target);
-            if (_nodeRuntime.GetCompatibility(finalRequirement) != NodeRuntimeCompatibility.Compatible)
+            if (packagedRuntime is null
+                && _nodeRuntime.GetCompatibility(finalRequirement) != NodeRuntimeCompatibility.Compatible)
             {
                 var message = $"Node.js {_nodeRuntime.VersionText} 与当前 DSh 要求（{finalRequirement ?? "未声明"}）不兼容。\n\n"
                     + "Launcher 不会自动卸载现有 Node.js。请安装满足要求的兼容版本后重试。";
@@ -2223,7 +2280,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             progressWindow.SetStatus("运行环境已就绪。");
-            ShowNotice(target?.Kind == InstanceKind.Source
+            ShowNotice(packagedRuntime is not null
+                ? $"运行环境已就绪：{packagedRuntime.ProductName ?? "封装应用"} 内置 DSh，不需要系统 Node.js。"
+                : target?.Kind == InstanceKind.Source
                 ? $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}。"
                 : $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}，{_dshRuntime.DisplayVersionText}。");
             return true;
@@ -2287,23 +2346,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         string? nodeEngineRequirement,
         ManagerInstance target)
     {
-        if (!nodeRuntime.IsAvailable
-            || nodeRuntime.GetCompatibility(nodeEngineRequirement) != NodeRuntimeCompatibility.Compatible)
+        // 入口 shim 仍在但 package 目录已删除的实例同样无法启动，
+        // 必须一并视为运行目录失效（否则会被 Runner 的 RootPath 检查拒绝）。
+        var installedRuntimeValid = target.Kind != InstanceKind.Installed
+            || (DshRuntimeCommandFactory.IsUsable(target.EffectiveDshLaunchSpec)
+                && DshRuntimeDetector.TryResolvePackageRoot(target.RootPath) is not null);
+        if (!installedRuntimeValid)
         {
             return false;
         }
 
-        // 入口 shim 仍在但 package 目录已删除的实例同样无法启动，
-        // 必须一并视为运行目录失效（否则会被 Runner 的 RootPath 检查拒绝）。
-        return target.Kind != InstanceKind.Installed
-            || ((!string.IsNullOrWhiteSpace(target.DshExecutablePath) && File.Exists(target.DshExecutablePath))
-                && DshRuntimeDetector.TryResolvePackageRoot(target.RootPath) is not null);
+        if (target.Kind == InstanceKind.Installed
+            && target.EffectiveDshLaunchSpec?.UsesPackagedNode == true)
+        {
+            return true;
+        }
+
+        return nodeRuntime.IsAvailable
+            && nodeRuntime.GetCompatibility(nodeEngineRequirement) == NodeRuntimeCompatibility.Compatible;
     }
 
     internal static bool IsGlobalRuntimeReady(NodeRuntimeInfo nodeRuntime, string? dshNodeEngine) =>
         nodeRuntime.IsAvailable
         && (string.IsNullOrWhiteSpace(dshNodeEngine)
             || nodeRuntime.GetCompatibility(dshNodeEngine) == NodeRuntimeCompatibility.Compatible);
+
+    internal static bool IsDetectedRuntimeReady(NodeRuntimeInfo nodeRuntime, DshRuntimeInfo dshRuntime) =>
+        dshRuntime.EffectiveLaunchSpec is { UsesPackagedNode: true } packagedRuntime
+            && DshRuntimeCommandFactory.IsUsable(packagedRuntime)
+            || IsGlobalRuntimeReady(nodeRuntime, dshRuntime.NodeEngine);
+
+    private static DshRuntimeLaunchSpec? ResolveUsablePackagedRuntime(
+        ManagerInstance? target,
+        DshRuntimeInfo detectedRuntime)
+    {
+        var runtime = target?.EffectiveDshLaunchSpec ?? detectedRuntime.EffectiveLaunchSpec;
+        return runtime is { UsesPackagedNode: true }
+            && DshRuntimeCommandFactory.IsUsable(runtime)
+                ? runtime
+                : null;
+    }
 
     private void SetRuntimeInstallPhase(bool installing)
     {
@@ -2351,18 +2433,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var missing = new List<string>();
         var needsManualNode = false;
 
-        if (!_nodeRuntime.IsAvailable)
+        var packagedRuntime = ResolveUsablePackagedRuntime(instance, _dshRuntime);
+        if (packagedRuntime is null && !_nodeRuntime.IsAvailable)
         {
             missing.Add("Node.js 未安装（可一键准备）");
         }
-        else if (_nodeRuntime.GetCompatibility(requirement) != NodeRuntimeCompatibility.Compatible)
+        else if (packagedRuntime is null
+            && _nodeRuntime.GetCompatibility(requirement) != NodeRuntimeCompatibility.Compatible)
         {
             missing.Add($"Node.js 版本不兼容（当前 {_nodeRuntime.VersionText}，要求 {(string.IsNullOrWhiteSpace(requirement) ? "未声明" : requirement)}）");
             needsManualNode = true;
         }
 
         if (instance.Kind == InstanceKind.Installed
-            && ((string.IsNullOrWhiteSpace(instance.DshExecutablePath) || !File.Exists(instance.DshExecutablePath))
+            && (!DshRuntimeCommandFactory.IsUsable(instance.EffectiveDshLaunchSpec)
                 || DshRuntimeDetector.TryResolvePackageRoot(instance.RootPath) is null))
         {
             missing.Add("DeepSeek Harness 入口或运行目录缺失（可一键修复）");
@@ -2441,7 +2525,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void AddInstance_Click(object sender, RoutedEventArgs e)
+    private async void AddInstance_Click(object sender, RoutedEventArgs e)
     {
         var selectedDirectory = PickFolder("选择已安装 DSh 的目录", _dshRuntime.PackageRoot);
         if (selectedDirectory is null)
@@ -2449,43 +2533,67 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var packageRoot = DshRuntimeDetector.TryResolvePackageRoot(selectedDirectory);
-        if (packageRoot is null && _dshRuntime.ExecutablePath is not null)
-        {
-            packageRoot = DshRuntimeDetector.TryFindPackageRoot(_dshRuntime.ExecutablePath);
-        }
+        await ScanAndRegisterRuntimeDirectoryAsync(selectedDirectory);
+    }
 
-        if (packageRoot is null)
-        {
-            ShowNotice("没有在所选目录找到 @deepseek-ai/dsh 的 package.json。请选择 DSh 安装目录或其上级运行目录。");
-            return;
-        }
-
+    private async Task ScanAndRegisterRuntimeDirectoryAsync(string selectedDirectory)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        var progressWindow = new RuntimeProgressWindow(
+            this,
+            cancellation,
+            "扫描 DeepSeek Harness",
+            "只检查所选目录，不扫描整块磁盘；可以随时取消。");
+        progressWindow.SetIndeterminate(true);
+        progressWindow.SetStatus("正在查找 DSH Desktop、npm 安装和源码目录…");
+        progressWindow.Show();
         try
         {
-            var executablePath = DshRuntimeDetector.FindExecutableForPackageRoot(packageRoot)
-                ?? (_dshRuntime.PackageRoot is not null && string.Equals(_dshRuntime.PackageRoot, packageRoot, StringComparison.OrdinalIgnoreCase)
-                    ? _dshRuntime.ExecutablePath
-                    : null);
-            var packageVersion = DshRuntimeDetector.TryReadPackageVersion(packageRoot) ?? _dshRuntime.Version;
-            var instance = _instanceRegistry.Register(
-                "DSh " + (packageVersion ?? "installed"),
-                packageRoot,
-                InstanceKind.Installed,
-                executablePath,
-                packageVersion,
-                "npm");
-            Instances.Add(instance);
-            SelectedInstance = instance;
-            OnPropertyChanged(nameof(InstanceCountText));
-            OnPropertyChanged(nameof(NoInstancesVisibility));
-            OnPropertyChanged(nameof(InstancesVisibility));
-            RefreshRunningInstances();
-            ShowNotice($"已注册 installed 实例：{instance.Name}。实例 DSH_HOME 已隔离到 {instance.DshHome}。");
+            var progress = new Progress<DshRuntimeScanProgress>(item =>
+                progressWindow.SetProgress(item.Completed, item.Total, item.Message));
+            var scan = await _dshDetector.ScanDirectoryAsync(
+                selectedDirectory,
+                progress,
+                cancellation.Token);
+            if (scan.Runtimes.Count == 0)
+            {
+                ShowNotice(scan.FoundCandidate
+                    ? "找到了疑似 DSh 文件，但版本命令或 package.json 校验未通过。"
+                    : "所选目录中没有找到可用的 DSH Desktop 或 @deepseek-ai/dsh。源码目录请使用版本控制中的源码导入入口。");
+                return;
+            }
+
+            _detectedDshRuntimes = scan.Runtimes
+                .Concat(_detectedDshRuntimes)
+                .Where(static runtime => !string.IsNullOrWhiteSpace(runtime.PackageRoot))
+                .GroupBy(static runtime => Path.GetFullPath(runtime.PackageRoot!), StringComparer.OrdinalIgnoreCase)
+                .Select(static group => group.First())
+                .ToArray();
+            _dshRuntime = _detectedDshRuntimes[0];
+            var before = Instances.Count;
+            AutoRegisterDetectedDshRuntimes();
+            OnPropertyChanged(nameof(DshStatusText));
+            OnPropertyChanged(nameof(DshStatusBrush));
+            OnPropertyChanged(nameof(DshVersionText));
+            OnPropertyChanged(nameof(NodeStatusText));
+            OnPropertyChanged(nameof(NodeVersionText));
+            OnPropertyChanged(nameof(NodePathText));
+            if (Instances.Count == before)
+            {
+                ShowNotice($"已识别 {scan.Runtimes.Count} 个运行环境；对应版本此前已经添加。");
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            ShowNotice("目录扫描已取消。");
         }
         catch (Exception ex)
         {
-            ShowNotice($"注册 installed 实例失败：{ex.Message}");
+            ShowNotice($"扫描运行环境失败：{ex.Message}");
+        }
+        finally
+        {
+            progressWindow.Close();
         }
     }
 
@@ -2592,6 +2700,51 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         finally
         {
             EndLifecycleOperation();
+        }
+    }
+
+    private void OpenDesktopShell_Click(object sender, RoutedEventArgs e)
+    {
+        var instance = SelectedInstance;
+        var runtime = instance?.EffectiveDshLaunchSpec;
+        if (instance is null
+            || runtime?.Mode != DshRuntimeLaunchMode.ElectronBootstrap
+            || !DshRuntimeCommandFactory.IsUsable(runtime))
+        {
+            ShowNotice("当前版本不是可用的 DSH Desktop 封装运行环境。");
+            return;
+        }
+
+        if (_instanceRunner.IsRunning(instance.Id)
+            || instance.RuntimeStatus == InstanceRuntimeStatus.Running)
+        {
+            ShowNotice("请先停止这个版本，再打开 DSH Desktop 原生窗口，避免两个进程同时写入同一个 DSH_HOME。");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = runtime.HostPath,
+                WorkingDirectory = Path.GetDirectoryName(runtime.HostPath) ?? instance.RootPath,
+                UseShellExecute = false,
+                CreateNoWindow = false
+            };
+            startInfo.Environment["DSH_HOME"] = instance.DshHome;
+            startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(instance.DshHome, ".agents");
+            startInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(runtime.HostPath);
+            if (Process.Start(startInfo) is null)
+            {
+                ShowNotice("DSH Desktop 原生窗口启动失败。");
+                return;
+            }
+
+            ShowNotice($"已使用 {instance.Name} 的隔离数据打开 DSH Desktop 原生窗口。此实验窗口由 DSH Desktop 自己管理。");
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
+        {
+            ShowNotice($"打开 DSH Desktop 原生窗口失败：{ex.Message}");
         }
     }
 
@@ -2834,7 +2987,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             RevealRuntimeAfterBootstrap(TestRuntimeKind.Dsh);
-            await RefreshDshAsync();
+            await RefreshDshAsync(forceRefresh: true);
             ShowNotice(installDirectory is null
                 ? $"DSh 安装/更新完成：{_dshRuntime.DisplayVersionText}。可以重新检测并注册实例。"
                 : $"DSh 安装/更新完成：{_dshRuntime.DisplayVersionText} · {installDirectory}。");
@@ -2884,6 +3037,40 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var project = _sourceInspector.Inspect(instance.RootPath);
+        if (!project.IsValid || !project.IsDshSource)
+        {
+            ShowNotice(project.Error ?? "所选目录已不再是可识别的 DeepSeek Harness 源码项目。");
+            return false;
+        }
+
+        if (!project.DependenciesPresent || project.BuiltCliEntrypoint is null)
+        {
+            var steps = new List<string>();
+            if (!project.DependenciesPresent)
+            {
+                steps.Add($"安装依赖（{project.PackageManager ?? "npm"}）");
+            }
+
+            if (project.BuiltCliEntrypoint is null)
+            {
+                steps.Add($"构建源码（{project.BuildCommand}）");
+            }
+
+            var confirm = System.Windows.MessageBox.Show(
+                this,
+                "这个源码版本还不能直接启动。Launcher 将在源码目录执行：\n\n"
+                + string.Join("\n", steps.Select(static step => "• " + step))
+                + "\n\n这可能联网下载依赖，并会修改该源码目录。是否继续？",
+                "准备源码版本",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.Yes)
+            {
+                ShowNotice("已取消准备源码版本。");
+                return false;
+            }
+        }
+
         var result = await _sourceBuilder.PrepareAsync(project, _nodeRuntime, _windowCancellation.Token);
         if (result.IsSuccess)
         {
@@ -3208,7 +3395,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var configuredDirectory = GetConfiguredDshInstallDirectory();
         var runtimeReady = IsPreferredDshRuntimeReady(_dshRuntime, configuredDirectory)
-            && IsGlobalRuntimeReady(_nodeRuntime, _dshRuntime.NodeEngine);
+            && IsDetectedRuntimeReady(_nodeRuntime, _dshRuntime);
         var choice = FirstRunSetupWindow.Show(
             this,
             _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
@@ -3234,7 +3421,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var launcherSettings = _versionSettingsService.ReadLauncherSettings();
             launcherSettings.DshInstallDirectory = choice.DshInstallDirectory;
             _versionSettingsService.SaveLauncherSettings(launcherSettings);
-            await RefreshDshAsync();
+            await RefreshDshAsync(forceRefresh: true);
 
             var sourceName = choice.Source == FirstRunDownloadSource.ChinaMirror
                 ? "npmmirror 国内镜像"
