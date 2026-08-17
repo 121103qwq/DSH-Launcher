@@ -23,8 +23,19 @@ public sealed class DshRuntimeDetector
         string? preferredInstallDirectory,
         CancellationToken cancellationToken = default)
     {
+        return await DetectAsync(
+            preferredInstallDirectory,
+            DeepSeekDesktopDetector.DetectInstallations(),
+            cancellationToken);
+    }
+
+    internal async Task<DshRuntimeInfo> DetectAsync(
+        string? preferredInstallDirectory,
+        IReadOnlyList<DeepSeekDesktopInstallation> desktopInstallations,
+        CancellationToken cancellationToken = default)
+    {
         var foundCandidate = false;
-        foreach (var candidate in GetCandidates(preferredInstallDirectory))
+        foreach (var candidate in GetCandidates(preferredInstallDirectory, desktopInstallations))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -41,7 +52,14 @@ public sealed class DshRuntimeDetector
                 continue;
             }
 
-            var reportedVersion = await ReadVersionAsync(candidate, cancellationToken);
+            var desktopInstallation = desktopInstallations.FirstOrDefault(item => string.Equals(
+                item.DshExecutablePath,
+                candidate,
+                StringComparison.OrdinalIgnoreCase));
+            var reportedVersion = await ReadVersionAsync(
+                candidate,
+                desktopInstallation?.NodeExecutablePath,
+                cancellationToken);
             if (!string.Equals(reportedVersion, packageVersion, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -53,12 +71,14 @@ public sealed class DshRuntimeDetector
                 packageVersion,
                 packageRoot,
                 null,
-                TryReadNodeEngine(packageRoot));
+                TryReadNodeEngine(packageRoot),
+                desktopInstallation?.DesktopVersion,
+                desktopInstallation?.NodeExecutablePath);
         }
 
         return DshRuntimeInfo.Missing(foundCandidate
             ? "找到了 DSh 命令，但安装包无法解析、命令不能运行，或命令版本与安装包不一致。请使用“准备运行环境”修复。"
-            : "PATH 和所选安装位置中没有可运行的 dsh.cmd 或 dsh.exe。");
+            : "PATH、所选安装位置和 DeepSeek Desktop 中没有可运行的 DSh 启动文件。");
     }
 
     public static string? TryFindPackageRoot(string executablePath)
@@ -100,7 +120,12 @@ public sealed class DshRuntimeDetector
         }
 
         var nested = Path.Combine(normalized, "node_modules", "@deepseek-ai", "dsh");
-        return IsDshPackageRoot(nested) ? nested : null;
+        if (IsDshPackageRoot(nested))
+        {
+            return nested;
+        }
+
+        return DeepSeekDesktopDetector.TryDetect(normalized)?.DshPackageRoot;
     }
 
     public static string? TryReadPackageVersion(string packageRoot)
@@ -213,19 +238,31 @@ public sealed class DshRuntimeDetector
         }
 
         var normalized = Path.GetFullPath(packageRoot.Trim());
-        var nodeModules = Directory.GetParent(normalized)?.FullName;
-        var binDirectory = nodeModules is null ? null : Directory.GetParent(nodeModules)?.FullName;
-        if (binDirectory is null)
+        var scopeDirectory = Directory.GetParent(normalized)?.FullName;
+        var nodeModulesDirectory = scopeDirectory is null
+            ? null
+            : Directory.GetParent(scopeDirectory)?.FullName;
+        if (nodeModulesDirectory is null)
         {
             return null;
         }
 
-        foreach (var fileName in new[] { "dsh.cmd", "dsh.exe", "dsh" })
+        var prefixDirectory = Directory.GetParent(nodeModulesDirectory)?.FullName;
+        var searchDirectories = new[]
         {
-            var candidate = Path.Combine(binDirectory, fileName);
-            if (File.Exists(candidate))
+            Path.Combine(nodeModulesDirectory, ".bin"),
+            prefixDirectory,
+            nodeModulesDirectory
+        };
+        foreach (var directory in searchDirectories.Where(static value => !string.IsNullOrWhiteSpace(value)))
+        {
+            foreach (var fileName in new[] { "dsh.cmd", "dsh.exe", "dsh" })
             {
-                return candidate;
+                var candidate = Path.Combine(directory!, fileName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
             }
         }
 
@@ -238,6 +275,15 @@ public sealed class DshRuntimeDetector
     }
 
     public static IEnumerable<string> GetCandidates(string? preferredInstallDirectory)
+    {
+        return GetCandidates(
+            preferredInstallDirectory,
+            DeepSeekDesktopDetector.DetectInstallations());
+    }
+
+    internal static IEnumerable<string> GetCandidates(
+        string? preferredInstallDirectory,
+        IReadOnlyList<DeepSeekDesktopInstallation> desktopInstallations)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var normalizedPreferred = TryNormalizeDirectory(preferredInstallDirectory);
@@ -282,6 +328,14 @@ public sealed class DshRuntimeDetector
             if (seen.Add(candidate))
             {
                 yield return candidate;
+            }
+        }
+
+        foreach (var installation in desktopInstallations)
+        {
+            if (seen.Add(installation.DshExecutablePath))
+            {
+                yield return installation.DshExecutablePath;
             }
         }
     }
@@ -357,11 +411,14 @@ public sealed class DshRuntimeDetector
         }
     }
 
-    private static async Task<string?> ReadVersionAsync(string executablePath, CancellationToken cancellationToken)
+    private static async Task<string?> ReadVersionAsync(
+        string executablePath,
+        string? bundledNodeExecutablePath,
+        CancellationToken cancellationToken)
     {
         using var process = new Process
         {
-            StartInfo = CreateStartInfo(executablePath)
+            StartInfo = CreateStartInfo(executablePath, bundledNodeExecutablePath)
         };
 
         try
@@ -410,7 +467,9 @@ public sealed class DshRuntimeDetector
         }
     }
 
-    private static ProcessStartInfo CreateStartInfo(string executablePath)
+    internal static ProcessStartInfo CreateStartInfo(
+        string executablePath,
+        string? bundledNodeExecutablePath = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -431,6 +490,16 @@ public sealed class DshRuntimeDetector
         {
             startInfo.FileName = executablePath;
             startInfo.Arguments = "--version";
+        }
+
+        if (!string.IsNullOrWhiteSpace(bundledNodeExecutablePath))
+        {
+            var inheritedPath = startInfo.Environment.TryGetValue("PATH", out var configuredPath)
+                ? configuredPath ?? string.Empty
+                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            startInfo.Environment["PATH"] = DshInstanceRunner.BuildPathWithNodeDirectory(
+                bundledNodeExecutablePath,
+                inheritedPath);
         }
 
         return startInfo;

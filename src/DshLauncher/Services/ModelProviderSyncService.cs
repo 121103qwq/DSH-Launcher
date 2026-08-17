@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using DshLauncher.Models;
 
 namespace DshLauncher.Services;
@@ -25,17 +26,29 @@ public sealed class ModelProviderSyncService
     private readonly ModelService _modelService;
     private readonly ProviderStateService _providerStateService;
     private readonly Func<string, bool> _isRunning;
+    private readonly Action<string>? _beforeProviderFileCommit;
 
     public ModelProviderSyncService(
         VersionSettingsService settingsService,
         ModelService modelService,
         ProviderStateService providerStateService,
         Func<string, bool>? isRunning = null)
+        : this(settingsService, modelService, providerStateService, isRunning, null)
+    {
+    }
+
+    internal ModelProviderSyncService(
+        VersionSettingsService settingsService,
+        ModelService modelService,
+        ProviderStateService providerStateService,
+        Func<string, bool>? isRunning,
+        Action<string>? beforeProviderFileCommit)
     {
         _settingsService = settingsService;
         _modelService = modelService;
         _providerStateService = providerStateService;
         _isRunning = isRunning ?? (_ => false);
+        _beforeProviderFileCommit = beforeProviderFileCommit;
     }
 
     public ModelProviderSyncResult Synchronize(
@@ -88,8 +101,12 @@ public sealed class ModelProviderSyncService
                 if (configurationSource is not null
                     && !string.Equals(configurationSource.Id, target.Id, StringComparison.Ordinal))
                 {
-                    _modelService.CopyProviderConfiguration(configurationSource, target);
-                    CopyCredentialStore(configurationSource, target);
+                    var settingsText = _modelService.BuildProviderConfigurationText(configurationSource, target);
+                    CopyProviderSnapshot(
+                        configurationSource,
+                        target,
+                        settingsText,
+                        _beforeProviderFileCommit);
                 }
 
                 if (sourceStates is not null
@@ -185,13 +202,7 @@ public sealed class ModelProviderSyncService
 
     private static DateTime? GetProviderSnapshotTimestamp(ManagerInstance instance)
     {
-        var settings = GetFileTimestamp(Path.Combine(instance.DshHome, "settings.yaml"));
-        var credentials = GetFileTimestamp(Path.Combine(instance.DshHome, CredentialsFileName));
-        return settings is null
-            ? credentials
-            : credentials is null
-                ? settings
-                : settings > credentials ? settings : credentials;
+        return GetFileTimestamp(Path.Combine(instance.DshHome, "settings.yaml"));
     }
 
     private static DateTime? GetStateTimestamp(ManagerInstance instance)
@@ -212,12 +223,94 @@ public sealed class ModelProviderSyncService
         }
     }
 
-    private static void CopyCredentialStore(ManagerInstance source, ManagerInstance target)
+    private static void CopyProviderSnapshot(
+        ManagerInstance source,
+        ManagerInstance target,
+        string settingsText,
+        Action<string>? beforeProviderFileCommit)
+    {
+        Directory.CreateDirectory(target.DshHome);
+        var updates = new List<StagedProviderFile>();
+        try
+        {
+            var settingsPath = Path.Combine(target.DshHome, "settings.yaml");
+            updates.Add(StageText(settingsPath, settingsText));
+
+            var credentialUpdate = StageCredentialStore(source, target);
+            if (credentialUpdate is not null)
+            {
+                updates.Add(credentialUpdate);
+            }
+
+            foreach (var update in updates)
+            {
+                update.CreateBackup();
+            }
+
+            var committed = 0;
+            try
+            {
+                foreach (var update in updates)
+                {
+                    beforeProviderFileCommit?.Invoke(update.TargetPath);
+                    update.Commit();
+                    committed++;
+                }
+            }
+            catch (Exception commitError)
+            {
+                var rollbackErrors = new List<string>();
+                for (var index = committed - 1; index >= 0; index--)
+                {
+                    try
+                    {
+                        updates[index].Restore();
+                    }
+                    catch (Exception rollbackError)
+                    {
+                        rollbackErrors.Add(rollbackError.Message);
+                    }
+                }
+
+                if (rollbackErrors.Count > 0)
+                {
+                    throw new IOException(
+                        $"Provider 同步失败，且恢复原配置时遇到错误：{string.Join("；", rollbackErrors)}",
+                        commitError);
+                }
+
+                throw;
+            }
+        }
+        finally
+        {
+            foreach (var update in updates)
+            {
+                update.Dispose();
+            }
+        }
+    }
+
+    private static StagedProviderFile StageText(string targetPath, string content)
+    {
+        var temporary = $"{targetPath}.{Guid.NewGuid():N}.tmp";
+        using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (var writer = new StreamWriter(output, new UTF8Encoding(false)))
+        {
+            writer.Write(content);
+            writer.Flush();
+            output.Flush(flushToDisk: true);
+        }
+
+        return new StagedProviderFile(targetPath, temporary);
+    }
+
+    private static StagedProviderFile? StageCredentialStore(ManagerInstance source, ManagerInstance target)
     {
         var sourcePath = Path.Combine(source.DshHome, CredentialsFileName);
         if (!File.Exists(sourcePath))
         {
-            return;
+            return null;
         }
 
         RejectCredentialLink(sourcePath);
@@ -233,31 +326,20 @@ public sealed class ModelProviderSyncService
             RejectCredentialLink(targetPath);
         }
 
-        Directory.CreateDirectory(target.DshHome);
-        var temporary = Path.Combine(target.DshHome, $"{CredentialsFileName}.{Guid.NewGuid():N}.tmp");
-        try
+        var temporary = $"{targetPath}.{Guid.NewGuid():N}.tmp";
+        using (var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+        using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
-            using (var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
-            using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-                input.CopyTo(output);
-                output.Flush(flushToDisk: true);
-            }
-
-            if (!OperatingSystem.IsWindows())
-            {
-                File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            }
-
-            File.Move(temporary, targetPath, overwrite: true);
+            input.CopyTo(output);
+            output.Flush(flushToDisk: true);
         }
-        finally
+
+        if (!OperatingSystem.IsWindows())
         {
-            if (File.Exists(temporary))
-            {
-                File.Delete(temporary);
-            }
+            File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
+
+        return new StagedProviderFile(targetPath, temporary);
     }
 
     private static void RejectCredentialLink(string path)
@@ -275,4 +357,65 @@ public sealed class ModelProviderSyncService
             .GroupBy(version => version.Id, StringComparer.Ordinal)
             .Select(group => group.First())
             .ToArray();
+
+    private sealed class StagedProviderFile : IDisposable
+    {
+        private readonly bool _targetExisted;
+        private string? _backupPath;
+
+        public StagedProviderFile(string targetPath, string stagedPath)
+        {
+            TargetPath = targetPath;
+            StagedPath = stagedPath;
+            _targetExisted = File.Exists(targetPath);
+        }
+
+        public string TargetPath { get; }
+
+        public string StagedPath { get; }
+
+        public void CreateBackup()
+        {
+            if (!_targetExisted)
+            {
+                return;
+            }
+
+            _backupPath = $"{TargetPath}.{Guid.NewGuid():N}.bak";
+            File.Copy(TargetPath, _backupPath, overwrite: false);
+        }
+
+        public void Commit() => File.Move(StagedPath, TargetPath, overwrite: true);
+
+        public void Restore()
+        {
+            if (_targetExisted)
+            {
+                if (_backupPath is null || !File.Exists(_backupPath))
+                {
+                    throw new IOException($"缺少 Provider 同步备份：{Path.GetFileName(TargetPath)}");
+                }
+
+                File.Move(_backupPath, TargetPath, overwrite: true);
+                _backupPath = null;
+            }
+            else if (File.Exists(TargetPath))
+            {
+                File.Delete(TargetPath);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (File.Exists(StagedPath))
+            {
+                File.Delete(StagedPath);
+            }
+
+            if (_backupPath is not null && File.Exists(_backupPath))
+            {
+                File.Delete(_backupPath);
+            }
+        }
+    }
 }

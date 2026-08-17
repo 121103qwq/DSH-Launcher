@@ -504,6 +504,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             if (HasExited(running.Process))
             {
+                await DrainExitedProcessOutputAsync(running.Process);
                 return HealthResult.Failed($"DSh 在健康检查前退出。{GetDiagnosticSuffix(running)}");
             }
 
@@ -518,6 +519,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
                     if (HasExited(running.Process))
                     {
+                        await DrainExitedProcessOutputAsync(running.Process);
                         return HealthResult.Failed($"DSh 在健康检查前退出。{GetDiagnosticSuffix(running)}");
                     }
 
@@ -589,6 +591,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     running.Process.Kill(entireProcessTree: true);
                     await Task.WhenAny(running.Process.WaitForExitAsync(), Task.Delay(StopTimeout));
                 }
+            }
+
+            if (HasExited(running.Process))
+            {
+                await DrainExitedProcessOutputAsync(running.Process);
             }
         }
         catch
@@ -721,7 +728,43 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         // Keep the second default skill root isolated as well. Without this
         // variable DSh falls back to the user's global %USERPROFILE%\.agents.
         startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(instance.DshHome, ".agents");
+        if (nodeRuntime?.IsAvailable == true
+            && !string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
+        {
+            var currentPath = startInfo.Environment.TryGetValue("PATH", out var inheritedPath)
+                ? inheritedPath ?? string.Empty
+                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            startInfo.Environment["PATH"] = BuildPathWithNodeDirectory(
+                nodeRuntime.ExecutablePath,
+                currentPath);
+        }
+
         return startInfo;
+    }
+
+    internal static string BuildPathWithNodeDirectory(string? nodeExecutablePath, string currentPath)
+    {
+        if (string.IsNullOrWhiteSpace(nodeExecutablePath))
+        {
+            return currentPath;
+        }
+
+        var nodeDirectory = Path.GetDirectoryName(Path.GetFullPath(nodeExecutablePath));
+        if (string.IsNullOrWhiteSpace(nodeDirectory))
+        {
+            return currentPath;
+        }
+
+        var entries = currentPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(static entry => entry.Trim().Trim('"'))
+            .Where(static entry => entry.Length > 0)
+            .ToList();
+        if (entries.Contains(nodeDirectory, StringComparer.OrdinalIgnoreCase))
+        {
+            return currentPath;
+        }
+
+        return nodeDirectory + Path.PathSeparator + string.Join(Path.PathSeparator, entries);
     }
 
     private static void AddLauncherPatch(ProcessStartInfo startInfo, ManagerInstance instance)
@@ -800,6 +843,21 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             || message.Contains("address already in use", StringComparison.OrdinalIgnoreCase)
             || message.Contains("端口已被占用", StringComparison.OrdinalIgnoreCase)
             || message.Contains("地址已在使用", StringComparison.OrdinalIgnoreCase));
+
+    private static async Task DrainExitedProcessOutputAsync(Process process)
+    {
+        try
+        {
+            await process.WaitForExitAsync();
+            // WaitForExitAsync observes process termination. The parameterless
+            // wait additionally drains asynchronous redirected output handlers.
+            process.WaitForExit();
+        }
+        catch (InvalidOperationException)
+        {
+            // The process may already have been disposed by concurrent cleanup.
+        }
+    }
 
     private static bool IsLockContention(IOException exception)
     {

@@ -346,6 +346,11 @@
                                         <StackPanel Grid.Column="1" Margin="12,0,16,0">
                                             <TextBlock Text="{Binding Name}"
                                                        FontWeight="SemiBold"
+                                                       Foreground="{StaticResource BlueBrush}"
+                                                       TextDecorations="Underline"
+                                                       Cursor="Hand"
+                                                       ToolTip="打开插件 GitHub 仓库"
+                                                       MouseLeftButtonUp="MarketplaceTitle_MouseLeftButtonUp"
                                                        TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{Binding TargetText}"
                                                        Foreground="{StaticResource MutedBrush}"
