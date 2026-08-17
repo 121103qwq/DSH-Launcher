@@ -24,4 +24,18 @@ public sealed record DshRuntimeInfo(
     public string DisplayVersionText => !string.IsNullOrWhiteSpace(DeepSeekDesktopVersion)
         ? $"DeepSeek Desktop v{DeepSeekDesktopVersion} · DSh {VersionText}"
         : $"DSh {VersionText}";
+
+    public string SuggestedInstanceName
+    {
+        get
+        {
+            var normalizedVersion = string.IsNullOrWhiteSpace(Version)
+                ? "默认版本"
+                : Version.Trim().TrimStart('v');
+            var dshName = $"DSh {normalizedVersion}";
+            return string.IsNullOrWhiteSpace(DeepSeekDesktopVersion)
+                ? dshName
+                : $"DeepSeek Desktop {DeepSeekDesktopVersion} · {dshName}";
+        }
+    }
 }

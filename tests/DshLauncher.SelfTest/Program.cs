@@ -18,6 +18,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source project inspection", TestSourceProjectInspection),
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
+    ("Detected DSh runtime auto registration", TestDetectedDshRuntimeAutoRegistration),
     ("DeepSeek Desktop bundled runtime detection", TestDeepSeekDesktopRuntimeDetection),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
     ("Node install version resolution", TestNodeInstallVersionResolution),
@@ -260,6 +261,33 @@ static async Task TestDshRuntimeDetection()
             && usable.Version == "1.2.3"
             && string.Equals(usable.PackageRoot, packageRoot, StringComparison.OrdinalIgnoreCase),
             "只有命令可执行、安装包可解析且版本一致时才能判定 DSh 可用。 ");
+
+        var secondPrefix = Path.Combine(temporary.Path, "second-dsh-prefix");
+        var secondPackageRoot = Path.Combine(secondPrefix, "node_modules", "@deepseek-ai", "dsh");
+        Directory.CreateDirectory(secondPackageRoot);
+        File.WriteAllText(
+            Path.Combine(secondPackageRoot, "package.json"),
+            "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"2.0.0\"}",
+            new UTF8Encoding(false));
+        var secondCommand = Path.Combine(secondPrefix, "dsh.cmd");
+        File.WriteAllText(secondCommand, "@echo dsh v2.0.0\r\n", Encoding.ASCII);
+
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", secondPrefix);
+            var scan = await new DshRuntimeDetector().ScanAsync(
+                prefix,
+                Array.Empty<DeepSeekDesktopInstallation>(),
+                CancellationToken.None);
+            Assert(scan.Runtimes.Any(item => string.Equals(item.PackageRoot, packageRoot, StringComparison.OrdinalIgnoreCase))
+                && scan.Runtimes.Any(item => string.Equals(item.PackageRoot, secondPackageRoot, StringComparison.OrdinalIgnoreCase)),
+                "检测器必须返回扫描到的所有有效 DSh 安装，而不是只返回第一个。 ");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+        }
     }
 
     Console.WriteLine("INFO DSh candidates: " + string.Join(" | ", DshRuntimeDetector.GetCandidates().Where(File.Exists)));
@@ -279,6 +307,42 @@ static async Task TestDshRuntimeDetection()
         "DSh 运行时版本应与安装包 package.json 版本一致。");
     Assert(DshRuntimeDetector.TryReadNodeEngine(runtime.PackageRoot!) == runtime.NodeEngine,
         "DSh 运行时应从同一个 package.json 暴露 engines.node，而不是另写版本规则。");
+}
+
+static Task TestDetectedDshRuntimeAutoRegistration()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var registration = new DetectedRuntimeRegistrationService(registry);
+    var runtimes = new List<DshRuntimeInfo>();
+    for (var index = 1; index <= 2; index++)
+    {
+        var prefix = Path.Combine(temporary.Path, $"runtime-{index}");
+        var packageRoot = Path.Combine(prefix, "node_modules", "@deepseek-ai", "dsh");
+        Directory.CreateDirectory(packageRoot);
+        File.WriteAllText(
+            Path.Combine(packageRoot, "package.json"),
+            "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"1.2.3\"}",
+            new UTF8Encoding(false));
+        var executable = Path.Combine(prefix, "dsh.cmd");
+        File.WriteAllText(executable, "@echo dsh v1.2.3\r\n", Encoding.ASCII);
+        runtimes.Add(new DshRuntimeInfo(true, executable, "1.2.3", packageRoot, null));
+    }
+
+    var first = registration.RegisterMissing(Array.Empty<ManagerInstance>(), runtimes);
+    Assert(first.Errors.Count == 0 && first.AddedInstances.Count == 2,
+        "扫描到的每个不同 DSh 安装都应自动注册为版本。 ");
+    Assert(first.AddedInstances.Select(item => item.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 2,
+        "相同 DSh 版本号的不同安装必须生成不重复的版本名称。 ");
+    Assert(first.AddedInstances.Select(item => item.DshHome).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 2,
+        "自动注册的每个版本必须使用独立 DSH_HOME。 ");
+
+    var stored = registry.Load();
+    var second = registration.RegisterMissing(stored, runtimes.Concat(new[] { runtimes[0] }).ToArray());
+    Assert(second.AddedInstances.Count == 0 && registry.Load().Count == 2,
+        "同一个 DSh 安装目录再次被扫描时不能重复添加版本。 ");
+    return Task.CompletedTask;
 }
 
 static async Task TestDeepSeekDesktopRuntimeDetection()
@@ -1663,11 +1727,25 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     try
     {
         Environment.SetEnvironmentVariable("PATH", Path.Combine(temporary.Path, "empty-path"));
-        await new ExtensionService().InstallPluginAsync(
+        var extensionService = new ExtensionService();
+        await extensionService.InstallPluginAsync(
             instance,
             "github:example/demo-plugin",
             new NodeRuntimeInfo(true, node, "22.19.0", null),
-            "demo-plugin");
+            "demo-plugin",
+            PluginInstallMode.Compatibility);
+
+        var compatibilityArguments = File.ReadAllText(argumentMarker);
+        Assert(compatibilityArguments.Contains("--package-import-method=copy", StringComparison.Ordinal)
+            && compatibilityArguments.Contains("--force", StringComparison.Ordinal),
+            "兼容性安装必须复制依赖并强制重建旧的 pnpm 依赖目录。 ");
+
+        await extensionService.InstallPluginAsync(
+            instance,
+            "github:example/demo-plugin",
+            new NodeRuntimeInfo(true, node, "22.19.0", null),
+            "demo-plugin",
+            PluginInstallMode.Fast);
     }
     finally
     {
@@ -1684,6 +1762,10 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     Assert(arguments.Contains("--allow-build", StringComparison.Ordinal)
         && arguments.Contains("demo-plugin", StringComparison.Ordinal),
         "市场已校验 Plugin 应只授权该顶层包运行安装构建。 ");
+    Assert(arguments.Contains("--prefer-offline", StringComparison.Ordinal)
+        && !arguments.Contains("--package-import-method=copy", StringComparison.Ordinal)
+        && !arguments.Contains("--force", StringComparison.Ordinal),
+        "快速安装必须优先使用本地缓存，且不能携带兼容模式的强制复制参数。 ");
 
     var compactFailure = ExtensionService.FormatProcessOutput(
         "Progress: resolved 1, reused 0, downloaded 0, added 0\rProgress: resolved 64, reused 0, downloaded 64, added 64\n普通输出",
@@ -1786,6 +1868,11 @@ static async Task TestMarketplaceDiscoveryAndVerification()
             return JsonResponse("{\"dist-tags\":{\"latest\":\"1.2.3\"},\"versions\":{\"1.2.3\":{\"name\":\"demo-plugin\",\"version\":\"1.2.3\",\"main\":\"index.js\",\"dsh.bundle.patch\":{}}}}");
         }
 
+        if (Uri.UnescapeDataString(url).Contains("registry.npmjs.org/@demo/scoped-plugin", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\"1.0.0\":{\"name\":\"@demo/scoped-plugin\",\"version\":\"1.0.0\",\"main\":\"index.js\",\"dsh.bundle.patch\":{}}}}");
+        }
+
         if (url.Contains("registry.npmjs.org/bad-plugin", StringComparison.OrdinalIgnoreCase))
         {
             return JsonResponse("{\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\"1.0.0\":{\"name\":\"bad-plugin\",\"version\":\"1.0.0\",\"main\":\"index.js\"}}}");
@@ -1839,6 +1926,25 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         MarketplaceVerificationStatus.Unverified,
         "待检查"));
     Assert(verified.Status == MarketplaceVerificationStatus.Verified && verified.Version == "1.2.3", "有 dsh.bundle.patch 和入口的 npm 包应通过检查。 ");
+    var scopedCatalog = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[{\"name\":\"scoped-plugin\",\"npm\":\"@demo/scoped-plugin\"}]}",
+        MarketplaceSourceKind.CommunityCatalog,
+        "社区目录");
+    Assert(scopedCatalog.Count == 1
+        && scopedCatalog[0].RepositoryUrl is null
+        && MarketplaceService.GetGitHubRepositoryUrl(scopedCatalog[0]) is null,
+        "scoped npm 包名不能被误拼成包含 @ 的 GitHub 地址。 ");
+    var scopedCatalogWithBrokenRepository = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[{\"name\":\"scoped-plugin\",\"npm\":\"@demo/scoped-plugin\",\"repository\":\"https://github.com/@demo/scoped-plugin\"}]}",
+        MarketplaceSourceKind.CommunityCatalog,
+        "社区目录");
+    Assert(scopedCatalogWithBrokenRepository.Count == 1
+        && scopedCatalogWithBrokenRepository[0].RepositoryUrl is null,
+        "目录中包含 @scope 的无效 GitHub 地址也必须被丢弃。 ");
+    var scopedVerified = await service.VerifyAsync(scopedCatalog[0]);
+    Assert(scopedVerified.Status == MarketplaceVerificationStatus.Verified
+        && scopedVerified.PackageName == "@demo/scoped-plugin",
+        "scoped npm 包必须通过 npm registry 校验，不能误走 GitHub 校验。 ");
     var npmWithRepositoryMetadata = await service.VerifyAsync(new MarketplaceItem(
         "npm:demo-plugin-with-repository",
         "demo-plugin",
@@ -2028,6 +2134,30 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     Assert(marketplaceIdentity.Any(installedIdentity.Contains), "npm/GitHub/subpath identity 应能匹配已安装 Plugin。 ");
     Assert(MarketplaceService.FindInstalledPlugin(merged[0], new[] { installed }) == installed,
         "市场更新或卸载应使用当前 profile 中匹配到的真实 Plugin 包名。 ");
+    var githubOnlyMarketplaceItem = new MarketplaceItem(
+        "github:omdsh-dev/dsh-at-file",
+        "dsh-at-file",
+        null,
+        null,
+        "test",
+        "github:omdsh-dev/dsh-at-file",
+        "https://github.com/omdsh-dev/dsh-at-file",
+        "tools",
+        MarketplaceSourceKind.CommunityCatalog,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查");
+    var installedGitHubPackage = new ExtensionEntry(
+        "plugin:dsh-at-file",
+        ExtensionKind.Plugin,
+        "dsh-at-file",
+        "1.0.0",
+        "installed",
+        "profile",
+        true,
+        true);
+    Assert(MarketplaceService.FindInstalledPlugin(githubOnlyMarketplaceItem, new[] { installedGitHubPackage }) == installedGitHubPackage,
+        "GitHub 安装后以 package name 写入 profile 的插件必须在自动刷新后显示为已安装。 ");
     Assert(MarketplaceService.GetUpdateStatus("1.1.0", "1.0.0") == MarketplaceUpdateStatus.Available, "较新的市场版本应显示可更新。 ");
     Assert(MarketplaceService.GetUpdateStatus("1.0.0", "1.0.0") == MarketplaceUpdateStatus.UpToDate, "相同版本应显示已是最新。 ");
     Assert(MarketplaceService.GetUpdateStatus(null, "1.0.0") == MarketplaceUpdateStatus.Unknown, "缺少版本信息时更新状态应为未知。 ");
@@ -2915,12 +3045,17 @@ static Task TestLauncherSettingsAndWorkspaces()
 
     Assert(!settings.ShouldSyncConversations(first, second), "独立模式下默认不应同步对话。");
     var launcherSettings = settings.ReadLauncherSettings();
+    Assert(launcherSettings.PluginInstallMode == PluginInstallMode.Fast,
+        "首次使用时 Plugin 安装模式必须默认是快速安装。");
     launcherSettings.SyncAllConfiguration = true;
     launcherSettings.DshInstallDirectory = Path.Combine(temporary.Path, "managed-dsh");
+    launcherSettings.PluginInstallMode = PluginInstallMode.Fast;
     settings.SaveLauncherSettings(launcherSettings);
     Assert(settings.ReadLauncherSettings().DshInstallDirectory
             == Path.GetFullPath(Path.Combine(temporary.Path, "managed-dsh")),
         "Launcher 设置应持久化 DSh 自定义安装位置。");
+    Assert(settings.ReadLauncherSettings().PluginInstallMode == PluginInstallMode.Fast,
+        "Launcher 设置应持久化 Plugin 快速安装模式。");
     Assert(settings.ShouldSyncConfiguration(first, second), "全局“和所有版本配置同步”开启后任意版本对应同步配置。");
     Assert(settings.ShouldSyncConversations(first, second), "全局开关应覆盖各版本自己的独立模式。");
     Assert(!settings.ShouldSyncModelProviders(first, second), "全局配置开关不能覆盖独立的模型 Provider 同步开关。");

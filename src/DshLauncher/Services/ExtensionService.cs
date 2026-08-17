@@ -100,7 +100,29 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default)
     {
-        return await RunPluginCommandAsync(instance, "add", packageSpec, nodeRuntime, null, cancellationToken);
+        return await InstallPluginAsync(
+            instance,
+            packageSpec,
+            nodeRuntime,
+            PluginInstallMode.Fast,
+            cancellationToken);
+    }
+
+    public async Task<string> InstallPluginAsync(
+        ManagerInstance instance,
+        string packageSpec,
+        NodeRuntimeInfo? nodeRuntime,
+        PluginInstallMode installMode,
+        CancellationToken cancellationToken = default)
+    {
+        return await RunPluginCommandAsync(
+            instance,
+            "add",
+            packageSpec,
+            nodeRuntime,
+            null,
+            installMode,
+            cancellationToken);
     }
 
     public async Task<string> InstallPluginAsync(
@@ -110,12 +132,30 @@ public sealed class ExtensionService
         string allowBuildPackageName,
         CancellationToken cancellationToken = default)
     {
+        return await InstallPluginAsync(
+            instance,
+            packageSpec,
+            nodeRuntime,
+            allowBuildPackageName,
+            PluginInstallMode.Fast,
+            cancellationToken);
+    }
+
+    public async Task<string> InstallPluginAsync(
+        ManagerInstance instance,
+        string packageSpec,
+        NodeRuntimeInfo? nodeRuntime,
+        string allowBuildPackageName,
+        PluginInstallMode installMode,
+        CancellationToken cancellationToken = default)
+    {
         return await RunPluginCommandAsync(
             instance,
             "add",
             packageSpec,
             nodeRuntime,
             allowBuildPackageName,
+            installMode,
             cancellationToken);
     }
 
@@ -125,7 +165,29 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default)
     {
-        return await RunPluginCommandAsync(instance, "update", packageSpec, nodeRuntime, null, cancellationToken);
+        return await UpdatePluginAsync(
+            instance,
+            packageSpec,
+            nodeRuntime,
+            PluginInstallMode.Fast,
+            cancellationToken);
+    }
+
+    public async Task<string> UpdatePluginAsync(
+        ManagerInstance instance,
+        string packageSpec,
+        NodeRuntimeInfo? nodeRuntime,
+        PluginInstallMode installMode,
+        CancellationToken cancellationToken = default)
+    {
+        return await RunPluginCommandAsync(
+            instance,
+            "update",
+            packageSpec,
+            nodeRuntime,
+            null,
+            installMode,
+            cancellationToken);
     }
 
     public async Task<string> RemovePluginAsync(
@@ -134,7 +196,14 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default)
     {
-        return await RunPluginCommandAsync(instance, "remove", packageSpec, nodeRuntime, null, cancellationToken);
+        return await RunPluginCommandAsync(
+            instance,
+            "remove",
+            packageSpec,
+            nodeRuntime,
+            null,
+            PluginInstallMode.Fast,
+            cancellationToken);
     }
 
     public Task SetPluginEnabledAsync(
@@ -620,6 +689,7 @@ public sealed class ExtensionService
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
         string? allowBuildPackageName,
+        PluginInstallMode installMode,
         CancellationToken cancellationToken)
     {
         EnsureStopped(instance);
@@ -632,6 +702,11 @@ public sealed class ExtensionService
         if (action is not ("add" or "update" or "remove"))
         {
             throw new ArgumentOutOfRangeException(nameof(action));
+        }
+
+        if (!Enum.IsDefined(installMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(installMode));
         }
 
         if (!string.IsNullOrWhiteSpace(allowBuildPackageName)
@@ -648,7 +723,13 @@ public sealed class ExtensionService
         };
         _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}", automatic: true);
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
-        var startInfo = CreatePluginStartInfo(instance, action, packageSpec, nodeRuntime, allowBuildPackageName);
+        var startInfo = CreatePluginStartInfo(
+            instance,
+            action,
+            packageSpec,
+            nodeRuntime,
+            allowBuildPackageName,
+            installMode);
         pnpmEnvironment.Apply(startInfo);
         var output = await RunProcessAsync(startInfo, cancellationToken);
         if (output.ExitCode != 0)
@@ -676,7 +757,8 @@ public sealed class ExtensionService
         string action,
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
-        string? allowBuildPackageName)
+        string? allowBuildPackageName,
+        PluginInstallMode installMode)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -709,7 +791,7 @@ public sealed class ExtensionService
             startInfo.ArgumentList.Add(ProfileName);
             startInfo.ArgumentList.Add(action);
             startInfo.ArgumentList.Add(packageSpec);
-            AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName);
+            AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName, installMode);
         }
         else
         {
@@ -719,10 +801,12 @@ public sealed class ExtensionService
                 || Path.GetExtension(executable).Equals(".bat", StringComparison.OrdinalIgnoreCase))
             {
                 startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-                var commandLine = $"\"{executable}\" plugin --profile {ProfileName} {action} {QuoteCmdArgument(packageSpec)} --reporter=append-only";
-                if (action == "add" && !string.IsNullOrWhiteSpace(allowBuildPackageName))
+                var commandLine = $"\"{executable}\" plugin --profile {ProfileName} {action} {QuoteCmdArgument(packageSpec)}";
+                var pnpmOptions = new List<string>();
+                AddPnpmOptions(pnpmOptions, action, allowBuildPackageName, installMode);
+                foreach (var option in pnpmOptions)
                 {
-                    commandLine += $" --allow-build={QuoteCmdArgument(allowBuildPackageName)}";
+                    commandLine += $" {QuoteCmdArgument(option)}";
                 }
                 startInfo.Arguments = $"/d /s /c \"{commandLine}\"";
             }
@@ -734,7 +818,7 @@ public sealed class ExtensionService
                 startInfo.ArgumentList.Add(ProfileName);
                 startInfo.ArgumentList.Add(action);
                 startInfo.ArgumentList.Add(packageSpec);
-                AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName);
+                AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName, installMode);
             }
         }
 
@@ -756,9 +840,23 @@ public sealed class ExtensionService
     private static void AddPnpmOptions(
         ICollection<string> arguments,
         string action,
-        string? allowBuildPackageName)
+        string? allowBuildPackageName,
+        PluginInstallMode installMode)
     {
         arguments.Add("--reporter=append-only");
+        if (action is "add" or "update")
+        {
+            if (installMode == PluginInstallMode.Compatibility)
+            {
+                arguments.Add("--package-import-method=copy");
+                arguments.Add("--force");
+            }
+            else
+            {
+                arguments.Add("--prefer-offline");
+            }
+        }
+
         if (action == "add" && !string.IsNullOrWhiteSpace(allowBuildPackageName))
         {
             arguments.Add($"--allow-build={allowBuildPackageName}");

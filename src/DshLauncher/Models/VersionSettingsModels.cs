@@ -7,6 +7,12 @@ public enum ConversationSyncMode
     All
 }
 
+public enum PluginInstallMode
+{
+    Fast,
+    Compatibility
+}
+
 public sealed class VersionSettingsData
 {
     public bool SyncAllConfiguration { get; set; }
@@ -30,6 +36,8 @@ public sealed class LauncherSettingsData
     public bool SyncAllConfiguration { get; set; }
 
     public List<string> Workspaces { get; set; } = new();
+
+    public PluginInstallMode PluginInstallMode { get; set; } = PluginInstallMode.Fast;
 
     /// <summary>
     /// Optional npm global prefix used only for the Launcher-managed DSh runtime.

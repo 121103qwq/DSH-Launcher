@@ -1191,7 +1191,26 @@ public sealed class MarketplaceService
         if (normalized.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
             || normalized.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
+            if (Uri.TryCreate(normalized, UriKind.Absolute, out var repositoryUri)
+                && string.Equals(repositoryUri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+            {
+                var segments = repositoryUri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length < 2
+                    || !IsGitHubOwner(segments[0])
+                    || !IsGitHubRepositoryName(segments[1]))
+                {
+                    return null;
+                }
+            }
+
             return normalized;
+        }
+
+        // Scoped npm package names also contain exactly one slash, but
+        // @scope/package is not a GitHub owner/repository shorthand.
+        if (normalized.StartsWith('@'))
+        {
+            return null;
         }
 
         return normalized.Count(character => character == '/') == 1
@@ -1527,15 +1546,16 @@ public sealed class MarketplaceService
             }
         }
 
-        if (string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repository))
+        if (!IsGitHubOwner(owner) || !IsGitHubRepositoryName(repository))
         {
             return false;
         }
 
-        repository = repository.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
-            ? repository[..^4]
-            : repository;
-        var baseIdentity = $"github:{owner}/{repository}".ToLowerInvariant();
+        var repositoryName = repository!;
+        repositoryName = repositoryName.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? repositoryName[..^4]
+            : repositoryName;
+        var baseIdentity = $"github:{owner}/{repositoryName}".ToLowerInvariant();
         identity = string.IsNullOrWhiteSpace(subpath)
             ? baseIdentity
             : $"{baseIdentity}#path:/{subpath.Trim('/')}";
@@ -1553,6 +1573,11 @@ public sealed class MarketplaceService
         {
             identities.UnionWith(EnumeratePluginIdentities(value));
         }
+
+        // GitHub install specs are saved by DSh under the package name declared
+        // by the repository. Include a package-like display name as an alias so
+        // an installed GitHub plugin is recognized immediately after refresh.
+        identities.UnionWith(EnumeratePluginIdentities(name));
 
         if (identities.Count == 0 && !string.IsNullOrWhiteSpace(name))
         {
@@ -1718,7 +1743,9 @@ public sealed class MarketplaceService
             var pathMarker = text.IndexOf("#path:", StringComparison.OrdinalIgnoreCase);
             var repositoryText = pathMarker >= 0 ? text[..pathMarker] : text;
             var repositorySegments = repositoryText.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (repositorySegments.Length != 2)
+            if (repositorySegments.Length != 2
+                || !IsGitHubOwner(repositorySegments[0])
+                || !IsGitHubRepositoryName(repositorySegments[1]))
             {
                 return false;
             }
@@ -1735,7 +1762,9 @@ public sealed class MarketplaceService
         }
 
         var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length < 2 || string.IsNullOrWhiteSpace(segments[0]) || string.IsNullOrWhiteSpace(segments[1]))
+        if (segments.Length < 2
+            || !IsGitHubOwner(segments[0])
+            || !IsGitHubRepositoryName(segments[1]))
         {
             return false;
         }
@@ -1760,6 +1789,30 @@ public sealed class MarketplaceService
             branch,
             subpath);
         return true;
+    }
+
+    private static bool IsGitHubOwner(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Length > 39
+            || value[0] == '-'
+            || value[^1] == '-')
+        {
+            return false;
+        }
+
+        return value.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
+    }
+
+    private static bool IsGitHubRepositoryName(string? value)
+    {
+        var normalized = value?.EndsWith(".git", StringComparison.OrdinalIgnoreCase) == true
+            ? value[..^4]
+            : value;
+        return !string.IsNullOrWhiteSpace(normalized)
+            && normalized is not "." and not ".."
+            && normalized.Length <= 100
+            && normalized.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
     }
 
     private static string NormalizeInstallSpec(string value)

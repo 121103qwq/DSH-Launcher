@@ -15,6 +15,7 @@ public partial class ExtensionWindow : UserControl
     private readonly ManagerInstance _instance;
     private readonly ExtensionService _service;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
+    private readonly Func<PluginInstallMode> _pluginInstallMode;
     private readonly bool _agentOnly;
     private readonly MarketplaceService? _marketplaceService;
     private readonly IReadOnlyList<ManagerInstance>? _instances;
@@ -46,11 +47,13 @@ public partial class ExtensionWindow : UserControl
         MarketplaceService? marketplaceService = null,
         IReadOnlyList<ManagerInstance>? instances = null,
         Action<ManagerInstance>? selectInstance = null,
-        SkillMarketService? skillMarketService = null)
+        SkillMarketService? skillMarketService = null,
+        Func<PluginInstallMode>? pluginInstallMode = null)
     {
         _instance = instance;
         _service = service;
         _nodeRuntime = nodeRuntime;
+        _pluginInstallMode = pluginInstallMode ?? (() => PluginInstallMode.Fast);
         _agentOnly = agentOnly;
         _marketplaceService = marketplaceService;
         _instances = instances;
@@ -667,47 +670,73 @@ public partial class ExtensionWindow : UserControl
             }
 
             var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
+            var installMode = _pluginInstallMode();
             var installedEntry = item.IsInstalled
                 ? MarketplaceService.FindInstalledPlugin(item, _installedPlugins)
                 : null;
             var packageSpec = verification.InstallSpec ?? item.InstallSpec;
-            string output;
-            try
+            if (item.IsInstalled && !item.IsManaged)
             {
+                throw new InvalidOperationException("当前 Plugin 不是 Launcher 安装的，不能从市场更新。请在 DSh 自己的工具中管理它。");
+            }
+
+            async Task<string> ExecuteMutationAsync(PluginInstallMode mode)
+            {
+                var modeText = mode == PluginInstallMode.Fast ? "快速安装" : "兼容性安装";
                 if (item.IsInstalled)
                 {
-                    if (!item.IsManaged)
-                    {
-                        throw new InvalidOperationException("当前 Plugin 不是 Launcher 安装的，不能从市场更新。请在 DSh 自己的工具中管理它。");
-                    }
-
                     SetMarketplaceMutationText("正在更新 Plugin…");
-                    progressWindow.SetStatus("正在通过官方 DSh CLI 更新 Plugin…");
-                    output = await _service.UpdatePluginAsync(
+                    progressWindow.SetStatus($"正在通过官方 DSh CLI 更新 Plugin（{modeText}）…");
+                    return await _service.UpdatePluginAsync(
                         _instance,
                         installedEntry?.Name ?? verification.PackageName ?? item.PackageName ?? packageSpec,
                         _nodeRuntime(),
+                        mode,
                         operationCancellation.Token);
-                    StatusText.Text = $"Plugin 更新完成。实例下次启动时加载；备份：{snapshot}";
                 }
-                else
+
+                SetMarketplaceMutationText("正在安装 Plugin…");
+                progressWindow.SetStatus($"正在通过官方 DSh CLI 安装 Plugin（{modeText}）…");
+                return string.IsNullOrWhiteSpace(verification.PackageName)
+                    ? await _service.InstallPluginAsync(
+                        _instance,
+                        packageSpec,
+                        _nodeRuntime(),
+                        mode,
+                        operationCancellation.Token)
+                    : await _service.InstallPluginAsync(
+                        _instance,
+                        packageSpec,
+                        _nodeRuntime(),
+                        verification.PackageName,
+                        mode,
+                        operationCancellation.Token);
+            }
+
+            string output;
+            try
+            {
+                try
                 {
-                    SetMarketplaceMutationText("正在安装 Plugin…");
-                    progressWindow.SetStatus("正在通过官方 DSh CLI 安装 Plugin…");
-                    output = string.IsNullOrWhiteSpace(verification.PackageName)
-                        ? await _service.InstallPluginAsync(
-                            _instance,
-                            packageSpec,
-                            _nodeRuntime(),
-                            operationCancellation.Token)
-                        : await _service.InstallPluginAsync(
-                            _instance,
-                            packageSpec,
-                            _nodeRuntime(),
-                            verification.PackageName,
-                            operationCancellation.Token);
-                    StatusText.Text = $"Plugin 安装完成。实例下次启动时加载；备份：{snapshot}";
+                    output = await ExecuteMutationAsync(installMode);
                 }
+                catch (Exception fastError) when (
+                    installMode == PluginInstallMode.Fast
+                    && fastError is not OperationCanceledException
+                    && !operationCancellation.IsCancellationRequested)
+                {
+                    progressWindow.SetStatus("快速安装失败，等待选择是否使用兼容性安装重试…");
+                    if (!ConfirmCompatibilityRetry(progressWindow, fastError))
+                    {
+                        throw;
+                    }
+
+                    output = await ExecuteMutationAsync(PluginInstallMode.Compatibility);
+                }
+
+                StatusText.Text = item.IsInstalled
+                    ? $"Plugin 更新完成。实例下次启动时加载；备份：{snapshot}"
+                    : $"Plugin 安装完成。实例下次启动时加载；备份：{snapshot}";
             }
             catch (Exception ex)
             {
@@ -952,6 +981,14 @@ public partial class ExtensionWindow : UserControl
         return trimmed.Length <= 600 ? trimmed : trimmed[^600..];
     }
 
+    private static bool ConfirmCompatibilityRetry(Window owner, Exception error) =>
+        System.Windows.MessageBox.Show(
+            owner,
+            $"快速安装失败。是否立即使用兼容性安装重试？\n\n{Tail(error.Message)}",
+            "快速安装失败",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning) == MessageBoxResult.Yes;
+
     private async void InstallPlugin_Click(object sender, RoutedEventArgs e)
     {
         var source = TextPromptWindow.Show(Window.GetWindow(this), "安装 Plugin", "输入 npm 包名、Git 仓库或本地路径：");
@@ -961,15 +998,42 @@ public partial class ExtensionWindow : UserControl
             Window.GetWindow(this),
             operationCancellation,
             "安装 Plugin",
-            "正在通过官方 DSh CLI 安装 Plugin…");
+            "正在准备 Plugin 安装…");
         progressWindow.Show();
         try
         {
-            var output = await _service.InstallPluginAsync(
-                _instance,
-                source,
-                _nodeRuntime(),
-                operationCancellation.Token);
+            var installMode = _pluginInstallMode();
+            var installModeText = installMode == PluginInstallMode.Fast ? "快速安装" : "兼容性安装";
+            progressWindow.SetStatus($"正在通过官方 DSh CLI 安装 Plugin（{installModeText}）…");
+            string output;
+            try
+            {
+                output = await _service.InstallPluginAsync(
+                    _instance,
+                    source,
+                    _nodeRuntime(),
+                    installMode,
+                    operationCancellation.Token);
+            }
+            catch (Exception fastError) when (
+                installMode == PluginInstallMode.Fast
+                && fastError is not OperationCanceledException
+                && !operationCancellation.IsCancellationRequested)
+            {
+                progressWindow.SetStatus("快速安装失败，等待选择是否使用兼容性安装重试…");
+                if (!ConfirmCompatibilityRetry(progressWindow, fastError))
+                {
+                    throw;
+                }
+
+                progressWindow.SetStatus("正在通过官方 DSh CLI 使用兼容性安装重试…");
+                output = await _service.InstallPluginAsync(
+                    _instance,
+                    source,
+                    _nodeRuntime(),
+                    PluginInstallMode.Compatibility,
+                    operationCancellation.Token);
+            }
             StatusText.Text = string.IsNullOrWhiteSpace(output) ? "Plugin 安装完成。" : $"Plugin 安装完成：{output}";
             progressWindow.SetStatus("Plugin 安装完成，正在刷新当前实例…");
             await RefreshAsync();

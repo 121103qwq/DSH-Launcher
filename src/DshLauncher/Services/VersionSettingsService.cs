@@ -352,6 +352,11 @@ public sealed class VersionSettingsService
 
     private static void NormalizeLauncherSettings(LauncherSettingsData settings)
     {
+        if (!Enum.IsDefined(settings.PluginInstallMode))
+        {
+            settings.PluginInstallMode = PluginInstallMode.Fast;
+        }
+
         settings.Workspaces ??= new List<string>();
         settings.Workspaces = settings.Workspaces
             .Where(workspace => !string.IsNullOrWhiteSpace(workspace))

@@ -39,6 +39,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DshRuntimeDetector _dshDetector = new();
     private readonly SourceProjectInspector _sourceInspector = new();
     private readonly InstanceRegistry _instanceRegistry = new();
+    private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
     private readonly DshInstanceRunner _instanceRunner = new();
     private readonly ExtensionService _extensionService;
     private readonly MarketplaceService _marketplaceService;
@@ -60,6 +61,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private CancellationTokenSource? _providerRefreshCancellation;
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
     private DshRuntimeInfo _dshRuntime = DshRuntimeInfo.Missing();
+    private IReadOnlyList<DshRuntimeInfo> _detectedDshRuntimes = Array.Empty<DshRuntimeInfo>();
     private readonly Dictionary<string, ChatWindow> _chatWindows = new(StringComparer.Ordinal);
     private ManagerInstance? _selectedInstance;
     private bool _isNodeDetectionInProgress;
@@ -84,6 +86,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _marketplaceService = new();
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
+        _detectedRuntimeRegistrationService = new(_instanceRegistry);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _conversationSyncService = new(_versionSettingsService, id => _instanceRunner.IsRunning(id));
         _modelService = new(id => _instanceRunner.IsRunning(id));
@@ -428,11 +431,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
-            _dshRuntime = IsRuntimeHiddenForBootstrapTest(TestRuntimeKind.Dsh)
-                ? DshRuntimeInfo.Missing("隔离测试模式：已对当前 Launcher 进程隐藏本机 DeepSeek Harness。")
-                : await _dshDetector.DetectAsync(
+            if (IsRuntimeHiddenForBootstrapTest(TestRuntimeKind.Dsh))
+            {
+                _detectedDshRuntimes = Array.Empty<DshRuntimeInfo>();
+                _dshRuntime = DshRuntimeInfo.Missing("隔离测试模式：已对当前 Launcher 进程隐藏本机 DeepSeek Harness。");
+            }
+            else
+            {
+                var scan = await _dshDetector.ScanAsync(
                     GetConfiguredDshInstallDirectory(),
                     _windowCancellation.Token);
+                _detectedDshRuntimes = scan.Runtimes;
+                _dshRuntime = scan.PrimaryRuntime;
+            }
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -440,7 +451,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
+            _detectedDshRuntimes = Array.Empty<DshRuntimeInfo>();
             _dshRuntime = DshRuntimeInfo.Missing($"DSh 检测失败：{ex.Message}");
+        }
+
+        if (_instancesLoadedSuccessfully)
+        {
+            AutoRegisterDetectedDshRuntimes();
         }
 
         OnPropertyChanged(nameof(DshStatusText));
@@ -548,6 +565,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
+            AutoRegisterDetectedDshRuntimes();
             SelectedInstance = Instances.FirstOrDefault();
             OnPropertyChanged(nameof(InstanceCountText));
             OnPropertyChanged(nameof(NoInstancesVisibility));
@@ -568,6 +586,47 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             ShowNotice($"读取实例注册文件失败：{ex.Message}");
         }
+    }
+
+    private void AutoRegisterDetectedDshRuntimes()
+    {
+        var result = _detectedRuntimeRegistrationService.RegisterMissing(
+            Instances.ToArray(),
+            _detectedDshRuntimes);
+        foreach (var instance in result.AddedInstances)
+        {
+            Instances.Add(instance);
+        }
+
+        if (result.AddedInstances.Count > 0)
+        {
+            SelectedInstance ??= result.AddedInstances[0];
+            OnPropertyChanged(nameof(InstanceCountText));
+            OnPropertyChanged(nameof(NoInstancesVisibility));
+            OnPropertyChanged(nameof(InstancesVisibility));
+            OnPropertyChanged(nameof(CanStartInstance));
+            RefreshRunningInstances();
+        }
+
+        if (result.AddedInstances.Count == 0 && result.Errors.Count == 0)
+        {
+            return;
+        }
+
+        var messages = new List<string>();
+        if (result.AddedInstances.Count > 0)
+        {
+            var names = string.Join("、", result.AddedInstances.Take(3).Select(static instance => instance.Name));
+            var suffix = result.AddedInstances.Count > 3 ? "等" : string.Empty;
+            messages.Add($"已自动添加 {result.AddedInstances.Count} 个 DSh 版本：{names}{suffix}。");
+        }
+
+        if (result.Errors.Count > 0)
+        {
+            messages.Add(string.Join("；", result.Errors));
+        }
+
+        ShowNotice(string.Join(" ", messages));
     }
 
     private async Task RefreshProvidersAsync(ManagerInstance? instance)
@@ -929,7 +988,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         () => _nodeRuntime,
                         marketplaceService: _marketplaceService,
                         instances: Instances.ToArray(),
-                        selectInstance: candidate => SwitchContextInstance(candidate, section)),
+                        selectInstance: candidate => SwitchContextInstance(candidate, section),
+                        pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode),
                     "Agent" => new ExtensionWindow(
                         instance,
                         _extensionService,
@@ -1377,8 +1437,96 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _runtimePanelUpdateStatus = UpdateStatus;
         UpdateStatus();
 
+        AddPluginInstallModeSection(panel);
         AddVersionSyncSection(panel);
         return panel;
+    }
+
+    private void AddPluginInstallModeSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Plugin 安装",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        var card = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        };
+        var currentMode = _versionSettingsService.ReadLauncherSettings().PluginInstallMode;
+        var compatibility = new System.Windows.Controls.RadioButton
+        {
+            GroupName = "PluginInstallMode",
+            Content = "兼容性安装",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            IsChecked = currentMode == PluginInstallMode.Compatibility
+        };
+        var fast = new System.Windows.Controls.RadioButton
+        {
+            GroupName = "PluginInstallMode",
+            Content = "快速安装（默认）",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 18, 0, 0),
+            IsChecked = currentMode == PluginInstallMode.Fast
+        };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("AccentBrush"),
+            FontSize = 11,
+            Margin = new Thickness(24, 12, 0, 0)
+        };
+        content.Children.Add(compatibility);
+        content.Children.Add(new TextBlock
+        {
+            Text = "复制依赖并重建 pnpm 依赖目录，适合硬链接、权限或旧安装状态异常的电脑；耗时会更长。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(24, 5, 0, 0)
+        });
+        content.Children.Add(fast);
+        content.Children.Add(new TextBlock
+        {
+            Text = "优先复用本地 pnpm 缓存和默认链接方式；安装更快，遇到链接或旧依赖问题时请切回兼容性安装。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(24, 5, 0, 0)
+        });
+        content.Children.Add(status);
+        panel.Children.Add(card);
+
+        void SaveMode(PluginInstallMode mode)
+        {
+            try
+            {
+                var settings = _versionSettingsService.ReadLauncherSettings();
+                settings.PluginInstallMode = mode;
+                _versionSettingsService.SaveLauncherSettings(settings);
+                status.Text = mode == PluginInstallMode.Fast
+                    ? "已使用快速安装。"
+                    : "已使用兼容性安装。";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                status.Text = $"保存失败：{ex.Message}";
+            }
+        }
+
+        compatibility.Checked += (_, _) => SaveMode(PluginInstallMode.Compatibility);
+        fast.Checked += (_, _) => SaveMode(PluginInstallMode.Fast);
     }
 
     private void AddVersionSyncSection(StackPanel panel)
@@ -3039,12 +3187,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     internal static string BuildDefaultFirstVersionNameForRuntime(DshRuntimeInfo runtime)
-    {
-        var dshName = BuildDefaultFirstVersionName(runtime.Version);
-        return string.IsNullOrWhiteSpace(runtime.DeepSeekDesktopVersion)
-            ? dshName
-            : $"DeepSeek Desktop {runtime.DeepSeekDesktopVersion} · {dshName}";
-    }
+        => runtime.SuggestedInstanceName;
 
     private async Task RunFirstVersionSetupAsync()
     {

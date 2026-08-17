@@ -23,10 +23,11 @@ public sealed class DshRuntimeDetector
         string? preferredInstallDirectory,
         CancellationToken cancellationToken = default)
     {
-        return await DetectAsync(
+        var scan = await ScanAsync(
             preferredInstallDirectory,
             DeepSeekDesktopDetector.DetectInstallations(),
             cancellationToken);
+        return scan.PrimaryRuntime;
     }
 
     internal async Task<DshRuntimeInfo> DetectAsync(
@@ -34,7 +35,40 @@ public sealed class DshRuntimeDetector
         IReadOnlyList<DeepSeekDesktopInstallation> desktopInstallations,
         CancellationToken cancellationToken = default)
     {
+        var scan = await ScanAsync(
+            preferredInstallDirectory,
+            desktopInstallations,
+            cancellationToken);
+        return scan.PrimaryRuntime;
+    }
+
+    public async Task<IReadOnlyList<DshRuntimeInfo>> DetectAllAsync(
+        string? preferredInstallDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        var scan = await ScanAsync(
+            preferredInstallDirectory,
+            DeepSeekDesktopDetector.DetectInstallations(),
+            cancellationToken);
+        return scan.Runtimes;
+    }
+
+    internal Task<DshRuntimeScanResult> ScanAsync(
+        string? preferredInstallDirectory,
+        CancellationToken cancellationToken = default) =>
+        ScanAsync(
+            preferredInstallDirectory,
+            DeepSeekDesktopDetector.DetectInstallations(),
+            cancellationToken);
+
+    internal async Task<DshRuntimeScanResult> ScanAsync(
+        string? preferredInstallDirectory,
+        IReadOnlyList<DeepSeekDesktopInstallation> desktopInstallations,
+        CancellationToken cancellationToken = default)
+    {
         var foundCandidate = false;
+        var runtimes = new List<DshRuntimeInfo>();
+        var seenPackageRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var candidate in GetCandidates(preferredInstallDirectory, desktopInstallations))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -65,20 +99,24 @@ public sealed class DshRuntimeDetector
                 continue;
             }
 
-            return new DshRuntimeInfo(
+            var normalizedPackageRoot = Path.GetFullPath(packageRoot);
+            if (!seenPackageRoots.Add(normalizedPackageRoot))
+            {
+                continue;
+            }
+
+            runtimes.Add(new DshRuntimeInfo(
                 true,
                 candidate,
                 packageVersion,
-                packageRoot,
+                normalizedPackageRoot,
                 null,
                 TryReadNodeEngine(packageRoot),
                 desktopInstallation?.DesktopVersion,
-                desktopInstallation?.NodeExecutablePath);
+                desktopInstallation?.NodeExecutablePath));
         }
 
-        return DshRuntimeInfo.Missing(foundCandidate
-            ? "找到了 DSh 命令，但安装包无法解析、命令不能运行，或命令版本与安装包不一致。请使用“准备运行环境”修复。"
-            : "PATH、所选安装位置和 DeepSeek Desktop 中没有可运行的 DSh 启动文件。");
+        return new DshRuntimeScanResult(runtimes, foundCandidate);
     }
 
     public static string? TryFindPackageRoot(string executablePath)
@@ -543,4 +581,14 @@ public sealed class DshRuntimeDetector
             // A terminated candidate may have failed while its output was closing.
         }
     }
+}
+
+internal sealed record DshRuntimeScanResult(
+    IReadOnlyList<DshRuntimeInfo> Runtimes,
+    bool FoundCandidate)
+{
+    public DshRuntimeInfo PrimaryRuntime => Runtimes.FirstOrDefault()
+        ?? DshRuntimeInfo.Missing(FoundCandidate
+            ? "找到了 DSh 命令，但安装包无法解析、命令不能运行，或命令版本与安装包不一致。请使用“准备运行环境”修复。"
+            : "PATH、所选安装位置和 DeepSeek Desktop 中没有可运行的 DSh 启动文件。");
 }
