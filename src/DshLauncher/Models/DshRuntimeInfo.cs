@@ -9,10 +9,11 @@ public sealed record DshRuntimeInfo(
     string? NodeEngine = null,
     string? DeepSeekDesktopVersion = null,
     string? BundledNodeExecutablePath = null,
-    DshRuntimeLaunchSpec? LaunchSpec = null)
+    DshRuntimeLaunchSpec? LaunchSpec = null,
+    string? ExistingDshHome = null)
 {
     public static DshRuntimeInfo Missing(string? error = null) =>
-        new(false, null, null, null, error, null, null, null, null);
+        new(false, null, null, null, error, null, null, null, null, null);
 
     public DshRuntimeLaunchSpec? EffectiveLaunchSpec => LaunchSpec
         ?? (string.IsNullOrWhiteSpace(ExecutablePath)

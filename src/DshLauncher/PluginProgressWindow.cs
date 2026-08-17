@@ -13,8 +13,10 @@ internal sealed class PluginProgressWindow : Window
     private readonly CancellationTokenSource _cancellation;
     private readonly TextBlock _statusText;
     private readonly ProgressBar _progressBar;
+    private readonly TextBlock _progressText;
     private readonly TextBox _detailsBox;
     private readonly Button _actionButton;
+    private readonly WindowState _ownerInitialState;
     private bool _canClose;
 
     public PluginProgressWindow(
@@ -24,6 +26,7 @@ internal sealed class PluginProgressWindow : Window
         string initialStatus)
     {
         _cancellation = cancellation;
+        _ownerInitialState = owner?.WindowState ?? WindowState.Normal;
         Title = title;
         Width = 520;
         Height = 250;
@@ -52,9 +55,26 @@ internal sealed class PluginProgressWindow : Window
         };
         _progressBar = new ProgressBar
         {
-            Height = 8,
-            IsIndeterminate = true
+            Height = 10,
+            Minimum = 0,
+            Maximum = 100,
+            Value = 5
         };
+        _progressText = new TextBlock
+        {
+            Text = "5%",
+            Width = 46,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = System.Windows.Media.Brushes.DimGray,
+            Margin = new Thickness(10, 0, 0, 0)
+        };
+        var progressRow = new Grid();
+        progressRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        progressRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_progressText, 1);
+        progressRow.Children.Add(_progressBar);
+        progressRow.Children.Add(_progressText);
         _detailsBox = new TextBox
         {
             Visibility = Visibility.Collapsed,
@@ -73,7 +93,7 @@ internal sealed class PluginProgressWindow : Window
             Padding = new Thickness(18, 7, 18, 7),
             Margin = new Thickness(0, 16, 0, 0)
         };
-        Grid.SetRow(_progressBar, 1);
+        Grid.SetRow(progressRow, 1);
         Grid.SetRow(_detailsBox, 2);
         Grid.SetRow(_actionButton, 3);
         _actionButton.Click += (_, _) =>
@@ -90,7 +110,7 @@ internal sealed class PluginProgressWindow : Window
         };
 
         grid.Children.Add(_statusText);
-        grid.Children.Add(_progressBar);
+        grid.Children.Add(progressRow);
         grid.Children.Add(_detailsBox);
         grid.Children.Add(_actionButton);
         Content = grid;
@@ -99,15 +119,22 @@ internal sealed class PluginProgressWindow : Window
 
     public void SetStatus(string message) => _statusText.Text = message;
 
+    public void SetProgress(double percentage, string message)
+    {
+        var value = ClampProgress(percentage);
+        _statusText.Text = message;
+        _progressBar.IsIndeterminate = false;
+        _progressBar.Value = value;
+        _progressText.Text = $"{value:0}%";
+    }
+
     public void Complete(string message)
     {
         _canClose = true;
-        _statusText.Text = message;
-        _progressBar.IsIndeterminate = false;
-        _progressBar.Value = 100;
+        SetProgress(100, message);
         _actionButton.Content = "关闭";
         _actionButton.IsEnabled = true;
-        Activate();
+        PresentResult();
     }
 
     public void Fail(string message)
@@ -115,12 +142,35 @@ internal sealed class PluginProgressWindow : Window
         _canClose = true;
         _statusText.Text = "Plugin 操作失败";
         _progressBar.IsIndeterminate = false;
-        _progressBar.Value = 0;
+        _progressText.Text = "失败";
         _detailsBox.Text = message;
         _detailsBox.Visibility = Visibility.Visible;
         _actionButton.Content = "关闭";
         _actionButton.IsEnabled = true;
         Height = Math.Min(420, SystemParameters.WorkArea.Height * 0.8);
+        PresentResult();
+    }
+
+    internal static double ClampProgress(double percentage) =>
+        Math.Clamp(double.IsFinite(percentage) ? percentage : 0, 0, 100);
+
+    internal static bool ShouldRestoreOwner(WindowState initialState, WindowState currentState) =>
+        initialState != WindowState.Minimized && currentState == WindowState.Minimized;
+
+    private void PresentResult()
+    {
+        if (Owner is { } owner
+            && ShouldRestoreOwner(_ownerInitialState, owner.WindowState))
+        {
+            owner.WindowState = _ownerInitialState;
+            owner.Activate();
+        }
+
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
         Activate();
     }
 

@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using DshLauncher;
 using DshLauncher.Models;
@@ -14,13 +15,17 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Instance registry round-trip", TestInstanceRegistryRoundTrip),
     ("Instance registry rename persists", TestInstanceRegistryRenamePersists),
     ("Instance registry allows shared roots for isolated versions", TestInstanceRegistryAllowsSharedRoots),
+    ("Instance registry deduplicates repeated imports", TestInstanceRegistryDeduplicatesRepeatedImports),
     ("Instance registry rejects missing executable state", TestInstanceRegistryRejectsMissingExecutableState),
     ("Instance registry rejects unsafe homes and corrupt records", TestInstanceRegistryRejectsUnsafeData),
     ("Source project inspection", TestSourceProjectInspection),
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
-    ("Detected DSh runtime auto registration", TestDetectedDshRuntimeAutoRegistration),
+    ("Detected DSh runtime auto import", TestDetectedDshRuntimeAutoRegistration),
+    ("Imported profile package restoration", TestImportedProfilePackageRestoration),
+    ("Recent instance selection", TestRecentInstanceSelection),
     ("Manual DSh detect, register and start", TestManualDshDetectRegisterAndStart),
+    ("Shortcut scan directory resolution", TestShortcutScanDirectoryResolution),
     ("DeepSeek Desktop bundled runtime detection", TestDeepSeekDesktopRuntimeDetection),
     ("DSH Desktop 2 packaged runtime compatibility", TestDshDesktopV2RuntimeCompatibility),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
@@ -30,12 +35,14 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node download cancel cleans part", TestNodeDownloadCancelCleansPart),
     ("Node MSI verification and deferred cleanup", TestNodeMsiVerificationAndDeferredCleanup),
     ("Lifecycle busy guard", TestLifecycleBusyGuard),
+    ("Single instance activation channel", TestSingleInstanceActivationChannel),
     ("Window resize hit testing", TestWindowResizeHitTesting),
     ("Main window code resource references", TestMainWindowCodeResourceReferences),
     ("Conversation title cache reparse rejection", TestConversationTitleCacheReparseRejection),
     ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
     ("Node engine requirement resolution", TestNodeEngineRequirementResolution),
     ("Runtime progress window close guard", TestRuntimeProgressCloseGuard),
+    ("Plugin progress window state", TestPluginProgressWindowState),
     ("Node version selection uses source engine", TestNodeVersionSelectionUsesEngine),
     ("DSh global install target decision", TestDshInstallTargetDecision),
     ("Start flow decisions", TestStartFlowDecisions),
@@ -43,6 +50,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node path propagation", TestNodePathPropagation),
     ("DSh install guard", TestDshInstallGuard),
     ("DSh custom install prefix", TestDshCustomInstallPrefix),
+    ("DSh default install directory", TestDshDefaultInstallDirectory),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
     ("Source runner lifecycle", TestSourceRunnerLifecycle),
@@ -66,6 +74,63 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Conversation file management", TestConversationFileManagement),
     ("Conversation synchronization", TestConversationSynchronization)
 };
+
+static async Task TestSingleInstanceActivationChannel()
+{
+    var pipeName = $"DSH-Launcher-SelfTest-{Guid.NewGuid():N}";
+    var activationCount = 0;
+    using var channel = new SingleInstanceActivationChannel(
+        pipeName,
+        () =>
+        {
+            Interlocked.Increment(ref activationCount);
+            return true;
+        });
+    channel.Start();
+
+    var activationCompletion = new TaskCompletionSource<bool>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var uiThread = new Thread(() =>
+    {
+        SynchronizationContext.SetSynchronizationContext(new NonPumpingSynchronizationContext());
+        try
+        {
+            activationCompletion.TrySetResult(
+                SingleInstanceActivationChannel.RequestActivationAsync(
+                        pipeName,
+                        TimeSpan.FromSeconds(2))
+                    .GetAwaiter()
+                    .GetResult() == SingleInstanceActivationResult.Accepted);
+        }
+        catch (Exception ex)
+        {
+            activationCompletion.TrySetException(ex);
+        }
+    })
+    {
+        IsBackground = true
+    };
+    uiThread.Start();
+
+    var activated = await activationCompletion.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    Assert(activated && activationCount == 1,
+        "第二个 Launcher 进程必须能在被同步阻塞的 WPF UI 上下文中完成唤醒请求。 ");
+
+    var missing = await SingleInstanceActivationChannel.RequestActivationAsync(
+        $"DSH-Launcher-SelfTest-Missing-{Guid.NewGuid():N}",
+        TimeSpan.FromMilliseconds(100));
+    Assert(missing == SingleInstanceActivationResult.Unavailable,
+        "没有主进程监听时，唤起请求必须快速失败并允许旧版窗口回退。 ");
+
+    var rejectingPipeName = $"DSH-Launcher-SelfTest-Rejected-{Guid.NewGuid():N}";
+    using var rejectingChannel = new SingleInstanceActivationChannel(rejectingPipeName, () => false);
+    rejectingChannel.Start();
+    var rejected = await SingleInstanceActivationChannel.RequestActivationAsync(
+        rejectingPipeName,
+        TimeSpan.FromSeconds(2));
+    Assert(rejected == SingleInstanceActivationResult.Rejected,
+        "正在退出的主进程拒绝唤醒时，次进程必须等待互斥锁，不能误走旧版窗口回退。 ");
+}
 
 var failures = 0;
 foreach (var test in tests)
@@ -123,6 +188,41 @@ static Task TestInstanceRegistryAllowsSharedRoots()
     var second = registry.Register("另一个实例", root, InstanceKind.Source, packageManager: "pnpm");
     Assert(first.RootPath == second.RootPath, "共享运行目录的版本应保留同一个 DSh 根目录。");
     Assert(!string.Equals(first.DshHome, second.DshHome, StringComparison.OrdinalIgnoreCase), "共享运行目录的版本必须使用不同 DSH_HOME。");
+    return Task.CompletedTask;
+}
+
+static Task TestInstanceRegistryDeduplicatesRepeatedImports()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var runtimeRoot = Path.Combine(temporary.Path, "runtime");
+    var importedHome = Path.Combine(temporary.Path, "desktop-home");
+    Directory.CreateDirectory(runtimeRoot);
+    Directory.CreateDirectory(importedHome);
+    var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
+    var older = registry.Register("重复导入", runtimeRoot, InstanceKind.Installed);
+    older = registry.Update(older with
+    {
+        ImportedFromDshHome = importedHome,
+        RuntimeStatus = InstanceRuntimeStatus.Ready,
+        LastUsedAt = DateTimeOffset.UtcNow.AddMinutes(-5)
+    });
+    var newer = registry.Register("重复导入 (2)", runtimeRoot, InstanceKind.Installed);
+    newer = registry.Update(newer with
+    {
+        ImportedFromDshHome = importedHome,
+        RuntimeStatus = InstanceRuntimeStatus.Ready,
+        LastUsedAt = DateTimeOffset.UtcNow
+    });
+    var intentionalCopy = registry.Register("独立复制版本", runtimeRoot, InstanceKind.Installed);
+
+    var loaded = registry.Load();
+    Assert(loaded.Count == 2, "同一运行目录和同一来源 HOME 的历史重复导入应只保留一个注册记录。 ");
+    Assert(loaded.Any(instance => instance.Id == newer.Id), "去重应保留最近使用的重复导入实例。 ");
+    Assert(loaded.Any(instance => instance.Id == intentionalCopy.Id), "没有导入来源标记的独立复制版本不能被去重。 ");
+    Assert(!loaded.Any(instance => instance.Id == older.Id), "较旧的重复导入注册记录应被移除。 ");
+    Assert(Directory.Exists(older.DshHome), "去重只清理注册记录，不能删除旧实例的 DSH_HOME 数据。 ");
+    Assert(registry.Load().Count == 2, "去重结果应持久化，后续加载不能再次出现重复实例。 ");
     return Task.CompletedTask;
 }
 
@@ -324,10 +424,35 @@ static async Task TestDshRuntimeDetection()
         "DSh 运行时应从同一个 package.json 暴露 engines.node，而不是另写版本规则。");
 }
 
-static Task TestDetectedDshRuntimeAutoRegistration()
+static async Task TestDetectedDshRuntimeAutoRegistration()
 {
     using var temporary = new TestDirectory();
     var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var existingHome = Path.Combine(temporary.Path, "existing-dsh-home");
+    Directory.CreateDirectory(Path.Combine(existingHome, "sessions"));
+    Directory.CreateDirectory(Path.Combine(existingHome, "storages"));
+    Directory.CreateDirectory(Path.Combine(existingHome, ".dsh-launcher"));
+    Directory.CreateDirectory(Path.Combine(existingHome, "webview2"));
+    File.WriteAllText(
+        Path.Combine(existingHome, "sessions", "session.jsonl"),
+        "{\"title\":\"imported\"}\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(existingHome, ".credentials.yaml"),
+        "provider: protected-placeholder\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(existingHome, "storages", "workspace.json"),
+        "{\"global\":{\"workspaceIds\":[\"workspace-1\"]},\"tables\":{\"workspaces\":{\"workspace-1\":{\"title\":\"existing\"}}}}",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(existingHome, ".dsh-launcher", "source-only.json"),
+        "{}",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(existingHome, "webview2", "browser-cache.bin"),
+        "browser shell cache",
+        Encoding.ASCII);
     var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
     var registration = new DetectedRuntimeRegistrationService(registry);
     var runtimes = new List<DshRuntimeInfo>();
@@ -342,21 +467,277 @@ static Task TestDetectedDshRuntimeAutoRegistration()
             new UTF8Encoding(false));
         var executable = Path.Combine(prefix, "dsh.cmd");
         File.WriteAllText(executable, "@echo dsh v1.2.3\r\n", Encoding.ASCII);
-        runtimes.Add(new DshRuntimeInfo(true, executable, "1.2.3", packageRoot, null));
+        runtimes.Add(new DshRuntimeInfo(
+            true,
+            executable,
+            "1.2.3",
+            packageRoot,
+            null,
+            ExistingDshHome: existingHome));
     }
 
-    var first = registration.RegisterMissing(Array.Empty<ManagerInstance>(), runtimes);
+    var first = await registration.ImportAsync(Array.Empty<ManagerInstance>(), runtimes);
     Assert(first.Errors.Count == 0 && first.AddedInstances.Count == 2,
-        "扫描到的每个不同 DSh 安装都应自动注册为版本。 ");
+        "扫描到的每个不同 DSh 安装都应自动导入为版本。 ");
+    Assert(first.ImportedInstances.Count == 2,
+        "自动导入必须把检测到的现有 DSH_HOME 复制到每个新版本。 ");
     Assert(first.AddedInstances.Select(item => item.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 2,
         "相同 DSh 版本号的不同安装必须生成不重复的版本名称。 ");
     Assert(first.AddedInstances.Select(item => item.DshHome).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 2,
-        "自动注册的每个版本必须使用独立 DSH_HOME。 ");
+        "自动导入的每个版本必须使用独立 DSH_HOME。 ");
+    foreach (var instance in first.AddedInstances)
+    {
+        Assert(File.Exists(Path.Combine(instance.DshHome, "sessions", "session.jsonl")),
+            "导入实例必须保留原有对话。 ");
+        Assert(File.ReadAllText(Path.Combine(instance.DshHome, ".credentials.yaml"))
+                == "provider: protected-placeholder\n",
+            "导入实例必须按原始字节保留本机 Provider 凭据。 ");
+        Assert(!Directory.Exists(Path.Combine(instance.DshHome, ".dsh-launcher")),
+            "导入实例不能复制旧 Launcher 的锁和内部状态。 ");
+        Assert(!Directory.Exists(Path.Combine(instance.DshHome, "webview2")),
+            "导入 Desktop 数据时不能复制与 DSh 会话无关的 WebView2 浏览器缓存。 ");
+    }
 
     var stored = registry.Load();
-    var second = registration.RegisterMissing(stored, runtimes.Concat(new[] { runtimes[0] }).ToArray());
+    var second = await registration.ImportAsync(stored, runtimes.Concat(new[] { runtimes[0] }).ToArray());
     Assert(second.AddedInstances.Count == 0 && registry.Load().Count == 2,
-        "同一个 DSh 安装目录再次被扫描时不能重复添加版本。 ");
+        "同一个 DSh 安装目录再次被自动扫描时不能重复导入版本。 ");
+
+    var manualTarget = registry.Load().Single(instance => string.Equals(
+        instance.RootPath,
+        runtimes[0].PackageRoot,
+        StringComparison.OrdinalIgnoreCase));
+    Directory.CreateDirectory(Path.Combine(manualTarget.DshHome, ".dsh-launcher"));
+    File.WriteAllText(
+        Path.Combine(manualTarget.DshHome, ".dsh-launcher", "version-settings.json"),
+        "{\"preserve\":true}",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(existingHome, "sessions", "session.jsonl"),
+        "{\"title\":\"refreshed\"}\n",
+        new UTF8Encoding(false));
+    var manual = await registration.ImportAsync(
+        registry.Load(),
+        new[] { runtimes[0] },
+        refreshRegisteredRuntimeRoots: true);
+    Assert(manual.AddedInstances.Count == 0
+        && manual.UpdatedInstances.Count == 1
+        && registry.Load().Count == 2,
+        "用户手动导入已注册的运行目录时，应覆盖更新现有实例而不是建立重复副本。 ");
+    Assert(File.ReadAllText(Path.Combine(manual.UpdatedInstances[0].DshHome, "sessions", "session.jsonl"))
+            == "{\"title\":\"refreshed\"}\n",
+        "重复导入必须用来源中的最新文件覆盖同地址实例。 ");
+    Assert(File.Exists(Path.Combine(
+            manual.UpdatedInstances[0].DshHome,
+            ".dsh-launcher",
+            "version-settings.json")),
+        "覆盖导入不能删除 Launcher 自己的版本设置。 ");
+
+    var runningTarget = registry.Update(manual.UpdatedInstances[0] with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running
+    });
+    File.WriteAllText(
+        Path.Combine(existingHome, "sessions", "session.jsonl"),
+        "{\"title\":\"must-not-overwrite-running\"}\n",
+        new UTF8Encoding(false));
+    var blocked = await registration.ImportAsync(
+        registry.Load(),
+        new[] { runtimes[0] },
+        refreshRegisteredRuntimeRoots: true);
+    Assert(blocked.UpdatedInstances.Count == 0 && blocked.Errors.Count == 1,
+        "运行中的同地址实例必须拒绝覆盖导入。 ");
+    Assert(File.ReadAllText(Path.Combine(runningTarget.DshHome, "sessions", "session.jsonl"))
+            == "{\"title\":\"refreshed\"}\n",
+        "拒绝覆盖运行中实例时不能修改现有数据。 ");
+    registry.Update(runningTarget with { RuntimeStatus = InstanceRuntimeStatus.Stopped });
+    File.WriteAllText(
+        Path.Combine(existingHome, "sessions", "session.jsonl"),
+        "{\"title\":\"imported\"}\n",
+        new UTF8Encoding(false));
+
+    var legacyPrefix = Path.Combine(temporary.Path, "legacy-runtime");
+    var legacyPackageRoot = Path.Combine(legacyPrefix, "node_modules", "@deepseek-ai", "dsh");
+    Directory.CreateDirectory(legacyPackageRoot);
+    File.WriteAllText(
+        Path.Combine(legacyPackageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"1.2.3\"}",
+        new UTF8Encoding(false));
+    var legacyExecutable = Path.Combine(legacyPrefix, "dsh.cmd");
+    File.WriteAllText(legacyExecutable, "@echo dsh v1.2.3\r\n", Encoding.ASCII);
+    var legacy = registry.Register(
+        "Legacy imported runtime",
+        legacyPackageRoot,
+        InstanceKind.Installed,
+        legacyExecutable,
+        "1.2.3",
+        "npm");
+    Directory.CreateDirectory(Path.Combine(legacy.DshHome, "storages"));
+    File.WriteAllText(
+        Path.Combine(legacy.DshHome, "storages", "workspace.json"),
+        "{\"global\":{\"workspaceIds\":[]},\"tables\":{\"workspaces\":{}}}",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(legacy.DshHome, ".credentials.yaml"),
+        "local: keep-existing\n",
+        new UTF8Encoding(false));
+    var repaired = await registration.ImportAsync(
+        registry.Load(),
+        new[]
+        {
+            new DshRuntimeInfo(
+                true,
+                legacyExecutable,
+                "1.2.3",
+                legacyPackageRoot,
+                null,
+                ExistingDshHome: existingHome)
+        });
+    Assert(repaired.AddedInstances.Count == 0 && repaired.BackfilledInstances.Count == 1,
+        "旧版已注册但仍为空的实例，应在再次检测时安全补入原有 DSH_HOME。 ");
+    Assert(File.Exists(Path.Combine(legacy.DshHome, "sessions", "session.jsonl"))
+        && File.ReadAllText(Path.Combine(legacy.DshHome, "storages", "workspace.json")).Contains("workspace-1"),
+        "旧实例补入必须恢复会话和工作区。 ");
+    var mergedCredentials = File.ReadAllText(Path.Combine(legacy.DshHome, ".credentials.yaml"));
+    Assert(mergedCredentials.Contains("local: keep-existing")
+        && mergedCredentials.Contains("provider: protected-placeholder"),
+        "旧实例补入应保留目标已有凭据，并只添加源中缺少的凭据。 ");
+    Assert(string.Equals(
+            repaired.BackfilledInstances[0].ImportedFromDshHome,
+            existingHome,
+            StringComparison.OrdinalIgnoreCase),
+        "补入完成后必须记录数据来源，避免每次检测重复写入。 ");
+
+    var correctedPrefix = Path.Combine(temporary.Path, "corrected-runtime");
+    var correctedPackageRoot = Path.Combine(correctedPrefix, "node_modules", "@deepseek-ai", "dsh");
+    Directory.CreateDirectory(correctedPackageRoot);
+    File.WriteAllText(
+        Path.Combine(correctedPackageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"1.2.3\"}",
+        new UTF8Encoding(false));
+    var correctedExecutable = Path.Combine(correctedPrefix, "dsh.cmd");
+    File.WriteAllText(correctedExecutable, "@echo dsh v1.2.3\r\n", Encoding.ASCII);
+    var wrongHome = Path.Combine(temporary.Path, "wrong-home");
+    Directory.CreateDirectory(wrongHome);
+    var wronglyImported = registry.Register(
+        "Previously imported from wrong home",
+        correctedPackageRoot,
+        InstanceKind.Installed,
+        correctedExecutable,
+        "1.2.3",
+        "npm");
+    wronglyImported = registry.Update(wronglyImported with { ImportedFromDshHome = wrongHome });
+    var correctedRuntime = new DshRuntimeInfo(
+        true,
+        correctedExecutable,
+        "1.2.3",
+        correctedPackageRoot,
+        null,
+        ExistingDshHome: existingHome);
+    var corrected = await registration.ImportAsync(registry.Load(), new[] { correctedRuntime });
+    Assert(corrected.AddedInstances.Count == 0
+        && corrected.UpdatedInstances.Count == 1
+        && corrected.UpdatedInstances[0].Id == wronglyImported.Id,
+        "同一运行目录曾从错误 DSH_HOME 导入时，应覆盖更新原实例而不是建立重复版本。 ");
+    Assert(File.Exists(Path.Combine(corrected.UpdatedInstances[0].DshHome, "sessions", "session.jsonl")),
+        "纠正导入必须把真实 DSH_HOME 中的会话覆盖到原实例。 ");
+    Assert(registry.Load().Count(instance => string.Equals(
+            instance.RootPath,
+            correctedPackageRoot,
+            StringComparison.OrdinalIgnoreCase)) == 1,
+        "纠正来源后同一运行目录只能保留原有的一条注册记录。 ");
+    var correctedAgain = await registration.ImportAsync(registry.Load(), new[] { correctedRuntime });
+    Assert(correctedAgain.AddedInstances.Count == 0 && correctedAgain.UpdatedInstances.Count == 0,
+        "正确 DSH_HOME 已导入后，再次扫描不能重复建立版本。 ");
+}
+
+static async Task TestImportedProfilePackageRestoration()
+{
+    using var temporary = new TestDirectory();
+    var sourceHome = Path.Combine(temporary.Path, "source-home");
+    var destinationHome = Path.Combine(temporary.Path, "destination-home");
+    var profile = Path.Combine(sourceHome, "profiles", "web");
+    Directory.CreateDirectory(profile);
+    File.WriteAllText(
+        Path.Combine(profile, "package.json"),
+        """
+        {
+          "name": "dsh-profile-web",
+          "dependencies": {
+            "dsh-custom-one": "1.0.0"
+          },
+          "dsh": {
+            "profile": {
+              "bundles": ["@deepseek-ai/dsh-base", "dsh-custom-two"]
+            }
+          }
+        }
+        """,
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(profile, "cordis.patch.yml"),
+        "- insert:\n    - id: paste-attach\n      name: 'dsh-paste-attach'\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(sourceHome, ".credentials.yaml"), "provider: protected\n", new UTF8Encoding(false));
+
+    static void WritePackage(string modules, string name)
+    {
+        var package = Path.Combine(modules, name);
+        Directory.CreateDirectory(package);
+        File.WriteAllText(
+            Path.Combine(package, "package.json"),
+            $"{{\"name\":\"{name}\",\"version\":\"1.0.0\"}}",
+            new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(package, "index.js"), "export default {};\n", new UTF8Encoding(false));
+    }
+
+    var webModules = Path.Combine(profile, "node_modules");
+    WritePackage(webModules, "dsh-custom-one");
+    WritePackage(webModules, "dsh-custom-two");
+    WritePackage(webModules, "unrelated-large-package");
+    WritePackage(Path.Combine(sourceHome, "profiles", "node_modules"), "dsh-paste-attach");
+
+    var importer = new DshHomeImportService();
+    var result = await importer.ImportAsync(sourceHome, destinationHome);
+    Assert(result.Imported, "现有 DSH_HOME 应完成隔离导入。 ");
+    Assert(File.Exists(Path.Combine(destinationHome, "profiles", "web", "node_modules", "dsh-custom-one", "package.json"))
+        && File.Exists(Path.Combine(destinationHome, "profiles", "web", "node_modules", "dsh-custom-two", "package.json"))
+        && File.Exists(Path.Combine(destinationHome, "profiles", "node_modules", "dsh-paste-attach", "package.json")),
+        "导入应离线恢复 package.json、bundle 和 cordis.patch 直接引用的自定义 Plugin。 ");
+    Assert(!Directory.Exists(Path.Combine(destinationHome, "profiles", "web", "node_modules", "unrelated-large-package")),
+        "导入不能复制整棵 profile node_modules，只恢复配置直接引用的 Plugin。 ");
+
+    var restoredPackage = Path.Combine(destinationHome, "profiles", "web", "node_modules", "dsh-custom-one");
+    Directory.Delete(restoredPackage, recursive: true);
+    var repairedCount = await importer.RestoreProfilePackagesAsync(sourceHome, destinationHome);
+    Assert(repairedCount == 1 && File.Exists(Path.Combine(restoredPackage, "package.json")),
+        "旧导入实例缺少 Plugin 包时，启动前修复应补回缺少的直接依赖。 ");
+}
+
+static Task TestRecentInstanceSelection()
+{
+    var now = DateTimeOffset.UtcNow;
+    var instances = Enumerable.Range(1, 5)
+        .Select(index => new ManagerInstance(
+            $"instance-{index}",
+            $"Version {index}",
+            $"C:\\runtime-{index}",
+            InstanceKind.Installed,
+            $"C:\\home-{index}",
+            null,
+            "1.0.0",
+            InstanceRuntimeStatus.Ready,
+            null,
+            null,
+            now.AddDays(-index),
+            LastUsedAt: index is 2 or 4 or 5 ? now.AddMinutes(-index) : null))
+        .ToArray();
+
+    var recent = MainWindow.SelectRecentInstances(instances);
+    Assert(recent.Count == 3
+        && recent.Select(static instance => instance.Id)
+            .SequenceEqual(new[] { "instance-2", "instance-4", "instance-5" }),
+        "启动页必须只显示最近使用的三个实例，并按最近使用时间排序。 ");
     return Task.CompletedTask;
 }
 
@@ -381,14 +762,14 @@ static async Task TestManualDshDetectRegisterAndStart()
 
     using var temporary = new TestDirectory();
     var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
-    var registration = new DetectedRuntimeRegistrationService(registry).RegisterMissing(
+    var registration = await new DetectedRuntimeRegistrationService(registry).ImportAsync(
         Array.Empty<ManagerInstance>(),
-        runtimes);
+        runtimes.Select(static item => item with { ExistingDshHome = null }).ToArray());
     var instance = registration.AddedInstances.FirstOrDefault(item => string.Equals(
         item.RootPath,
         runtime.PackageRoot,
         StringComparison.OrdinalIgnoreCase));
-    Assert(instance is not null, "手动安装的 DSh 被检测后必须自动添加为独立版本。 ");
+    Assert(instance is not null, "手动安装的 DSh 被检测后必须自动导入为独立版本。 ");
 
     await using var runner = new DshInstanceRunner();
     using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(45));
@@ -396,7 +777,7 @@ static async Task TestManualDshDetectRegisterAndStart()
     try
     {
         Assert(started.IsSuccess && started.WebUrl is not null,
-            started.Error ?? "自动添加的手动 DSh 版本必须可以成功启动。 ");
+            started.Error ?? "自动导入的手动 DSh 版本必须可以成功启动。 ");
     }
     finally
     {
@@ -419,6 +800,14 @@ static async Task TestDeepSeekDesktopRuntimeDetection()
     Directory.CreateDirectory(runtimeDirectory);
     Directory.CreateDirectory(binDirectory);
     Directory.CreateDirectory(packageRoot);
+    var desktopHome = Path.Combine(temporary.Path, "DeepSeek Harness Data");
+    var virtualStore = Path.Combine(desktopHome, "profiles", "web", "node_modules", ".pnpm");
+    Directory.CreateDirectory(Path.Combine(desktopHome, "sessions"));
+    Directory.CreateDirectory(virtualStore);
+    File.WriteAllText(
+        Path.Combine(installRoot, "app", "node_modules", ".modules.yaml"),
+        $"  \"virtualStoreDir\": {JsonSerializer.Serialize(virtualStore)}\n",
+        new UTF8Encoding(false));
     File.WriteAllText(Path.Combine(installRoot, "DeepSeek Desktop.exe"), string.Empty, Encoding.ASCII);
     File.WriteAllText(
         Path.Combine(installRoot, "VERSION.txt"),
@@ -447,6 +836,8 @@ static async Task TestDeepSeekDesktopRuntimeDetection()
         "DSh 自动检测候选应包含 DeepSeek Desktop 的启动文件。 ");
     Assert(NodeRuntimeDetector.GetCandidates(new[] { installation }).Contains(nodeExecutable, StringComparer.OrdinalIgnoreCase),
         "Node 自动检测候选应包含 DeepSeek Desktop 自带的 Node。 ");
+    Assert(DeepSeekDesktopDetector.TryResolveDshHome(installation) == Path.GetFullPath(desktopHome),
+        "DeepSeek Desktop 应从打包依赖元数据定位实际 DSH_HOME，而不是误用用户目录下的 .dsh。 ");
 
     var startInfo = DshRuntimeDetector.CreateStartInfo(dshExecutable, nodeExecutable);
     Assert(startInfo.Environment.TryGetValue("PATH", out var detectionPath)
@@ -460,7 +851,8 @@ static async Task TestDeepSeekDesktopRuntimeDetection()
     Assert(detected.IsAvailable
         && detected.Version == "1.2.3"
         && detected.DeepSeekDesktopVersion == "0.4.2"
-        && detected.BundledNodeExecutablePath == Path.GetFullPath(nodeExecutable),
+        && detected.BundledNodeExecutablePath == Path.GetFullPath(nodeExecutable)
+        && detected.ExistingDshHome == Path.GetFullPath(desktopHome),
         "内置 DSh 必须通过命令版本与 package metadata 双重校验后返回 Desktop 来源。 ");
     Assert(detected.DisplayVersionText == "DeepSeek Desktop v0.4.2 · DSh v1.2.3",
         "界面应同时显示 DeepSeek Desktop 与 DSh 版本。 ");
@@ -836,9 +1228,15 @@ static Task TestWindowResizeHitTesting()
 static Task TestMainWindowCodeResourceReferences()
 {
     var appXamlPath = FindRepositoryFile("src", "DshLauncher", "App.xaml");
+    var mainWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml");
     var mainWindowCodePath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml.cs");
+    var versionSettingsXamlPath = FindRepositoryFile("src", "DshLauncher", "VersionSettingsWindow.xaml");
+    var versionSettingsCodePath = FindRepositoryFile("src", "DshLauncher", "VersionSettingsWindow.xaml.cs");
     var appXaml = File.ReadAllText(appXamlPath, Encoding.UTF8);
+    var mainWindowXaml = File.ReadAllText(mainWindowXamlPath, Encoding.UTF8);
     var mainWindowCode = File.ReadAllText(mainWindowCodePath, Encoding.UTF8);
+    var versionSettingsXaml = File.ReadAllText(versionSettingsXamlPath, Encoding.UTF8);
+    var versionSettingsCode = File.ReadAllText(versionSettingsCodePath, Encoding.UTF8);
     var resourceKeys = Regex.Matches(appXaml, "x:Key=\\\"(?<key>[^\\\"]+)\\\"")
         .Select(match => match.Groups["key"].Value)
         .ToHashSet(StringComparer.Ordinal);
@@ -850,6 +1248,32 @@ static Task TestMainWindowCodeResourceReferences()
 
     Assert(missingKeys.Length == 0,
         $"MainWindow 代码引用了 App.xaml 中不存在的资源：{string.Join(", ", missingKeys)}");
+    Assert(!mainWindowXaml.Contains("ProviderCards", StringComparison.Ordinal)
+        && !mainWindowXaml.Contains("模型提供商", StringComparison.Ordinal)
+        && !mainWindowCode.Contains("RefreshProvidersAsync", StringComparison.Ordinal),
+        "启动页不应显示或后台诊断 Provider 卡片；Provider 只保留版本同步功能。 ");
+    var cachedLoad = mainWindowCode.IndexOf("LoadCachedInstances();", StringComparison.Ordinal);
+    var renderYield = mainWindowCode.IndexOf("Dispatcher.Yield(DispatcherPriority.Background)", StringComparison.Ordinal);
+    var reconcile = mainWindowCode.IndexOf("ReconcileCachedInstanceStatesAsync();", StringComparison.Ordinal);
+    var runtimeRefresh = mainWindowCode.IndexOf("await RefreshDshAsync();", StringComparison.Ordinal);
+    Assert(cachedLoad >= 0
+        && renderYield > cachedLoad
+        && reconcile > renderYield
+        && runtimeRefresh > reconcile,
+        "启动时应先显示本地实例，再核对运行状态和扫描运行环境。 ");
+    Assert(mainWindowXaml.Contains("ItemsSource=\"{Binding Instances}\"", StringComparison.Ordinal)
+        && !mainWindowXaml.Contains("ItemsSource=\"{Binding RecentInstancesView}\"", StringComparison.Ordinal),
+        "启动页实例列表必须显示全部版本，不能只绑定最近三个实例。 ");
+    Assert(mainWindowCode.Contains("Dispatcher.BeginInvoke(Close, DispatcherPriority.Background)", StringComparison.Ordinal),
+        "异步清理完成后的第二次关闭必须排到 Closing 事件结束后，不能在原调用栈中重入。 ");
+    Assert(mainWindowCode.Contains("private async void RunningInstances_MouseDoubleClick", StringComparison.Ordinal)
+        && mainWindowCode.Contains("await StartSelectedInstanceAsync();", StringComparison.Ordinal),
+        "双击实例必须复用统一启动流程：停止实例启动，运行实例直接打开。 ");
+    Assert(versionSettingsXaml.Contains("x:Name=\"SnapshotPage\"", StringComparison.Ordinal)
+        && versionSettingsXaml.Contains("Click=\"CreateSnapshot_Click\"", StringComparison.Ordinal)
+        && versionSettingsXaml.Contains("Click=\"RollbackSnapshot_Click\"", StringComparison.Ordinal)
+        && versionSettingsCode.Contains("_snapshotService.RestoreSnapshot", StringComparison.Ordinal),
+        "版本设置必须提供复用现有加密快照服务的创建与回滚入口。 ");
     return Task.CompletedTask;
 }
 
@@ -1052,6 +1476,63 @@ static Task TestRuntimeProgressCloseGuard()
 {
     Assert(RuntimeProgressWindow.IsCloseAllowed(false), "Node 下载阶段应允许关闭窗口。");
     Assert(!RuntimeProgressWindow.IsCloseAllowed(true), "MSI 安装阶段必须阻止窗口关闭。");
+    return Task.CompletedTask;
+}
+
+static Task TestShortcutScanDirectoryResolution()
+{
+    using var temporary = new TestDirectory();
+    var application = Path.Combine(temporary.Path, "application");
+    var working = Path.Combine(temporary.Path, "working");
+    Directory.CreateDirectory(application);
+    Directory.CreateDirectory(working);
+    var executable = Path.Combine(application, "DSH Desktop.exe");
+    File.WriteAllText(executable, string.Empty);
+
+    Assert(
+        string.Equals(
+            ShortcutTargetResolver.ResolveExistingDirectory(executable, working),
+            application,
+            StringComparison.OrdinalIgnoreCase),
+        "快捷方式指向文件时应扫描目标文件所在目录。");
+    Assert(
+        string.Equals(
+            ShortcutTargetResolver.ResolveExistingDirectory(application, working),
+            application,
+            StringComparison.OrdinalIgnoreCase),
+        "快捷方式直接指向目录时应扫描该目录。");
+    Assert(
+        string.Equals(
+            ShortcutTargetResolver.ResolveExistingDirectory(Path.Combine(temporary.Path, "missing.exe"), working),
+            working,
+            StringComparison.OrdinalIgnoreCase),
+        "快捷方式目标失效时应回退到仍存在的工作目录。");
+    Assert(
+        ShortcutTargetResolver.ResolveExistingDirectory(null, Path.Combine(temporary.Path, "missing")) is null,
+        "快捷方式目标和工作目录都失效时不应返回扫描目录。");
+    return Task.CompletedTask;
+}
+
+static Task TestPluginProgressWindowState()
+{
+    Assert(PluginProgressWindow.ClampProgress(-10) == 0
+        && PluginProgressWindow.ClampProgress(48.5) == 48.5
+        && PluginProgressWindow.ClampProgress(150) == 100
+        && PluginProgressWindow.ClampProgress(double.NaN) == 0,
+        "Plugin 进度条应把无效或越界百分比限制在 0 到 100。 ");
+    Assert(PluginProgressWindow.ShouldRestoreOwner(
+            System.Windows.WindowState.Normal,
+            System.Windows.WindowState.Minimized)
+        && PluginProgressWindow.ShouldRestoreOwner(
+            System.Windows.WindowState.Maximized,
+            System.Windows.WindowState.Minimized)
+        && !PluginProgressWindow.ShouldRestoreOwner(
+            System.Windows.WindowState.Minimized,
+            System.Windows.WindowState.Minimized)
+        && !PluginProgressWindow.ShouldRestoreOwner(
+            System.Windows.WindowState.Normal,
+            System.Windows.WindowState.Normal),
+        "Plugin 操作只应恢复被操作流程带入最小化的原本可见 Owner 窗口。 ");
     return Task.CompletedTask;
 }
 
@@ -1273,6 +1754,31 @@ static Task TestDshCustomInstallPrefix()
     AssertThrows<ArgumentException>(
         () => DshInstallService.NormalizeInstallDirectory(Path.GetPathRoot(prefix)),
         "DSh 安装位置不能选择磁盘根目录。");
+    return Task.CompletedTask;
+}
+
+static Task TestDshDefaultInstallDirectory()
+{
+    using var temporary = new TestDirectory();
+    var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+    var settings = new VersionSettingsService(paths);
+    var expectedDefault = Path.Combine(paths.RootDirectory, "runtime", "dsh");
+    Assert(settings.DefaultDshInstallDirectory == expectedDefault
+        && settings.ResolveDshInstallDirectory() == expectedDefault,
+        "未配置 DSh 安装位置时应使用 Launcher 管理目录。 ");
+
+    var custom = Path.Combine(temporary.Path, "custom-dsh");
+    var launcherSettings = settings.ReadLauncherSettings();
+    launcherSettings.DshInstallDirectory = custom;
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(settings.ResolveDshInstallDirectory() == Path.GetFullPath(custom),
+        "用户选择的 DSh 安装位置应覆盖默认目录。 ");
+
+    launcherSettings = settings.ReadLauncherSettings();
+    launcherSettings.DshInstallDirectory = null;
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(settings.ResolveDshInstallDirectory() == expectedDefault,
+        "清空自定义位置后应恢复 Launcher 默认目录。 ");
     return Task.CompletedTask;
 }
 
@@ -3541,6 +4047,14 @@ static void Assert(bool condition, string message)
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+file sealed class NonPumpingSynchronizationContext : SynchronizationContext
+{
+    public override void Post(SendOrPostCallback d, object? state)
+    {
+        // Intentionally do not pump callbacks: production activation must not capture WPF UI context.
     }
 }
 

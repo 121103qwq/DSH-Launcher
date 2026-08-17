@@ -7,11 +7,46 @@
         Loaded="Window_OnLoaded">
     <Grid Margin="18">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TabControl Grid.Row="0" MinHeight="560">
+        <Grid Grid.Row="0" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="24" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="版本"
+                       Foreground="{StaticResource MutedBrush}"
+                       VerticalAlignment="Center"
+                       Margin="0,0,8,0" />
+            <ComboBox Grid.Column="1"
+                      x:Name="VersionSelectorBox"
+                      Height="38"
+                      DisplayMemberPath="Name"
+                      SelectionChanged="VersionSelector_SelectionChanged" />
+            <TextBlock Grid.Column="3"
+                       Text="显示"
+                       Foreground="{StaticResource MutedBrush}"
+                       VerticalAlignment="Center"
+                       Margin="0,0,8,0" />
+            <ComboBox Grid.Column="4"
+                      x:Name="ConversationScopeBox"
+                      Height="38"
+                      SelectedIndex="0"
+                      SelectionChanged="ConversationScope_SelectionChanged">
+                <ComboBoxItem Tag="All">全部对话</ComboBoxItem>
+                <ComboBoxItem Tag="Isolated">隔离对话</ComboBoxItem>
+                <ComboBoxItem Tag="Workspace">工作区对话</ComboBoxItem>
+            </ComboBox>
+        </Grid>
+
+        <TabControl Grid.Row="1" MinHeight="560">
             <TabItem Header="对话文件">
                 <Grid Margin="0,12,0,0">
                     <Grid.RowDefinitions>
@@ -97,7 +132,7 @@
             </TabItem>
         </TabControl>
 
-        <TextBlock Grid.Row="1"
+        <TextBlock Grid.Row="2"
                    x:Name="StatusText"
                    Foreground="{StaticResource BlueBrush}"
                    TextWrapping="Wrap"

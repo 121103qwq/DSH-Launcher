@@ -23,6 +23,7 @@ public partial class VersionSettingsWindow : UserControl
     private readonly VersionSnapshotService _snapshotService;
     private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
     private readonly Action _settingsSaved;
+    private readonly bool _openPluginPage;
     private VersionSettingsData _settings = new();
 
     public VersionSettingsWindow(
@@ -34,7 +35,8 @@ public partial class VersionSettingsWindow : UserControl
         VersionPackageService packageService,
         VersionSnapshotService snapshotService,
         Func<ManagerInstance, string, ManagerInstance> renameVersion,
-        Action settingsSaved)
+        Action settingsSaved,
+        bool openPluginPage = false)
     {
         _instance = instance;
         _versions = versions.ToArray();
@@ -45,6 +47,7 @@ public partial class VersionSettingsWindow : UserControl
         _snapshotService = snapshotService;
         _renameVersion = renameVersion;
         _settingsSaved = settingsSaved;
+        _openPluginPage = openPluginPage;
 
         InitializeComponent();
         try
@@ -76,7 +79,8 @@ public partial class VersionSettingsWindow : UserControl
         LoadWorkspaceNames();
         LoadConfigurationControls();
         LoadPluginSettingsControls();
-        ShowPage(PersonalizationButton);
+        RefreshSnapshots();
+        ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
 
         if (_instance is null)
         {
@@ -85,6 +89,7 @@ public partial class VersionSettingsWindow : UserControl
             PersonalizationPage.IsEnabled = false;
             ConfigurationPage.IsEnabled = false;
             PluginPage.IsEnabled = false;
+            SnapshotPage.IsEnabled = false;
             ExportPage.IsEnabled = false;
             return;
         }
@@ -162,6 +167,12 @@ public partial class VersionSettingsWindow : UserControl
 
     private void Plugins_Click(object sender, RoutedEventArgs e) => ShowPage(PluginsButton);
 
+    private void Snapshots_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshSnapshots();
+        ShowPage(SnapshotsButton);
+    }
+
     private void Export_Click(object sender, RoutedEventArgs e) => ShowPage(ExportButton);
 
     private void ShowPage(WpfButton activeButton)
@@ -175,6 +186,9 @@ public partial class VersionSettingsWindow : UserControl
         PluginPage.Visibility = ReferenceEquals(activeButton, PluginsButton)
             ? Visibility.Visible
             : Visibility.Collapsed;
+        SnapshotPage.Visibility = ReferenceEquals(activeButton, SnapshotsButton)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         ExportPage.Visibility = ReferenceEquals(activeButton, ExportButton)
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -183,6 +197,8 @@ public partial class VersionSettingsWindow : UserControl
             ? "配置"
             : activeButton == PluginsButton
                 ? "插件管理"
+                : activeButton == SnapshotsButton
+                    ? "快照回滚"
                 : activeButton == ExportButton
                     ? "导出"
                     : "个性化";
@@ -190,11 +206,13 @@ public partial class VersionSettingsWindow : UserControl
             ? "决定对话文件同步范围，以及是否让所有版本自动同步模型。"
             : activeButton == PluginsButton
                 ? "像 PCL2 的 Mod 管理一样，在当前版本快速启用、禁用或删除 Plugin。"
+                : activeButton == SnapshotsButton
+                    ? "创建加密配置快照，或把当前版本恢复到先前状态。"
                 : activeButton == ExportButton
                     ? "导出可以分享的版本设计，不带隐私内容和会话。"
                     : "查看当前版本和它自己的 DSH_HOME。";
 
-        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, ExportButton })
+        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, SnapshotsButton, ExportButton })
         {
             button.Background = ReferenceEquals(button, activeButton)
                 ? new System.Windows.Media.SolidColorBrush(WpfColor.FromRgb(227, 240, 253))
@@ -204,6 +222,117 @@ public partial class VersionSettingsWindow : UserControl
                 : (WpfBrush)FindResource("TextBrush");
         }
     }
+
+    private void SnapshotBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSnapshotButtons();
+
+    private async void CreateSnapshot_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null || !CanMutateSnapshot())
+        {
+            SnapshotStatusText.Text = "请先停止当前版本，再创建配置快照。";
+            return;
+        }
+
+        SetSnapshotBusy(true);
+        try
+        {
+            var snapshot = await Task.Run(() => _snapshotService.CreateSnapshot(_instance, "手动快照"));
+            RefreshSnapshots();
+            SnapshotBox.SelectedItem = SnapshotBox.Items
+                .OfType<VersionSnapshotInfo>()
+                .FirstOrDefault(item => string.Equals(item.FilePath, snapshot.FilePath, StringComparison.OrdinalIgnoreCase));
+            SnapshotStatusText.Text = "配置快照已创建。快照由当前 Windows 用户加密，不包含会话文件。";
+        }
+        catch (Exception ex)
+        {
+            SnapshotStatusText.Text = $"创建快照失败：{ex.Message}";
+        }
+        finally
+        {
+            SetSnapshotBusy(false);
+        }
+    }
+
+    private async void RollbackSnapshot_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null
+            || SnapshotBox.SelectedItem is not VersionSnapshotInfo snapshot
+            || !CanMutateSnapshot())
+        {
+            SnapshotStatusText.Text = "请先停止版本并选择一个可用快照。";
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"确定把“{_instance.Name}”的配置恢复到 {snapshot.DisplayName}？\n\n恢复前会再自动创建一个回滚点；会话文件不会改变。",
+                "确认回滚版本配置",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        SetSnapshotBusy(true);
+        try
+        {
+            var rollbackPoint = await Task.Run(() => _snapshotService.RestoreSnapshot(_instance, snapshot.FilePath));
+            _settings = _settingsService.Read(_instance);
+            LoadWorkspaceNames();
+            LoadConfigurationControls();
+            LoadPluginSettingsControls();
+            await LoadPluginsAsync();
+            _settingsSaved();
+            RefreshSnapshots();
+            SnapshotStatusText.Text = $"配置已回滚；恢复前状态保存在：{rollbackPoint.DisplayName}。";
+        }
+        catch (Exception ex)
+        {
+            SnapshotStatusText.Text = $"回滚失败：{ex.Message}";
+        }
+        finally
+        {
+            SetSnapshotBusy(false);
+        }
+    }
+
+    private void RefreshSnapshots()
+    {
+        if (SnapshotBox is null)
+        {
+            return;
+        }
+
+        try
+        {
+            SnapshotBox.ItemsSource = _instance is null
+                ? Array.Empty<VersionSnapshotInfo>()
+                : _snapshotService.ListSnapshots(_instance);
+            SnapshotBox.SelectedIndex = SnapshotBox.Items.Count > 0 ? 0 : -1;
+        }
+        catch (Exception ex)
+        {
+            SnapshotBox.ItemsSource = Array.Empty<VersionSnapshotInfo>();
+            SnapshotStatusText.Text = $"读取版本快照失败：{ex.Message}";
+        }
+
+        UpdateSnapshotButtons();
+    }
+
+    private bool CanMutateSnapshot() => _instance is { } instance
+        && instance.RuntimeStatus != InstanceRuntimeStatus.Running
+        && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached;
+
+    private void SetSnapshotBusy(bool busy)
+    {
+        SnapshotBox.IsEnabled = !busy;
+        CreateSnapshotButton.IsEnabled = !busy && CanMutateSnapshot();
+        RollbackSnapshotButton.IsEnabled = !busy
+            && CanMutateSnapshot()
+            && SnapshotBox.SelectedItem is VersionSnapshotInfo;
+    }
+
+    private void UpdateSnapshotButtons() => SetSnapshotBusy(false);
 
     private void SyncAllConfiguration_Changed(object sender, RoutedEventArgs e)
     {

@@ -18,6 +18,8 @@ public partial class ConversationWindow : UserControl
     private readonly Func<Task>? _synchronizeConversations;
     private readonly Func<string, Task>? _propagateDeletion;
     private readonly IReadOnlyList<ManagerInstance>? _instances;
+    private readonly Action<ManagerInstance>? _selectInstance;
+    private bool _instanceSelectorReady;
 
     public ConversationWindow(
         ManagerInstance instance,
@@ -25,7 +27,8 @@ public partial class ConversationWindow : UserControl
         Func<ConversationEntry, Task<bool>> openConversation,
         Func<Task>? synchronizeConversations = null,
         Func<string, Task>? propagateDeletion = null,
-        IReadOnlyList<ManagerInstance>? instances = null)
+        IReadOnlyList<ManagerInstance>? instances = null,
+        Action<ManagerInstance>? selectInstance = null)
     {
         _instance = instance;
         _service = service;
@@ -33,6 +36,7 @@ public partial class ConversationWindow : UserControl
         _synchronizeConversations = synchronizeConversations;
         _propagateDeletion = propagateDeletion;
         _instances = instances;
+        _selectInstance = selectInstance;
         InitializeComponent();
     }
 
@@ -42,6 +46,10 @@ public partial class ConversationWindow : UserControl
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
+        VersionSelectorBox.ItemsSource = _instances ?? new[] { _instance };
+        VersionSelectorBox.SelectedItem = (_instances ?? new[] { _instance }).FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, _instance.Id, StringComparison.Ordinal));
+        _instanceSelectorReady = true;
         await SynchronizeAsync();
         await RefreshAsync();
         await RefreshBackupsAsync(updateStatus: false);
@@ -69,20 +77,52 @@ public partial class ConversationWindow : UserControl
             var entries = await Task.Run(() => _service.List(_instance));
             Entries.Clear();
             foreach (var entry in entries) Entries.Add(entry);
-            ConversationList.ItemsSource = Entries;
+            ApplyConversationFilter();
             if (selectedPath is not null)
             {
                 ConversationList.SelectedItem = Entries.FirstOrDefault(entry =>
                     string.Equals(entry.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
             }
 
-            StatusText.Text = $"已读取 {Entries.Count} 个对话文件。压缩 session.jsonl.zstd 可查看、打开和导入，导入时保留原始格式。";
+            StatusText.Text = $"已读取 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。压缩 session.jsonl.zstd 可查看、打开和导入。";
             UpdateSelection();
         }
         catch (Exception ex)
         {
             ShowError(ex);
         }
+    }
+
+    private void VersionSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_instanceSelectorReady
+            || VersionSelectorBox.SelectedItem is not ManagerInstance target
+            || string.Equals(target.Id, _instance.Id, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _selectInstance?.Invoke(target);
+    }
+
+    private void ConversationScope_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsLoaded)
+        {
+            ApplyConversationFilter();
+            StatusText.Text = $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。";
+        }
+    }
+
+    private void ApplyConversationFilter()
+    {
+        var scope = (ConversationScopeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "All";
+        ConversationList.ItemsSource = scope switch
+        {
+            "Isolated" => Entries.Where(static entry => string.IsNullOrWhiteSpace(entry.WorkingDirectory)).ToArray(),
+            "Workspace" => Entries.Where(static entry => !string.IsNullOrWhiteSpace(entry.WorkingDirectory)).ToArray(),
+            _ => Entries.ToArray()
+        };
     }
 
     private async void RefreshBackups_Click(object sender, RoutedEventArgs e) =>

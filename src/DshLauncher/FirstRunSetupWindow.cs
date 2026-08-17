@@ -86,7 +86,7 @@ internal sealed class FirstRunSetupWindow : Window
             Text = initialInstallDirectory ?? string.Empty,
             Height = 36,
             VerticalContentAlignment = VerticalAlignment.Center,
-            ToolTip = "留空时使用当前 Node.js 的 npm 全局默认位置"
+            ToolTip = "留空时使用 Launcher 的默认 DSh Runtime 目录"
         };
         var browse = new Button
         {
@@ -101,7 +101,7 @@ internal sealed class FirstRunSetupWindow : Window
         panel.Children.Add(locationRow);
         panel.Children.Add(new TextBlock
         {
-            Text = "这里仅控制 DSh Runtime 的安装位置；每个版本的 Plugin、Skill、Provider、设置和对话仍保存在各自的 DSH_HOME。",
+            Text = "这里仅控制 DSh Runtime 的安装位置；默认目录由 Launcher 提供，每个版本的 Plugin、Skill、Provider、设置和对话仍保存在各自的 DSH_HOME。",
             Foreground = System.Windows.Media.Brushes.DimGray,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,

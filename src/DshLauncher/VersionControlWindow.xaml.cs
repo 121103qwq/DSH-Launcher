@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using UserControl = System.Windows.Controls.UserControl;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -16,6 +18,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly Action<ManagerInstance> _versionCreated;
     private readonly Action<ManagerInstance> _versionDeleted;
     private readonly Action<ManagerInstance> _versionSelected;
+    private readonly Func<string, Task<IReadOnlyList<ManagerInstance>>> _scanAndRegisterRuntimeDirectory;
     private readonly VersionHealthService _healthService;
     private readonly VersionSnapshotService _snapshotService;
     private readonly Func<NodeRuntimeInfo> _nodeRuntimeProvider;
@@ -34,6 +37,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Action<ManagerInstance> versionCreated,
         Action<ManagerInstance> versionDeleted,
         Action<ManagerInstance> versionSelected,
+        Func<string, Task<IReadOnlyList<ManagerInstance>>> scanAndRegisterRuntimeDirectory,
         VersionHealthService healthService,
         VersionSnapshotService snapshotService,
         Func<NodeRuntimeInfo> nodeRuntimeProvider,
@@ -47,6 +51,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _versionCreated = versionCreated;
         _versionDeleted = versionDeleted;
         _versionSelected = versionSelected;
+        _scanAndRegisterRuntimeDirectory = scanAndRegisterRuntimeDirectory;
         _healthService = healthService;
         _snapshotService = snapshotService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
@@ -138,6 +143,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         && SelectedVersion is not null
         && SelectedVersion.RuntimeStatus != InstanceRuntimeStatus.Running;
 
+    public bool CanAddInstance => !_isBusy;
+
     public string CloneButtonToolTip => SelectedVersion is null
         ? "请先在左侧选择一个版本。"
         : SelectedVersion.RuntimeStatus == InstanceRuntimeStatus.Running
@@ -188,6 +195,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedVersionName));
         OnPropertyChanged(nameof(SelectedVersionDetails));
         OnPropertyChanged(nameof(CanClone));
+        OnPropertyChanged(nameof(CanAddInstance));
         OnPropertyChanged(nameof(CloneButtonToolTip));
         OnPropertyChanged(nameof(CanDelete));
         OnPropertyChanged(nameof(DeleteButtonToolTip));
@@ -203,6 +211,102 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private async void CreateCleanVersion_Click(object sender, RoutedEventArgs e)
     {
         await CreateVersionAsync(clone: false);
+    }
+
+    private void AddInstance_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button button || button.ContextMenu is not { } menu)
+        {
+            return;
+        }
+
+        menu.PlacementTarget = button;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private async void ScanInstanceFolder_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new Forms.FolderBrowserDialog
+        {
+            Description = "选择要导入的 DeepSeek Harness、DSH Desktop 或 DSh npm 包所在文件夹",
+            ShowNewFolderButton = false,
+            UseDescriptionForTitle = true
+        };
+        if (dialog.ShowDialog() == Forms.DialogResult.OK)
+        {
+            await AddInstanceFromDirectoryAsync(dialog.SelectedPath, "所选文件夹");
+        }
+    }
+
+    private async void ScanInstanceShortcut_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new Forms.OpenFileDialog
+        {
+            Title = "选择要导入的 DeepSeek Harness 或 DSH Desktop 快捷方式",
+            Filter = "Windows 快捷方式 (*.lnk)|*.lnk",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            var directory = ShortcutTargetResolver.ResolveScanDirectory(dialog.FileName);
+            await AddInstanceFromDirectoryAsync(directory, "快捷方式目标");
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or IOException
+            or NotSupportedException
+            or UnauthorizedAccessException)
+        {
+            SetStatus($"无法读取快捷方式：{ex.Message}");
+        }
+    }
+
+    private async Task AddInstanceFromDirectoryAsync(string directory, string source)
+    {
+        SetBusy(true);
+        SetStatus($"正在扫描{source}…");
+        try
+        {
+            var changed = await _scanAndRegisterRuntimeDirectory(directory);
+            foreach (var version in changed)
+            {
+                var existing = Versions.FirstOrDefault(item =>
+                    string.Equals(item.Id, version.Id, StringComparison.Ordinal));
+                if (existing is null)
+                {
+                    Versions.Add(version);
+                    continue;
+                }
+
+                var index = Versions.IndexOf(existing);
+                Versions[index] = version;
+            }
+
+            OnPropertyChanged(nameof(VersionCountText));
+            if (changed.Count > 0)
+            {
+                SelectedVersion = changed[0];
+                SetStatus($"已导入或更新 {changed.Count} 个实例：{string.Join("、", changed.Select(static item => item.Name))}。同一运行目录不会重复建立版本。 ");
+            }
+            else
+            {
+                SetStatus("没有导入或更新实例；目录中未找到有效运行环境，或同地址实例正在运行。 ");
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"导入实例失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private async void CloneVersion_Click(object sender, RoutedEventArgs e)
@@ -580,6 +684,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private void SetBusy(bool busy)
     {
         _isBusy = busy;
+        OnPropertyChanged(nameof(CanAddInstance));
         OnPropertyChanged(nameof(CanClone));
         OnPropertyChanged(nameof(CloneButtonToolTip));
         OnPropertyChanged(nameof(CanDelete));

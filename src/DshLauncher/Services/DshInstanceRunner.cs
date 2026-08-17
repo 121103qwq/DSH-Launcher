@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.IO;
 using DshLauncher.Models;
 
@@ -20,11 +21,15 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly Dictionary<string, RunningDshProcess> _running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, AttachedDshService> _attached = new(StringComparer.Ordinal);
     private readonly Func<int> _portAllocator;
+    private readonly DshHomeImportService _homeImporter;
     private bool _disposed;
 
-    public DshInstanceRunner(Func<int>? portAllocator = null)
+    public DshInstanceRunner(
+        Func<int>? portAllocator = null,
+        DshHomeImportService? homeImporter = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
+        _homeImporter = homeImporter ?? new DshHomeImportService();
     }
 
     public bool IsRunning(string instanceId)
@@ -248,6 +253,25 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             catch (Exception ex)
             {
                 return DshInstanceRunResult.Failure($"无法创建实例 DSH_HOME：{ex.Message}");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(instance.ImportedFromDshHome))
+        {
+            try
+            {
+                await _homeImporter.RestoreProfilePackagesAsync(
+                    instance.ImportedFromDshHome,
+                    instance.DshHome,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (ex is IOException
+                or UnauthorizedAccessException
+                or InvalidDataException
+                or JsonException)
+            {
+                return DshInstanceRunResult.Failure(
+                    $"恢复导入配置引用的 Plugin 失败：{ex.Message}");
             }
         }
 

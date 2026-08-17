@@ -4,6 +4,10 @@ namespace DshLauncher.Services;
 
 public sealed class LauncherPaths
 {
+#if DEBUG
+    private const string TestRootVariable = "DSH_LAUNCHER_TEST_ROOT";
+#endif
+
     public LauncherPaths(string? rootDirectory = null)
     {
         RootDirectory = Path.GetFullPath(rootDirectory ?? GetDefaultRoot());
@@ -25,6 +29,8 @@ public sealed class LauncherPaths
 
     public string RuntimeCachePath => Path.Combine(RootDirectory, "runtime-cache.json");
 
+    public string ManagedDshRuntimeDirectory => Path.Combine(RootDirectory, "runtime", "dsh");
+
     public string VersionSettingsPath => Path.Combine(RootDirectory, "version-settings.json");
 
     public string GetInstanceDshHome(string instanceId) =>
@@ -38,6 +44,14 @@ public sealed class LauncherPaths
 
     private static string GetDefaultRoot()
     {
+#if DEBUG
+        var testRoot = Environment.GetEnvironmentVariable(TestRootVariable);
+        if (!string.IsNullOrWhiteSpace(testRoot))
+        {
+            return testRoot;
+        }
+#endif
+
         var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         if (string.IsNullOrWhiteSpace(documents))
         {

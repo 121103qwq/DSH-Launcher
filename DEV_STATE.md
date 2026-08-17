@@ -2,34 +2,37 @@
 
 ## 当前目标
 
-当前源码版本为 `v0.2.6`。本版完成多来源 DSh Runtime 兼容，并优先适配 Star 数最高的 `anywhere-labs/deepseek-harness-desktop`（DSH Desktop v2 Windows 包）。
+当前源码版本为 `v1.0.0`。本版整合运行时、导入、Plugin 安装和 Launcher 生命周期修复，以及主窗口信息层级调整、历史导入实例去重、版本设置快照入口和实例双击启动/打开。
 
 ## 已完成内容
 
 - .NET 8 WPF Launcher，目标 Windows x64；发布版为自包含单文件，不内置 Node.js、npm、pnpm 或 DSh。
-- 主窗口采用 PCL2 参考的信息层级：启动、扩展、Agent、对话和设置在主窗口内切换；Chat WebView2 为无 Owner 的独立窗口，使用黑色 DeepSeek 图标。
+- 主窗口采用 PCL2 参考的信息层级：启动、扩展、Agent、对话和设置在主窗口内切换，并移除各模块重复的大号页标题。启动页标题栏左侧显示 `DSH Launcher`；扩展和 Agent 页在同一位置改为当前实例选择器，可下拉快速切换并用绿/灰/红圆点显示运行、停止和错误状态，点击实例名称直接进入该版本的插件管理。Chat WebView2 为无 Owner 的独立窗口，使用黑色 DeepSeek 图标。
+- 标题栏实例下拉已改为紧凑圆角菜单；从扩展或 Agent 进入版本设置后，左上角显示返回原页面的按钮。启动页全部实例支持双击：停止实例复用主启动流程，已运行或 Attached 实例直接打开现有 Web UI。
+- 启动页先从本地注册文件立即显示全部实例；界面恢复响应后再核对遗留运行状态并扫描 DSh/Node。左侧为固定窄度的当前实例状态、重命名、实例设置和启动/停止/重启操作，右侧为更宽的全部实例列表与版本控制入口；左右容器高度解耦，实例列表在右栏内部滚动。最近使用时间仍用于启动时默认选择，不再限制启动页显示数量。
+- Launcher 保持单实例；第二次启动通过命名管道要求已有进程显示、恢复并聚焦主窗口，旧版兼容回退才按窗口句柄查找。已有进程处于退出阶段时可等待锁释放后接管。主窗口关闭先取消当前操作并异步清理实例，清理完成后的最终 `Close` 通过 Dispatcher 排到原 `Closing` 事件结束后，避免同步完成时重入关闭而留下无窗口后台进程。
 - 支持 installed/source DSh 实例、独立端口、健康检查、停止/重启、跨 Runner 互斥锁，以及 `Managed` / `Attached` 运行态。Attached 实例可打开 Web UI，但不会被 Stop/Restart 或退出清理误杀。
 - 每个版本使用独立 `DSH_HOME` 和 `DSH_AGENTS_HOME`。实例级 Plugin、Skill、MCP、Provider 状态、Agent Preset、Settings 和 Conversation 文件均以该目录为边界；对话和模型 Provider 支持 Independent、Workspace、All/全配置同步策略。运行中的版本不会被同步写入。
 - 设置/诊断页可选择任意版本并编辑与“版本设置 → 配置”相同的同步选项；工作区管理支持显示成员、添加、重命名和删除。删除工作区只解除成员版本的同步关系并切回 Independent，不删除版本或对话文件。
-- Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、独立安装弹窗和完成后刷新。市场标题可打开 GitHub；根目录缺少有效 package.json 时会按默认分支并回退 main/master 扫描常见 monorepo 子目录。主题预览按需读取 README 图片，无图或不支持时明确提示。
-- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter 及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`；扩展和 Agent 页在存在多个版本时可直接切换当前实例。
+- Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、独立安装弹窗和完成后刷新。安装弹窗按检查、备份、CLI 操作和刷新显示阶段百分比；操作前可见但完成时被最小化的 Owner 会恢复原状态。市场标题可打开 GitHub；根目录缺少有效 package.json 时会按默认分支并回退 main/master 扫描常见 monorepo 子目录。主题预览按需读取 README 图片，无图或不支持时明确提示。
+- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`。扩展和 Agent 页的左栏现为纵向分类选择，已安装内容与删除操作统一进入当前实例的版本设置/插件管理页。
 - 全局 ComboBox 的点击层使用不绘制悬停背景的专用模板，鼠标移入时只改变外框颜色，不再覆盖选中文字和箭头；可编辑 ComboBox 的内部文本框显式清除重复 Padding，工作区名称不再被垂直裁切。
-- 版本控制支持复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。整合包可包含脱敏后的 Provider 结构和模型目录，但会排除 `.credentials.yaml`、`.env`/`.env.*`、sessions、API Key、Token、密码和 URL 凭据；导入再次拒绝凭据路径并清理可分享文本，始终创建新版本。版本设置个性化页提供版本名称输入框和保存按钮，修改后同步更新实例注册记录、当前选择和页面标题。
-- Provider 启动页支持启用/禁用、`/models` 只读诊断、模型列表/思考档位显示和问题说明；模型设置只保存环境变量名。DSh Web UI 当前生成的花括号映射、行尾逗号和行内模型数组可以被正确读取，不再把 `{` 识别为 Provider 名称。
-- Provider 自动同步会在符合策略的停止版本之间同步模型配置、启用状态和 DSh 官方 `.credentials.yaml`；只用 `settings.yaml` 时间戳选择配置来源，并把设置、状态和同源凭据作为一个事务提交，失败会回滚。凭据文件不由 Launcher 解析、显示或写入自身配置，并拒绝重解析点和超过 1 MiB 的文件。
-- Provider 刷新已改为纯读取与只读诊断，不再顺带执行版本同步。相同实例刷新时旧卡片保留到新结果就绪；取消或过期的并发刷新不能再把旧结果写回，因此不会出现先显示、刷新后消失。
+- 版本控制支持导入实例、复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。“导入实例”可扫描文件夹或解析 Windows `.lnk` 快捷方式的目标/工作目录，再复用现有 DSh Runtime 校验；普通 DSh 使用当前有效的 `$DSH_HOME`（默认 `~/.dsh`），DeepSeek Desktop 从安装包 `.modules.yaml` 反查实际 `%LOCALAPPDATA%\DeepSeek Harness Data`，把工作区、对话、设置、Plugin/Skill 和本机 Provider 凭据复制到独立 HOME，不与原桌面程序共用目录。同一 package root 再次手动导入时更新已有实例，不再建立 `(2)/(3)`；自动检测到同一 root 的真实来源 HOME 改变时也覆盖原停止实例并更新来源记录。覆盖会保留 `.dsh-launcher` 版本设置，运行中的实例拒绝覆盖。导入跳过 `webview2` 浏览器缓存、重解析点和整棵 `node_modules`，新注册失败会撤销。整合包可包含脱敏后的 Provider 结构和模型目录，但会排除 `.credentials.yaml`、`.env`/`.env.*`、sessions、API Key、Token、密码和 URL 凭据；导入再次拒绝凭据路径并清理可分享文本，始终创建新版本。版本设置个性化页提供版本名称输入框和保存按钮，修改后同步更新实例注册记录、当前选择和页面标题。
+- 实例注册文件加载时会合并历史遗留的“相同 DSh package root + 相同导入 DSH_HOME”重复项，保留运行状态更有效或最近使用的一项并持久化结果；没有导入来源的复制版本、干净版本和各自 DSH_HOME 不参与合并，也不会删除旧目录。
+- 导入 DSH_HOME 会跳过整棵 `node_modules`，只恢复 profile dependencies、bundles 和 `cordis.patch.yml` 直接引用的第三方 Plugin；已导入版本在启动前会补齐缺包，修复自定义 Plugin 引起的 `ERR_MODULE_NOT_FOUND`，并避免每个版本复制约 166 MB 的派生依赖。
+- 启动页已移除 Provider 卡片、启停按钮和网络诊断，不再在打开或切换实例时发起 Provider 检测。设置中的供应商自动同步仍保留：在符合策略的停止版本之间同步模型配置、本地状态和 DSh 官方 `.credentials.yaml`，以事务方式提交并在失败时回滚；凭据不由 Launcher 解析或显示。
 - `v0.1.9` 已构建、推送并发布；PR #1 已合并到 `main`（merge commit `1eb5f65`）。
-- 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。对话列表优先显示会话名称：读取 DSh `storages/session_projcache.json` 的标题，无标题时回退为“未命名 · 项目 · 时间”，不再把原始 session ID 作为首列。导入时可选择目标版本和 sessions 工作区落位，并保留原始会话内容。
+- 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；顶部版本选择器决定当前实例，列表只读取该版本独立 `DSH_HOME`，并可筛选全部、独立对话或工作区对话。当前使用 Chat `localStorage` 预选 session ID。对话列表优先显示会话名称：读取 DSh `storages/session_projcache.json` 的标题，无标题时回退为“未命名 · 项目 · 时间”，不再把原始 session ID 作为首列。导入时可选择目标版本和 sessions 工作区落位，并保留原始会话内容。
 - 对话文件和备份列表的归属列显示对应实例名称，不再显示会话 header 中的工作目录路径；底层仍保留该字段用于会话解析和恢复。
 - 对话页新增“备份与恢复”列表，可选择当前实例的有效备份恢复；已有相同会话 ID 时拒绝覆盖，恢复后按当前会话策略同步。
 - 插件市场的分类保留在主浏览行，“排序”和“来源”改为带独立文字标签的次级筛选，默认项显示为“综合排序 / 全部来源”。
 - 扩展页卡顿修复：已安装插件扫描和插件市场安装状态/主题扫描移到后台线程；已安装列表与市场列表启用虚拟化（Recycling）。打开“扩展”页只读取本地市场缓存，不再每次联网刷新目录；仅在首次无缓存或用户点击“刷新目录”时才联网。缓存载入只按 identity 索引合并一次，搜索、分类和排序不再重复合并；虚拟化列表滚轮改为逐条滚动。
-- 一键运行环境准备：设置/诊断页显示 Node/DSh 状态，缺失时提供“准备运行环境（官方源 / 国内镜像）”按钮。Node 缺失时通过 NodeInstallService 下载 Windows x64 Node.js 官方 MSI 并显示真实字节/百分比进度，经系统授权（msiexec /qn）安装后重新运行 NodeRuntimeDetector，无需重启 Launcher；Node 就绪但 DSh 缺失时复用 DshInstallService 通过 npm 安装 `@deepseek-ai/dsh`（不确定进度），安装后重新运行 DshRuntimeDetector。Node 版本不兼容时只提示安装兼容版本，不自动卸载。启动实例时若运行环境缺失会弹出缺失项并询问是否准备，准备成功后继续原启动流程。Launcher 启动时不静默下载或安装任何内容。Node 检测覆盖 `<ProgramFiles>\nodejs`（官方 MSI 默认位置）。
-- DeepSeek Desktop 自动检测：扫描 `%LOCALAPPDATA%\Programs\DeepSeek Desktop`、Program Files 等标准目录，并读取 Windows 卸载注册表中的自定义安装位置；读取 Desktop 版本、内置 `runtime\node.exe`、官方 DSh package 版本和 `app\node_modules\.bin\dsh` 启动文件，命令版本与 package metadata 一致后才标记可用。首次无版本时会显示 Desktop 与 DSh 两个版本，并可直接创建独立版本，不重复安装环境。手动选择 Desktop 根目录也能解析 DSh package 和启动文件。检测、实例启动及 Plugin CLI 都会给子进程临时加入内置 Node 路径。
+- 一键运行环境准备：设置/诊断页显示 Node/DSh 状态，缺失时提供“准备运行环境（官方源 / 国内镜像）”按钮。Node 缺失时通过 NodeInstallService 下载 Windows x64 Node.js 官方 MSI 并显示真实字节/百分比进度，经系统授权（msiexec /qn）安装后重新运行 NodeRuntimeDetector，无需重启 Launcher；Node 就绪但 DSh 缺失时复用 DshInstallService 通过 npm 安装 `@deepseek-ai/dsh`，默认目标为 Manager 根目录下的 `runtime\dsh`，设置页和首次引导可覆盖该位置，安装后重新运行 DshRuntimeDetector。Node 版本不兼容时只提示安装兼容版本，不自动卸载。启动实例时若运行环境缺失会弹出缺失项并询问是否准备，准备成功后继续原启动流程。Launcher 启动时不静默下载或安装任何内容。Node 检测覆盖 `<ProgramFiles>\nodejs`（官方 MSI 默认位置）。
+- DeepSeek Desktop 自动检测：扫描 `%LOCALAPPDATA%\Programs\DeepSeek Desktop`、Program Files 等标准目录，并读取 Windows 卸载注册表中的自定义安装位置；读取 Desktop 版本、内置 `runtime\node.exe`、官方 DSh package 版本和 `app\node_modules\.bin\dsh` 启动文件，命令版本与 package metadata 一致后才标记可用。检测会从 `.modules.yaml` 定位 Desktop 实际使用的 DSH_HOME；当前机器已确认从 `C:\Users\121103qwq\.dsh` 纠正为 `C:\Users\121103qwq\AppData\Local\DeepSeek Harness Data`。首次无版本时会显示 Desktop 与 DSh 两个版本，并可直接创建独立版本，不重复安装环境。手动选择 Desktop 根目录也能解析 DSh package、启动文件和数据来源。检测、实例启动及 Plugin CLI 都会给子进程临时加入内置 Node 路径。
 - DSH Desktop v2 兼容：识别 `DSH Desktop.exe` 与 `resources\app.asar.unpacked` 中的官方 DSh、`lib\desktop-cli.js` 和 pnpm；使用 Electron Run-as-Node 启动、检测版本及调用 Plugin CLI，不要求系统 Node.js。运行时启动描述随版本注册信息保存，旧版本仍从原 `DshExecutablePath` 自动迁移。Launcher 另提供仅对该封装版本显示的“桌面窗口”入口，并拒绝与同一版本的 Managed 进程并发写同一个 `DSH_HOME`。
 - 运行时发现性能：自动检测只访问 PATH、Node 版本管理器/Scoop、npm prefix、标准安装目录和卸载注册表，候选最多 4 路并发；有效结果按宿主/入口/package 文件指纹缓存 24 小时。自定义目录扫描限制为 6 层、20,000 个目录、跳过重解析点且可取消，不扫描整块磁盘；源码首次安装依赖或构建前必须由用户确认。
 - DSh 可用性检测要求命令返回可解析的语义版本、附近存在官方 `@deepseek-ai/dsh` package root，且命令版本与 `package.json` 一致；残留 shim、损坏包和版本错配不会再被报告为可用，设置页会显示修复原因。
-- DSh 检测不再只保留第一个结果：Launcher 进程 PATH、当前用户/系统 PATH、设置中的安装位置、npm 默认位置和 DeepSeek Desktop 范围内扫描到的每个不同有效 package root 都会自动注册为 Installed 版本；已有 root 会去重，每个新增版本创建独立 `DSH_HOME`，相同版本号使用不重复名称。DSh 校验和 Installed 实例启动都会临时注入已检测 Node 路径，避免父进程 PATH 过期时 `dsh.cmd` 找不到 `node`。
+- DSh 检测不再只保留第一个结果：Launcher 进程 PATH、当前用户/系统 PATH、设置中的安装位置、npm 默认位置和 DeepSeek Desktop 范围内扫描到的每个不同有效 package root 都会自动导入为 Installed 版本；已有 root 会去重，每个新增版本创建独立 `DSH_HOME`，并在旧 HOME 存在时复制原有数据，相同版本号使用不重复名称。DSh 校验和 Installed 实例启动都会临时注入已检测 Node 路径，避免父进程 PATH 过期时 `dsh.cmd` 找不到 `node`。
 - Node.js 候选检查最多并发运行 4 个版本命令，坏候选各自保持 2 秒超时并清理进程树，不再把多个超时串行累加；版本输出必须可解析。存在多个有效 Node 时优先选择满足当前实例 `engines.node` 的最高版本，没有兼容项时返回最高有效版本并显示 `Incompatible`，方便用户修复。
 - 插件市场地址解析已区分 GitHub `owner/repository` 与 scoped npm `@scope/package`；后者不再生成 `https://github.com/@scope/package`，安装前校验继续走 npm registry。
 - Plugin 安装模式由 Launcher 全局设置控制，默认为快速安装；兼容模式给 pnpm 使用 copy/force 参数。快速模式失败会先展示原始根因，再询问是否用兼容模式重试。实机通过快速模式安装 `dsh-at-file` 成功；安装后的 GitHub 条目可按 package name 立即识别为已安装。
@@ -42,18 +45,20 @@
 - 启动、重启和对话自动启动失败时，主页面只显示简短原因；完整错误通过通知卡片的“查看详情”打开。YAML 错误会直接提示进入“版本控制 → 检查版本”。
 - 启动冲突补强：同版本复用、跨 Runner DSH_HOME 锁和旧 PID/端口收编继续保留；端口分配后被抢占并出现 `EADDRINUSE` 时保持实例锁并最多换端口重试 3 次，锁占用和锁目录权限失败使用不同提示。
 - 版本控制新增本地加密快照与手动回滚。快照覆盖版本设置、Provider 配置、官方 `.credentials.yaml`、MCP、launcher patch 和 Plugin profile，使用 Windows DPAPI CurrentUser 加密，不包含会话或 Runtime 依赖；回滚前自动保存当前状态。版本配置保存、Plugin 启停和官方 Plugin CLI 安装/更新/删除前自动创建快照。
+- 版本设置新增“快照回滚”页，直接复用上述快照服务；可创建手动快照、选择已有快照回滚，并在完成后重新读取同步设置、窗口/Node 设置和 Plugin 状态。
 - runtime bootstrap 边界修复：Node 下载阶段可取消并清理 `.part` 临时文件，关闭进度窗口等价于取消下载；MSI 安装开始后禁用取消按钮、阻止通过窗口 X 关闭进度窗口并阻止主窗口关闭（流程结束恢复后自动解除）、不强制终止 Windows Installer，安装结束后删除下载的 MSI，用户取消与真实 10 分钟超时用独立结果状态区分。DSh 重新安装并检测成功后，绑定失效的 Installed 实例经 `InstanceRuntimeRebinder` 重绑定到重新检测到的 package root / executable / version，保留实例 Id 与 DSH_HOME、不创建新实例、不修改 Source 实例；运行中或 Attached 实例不参与重绑定。Node 兼容判断以 metadata 为准：Installed 实例优先读取自身 package root 的 `engines.node`，有效但未声明时保持未声明，仅当其 runtime 失效且重装/重绑定时才使用重新检测到的 DSh metadata；Source 实例只读取自身项目 metadata，未声明时保持未声明，不继承全局 installed DSh 的版本要求；未选择实例的诊断场景使用全局 DSh engine。手动安装提示按实际 `engines.node` 要求给出；对话触发的自动启动同样先经过 runtime 准备；准备期间目标实例被删除则中止启动；会话标题缓存路径包含重解析点组件或 ACL 拒绝读取属性时拒绝/放弃读取，缓存结构损坏（意外值类型）时按无标题处理、不中断会话列表。MSI 提权安装前验证 Authenticode 签名链与 Node.js 官方发布者（OpenJS/Node.js Foundation/Joyent），验证失败不执行安装；msiexec 超时后仍可能在后台运行，MSI 清理推迟到进程真正退出，且残留安装进程结束前拒绝再次启动 Node 安装；版本索引返回形状错误的合法 JSON 时走固定版本兜底。实例 package 运行目录已删除但入口 shim 仍在时同样视为缺失并进入一键修复，准备完成时自动重绑定自愈；DSh 安装/更新后按最新 engines.node 复查 Node 兼容性，不兼容时报失败且不自动卸载，设置页就绪判定包含该兼容性。Restart 在停止完成后与 Start 使用相同语义：先 runtime readiness（可能触发一键准备）、再按最初目标实例 ID 重解析。Start/Stop/Restart/对话自动启动在 handler 入口占用 `LifecycleBusyGuard` 串行化 guard 并持有到状态更新结束，只有占用者释放；runtime 准备进行中 Stop/Restart 按钮不可用且入口拒绝。MSI 安装后把新检测到的 Node 目录补入当前进程 PATH，DSh 检测/启动可解析 node；设置/诊断页准备按钮面向全局运行环境（不传实例目标），Node 检测进行中禁止启动与一键准备，后台检测结束后自动恢复准备按钮；版本索引不可用且固定兜底版本不满足目标 engine 时停止安装并提示，不装出与 engine 不兼容的 Node；每次安装调用使用唯一 MSI 文件名避免并发干扰。
 
 ## 当前主要相关文件
 
-- `src/DshLauncher/MainWindow.xaml(.cs)`、`ChatWindow.xaml(.cs)`、`WindowSizeHelper.cs`：主窗口导航、启动页、Provider、实例生命周期、运行环境准备、低分辨率初始尺寸约束和独立 Chat 窗口。
+- `src/DshLauncher/App.xaml.cs`、`SingleInstanceActivationChannel.cs`：Launcher 单实例互斥、进程间窗口唤醒、退出阶段锁接管与异常后台残留恢复。
+- `src/DshLauncher/MainWindow.xaml(.cs)`、`ChatWindow.xaml(.cs)`、`WindowSizeHelper.cs`：主窗口导航、本地优先启动页、实例生命周期、异步关闭清理、运行环境准备、低分辨率初始尺寸约束和独立 Chat 窗口。
 - `src/DshLauncher/Services/NodeInstallService.cs`、`RuntimeProgressWindow.cs`：Node 下载（真实进度）、系统安装与准备进度窗口。
-- `src/DshLauncher/Models/DshRuntimeLaunchSpec.cs`、`Services/DshRuntimeCommandFactory.cs`、`DshRuntimeDetector.cs`、`DeepSeekDesktopDetector.cs`、`DetectedRuntimeRegistrationService.cs`、`NodeRuntimeDetector.cs`、`DshInstallService.cs`：普通 npm、源码、旧 Desktop 与 DSH Desktop v2 的检测、启动描述、命令创建、自动注册和 npm 安装。
+- `src/DshLauncher/Models/DshRuntimeLaunchSpec.cs`、`Services/DshRuntimeCommandFactory.cs`、`DshRuntimeDetector.cs`、`DeepSeekDesktopDetector.cs`、`DetectedRuntimeRegistrationService.cs`、`DshHomeImportService.cs`、`NodeRuntimeDetector.cs`、`DshInstallService.cs`：普通 npm、源码、旧 Desktop 与 DSH Desktop v2 的检测、启动描述、命令创建、实例数据导入和 npm 安装。
 - `src/DshLauncher/Services/RuntimeSearchPaths.cs`：合并进程、当前用户和系统 PATH，供 Node/DSh 校验及子进程启动使用。
 - `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`、`PluginProgressWindow.cs`：Plugin、Skill、MCP、Agent Preset、市场入口和插件安装进度弹窗。
 - `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`、`ThemePreviewWindow.cs`：市场缓存、来源合并、搜索、排序、GitHub/monorepo 校验、安装状态和 README 图片预览。
 - `src/DshLauncher/Services/SkillMarketService.cs`、`Models/SkillMarketModels.cs`：Skill 市场缓存、GitHub 发现、SKILL.md 校验和实例导入。
-- `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionPackageService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`：版本同步策略、工作区管理、版本复制/删除、设置和 `.dshpack`。
+- `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionPackageService.cs`、`VersionSnapshotService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`：版本同步策略、工作区管理、版本复制/删除、加密快照回滚、设置和 `.dshpack`。
 - `src/DshLauncher/Services/VersionHealthService.cs`、`DshSettingsYamlValidator.cs`、`VersionSnapshotService.cs`、`Models/VersionHealthModels.cs`：版本体检、DSh YAML 语义校验、安全自动修复和当前 Windows 用户加密的配置回滚点。
 - `src/DshLauncher/Services/ModelService.cs`、`ModelProviderSyncService.cs`、`ProviderStateService.cs`：Provider 配置、同步和启用状态。
 - `src/DshLauncher/Services/ConversationService.cs`、`ConversationSyncService.cs`、`ConversationWindow.xaml(.cs)`：会话文件管理、打开入口和同步策略。
@@ -62,6 +67,18 @@
 
 ## 已执行测试及结果
 
+- `v1.0.0` 发布候选：Release 完整自测 61/61 通过；Windows x64 自包含压缩单文件构建成功，文件版本为 `1.0.0.0`。
+- 标题栏返回/下拉、实例去重、版本设置快照入口和双击启动/打开：`dotnet build src/DshLauncher/DshLauncher.csproj -c Release --no-restore` 为 0 warnings、0 errors；Release 完整自测 61/61 通过。自测实际创建 DPAPI 加密快照、修改配置并回滚，确认凭据与 Plugin 配置恢复、会话不受影响；同时覆盖重复导入注册合并和相关 XAML/代码入口。最终 Windows x64 自包含单文件测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\instance-dedupe-snapshot-20260818-0002`；`DSH Launcher.exe` 为 72,445,430 字节，SHA-256 `7943DCDD15E125F28084DC50BE52C74267AD229AA9210AA3B2FA56A5A44C29BC`。
+
+- 启动页标题栏品牌文字：MainWindow XAML 解析通过，Release 构建 0 warnings、0 errors，完整自检 60/60 通过。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\startup-brand-20260817-234340`，SHA-256 `8BC15960D740716FEC69623F347119F60C22DB48906219598A2D49A1E0A4B510`。
+- 启动页全部实例与左右隔离布局：标题栏实例选择器由 250 缩短为 190；启动页列宽改为 320 / 自适应，右侧列表绑定全部 `Instances` 并在固定区域独立滚动。MainWindow XAML 解析通过，Release 构建 0 warnings、0 errors，完整自检 60/60 通过。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\startup-all-instances-ui-20260817-233811`，SHA-256 `9D17DBA98239518B81415C47A4AE461F84378AD7856FFE76FFA50F58D7B28005`。
+- Launcher 关闭重入修复：最新 `crash.log` 确认原因为清理同步完成时在 `Closing` 调用栈内再次 `Close()`；现仅把最终关闭排到 Dispatcher 下一轮，并在既有 MainWindow 源码约束测试中加入回归断言。Release 构建 0 warnings、0 errors，完整自检 60/60 通过；新构建连续执行 3 次“启动→关闭”，进程均正常退出且最终残留数为 0。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\shutdown-reentry-fix-20260817-232542`，SHA-256 `EC12D066EEA9C554FF99CACEEC76AF17FCBF7D930571317527F9B11FD5B8640A`。
+- 主窗口信息层级调整：`dotnet build .\src\DshLauncher\DshLauncher.csproj -c Debug --no-restore` 为 0 warnings、0 errors；Release 完整自测 60/60 通过。已静态校验本轮修改的 4 个 XAML 文件均为有效 XML，`git diff --check` 通过。Windows x64 自包含压缩单文件发布构建成功，完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.6-20260817-231651`，并已把同一 `DSH Launcher.exe` 复制到桌面同名文件夹顶层；文件为 68,551,629 字节，SHA-256 `175D0272DF3EB104EAD789F45FC11F4ECB05CB3ADA53B4057153F9D07720E30A`。
+- 同地址导入覆盖修复：Release 完整自测 60/60 通过；覆盖手动重复导入不新增实例、来源内容覆盖到原 DSH_HOME、`.dsh-launcher` 版本设置保留、运行中实例拒绝覆盖，以及自动检测到错误来源时原位纠正。Windows x64 自包含单文件发布构建成功，已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-import-overwrite-20260817-205734`；`DSH Launcher.exe` 为 72,440,653 字节，SHA-256 `2C252A49058D5C366DB187D64E4C933DF8502B70F089B316CC17079692A4EE07`。
+- 启动页本地优先、Provider 卡片移除和导入缺包启动修复：Release 完整自测 60/60 通过；新增覆盖 profile dependencies/bundles/cordis.patch 直接 Plugin 恢复、整棵 node_modules 不复制、旧实例缺包补齐，以及启动页不再引用 Provider 诊断和本地实例先于运行探测显示。Windows x64 自包含单文件发布构建成功，已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-startup-cache-provider-sync-20260817-203515`；`DSH Launcher.exe` 为 72,439,681 字节，SHA-256 `D9CF6248EBDDEF37387AA9DF7E7C97D2029D1A0822E421758E964C26949CE544`。
+- 最近实例与旧数据补入修复：Release 完整自测 59/59 通过，新增最近 3 个实例排序覆盖，并扩展自动导入测试验证旧空实例恢复会话/工作区、目标凭据保留、源中缺少凭据追加及来源标记；Windows x64 自包含单文件 publish 为 0 warnings、0 errors。完整测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\recent-instances-sync-final-20260817-192347`，`DSH Launcher.exe` 为 72,439,829 字节，SHA-256 `33965FC98CB59CD3C3B33BB0E1AB32C06BBE931CB2E5DF5E2269AA5D93DB1077`。
+- Launcher 后台残留修复：Release 完整自测 58/58 通过，新增命名管道唤醒、不可泵送 WPF 同步上下文和无监听端快速失败覆盖；WPF Release 构建 0 warnings、0 errors。进程级复测在既有 `v0.2.6` 主窗口运行时启动修复版次进程，约 2.3 秒完成旧版兼容唤醒并退出，确认没有留下同路径后台进程且既有主进程继续运行。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\single-instance-shutdown-fix-20260817-190157`，确认 `DSH Launcher.exe` 存在。
+- 默认 DSh 安装目录与 Plugin 安装进度修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 56/56 通过；`dotnet build .\src\DshLauncher\DshLauncher.csproj -c Release --no-restore` 为 0 warnings、0 errors。完整 Release 测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\default-path-plugin-progress-20260817-160310`，确认 `DSH Launcher.exe` 存在。
 - `v0.2.6` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 54/54 通过；Windows x64 自包含单文件 publish 为 0 warnings、0 errors。`DSH Launcher.exe` 为 72,425,534 字节，文件版本 `0.2.6.0`，SHA-256 `A955E5251A1CCD0460343D12048F4268F2007BAE6939D1F99AB8CC18271DC2BD`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.6-20260817-153750`，桌面同名文件夹顶层发布文件哈希一致。
 - DSH Desktop v2 Runtime 兼容：官方仓库 API 于 2026-08-17 返回 10,406 Star，最新 Windows Release 为 v2.0.0。下载其 147,818,995 字节安装包到临时目录并用 7-Zip 静态检查，确认真实文件位于 `resources\app.asar.unpacked\lib\desktop-cli.js`、官方 DSh package/CLI 和内置 pnpm；未安装、未修改系统 PATH。解包后用 `DSH Desktop.exe` + `ELECTRON_RUN_AS_NODE=1` 实际执行 bootstrap `--version`，返回 `0.1.0-rc.6`。Launcher 对真实目录在约 438 ms 内只识别出 1 个 `ElectronBootstrap` 运行时，并使用临时 `DSH_HOME` 启动 Web 到健康检查通过后正常停止，无残留进程。最终完整自测 54/54 通过，0 warnings、0 errors；Release 测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-runtime-compatibility-dsh-desktop-v2-20260817`，确认 `DSH Launcher.exe` 存在。
 - `v0.2.5` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release` 53/53 通过；Windows x64 自包含单文件 publish 为 0 warnings、0 errors。`DSH Launcher.exe` 为 72,410,054 字节，文件版本 `0.2.5.0`，SHA-256 `C200559201F8B7E1247EA5395C14378AA159D4BD485C6348BA2AD392DD0B0196`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.5-20260817-141605`，桌面同名文件夹顶层发布文件哈希一致。
@@ -108,19 +125,21 @@
 - MCP 当前是实例级 stdio/streamable-http 配置和 patch 管理，尚未接入完整 MCP Manager 的 connected/needs-auth/authorizing/error、OAuth 和 Tool discovery 状态。
 - 主题市场可按需显示仓库 README 中的首选图片，并保留 dsh-market 应用桥接；Wallpaper 仍未建立独立资源格式，也未在用户真实实例上做主题视觉验收。
 - GitHub Topic 发现仍未做分页加载；真实第三方 Plugin CLI 对 node_modules 的副作用不能由配置快照完全回滚，失败时仍以官方 CLI 输出和 web profile 自动恢复为准。
+- Plugin 百分比按校验、备份、官方 CLI 与刷新阶段计算；官方 CLI 没有稳定的总字节数，因此不是网络下载字节百分比。
 - `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；它是本地回滚点，不是可分享格式，分享继续使用脱敏 `.dshpack`。
 - 官方已安装 DSh 的 package metadata 当前未声明 `engines.node` 时，Node 兼容性只能显示“未声明/Unknown”，不会凭空套用固定版本限制。
 - 一键运行环境准备的端到端链路（真实无 Node 机器上：下载、UAC 授权、msiexec 安装、自动重检测）仍需实机人工验证。
 - DeepSeek Desktop / DSH Desktop 自定义安装位置优先依赖卸载注册表；用户手工移动目录或删除注册表记录后，需要在设置中使用“扫描自定义目录”。上游 DSH Desktop 的 `desktop-cli` 属于私有打包入口，因此 Launcher 只在官方宿主、bootstrap、DSh package/CLI 和 pnpm 全部存在且版本命令通过时启用；上游改变封装结构后会安全降级为未识别并要求重新扫描。
-- DSh 自动注册只覆盖定向候选范围，不遍历整块磁盘寻找任意未知目录；用户可显式选择一个上级目录进行有限深度扫描。
+- DSh 自动检测/导入只覆盖定向候选范围，不遍历整块磁盘寻找任意未知目录；用户可显式选择一个上级目录进行有限深度扫描。同地址实例运行时不会自动覆盖，必须先停止后重新导入。
 - 空实例首次运行引导已通过代码测试，但官方源/国内镜像选择、DSh 自定义位置、自动创建并启动首个版本仍需人工走完整安装流程。
 - Skill 市场当前只取 GitHub 搜索前 30 个名称含 `skill` 的仓库；没有聚合社区 catalog，也没有分页。
 - 根目录 `artifacts/` 和 `src/DshLauncher/artifacts/` 是未跟踪的本地诊断/构建目录，未纳入源码提交和 Release。
 
 ## 尚未完成内容
 
+- 本轮标题栏实例选择、分类侧栏、对话版本筛选和启动页新布局的实机 UI 验收。
 - 本轮新增设置、工作区、备份恢复、市场筛选及首次运行引导的实机 UI 验收。
-- 版本检查、修复按钮、快照选择与回滚确认的实机 UI 验收。
+- 版本检查、修复按钮，以及版本控制/版本设置两处快照选择与回滚确认的实机 UI 验收。
 - 一键运行环境准备的实机端到端验证与后续打磨。
 - 官方 Session deep link。
 - 完整 MCP Manager 状态/认证/工具发现整合。
@@ -137,4 +156,4 @@
 
 ## 下一步最直接的任务
 
-在真实安装后的 DSH Desktop v2 机器上走一次 UI 验收：自动发现并注册版本、启动 Web 实例、打开独立桌面窗口，以及用内置 pnpm 完成一次真实 Plugin 安装；同时跟踪上游封装路径变化。
+在 1K 与常规分辨率下实机检查标题栏实例切换与返回、启动页实例双击启动/打开、版本设置快照选择/回滚，以及扩展/Agent 分类栏和启动页各操作入口。

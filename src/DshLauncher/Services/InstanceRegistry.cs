@@ -55,7 +55,13 @@ public sealed class InstanceRegistry
                 validated.Add(safe);
             }
 
-            return validated;
+            var deduplicated = DeduplicateImportedInstances(validated);
+            if (deduplicated.Count != validated.Count)
+            {
+                Save(deduplicated);
+            }
+
+            return deduplicated;
         }
         catch (JsonException ex)
         {
@@ -227,7 +233,8 @@ public sealed class InstanceRegistry
             DshExecutablePath = executable,
             DshLaunchSpec = launchSpec,
             RuntimeStatus = status,
-            LastError = error
+            LastError = error,
+            ImportedFromDshHome = NormalizeOptionalPath(entry.ImportedFromDshHome)
         };
     }
 
@@ -294,6 +301,68 @@ public sealed class InstanceRegistry
         var normalized = Path.GetFullPath(path.Trim());
         return File.Exists(normalized) && !IsReparsePoint(normalized) ? normalized : null;
     }
+
+    private static string? NormalizeOptionalPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path.Trim())
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<ManagerInstance> DeduplicateImportedInstances(
+        IReadOnlyList<ManagerInstance> entries)
+    {
+        var duplicateIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in entries
+                     .Where(static entry => entry.Kind == InstanceKind.Installed)
+                     .Select(static entry => (Entry: entry, Identity: GetImportedRuntimeIdentity(entry)))
+                     .Where(static item => item.Identity is not null)
+                     .GroupBy(static item => item.Identity!, StringComparer.OrdinalIgnoreCase)
+                     .Where(static group => group.Count() > 1))
+        {
+            foreach (var duplicate in group
+                         .OrderByDescending(static item => GetPreservationRank(item.Entry.RuntimeStatus))
+                         .ThenByDescending(static item => item.Entry.RecentSortAt)
+                         .ThenByDescending(static item => item.Entry.RegisteredAt)
+                         .Skip(1))
+            {
+                duplicateIds.Add(duplicate.Entry.Id);
+            }
+        }
+
+        return duplicateIds.Count == 0
+            ? entries
+            : entries.Where(entry => !duplicateIds.Contains(entry.Id)).ToArray();
+    }
+
+    private static string? GetImportedRuntimeIdentity(ManagerInstance entry)
+    {
+        var runtimeRoot = NormalizeOptionalPath(entry.RootPath);
+        var importedHome = NormalizeOptionalPath(entry.ImportedFromDshHome);
+        return runtimeRoot is null || importedHome is null
+            ? null
+            : $"{runtimeRoot}\0{importedHome}";
+    }
+
+    private static int GetPreservationRank(InstanceRuntimeStatus status) => status switch
+    {
+        InstanceRuntimeStatus.Running => 4,
+        InstanceRuntimeStatus.Ready => 3,
+        InstanceRuntimeStatus.Stopped => 2,
+        InstanceRuntimeStatus.Unknown => 1,
+        _ => 0
+    };
 
     private static DshRuntimeLaunchSpec? NormalizeLaunchSpec(DshRuntimeLaunchSpec? spec)
     {

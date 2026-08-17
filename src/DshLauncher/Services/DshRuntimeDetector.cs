@@ -358,7 +358,17 @@ public sealed class DshRuntimeDetector
             TryReadNodeEngine(candidate.PackageRoot),
             legacyDesktopVersion,
             candidate.LaunchSpec.NodeExecutablePath,
-            candidate.LaunchSpec);
+            candidate.LaunchSpec,
+            ResolveExistingDshHome(candidate.PackageRoot));
+    }
+
+    private static string? ResolveExistingDshHome(string packageRoot)
+    {
+        var desktop = TryFindDesktopForPackageRoot(packageRoot);
+        return desktop is null
+            ? DshHomeImportService.ResolveCurrentDshHome()
+            : DeepSeekDesktopDetector.TryResolveDshHome(desktop)
+                ?? DshHomeImportService.ResolveCurrentDshHome();
     }
 
     private static async Task<string?> ReadVersionAsync(
@@ -945,7 +955,10 @@ public sealed class DshRuntimeDetector
                     return false;
                 }
 
-                runtimes.Add(runtime);
+                runtimes.Add(runtime with
+                {
+                    ExistingDshHome = ResolveExistingDshHome(runtime.PackageRoot)
+                });
             }
 
             result = new DshRuntimeScanResult(runtimes, true, FromCache: true);

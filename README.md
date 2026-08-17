@@ -1,15 +1,8 @@
 # DSH Launcher
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-1677D2)](https://github.com/121103qwq/DSH-Launcher/releases)
-[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/)
-[![Release](https://img.shields.io/github/v/release/121103qwq/DSH-Launcher?include_prereleases)](https://github.com/121103qwq/DSH-Launcher/releases/latest)
-
 面向 Windows x64 的 [DeepSeek Harness（DSh）](https://github.com/deepseek-ai/deepseek-harness) 图形化启动器与生态管理器。
 
 DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行实例、Plugin、Skill、Provider 和对话文件。Launcher 本身可以在没有 Node.js 或 DSh 的环境中打开，并提供运行环境检测与安装引导。
-
-
-![DSH Launcher 启动页](./docs/images/launcher-home.png)
 
 ## 主要功能
 
@@ -55,35 +48,6 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - 每个运行实例使用独立 WebView2 Chat 窗口和任务栏图标。
 - 关闭 Chat 窗口不会停止 DSh 实例。
 - 再次点击启动或双击运行中的实例，可以重新呼出对应 Chat 窗口。
-
-## 界面预览
-
-<table>
-  <tr>
-    <td width="50%"><strong>Plugin 市场</strong></td>
-    <td width="50%"><strong>Skill / Agent</strong></td>
-  </tr>
-  <tr>
-    <td><img src="./docs/images/plugin-marketplace.png" alt="Plugin 市场" width="100%"></td>
-    <td><img src="./docs/images/skill-marketplace.png" alt="Skill 市场" width="100%"></td>
-  </tr>
-  <tr>
-    <td><strong>对话管理</strong></td>
-    <td><strong>运行环境与同步设置</strong></td>
-  </tr>
-  <tr>
-    <td><img src="./docs/images/conversations.png" alt="对话管理" width="100%"></td>
-    <td><img src="./docs/images/settings-runtime-sync.png" alt="设置与诊断" width="100%"></td>
-  </tr>
-  <tr>
-    <td><strong>版本控制</strong></td>
-    <td><strong>版本设置</strong></td>
-  </tr>
-  <tr>
-    <td><img src="./docs/images/version-control.png" alt="版本控制" width="100%"></td>
-    <td><img src="./docs/images/version-settings.png" alt="版本设置" width="100%"></td>
-  </tr>
-</table>
 
 ## 快速开始
 
@@ -140,4 +104,4 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v0.2.6**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.0.0**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。

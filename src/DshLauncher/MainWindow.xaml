@@ -51,36 +51,102 @@
                     Background="{StaticResource BlueBrush}"
                     CornerRadius="17,17,0,0"
                     MouseLeftButtonDown="TitleBar_OnMouseLeftButtonDown">
-                <Grid Margin="22,0,16,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Width="42"
-                                Height="42"
-                                Background="#FFFFFF"
-                                BorderBrush="#FFFFFF"
-                                BorderThickness="0"
-                                Padding="0"
-                                Click="Brand_Click"
-                                ToolTip="点击返回启动页">
-                            <TextBlock Text="DSH"
-                                       Foreground="{StaticResource BlueBrush}"
-                                       FontSize="13"
-                                       FontWeight="Bold"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center" />
-                        </Button>
-                        <TextBlock Margin="14,0,0,0"
-                                   Text="DSH Launcher"
-                                   Foreground="White"
-                                   FontSize="20"
-                                   FontWeight="SemiBold"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1"
+                <Grid Margin="18,0,16,0">
+                    <TextBlock x:Name="StartupBrandText"
+                               Text="DSH Launcher"
+                               Foreground="White"
+                               FontSize="20"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Left"
+                               VerticalAlignment="Center" />
+                    <Button x:Name="VersionSettingsBackButton"
+                            Width="190"
+                            Height="44"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Foreground="White"
+                            Background="#2578C4"
+                            BorderBrush="#80FFFFFF"
+                            BorderThickness="1"
+                            Cursor="Hand"
+                            Visibility="Collapsed"
+                            Click="VersionSettingsBack_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="BackChrome"
+                                        Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        CornerRadius="10">
+                                    <ContentPresenter HorizontalAlignment="Left"
+                                                      VerticalAlignment="Center"
+                                                      Margin="13,0" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="BackChrome" Property="Background" Value="#3388D3" />
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="BackChrome" Property="Background" Value="#1D69AF" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="←" FontSize="18" Margin="0,0,9,0" />
+                            <TextBlock x:Name="VersionSettingsBackText"
+                                       Text="返回"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Button>
+                    <Border x:Name="ContextInstanceSelector"
+                            Width="190"
+                            Height="44"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Background="#2578C4"
+                            BorderBrush="#80FFFFFF"
+                            BorderThickness="1"
+                            CornerRadius="10"
+                            ClipToBounds="True"
+                            Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Button Click="ContextInstanceSettings_Click"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Foreground="White"
+                                    Padding="12,0"
+                                    HorizontalContentAlignment="Left"
+                                    ToolTip="打开当前实例的插件控制">
+                                <TextBlock Text="{Binding SelectedInstanceName}"
+                                           FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" />
+                            </Button>
+                            <Ellipse Grid.Column="1"
+                                     Width="9"
+                                     Height="9"
+                                     Fill="{Binding SelectedInstanceStatusBrush}"
+                                     ToolTip="{Binding SelectedInstanceStatus}" />
+                            <Button Grid.Column="2"
+                                    Width="38"
+                                    Height="42"
+                                    Padding="0"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Foreground="White"
+                                    Click="ContextInstanceMenu_Click"
+                                    ToolTip="快速切换实例">
+                                <TextBlock Text="⌄" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Button>
+                        </Grid>
+                    </Border>
+                    <StackPanel
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
@@ -115,7 +181,9 @@
                             </StackPanel>
                         </Button>
                     </StackPanel>
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
                         <Button Click="Minimize_Click"
                                 Width="42"
                                 Height="42"
@@ -147,16 +215,14 @@
                               HorizontalContentAlignment="Stretch"
                               CanContentScroll="False"
                               PanningMode="VerticalOnly">
-                    <StackPanel Margin="18,16,18,24">
-                        <TextBlock Text="{Binding PageTitle}" FontSize="28" FontWeight="SemiBold" />
-
+                    <StackPanel Margin="18,10,18,24">
                         <Border Visibility="{Binding PageNoticeVisibility}"
                                 Background="#FFF4DF"
                                 BorderBrush="#F1C26B"
                                 BorderThickness="1"
                                 CornerRadius="9"
                                 Padding="14,10"
-                                Margin="0,16,0,0">
+                                Margin="0,0,0,12">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -176,136 +242,34 @@
                             </Grid>
                         </Border>
 
-                        <Grid x:Name="MainDashboardGrid" Margin="0,18,0,0">
+                        <Grid x:Name="MainDashboardGrid" VerticalAlignment="Top">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="340" />
-                                <ColumnDefinition Width="20" />
+                                <ColumnDefinition Width="320" />
+                                <ColumnDefinition Width="18" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Border x:Name="ProviderSummaryCard" Grid.Column="0" Background="{StaticResource CardBrush}" CornerRadius="13" Padding="18" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                            <Border Grid.Column="0"
+                                    Background="{StaticResource CardBrush}"
+                                    CornerRadius="13"
+                                    Padding="18"
+                                    VerticalAlignment="Top"
+                                    BorderBrush="{StaticResource LineBrush}"
+                                    BorderThickness="1">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
-                                    <Grid x:Name="ProviderHeaderGrid" Grid.Row="0">
-                                        <StackPanel>
-                                            <TextBlock Text="模型提供商" FontSize="18" FontWeight="SemiBold" />
-                                            <TextBlock Text="{Binding ProviderSummaryText}"
-                                                       Foreground="{StaticResource MutedBrush}"
-                                                       FontSize="11"
-                                                       TextWrapping="Wrap"
-                                                       Margin="0,5,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                                            <Button Click="RefreshProviders_Click"
-                                                    IsEnabled="{Binding CanRefreshProviders}"
-                                                    Padding="8,4"
-                                                    FontSize="11"
-                                                    Margin="0,0,6,0">
-                                                <TextBlock Text="↻" />
-                                            </Button>
-                                            <Border Background="#E7F1FC" CornerRadius="10" Padding="8,3">
-                                                <TextBlock Text="离线配置" Foreground="{StaticResource BlueBrush}" FontSize="11" />
-                                            </Border>
-                                        </StackPanel>
-                                    </Grid>
-                                    <Grid x:Name="ProviderListGrid" Grid.Row="1" Margin="0,16,0,14">
-                                        <TextBlock Text="未在当前实例的 settings.yaml 中检测到 llm Provider 配置；通过 DSh 登录页连接的 Provider 不会显示在这里。"
-                                                   Visibility="{Binding NoProvidersVisibility}"
-                                                   Foreground="{StaticResource MutedBrush}"
-                                                   TextWrapping="Wrap" />
-                                        <ScrollViewer Visibility="{Binding ProviderCardsVisibility}"
-                                                      MaxHeight="300"
-                                                      VerticalScrollBarVisibility="Auto"
-                                                      HorizontalScrollBarVisibility="Disabled">
-                                            <ItemsControl ItemsSource="{Binding ProviderCards}">
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <Border Background="#F7FAFD"
-                                                                CornerRadius="10"
-                                                                Padding="11"
-                                                                Margin="0,0,0,9">
-                                                            <Grid>
-                                                                <Grid.ColumnDefinitions>
-                                                                    <ColumnDefinition Width="Auto" />
-                                                                    <ColumnDefinition Width="*" />
-                                                                    <ColumnDefinition Width="Auto" />
-                                                                </Grid.ColumnDefinitions>
-                                                                <Button Click="ProviderToggle_Click"
-                                                                        ToolTip="{Binding ToggleToolTip}"
-                                                                        Background="Transparent"
-                                                                        BorderThickness="0"
-                                                                        Padding="2"
-                                                                        VerticalAlignment="Top">
-                                                                    <Ellipse Width="15" Height="15" Fill="{Binding ToggleBrush}" />
-                                                                </Button>
-                                                                <StackPanel Grid.Column="1" Margin="9,0,7,0">
-                                                                    <Grid>
-                                                                        <TextBlock Text="{Binding DisplayName}"
-                                                                                   FontWeight="SemiBold"
-                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Text="{Binding ToggleStatusText}"
-                                                                                   HorizontalAlignment="Right"
-                                                                                   Foreground="{Binding ToggleBrush}"
-                                                                                   FontSize="10" />
-                                                                    </Grid>
-                                                                    <TextBlock Text="{Binding StatusText}"
-                                                                               Foreground="{StaticResource BlueBrush}"
-                                                                               FontSize="10"
-                                                                               Margin="0,3,0,0" />
-                                                                    <TextBlock Text="{Binding DiagnosticSummary}"
-                                                                               Foreground="{StaticResource MutedBrush}"
-                                                                               FontSize="10"
-                                                                               TextWrapping="Wrap"
-                                                                               Margin="0,2,0,0" />
-                                                                    <TextBlock Text="{Binding EndpointText}"
-                                                                               Foreground="{StaticResource MutedBrush}"
-                                                                               FontSize="9"
-                                                                               TextTrimming="CharacterEllipsis"
-                                                                               Margin="0,5,0,0" />
-                                                                    <TextBlock Text="{Binding ModelCountText}"
-                                                                               Foreground="{StaticResource MutedBrush}"
-                                                                               FontSize="9"
-                                                                               Margin="0,2,0,0" />
-                                                                    <TextBlock Text="{Binding ThinkingText}"
-                                                                               Foreground="{StaticResource MutedBrush}"
-                                                                               FontSize="9"
-                                                                               TextWrapping="Wrap"
-                                                                               Margin="0,2,0,0" />
-                                                                </StackPanel>
-                                                                <Button Grid.Column="2"
-                                                                        Click="ProviderIssue_Click"
-                                                                        Visibility="{Binding IssueVisibility}"
-                                                                        ToolTip="{Binding IssueToolTip}"
-                                                                        Width="25"
-                                                                        Height="25"
-                                                                        Padding="0"
-                                                                        Background="#FFF4DF"
-                                                                        BorderBrush="#F1C26B"
-                                                                        Foreground="#8B5A12">
-                                                                    <TextBlock Text="?" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                                </Button>
-                                                            </Grid>
-                                                        </Border>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                        </ScrollViewer>
-                                    </Grid>
-                                    <Border x:Name="ProviderSeparator" Grid.Row="2" Height="1" Background="{StaticResource LineBrush}" Margin="0,0,0,14" />
-                                    <Grid Grid.Row="3">
-                                        <TextBlock Text="启动实例" FontSize="16" FontWeight="SemiBold" />
-                                        <Border HorizontalAlignment="Right" Background="#E7F1FC" CornerRadius="10" Padding="8,3">
-                                            <TextBlock Text="{Binding InstanceCountText}" Foreground="{StaticResource BlueBrush}" FontSize="11" />
+                                    <Grid>
+                                        <TextBlock Text="实例状态" FontSize="18" FontWeight="SemiBold" />
+                                        <Border HorizontalAlignment="Right" Background="#F1F5F9" CornerRadius="10" Padding="9,4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Ellipse Width="8" Height="8" Fill="{Binding SelectedInstanceStatusBrush}" Margin="0,0,6,0" />
+                                                <TextBlock Text="{Binding SelectedInstanceStatus}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                                            </StackPanel>
                                         </Border>
                                     </Grid>
-                                    <Grid Grid.Row="4" Margin="0,14,0,14">
+                                    <Grid Grid.Row="1" Margin="0,22,0,0">
                                         <StackPanel VerticalAlignment="Center" Visibility="{Binding NoInstancesVisibility}">
                                             <Border Width="58" Height="58" Background="#EAF3FC" CornerRadius="18" HorizontalAlignment="Center">
                                                 <TextBlock Text="＋" Foreground="{StaticResource BlueBrush}" FontSize="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -321,126 +285,120 @@
                                                        TextAlignment="Center"
                                                        FontSize="12"
                                                        Margin="8,8,8,0" />
-                                        </StackPanel>
-                                        <ListBox ItemsSource="{Binding Instances}"
-                                                 SelectedItem="{Binding SelectedInstance, Mode=TwoWay}"
-                                                 Visibility="{Binding InstancesVisibility}"
-                                                 BorderThickness="0"
-                                                 Background="Transparent"
-                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                            <ListBox.ItemContainerStyle>
-                                                <Style TargetType="ListBoxItem">
-                                                    <Setter Property="Padding" Value="0" />
-                                                    <Setter Property="Margin" Value="0,0,0,8" />
-                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                                </Style>
-                                            </ListBox.ItemContainerStyle>
-                                            <ListBox.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Border Background="#F5F9FD" CornerRadius="9" Padding="10">
-                                                        <Grid>
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="34" />
-                                                                <ColumnDefinition Width="*" />
-                                                            </Grid.ColumnDefinitions>
-                                                            <Border Width="28" Height="28" Background="#DCECFB" CornerRadius="8">
-                                                                <TextBlock Text="D" Foreground="{StaticResource BlueBrush}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                            </Border>
-                                                            <StackPanel Grid.Column="1" Margin="8,0,0,0">
-                                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                                <TextBlock Text="{Binding DshVersionText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
-                                                                <TextBlock Text="{Binding ResourceSummaryText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
-                                                                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource BlueBrush}" FontSize="11" />
-                                                            </StackPanel>
-                                                        </Grid>
-                                                    </Border>
-                                                </DataTemplate>
-                                            </ListBox.ItemTemplate>
-                                        </ListBox>
-                                    </Grid>
-                                    <StackPanel Grid.Row="5" Margin="0,0,0,14">
-                                        <TextBlock Text="{Binding SelectedInstanceName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding InstanceEndpointText}"
-                                                   Foreground="{StaticResource MutedBrush}"
-                                                   FontSize="11"
-                                                   TextWrapping="Wrap"
-                                                   Margin="0,4,0,10" />
-                                        <StackPanel Orientation="Horizontal">
                                             <Button Click="StartInstance_Click"
                                                     IsEnabled="{Binding CanStartInstance}"
                                                     Style="{StaticResource PrimaryButton}"
-                                                    Height="38"
-                                                    Padding="14,0">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="▶" Margin="0,0,6,0" />
-                                                    <TextBlock Text="{Binding StartInstanceButtonText}" />
-                                                </StackPanel>
-                                            </Button>
-                                            <Button Click="StopInstance_Click"
-                                                    IsEnabled="{Binding CanStopInstance}"
-                                                    Height="38"
-                                                    Margin="8,0,0,0"
-                                                    Padding="12,0">
-                                                <TextBlock Text="停止" />
-                                            </Button>
-                                            <Button Click="RestartInstance_Click"
-                                                    IsEnabled="{Binding CanRestartInstance}"
-                                                    Height="38"
-                                                    Margin="8,0,0,0"
-                                                    Padding="12,0">
-                                                <TextBlock Text="重启" />
-                                            </Button>
-                                            <Button Click="OpenDesktopShell_Click"
-                                                    Visibility="{Binding DesktopShellVisibility}"
-                                                    Height="38"
-                                                    Margin="8,0,0,0"
-                                                    Padding="12,0"
-                                                    ToolTip="实验功能：使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口">
-                                                <TextBlock Text="桌面窗口" />
+                                                    HorizontalAlignment="Center"
+                                                    Margin="0,18,0,0"
+                                                    Padding="18,9">
+                                                <TextBlock Text="准备首个版本" />
                                             </Button>
                                         </StackPanel>
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="6">
-                                        <Button Click="VersionControl_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,0,10">
-                                            <TextBlock Text="版本控制" />
-                                        </Button>
-                                        <Button Click="VersionSettings_Click">
-                                            <TextBlock Text="版本设置" />
-                                        </Button>
-                                    </StackPanel>
+                                        <StackPanel Visibility="{Binding InstancesVisibility}" VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding SelectedInstanceName}"
+                                                       FontSize="24"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding SelectedInstanceSummary}"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding InstanceEndpointText}"
+                                                       Foreground="{StaticResource BlueBrush}"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,8,0,0" />
+                                            <WrapPanel Margin="0,24,0,0">
+                                                <Button Content="重命名"
+                                                        Click="RenameSelectedInstance_Click"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Content="实例设置"
+                                                        Click="VersionSettings_Click"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Click="StartInstance_Click"
+                                                        IsEnabled="{Binding CanStartInstance}"
+                                                        Style="{StaticResource PrimaryButton}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="▶" Margin="0,0,6,0" />
+                                                        <TextBlock Text="{Binding StartInstanceButtonText}" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Content="停止"
+                                                        Click="StopInstance_Click"
+                                                        IsEnabled="{Binding CanStopInstance}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Content="重启"
+                                                        Click="RestartInstance_Click"
+                                                        IsEnabled="{Binding CanRestartInstance}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Content="桌面窗口"
+                                                        Click="OpenDesktopShell_Click"
+                                                        Visibility="{Binding DesktopShellVisibility}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8"
+                                                        ToolTip="实验功能：使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口" />
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Grid>
                                 </Grid>
                             </Border>
 
-                            <StackPanel x:Name="InstanceWorkspacePanel" Grid.Column="2">
-                                <Border Background="{StaticResource CardBrush}" CornerRadius="13" Padding="20" BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                            <Border x:Name="InstanceWorkspacePanel"
+                                    Grid.Column="2"
+                                    Height="520"
+                                    VerticalAlignment="Top"
+                                    Background="{StaticResource CardBrush}"
+                                    CornerRadius="13"
+                                    Padding="18"
+                                    BorderBrush="{StaticResource LineBrush}"
+                                    BorderThickness="1">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
                                         </Grid.RowDefinitions>
                                         <Grid>
-                                            <TextBlock Text="正在运行的实例" FontSize="18" FontWeight="SemiBold" />
-                                            <Border Grid.Column="1" HorizontalAlignment="Right" Background="#E7F1FC" CornerRadius="10" Padding="8,3">
-                                                <TextBlock Text="{Binding RunningInstanceCountText}" Foreground="{StaticResource BlueBrush}" FontSize="11" />
-                                            </Border>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="启动实例" FontSize="18" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding InstanceCountText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1"
+                                                    Content="版本控制"
+                                                    Click="VersionControl_Click"
+                                                    Padding="11,6"
+                                                    VerticalAlignment="Top" />
                                         </Grid>
-                                <TextBlock Grid.Row="2"
-                                           Text="没有正在运行的实例。请从左侧选择实例并启动。"
-                                                   Visibility="{Binding NoRunningInstancesVisibility}"
-                                                   Foreground="{StaticResource MutedBrush}"
-                                                   Margin="0,20,0,2" />
-                                        <ListBox Grid.Row="2"
+                                        <ListBox Grid.Row="1"
                                                  x:Name="RunningInstancesList"
-                                                 ItemsSource="{Binding RunningInstances}"
+                                                 ItemsSource="{Binding Instances}"
                                                  SelectedItem="{Binding SelectedInstance, Mode=TwoWay}"
                                                  MouseDoubleClick="RunningInstances_MouseDoubleClick"
-                                                 Visibility="{Binding RunningInstancesVisibility}"
+                                                 Visibility="{Binding InstancesVisibility}"
                                                  BorderThickness="0"
                                                  Background="Transparent"
-                                                 Margin="0,16,0,0"
-                                                 MaxHeight="260"
-                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                 Margin="0,18,0,0"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 ScrollViewer.CanContentScroll="True"
+                                                 VirtualizingPanel.IsVirtualizing="True"
+                                                 VirtualizingPanel.VirtualizationMode="Recycling">
                                             <ListBox.ItemContainerStyle>
                                                 <Style TargetType="ListBoxItem">
                                                     <Setter Property="Padding" Value="0" />
@@ -453,32 +411,41 @@
                                                     <Border Background="#F5F9FD" CornerRadius="9" Padding="12">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="34" />
+                                                                <ColumnDefinition Width="22" />
                                                                 <ColumnDefinition Width="*" />
-                                                                <ColumnDefinition Width="Auto" />
                                                             </Grid.ColumnDefinitions>
-                                                            <Border Width="28" Height="28" Background="#E5F5EC" CornerRadius="8">
-                                                                <TextBlock Text="●" Foreground="#25875A" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                            </Border>
-                                                            <StackPanel Grid.Column="1" Margin="9,0,8,0">
+                                                            <Ellipse Width="9" Height="9" VerticalAlignment="Top" Margin="0,5,0,0">
+                                                                <Ellipse.Style>
+                                                                    <Style TargetType="Ellipse">
+                                                                        <Setter Property="Fill" Value="#96A3B5" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding RuntimeStatus}" Value="Running">
+                                                                                <Setter Property="Fill" Value="#2EA66B" />
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding RuntimeStatus}" Value="Error">
+                                                                                <Setter Property="Fill" Value="#D94A4A" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Ellipse.Style>
+                                                            </Ellipse>
+                                                            <StackPanel Grid.Column="1">
                                                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                                <TextBlock Text="{Binding RuntimeOwnershipText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
-                                                                <TextBlock Text="{Binding WebUrl}" Foreground="{StaticResource BlueBrush}" FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                                                                <TextBlock Text="{Binding DshVersionText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
+                                                                <TextBlock Text="{Binding ResourceSummaryText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                                                                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource BlueBrush}" FontSize="11" />
                                                             </StackPanel>
-                                                            <TextBlock Grid.Column="2" Text="打开" Foreground="{StaticResource BlueBrush}" FontSize="11" VerticalAlignment="Center" />
                                                         </Grid>
                                                     </Border>
                                                 </DataTemplate>
                                             </ListBox.ItemTemplate>
                                         </ListBox>
                                     </Grid>
-                                </Border>
-
-                            </StackPanel>
+                            </Border>
                         </Grid>
                         <ContentControl x:Name="EmbeddedPageHost"
                                         Visibility="Collapsed"
-                                        Margin="0,18,0,0"
+                                        Margin="0"
                                         MinHeight="620"
                                         HorizontalContentAlignment="Stretch"
                                         VerticalContentAlignment="Stretch" />

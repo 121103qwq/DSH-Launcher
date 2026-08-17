@@ -27,6 +27,16 @@ public sealed class VersionSettingsService
 
     public string LauncherSettingsPath => Path.Combine(_paths.RootDirectory, "launcher-settings.json");
 
+    public string DefaultDshInstallDirectory => _paths.ManagedDshRuntimeDirectory;
+
+    public string ResolveDshInstallDirectory()
+    {
+        var configured = ReadLauncherSettings().DshInstallDirectory;
+        return string.IsNullOrWhiteSpace(configured)
+            ? DefaultDshInstallDirectory
+            : configured;
+    }
+
     public VersionSettingsData Read(ManagerInstance instance)
     {
         var path = GetSettingsPath(instance);

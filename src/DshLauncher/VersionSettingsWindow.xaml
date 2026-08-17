@@ -39,6 +39,10 @@
                         Content="♧   插件管理"
                         Click="Plugins_Click"
                         Style="{StaticResource NavButton}" />
+                <Button x:Name="SnapshotsButton"
+                        Content="↶   快照回滚"
+                        Click="Snapshots_Click"
+                        Style="{StaticResource NavButton}" />
                 <Button x:Name="ExportButton"
                         Content="⇧   导出"
                         Click="Export_Click"
@@ -296,6 +300,50 @@
                                     Style="{StaticResource PrimaryButton}"
                                     HorizontalAlignment="Left"
                                     Margin="0,16,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="SnapshotPage" Visibility="Collapsed">
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20">
+                        <StackPanel>
+                            <TextBlock Text="配置快照与回滚" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="保存版本设置、Provider 凭据、MCP 与 Plugin 配置。快照仅限当前 Windows 用户读取，不包含会话和运行依赖。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,16" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="SnapshotBox"
+                                          DisplayMemberPath="DisplayName"
+                                          MinWidth="260"
+                                          Height="36"
+                                          SelectionChanged="SnapshotBox_SelectionChanged" />
+                                <Button x:Name="CreateSnapshotButton"
+                                        Grid.Column="1"
+                                        Content="创建快照"
+                                        Click="CreateSnapshot_Click"
+                                        Margin="8,0,0,0"
+                                        Padding="14,8" />
+                                <Button x:Name="RollbackSnapshotButton"
+                                        Grid.Column="2"
+                                        Content="回滚选中快照"
+                                        Click="RollbackSnapshot_Click"
+                                        Margin="8,0,0,0"
+                                        Padding="14,8" />
+                            </Grid>
+                            <TextBlock x:Name="SnapshotStatusText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,14,0,0" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

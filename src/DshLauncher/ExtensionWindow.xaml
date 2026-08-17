@@ -5,11 +5,12 @@
              Foreground="{StaticResource TextBrush}"
              HorizontalAlignment="Stretch"
              VerticalAlignment="Stretch"
-             Loaded="Window_OnLoaded">
+             Loaded="Window_OnLoaded"
+             Unloaded="Window_OnUnloaded">
     <Grid Margin="12">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="340" />
-            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="190" />
+            <ColumnDefinition Width="14" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
@@ -19,155 +20,113 @@
                 BorderBrush="{StaticResource LineBrush}"
                 BorderThickness="1"
                 CornerRadius="12"
-                Padding="16">
+                Padding="14"
+                VerticalAlignment="Top">
             <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-
                 <StackPanel>
-                    <TextBlock Text="当前实例" FontSize="17" FontWeight="SemiBold" />
-                    <ComboBox x:Name="InstanceSelectorBox"
-                              Margin="0,10,0,0"
-                              Visibility="Collapsed"
-                              DisplayMemberPath="Name"
-                              SelectionChanged="InstanceSelector_SelectionChanged" />
-                    <TextBlock x:Name="CurrentInstanceNameText"
-                               Foreground="{StaticResource BlueBrush}"
+                    <TextBlock Text="分类"
                                FontSize="16"
                                FontWeight="SemiBold"
-                               TextTrimming="CharacterEllipsis"
-                               Margin="0,10,0,0" />
-                    <TextBlock x:Name="CurrentInstanceDetailsText"
+                               Margin="4,2,4,10" />
+                    <ListBox x:Name="MarketplaceCategoryList"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             SelectedIndex="0"
+                             SelectionChanged="MarketplaceFilter_SelectionChanged">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="14,10" />
+                                <Setter Property="Margin" Value="0,0,0,4" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#E3F0FD" />
+                                        <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBoxItem Tag="">全部</ListBoxItem>
+                        <ListBoxItem Tag="UI">UI</ListBoxItem>
+                        <ListBoxItem Tag="工具">工具</ListBoxItem>
+                        <ListBoxItem Tag="工作流">工作流</ListBoxItem>
+                        <ListBoxItem Tag="Agent">Agent</ListBoxItem>
+                        <ListBoxItem Tag="模型">模型</ListBoxItem>
+                        <ListBoxItem Tag="主题">主题</ListBoxItem>
+                        <ListBoxItem Tag="开发">开发</ListBoxItem>
+                    </ListBox>
+                    <ListBox x:Name="SkillMarketCategoryList"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             SelectedIndex="0"
+                             Visibility="Collapsed"
+                             SelectionChanged="SkillMarketCategoryList_SelectionChanged">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="14,10" />
+                                <Setter Property="Margin" Value="0,0,0,4" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#E3F0FD" />
+                                        <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBoxItem Tag="">全部</ListBoxItem>
+                        <ListBoxItem Tag="开发">开发</ListBoxItem>
+                        <ListBoxItem Tag="设计">设计</ListBoxItem>
+                        <ListBoxItem Tag="文档">文档</ListBoxItem>
+                        <ListBoxItem Tag="效率">效率</ListBoxItem>
+                        <ListBoxItem Tag="Agent">Agent</ListBoxItem>
+                        <ListBoxItem Tag="其他">其他</ListBoxItem>
+                    </ListBox>
+                    <TextBlock Text="点击顶部实例名称可进入该实例的插件管理。"
                                Foreground="{StaticResource MutedBrush}"
                                FontSize="11"
                                TextWrapping="Wrap"
-                               Margin="0,4,0,0" />
-                </StackPanel>
-
-                <WrapPanel Grid.Row="1" Margin="0,16,0,10">
-                    <Button Content="刷新" Click="Refresh_Click" Margin="0,0,7,7" Padding="12,7" />
+                               Margin="4,12,4,2" />
+                    <Separator Margin="0,12,0,10" />
                     <Button x:Name="InstallPluginButton"
                             Content="手动安装 Plugin"
                             Click="InstallPlugin_Click"
-                            Style="{StaticResource PrimaryButton}"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
-                    <Button x:Name="ImportSkillButton"
-                            Content="导入 Skill"
-                            Click="ImportSkill_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
+                            Margin="0,0,0,7"
+                            Padding="10,7" />
                     <Button x:Name="AddMcpButton"
                             Content="添加 MCP"
                             Click="AddMcp_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
+                            Margin="0,0,0,7"
+                            Padding="10,7" />
+                    <Button x:Name="ImportSkillButton"
+                            Content="导入 Skill"
+                            Click="ImportSkill_Click"
+                            Margin="0,0,0,7"
+                            Padding="10,7" />
                     <Button x:Name="ImportPresetButton"
                             Content="导入 Agent Preset"
                             Click="ImportPreset_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
-                </WrapPanel>
+                            Padding="10,7" />
+                </StackPanel>
 
-                <Border Grid.Row="2"
-                        Background="#F8FBFE"
-                        BorderBrush="{StaticResource LineBrush}"
-                        BorderThickness="1"
-                        CornerRadius="10"
-                        Padding="8">
-                    <ListBox x:Name="ExtensionList"
-                             MaxHeight="620"
-                             BorderThickness="0"
-                             Background="Transparent"
-                             Foreground="{StaticResource TextBrush}"
-                             SelectionChanged="ExtensionList_SelectionChanged"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             VirtualizingStackPanel.IsVirtualizing="True"
-                             VirtualizingStackPanel.VirtualizationMode="Recycling"
-                             ScrollViewer.CanContentScroll="True">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Border Padding="10"
-                                        Margin="0,0,0,6"
-                                        Background="{StaticResource CardBrush}"
-                                        BorderBrush="{StaticResource LineBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="8">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="62" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding Kind}"
-                                                   Foreground="{StaticResource BlueBrush}"
-                                                   FontSize="11"
-                                                   VerticalAlignment="Center" />
-                                        <StackPanel Grid.Column="1">
-                                            <TextBlock Text="{Binding Name}"
-                                                       FontWeight="SemiBold"
-                                                       TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding Description, TargetNullValue=没有描述}"
-                                                       Foreground="{StaticResource MutedBrush}"
-                                                       FontSize="11"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       Margin="0,3,0,0" />
-                                        </StackPanel>
-                                        <TextBlock Grid.Column="2"
-                                                   Text="{Binding Enabled}"
-                                                   Foreground="#25875A"
-                                                   FontSize="11"
-                                                   VerticalAlignment="Center"
-                                                   Margin="8,0,2,0" />
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                </Border>
-
-                <Border Grid.Row="3"
-                        Background="#F5F9FD"
-                        CornerRadius="9"
-                        Padding="12"
-                        Margin="0,12,0,0">
-                    <StackPanel>
-                        <TextBlock Text="当前选择" FontSize="15" FontWeight="SemiBold" />
-                        <TextBlock x:Name="SelectedName"
-                                   FontSize="14"
-                                   TextWrapping="Wrap"
-                                   Margin="0,8,0,0" />
-                        <TextBlock x:Name="SelectedDetails"
-                                   Foreground="{StaticResource MutedBrush}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="0,5,0,0" />
-                        <WrapPanel Margin="0,12,0,0">
-                            <Button x:Name="EnableButton" Content="启用" Click="Enable_Click" Margin="0,0,6,6" Padding="10,6" />
-                            <Button x:Name="DisableButton" Content="禁用" Click="Disable_Click" Margin="0,0,6,6" Padding="10,6" />
-                            <Button x:Name="UpdateButton" Content="更新" Click="Update_Click" Margin="0,0,6,6" Padding="10,6" />
-                            <Button x:Name="RemoveButton" Content="删除" Click="Remove_Click" Margin="0,0,6,6" Padding="10,6" />
-                        </WrapPanel>
-                        <TextBlock x:Name="HintText"
-                                   Text="修改前请停止实例。Plugin 和 MCP 会在下次启动时生效。"
-                                   Foreground="{StaticResource MutedBrush}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="0,4,0,0" />
-                    </StackPanel>
-                </Border>
-
-                <TextBlock Grid.Row="4"
-                           x:Name="StatusText"
-                           Foreground="{StaticResource BlueBrush}"
-                           TextWrapping="Wrap"
-                           Margin="0,14,0,0" />
+                <Grid Visibility="Collapsed">
+                    <ComboBox x:Name="InstanceSelectorBox" SelectionChanged="InstanceSelector_SelectionChanged" />
+                    <TextBlock x:Name="CurrentInstanceNameText" />
+                    <TextBlock x:Name="CurrentInstanceDetailsText" />
+                    <ListBox x:Name="ExtensionList" SelectionChanged="ExtensionList_SelectionChanged" />
+                    <TextBlock x:Name="SelectedName" />
+                    <TextBlock x:Name="SelectedDetails" />
+                    <Button x:Name="EnableButton" Click="Enable_Click" />
+                    <Button x:Name="DisableButton" Click="Disable_Click" />
+                    <Button x:Name="UpdateButton" Click="Update_Click" />
+                    <Button x:Name="RemoveButton" Click="Remove_Click" />
+                    <TextBlock x:Name="HintText" />
+                    <TextBlock x:Name="StatusText" />
+                </Grid>
             </Grid>
         </Border>
 
@@ -205,58 +164,7 @@
                             Margin="8,0,0,0" />
                 </Grid>
 
-                <Grid Grid.Row="1" Margin="0,10,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="分类"
-                                   Foreground="{StaticResource MutedBrush}"
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,8,0" />
-                        <ListBox Grid.Column="1"
-                                 x:Name="MarketplaceCategoryList"
-                                 Height="34"
-                                 BorderThickness="0"
-                                 Background="Transparent"
-                                 SelectedIndex="0"
-                                 SelectionChanged="MarketplaceFilter_SelectionChanged">
-                            <ListBox.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Horizontal" />
-                                </ItemsPanelTemplate>
-                            </ListBox.ItemsPanel>
-                            <ListBox.ItemContainerStyle>
-                                <Style TargetType="ListBoxItem">
-                                    <Setter Property="Padding" Value="10,6" />
-                                    <Setter Property="Margin" Value="0,0,4,0" />
-                                    <Setter Property="Background" Value="Transparent" />
-                                    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-                                    <Setter Property="HorizontalContentAlignment" Value="Center" />
-                                    <Style.Triggers>
-                                        <Trigger Property="IsSelected" Value="True">
-                                            <Setter Property="Background" Value="#E3F0FD" />
-                                            <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
-                                        </Trigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </ListBox.ItemContainerStyle>
-                            <ListBoxItem Tag="">全部</ListBoxItem>
-                            <ListBoxItem Tag="UI">UI</ListBoxItem>
-                            <ListBoxItem Tag="工具">工具</ListBoxItem>
-                            <ListBoxItem Tag="工作流">工作流</ListBoxItem>
-                            <ListBoxItem Tag="Agent">Agent</ListBoxItem>
-                            <ListBoxItem Tag="模型">模型</ListBoxItem>
-                            <ListBoxItem Tag="主题">主题</ListBoxItem>
-                            <ListBoxItem Tag="开发">开发</ListBoxItem>
-                        </ListBox>
-                    </Grid>
-                    <WrapPanel Grid.Row="1" Margin="0,8,0,0" VerticalAlignment="Center">
+                <WrapPanel Grid.Row="1" Margin="0,10,0,0" VerticalAlignment="Center">
                         <TextBlock Text="排序"
                                    Foreground="{StaticResource MutedBrush}"
                                    VerticalAlignment="Center"
@@ -287,8 +195,7 @@
                             <ComboBoxItem Tag="GitHubTopic">GitHub 发现</ComboBoxItem>
                             <ComboBoxItem Tag="Custom">自定义目录</ComboBoxItem>
                         </ComboBox>
-                    </WrapPanel>
-                </Grid>
+                </WrapPanel>
 
                 <StackPanel Grid.Row="2" Margin="0,14,0,12">
                     <TextBlock Text="插件市场" FontSize="21" FontWeight="SemiBold" />
@@ -501,50 +408,6 @@
                                FontSize="11"
                                TextWrapping="Wrap"
                                Margin="0,4,0,0" />
-                </StackPanel>
-
-                <StackPanel Grid.Row="2"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center"
-                            Margin="0,0,0,12">
-                    <TextBlock Text="分类"
-                               Foreground="{StaticResource MutedBrush}"
-                               VerticalAlignment="Center"
-                               Margin="0,0,8,0" />
-                    <ListBox x:Name="SkillMarketCategoryList"
-                             Height="34"
-                             BorderThickness="0"
-                             Background="Transparent"
-                             SelectedIndex="0"
-                             SelectionChanged="SkillMarketCategoryList_SelectionChanged">
-                        <ListBox.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" />
-                            </ItemsPanelTemplate>
-                        </ListBox.ItemsPanel>
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="Padding" Value="10,6" />
-                                <Setter Property="Margin" Value="0,0,4,0" />
-                                <Setter Property="Background" Value="Transparent" />
-                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-                                <Setter Property="HorizontalContentAlignment" Value="Center" />
-                                <Style.Triggers>
-                                    <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="#E3F0FD" />
-                                        <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
-                        <ListBoxItem Tag="">全部</ListBoxItem>
-                        <ListBoxItem Tag="开发">开发</ListBoxItem>
-                        <ListBoxItem Tag="设计">设计</ListBoxItem>
-                        <ListBoxItem Tag="文档">文档</ListBoxItem>
-                        <ListBoxItem Tag="效率">效率</ListBoxItem>
-                        <ListBoxItem Tag="Agent">Agent</ListBoxItem>
-                        <ListBoxItem Tag="其他">其他</ListBoxItem>
-                    </ListBox>
                 </StackPanel>
 
                 <ListBox Grid.Row="3"

@@ -90,6 +90,19 @@
                         </ListBox.ItemTemplate>
                     </ListBox>
                     <StackPanel Grid.Row="2">
+                        <Button x:Name="AddInstanceButton"
+                                Content="导入实例"
+                                Click="AddInstance_Click"
+                                IsEnabled="{Binding CanAddInstance}"
+                                Style="{StaticResource PrimaryButton}"
+                                Margin="0,0,0,8">
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="从文件夹导入" Click="ScanInstanceFolder_Click" />
+                                    <MenuItem Header="从快捷方式导入" Click="ScanInstanceShortcut_Click" />
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
                         <Button Content="新建干净版本" Click="CreateCleanVersion_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,0,8" />
                         <Button Content="导入整合包" Click="ImportPackage_Click" />
                     </StackPanel>

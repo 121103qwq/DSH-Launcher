@@ -56,6 +56,100 @@ public static class DeepSeekDesktopDetector
             ?? TryDetectLegacyDesktop(normalizedRoot);
     }
 
+    internal static string? TryResolveDshHome(
+        DeepSeekDesktopInstallation installation,
+        string? localApplicationData = null)
+    {
+        var modulesFile = Path.Combine(
+            Path.GetDirectoryName(Path.GetDirectoryName(installation.DshPackageRoot)) ?? string.Empty,
+            ".modules.yaml");
+        var fromModules = TryReadDshHomeFromModulesFile(modulesFile);
+        if (fromModules is not null)
+        {
+            return fromModules;
+        }
+
+        if (!string.Equals(installation.ProductName, "DeepSeek Desktop", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var localData = string.IsNullOrWhiteSpace(localApplicationData)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : localApplicationData;
+        return TryNormalizeDshHome(Path.Combine(localData, "DeepSeek Harness Data"));
+    }
+
+    private static string? TryReadDshHomeFromModulesFile(string modulesFile)
+    {
+        try
+        {
+            if (!File.Exists(modulesFile))
+            {
+                return null;
+            }
+
+            var match = Regex.Match(
+                File.ReadAllText(modulesFile, Encoding.UTF8),
+                "(?m)^\\s*[\"']?virtualStoreDir[\"']?\\s*:\\s*(?<value>\"(?:\\\\.|[^\"])*\"|'[^']*'|[^\\r\\n#]+)");
+            if (!match.Success)
+            {
+                return null;
+            }
+
+            var value = match.Groups["value"].Value.Trim();
+            var virtualStore = value.StartsWith('"')
+                ? JsonSerializer.Deserialize<string>(value)
+                : value.Trim('\'');
+            var current = string.IsNullOrWhiteSpace(virtualStore)
+                ? null
+                : new DirectoryInfo(virtualStore);
+            for (var depth = 0; depth < 4 && current is not null; depth++)
+            {
+                current = current.Parent;
+            }
+
+            return current is null ? null : TryNormalizeDshHome(current.FullName);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or JsonException
+            or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryNormalizeDshHome(string path)
+    {
+        try
+        {
+            var normalized = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!Directory.Exists(normalized)
+                || (File.GetAttributes(normalized) & FileAttributes.ReparsePoint) != 0)
+            {
+                return null;
+            }
+
+            return Directory.Exists(Path.Combine(normalized, "sessions"))
+                || Directory.Exists(Path.Combine(normalized, "storages"))
+                || Directory.Exists(Path.Combine(normalized, "profiles"))
+                || File.Exists(Path.Combine(normalized, "settings.yaml"))
+                || File.Exists(Path.Combine(normalized, ".credentials.yaml"))
+                    ? normalized
+                    : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
     private static DeepSeekDesktopInstallation? TryDetectDshDesktopV2(string installRoot)
     {
         var hostExecutable = Path.Combine(installRoot, "DSH Desktop.exe");

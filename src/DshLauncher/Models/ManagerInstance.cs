@@ -42,7 +42,9 @@ public sealed record ManagerInstance(
     int? ProcessId = null,
     int? Port = null,
     string? WebUrl = null,
-    DshRuntimeLaunchSpec? DshLaunchSpec = null)
+    DshRuntimeLaunchSpec? DshLaunchSpec = null,
+    DateTimeOffset? LastUsedAt = null,
+    string? ImportedFromDshHome = null)
 {
     [JsonIgnore]
     public string KindText => Kind == InstanceKind.Installed ? "installed" : "source";
@@ -87,6 +89,9 @@ public sealed record ManagerInstance(
 
     [JsonIgnore]
     public string ResourceSummaryText => $"{ReadPluginCount()} Plugins · {ReadSkillCount()} Skills";
+
+    [JsonIgnore]
+    public DateTimeOffset RecentSortAt => LastUsedAt ?? RegisteredAt;
 
     private int ReadPluginCount()
     {
