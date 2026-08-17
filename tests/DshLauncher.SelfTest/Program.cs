@@ -18,6 +18,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Source project inspection", TestSourceProjectInspection),
     ("Source inspector rejects unrelated workspace", TestSourceInspectorRejectsUnrelatedWorkspace),
     ("DSh runtime detection", TestDshRuntimeDetection),
+    ("DeepSeek Desktop bundled runtime detection", TestDeepSeekDesktopRuntimeDetection),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
     ("Node install version resolution", TestNodeInstallVersionResolution),
     ("Node installer download progress", TestNodeInstallerDownloadProgress),
@@ -278,6 +279,70 @@ static async Task TestDshRuntimeDetection()
         "DSh 运行时版本应与安装包 package.json 版本一致。");
     Assert(DshRuntimeDetector.TryReadNodeEngine(runtime.PackageRoot!) == runtime.NodeEngine,
         "DSh 运行时应从同一个 package.json 暴露 engines.node，而不是另写版本规则。");
+}
+
+static async Task TestDeepSeekDesktopRuntimeDetection()
+{
+    using var temporary = new TestDirectory();
+    var installRoot = Path.Combine(temporary.Path, "DeepSeek Desktop");
+    var runtimeDirectory = Path.Combine(installRoot, "runtime");
+    var binDirectory = Path.Combine(installRoot, "app", "node_modules", ".bin");
+    var packageRoot = Path.Combine(
+        installRoot,
+        "app",
+        "node_modules",
+        "@deepseek-ai",
+        "dsh");
+    Directory.CreateDirectory(runtimeDirectory);
+    Directory.CreateDirectory(binDirectory);
+    Directory.CreateDirectory(packageRoot);
+    File.WriteAllText(Path.Combine(installRoot, "DeepSeek Desktop.exe"), string.Empty, Encoding.ASCII);
+    File.WriteAllText(
+        Path.Combine(installRoot, "VERSION.txt"),
+        "DeepSeek Desktop 0.4.2\nDeepSeek Harness 1.2.3\nBundled Node.js 22.19.0\n",
+        new UTF8Encoding(false));
+    var nodeExecutable = Path.Combine(runtimeDirectory, "node.exe");
+    File.WriteAllText(nodeExecutable, string.Empty, Encoding.ASCII);
+    File.WriteAllText(
+        Path.Combine(packageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"1.2.3\"}",
+        new UTF8Encoding(false));
+    var dshExecutable = Path.Combine(binDirectory, "dsh.cmd");
+    File.WriteAllText(dshExecutable, "@echo dsh v1.2.3\r\n", Encoding.ASCII);
+
+    var installation = DeepSeekDesktopDetector.TryDetect(installRoot);
+    Assert(installation is not null, "完整的 DeepSeek Desktop 安装应被识别。 ");
+    Assert(installation!.DesktopVersion == "0.4.2", "应从 VERSION.txt 读取 DeepSeek Desktop 版本。 ");
+    Assert(installation.DshVersion == "1.2.3", "应从官方 package.json 读取内置 DSh 版本。 ");
+    Assert(installation.DshExecutablePath == Path.GetFullPath(dshExecutable), "应定位 app/node_modules/.bin 下的 DSh 启动文件。 ");
+    Assert(installation.NodeExecutablePath == Path.GetFullPath(nodeExecutable), "应定位 Desktop 自带的 runtime/node.exe。 ");
+    Assert(DshRuntimeDetector.TryResolvePackageRoot(installRoot) == Path.GetFullPath(packageRoot),
+        "直接选择 DeepSeek Desktop 安装目录时也应解析到内置 DSh package root。 ");
+    Assert(DshRuntimeDetector.FindExecutableForPackageRoot(packageRoot) == Path.GetFullPath(dshExecutable),
+        "从内置 DSh package root 应反向找到 .bin 启动文件。 ");
+    Assert(DshRuntimeDetector.GetCandidates(null, new[] { installation }).Contains(dshExecutable, StringComparer.OrdinalIgnoreCase),
+        "DSh 自动检测候选应包含 DeepSeek Desktop 的启动文件。 ");
+    Assert(NodeRuntimeDetector.GetCandidates(new[] { installation }).Contains(nodeExecutable, StringComparer.OrdinalIgnoreCase),
+        "Node 自动检测候选应包含 DeepSeek Desktop 自带的 Node。 ");
+
+    var startInfo = DshRuntimeDetector.CreateStartInfo(dshExecutable, nodeExecutable);
+    Assert(startInfo.Environment.TryGetValue("PATH", out var detectionPath)
+        && detectionPath?.Split(Path.PathSeparator).Contains(runtimeDirectory, StringComparer.OrdinalIgnoreCase) == true,
+        "运行内置 DSh 版本检测时必须临时注入 Desktop 自带 Node 路径。 ");
+
+    var detected = await new DshRuntimeDetector().DetectAsync(
+        binDirectory,
+        new[] { installation },
+        CancellationToken.None);
+    Assert(detected.IsAvailable
+        && detected.Version == "1.2.3"
+        && detected.DeepSeekDesktopVersion == "0.4.2"
+        && detected.BundledNodeExecutablePath == Path.GetFullPath(nodeExecutable),
+        "内置 DSh 必须通过命令版本与 package metadata 双重校验后返回 Desktop 来源。 ");
+    Assert(detected.DisplayVersionText == "DeepSeek Desktop v0.4.2 · DSh v1.2.3",
+        "界面应同时显示 DeepSeek Desktop 与 DSh 版本。 ");
+    Assert(MainWindow.BuildDefaultFirstVersionNameForRuntime(detected) == "DeepSeek Desktop 0.4.2 · DSh 1.2.3",
+        "首次创建版本时应保留自动检测到的 Desktop 与 DSh 版本。 ");
 }
 
 static Task TestNodeRuntimeCompatibility()
@@ -1566,6 +1631,7 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     var home = Path.Combine(temporary.Path, "dsh-home");
     var runtimeDirectory = Path.Combine(temporary.Path, "node-runtime");
     var marker = Path.Combine(temporary.Path, "pnpm-version.txt");
+    var nodePathMarker = Path.Combine(temporary.Path, "node-path.txt");
     var argumentMarker = Path.Combine(temporary.Path, "plugin-arguments.txt");
     Directory.CreateDirectory(root);
     Directory.CreateDirectory(home);
@@ -1585,6 +1651,8 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
         dsh,
         "@echo off\r\n"
         + "echo %* > \"" + argumentMarker + "\"\r\n"
+        + "\"%SystemRoot%\\System32\\where.exe\" node > \"" + nodePathMarker + "\" 2>&1\r\n"
+        + "if errorlevel 1 exit /b 22\r\n"
         + "pnpm --version > \"" + marker + "\" 2>&1\r\n"
         + "if errorlevel 1 exit /b 21\r\n"
         + "exit /b 0\r\n",
@@ -1595,7 +1663,11 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     try
     {
         Environment.SetEnvironmentVariable("PATH", Path.Combine(temporary.Path, "empty-path"));
-        await new ExtensionService().InstallPluginAsync(instance, "github:example/demo-plugin", null, "demo-plugin");
+        await new ExtensionService().InstallPluginAsync(
+            instance,
+            "github:example/demo-plugin",
+            new NodeRuntimeInfo(true, node, "22.19.0", null),
+            "demo-plugin");
     }
     finally
     {
@@ -1603,6 +1675,9 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     }
 
     Assert(File.Exists(marker), "Plugin CLI 应能通过 Launcher 提供的 pnpm 环境运行。 ");
+    Assert(File.Exists(nodePathMarker)
+        && File.ReadAllText(nodePathMarker).Contains(runtimeDirectory, StringComparison.OrdinalIgnoreCase),
+        "Plugin CLI 应同时继承检测到的 Node 目录，不能只注入 pnpm shim。 ");
     Assert(File.ReadAllText(marker).Contains("11.21.0", StringComparison.Ordinal), "Plugin CLI 应使用可用的 Corepack pnpm shim。 ");
     var arguments = File.ReadAllText(argumentMarker);
     Assert(arguments.Contains("--reporter=append-only", StringComparison.Ordinal), "Plugin CLI 应使用适合图形界面捕获的 pnpm 输出模式。 ");

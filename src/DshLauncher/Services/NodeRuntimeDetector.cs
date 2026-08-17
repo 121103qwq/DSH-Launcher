@@ -51,7 +51,7 @@ public sealed class NodeRuntimeDetector
             return new NodeRuntimeInfo(true, best.Path, best.Version, null);
         }
 
-        return NodeRuntimeInfo.Missing("PATH 和 Windows 常见安装目录中都没有可用的 node.exe。");
+        return NodeRuntimeInfo.Missing("PATH、Windows 常见安装目录和 DeepSeek Desktop 中都没有可用的 node.exe。");
     }
 
     private static string? NormalizePreferredPath(string path)
@@ -70,7 +70,8 @@ public sealed class NodeRuntimeDetector
         }
     }
 
-    private static IEnumerable<string> GetCandidates()
+    internal static IEnumerable<string> GetCandidates(
+        IReadOnlyList<DeepSeekDesktopInstallation>? desktopInstallations = null)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
@@ -109,6 +110,14 @@ public sealed class NodeRuntimeDetector
                 {
                     yield return candidate;
                 }
+            }
+        }
+
+        foreach (var installation in desktopInstallations ?? DeepSeekDesktopDetector.DetectInstallations())
+        {
+            if (seen.Add(installation.NodeExecutablePath))
+            {
+                yield return installation.NodeExecutablePath;
             }
         }
     }

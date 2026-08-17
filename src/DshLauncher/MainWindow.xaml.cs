@@ -290,10 +290,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             : $"{_nodeRuntime.VersionText} · {GetNodeRequirementText()}";
 
     public string NodePathText => _isNodeDetectionInProgress
-        ? "正在检查 PATH 和 Windows 常见安装位置…"
+        ? "正在检查 PATH、Windows 常见安装位置和 DeepSeek Desktop…"
         : _nodeRuntime.IsAvailable
             ? (_nodeRuntime.ExecutablePath ?? "已找到 node.exe，但路径不可用")
-            : _nodeRuntime.Error ?? "未找到 PATH 中的 node.exe，也没有发现常见安装位置";
+            : _nodeRuntime.Error ?? "没有发现可用的 node.exe";
 
     public string DshStatusText => _dshRuntime.IsAvailable ? "可用" : "未安装";
 
@@ -302,7 +302,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         : new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 105, 30));
 
     public string DshVersionText => _dshRuntime.IsAvailable
-        ? $"{_dshRuntime.VersionText} · {(_dshRuntime.PackageRoot is null ? "路径未解析" : "已找到安装包")}"
+        ? $"{_dshRuntime.DisplayVersionText} · {(_dshRuntime.ExecutablePath is null ? "启动文件未解析" : "已找到启动文件")}"
         : "实例注册后由对应运行环境启动";
 
     private NodeRuntimeCompatibility GetSelectedNodeCompatibility()
@@ -358,7 +358,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         ShowNotice(runtime.IsAvailable
-            ? $"运行环境检测完成：Node.js {runtime.VersionText}（{NodeStatusText}），DSh {_dshRuntime.VersionText}。"
+            ? $"运行环境检测完成：Node.js {runtime.VersionText}（{NodeStatusText}），{_dshRuntime.DisplayVersionText}。"
             : "运行环境检测完成：当前没有找到可用的 node.exe。Launcher 本身仍可继续运行。");
     }
 
@@ -1110,7 +1110,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return new ManagerInstance(
             "runtime-template",
-            $"DSh {_dshRuntime.Version ?? "installed"}",
+            BuildDefaultFirstVersionNameForRuntime(_dshRuntime),
             packageRoot,
             InstanceKind.Installed,
             string.Empty,
@@ -1292,7 +1292,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 : _nodeRuntime.Error ?? "未安装";
             dshStatus.Text = $"DeepSeek Harness：{DshStatusText}";
             dshDetail.Text = _dshRuntime.IsAvailable
-                ? $"{_dshRuntime.VersionText} · {(_dshRuntime.ExecutablePath ?? "路径未知")}"
+                ? $"{_dshRuntime.DisplayVersionText} · {(_dshRuntime.ExecutablePath ?? "路径未知")}"
                 : _dshRuntime.Error ?? "未安装";
             // 设置页按全局环境判定就绪：DSh 声明的 engines.node 与现有 Node
             // 不兼容时保持“未就绪”，让状态和不兼容提示可见，而不是隐藏准备按钮。
@@ -2074,7 +2074,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             progressWindow.SetStatus("运行环境已就绪。");
             ShowNotice(target?.Kind == InstanceKind.Source
                 ? $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}。"
-                : $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}，DSh {_dshRuntime.VersionText}。");
+                : $"运行环境已准备完成：Node.js {_nodeRuntime.VersionText}，{_dshRuntime.DisplayVersionText}。");
             return true;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -2685,8 +2685,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RevealRuntimeAfterBootstrap(TestRuntimeKind.Dsh);
             await RefreshDshAsync();
             ShowNotice(installDirectory is null
-                ? $"DSh 安装/更新完成：{_dshRuntime.VersionText}。可以重新检测并注册实例。"
-                : $"DSh 安装/更新完成：{_dshRuntime.VersionText} · {installDirectory}。");
+                ? $"DSh 安装/更新完成：{_dshRuntime.DisplayVersionText}。可以重新检测并注册实例。"
+                : $"DSh 安装/更新完成：{_dshRuntime.DisplayVersionText} · {installDirectory}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -3038,6 +3038,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             : $"DSh {normalized}";
     }
 
+    internal static string BuildDefaultFirstVersionNameForRuntime(DshRuntimeInfo runtime)
+    {
+        var dshName = BuildDefaultFirstVersionName(runtime.Version);
+        return string.IsNullOrWhiteSpace(runtime.DeepSeekDesktopVersion)
+            ? dshName
+            : $"DeepSeek Desktop {runtime.DeepSeekDesktopVersion} · {dshName}";
+    }
+
     private async Task RunFirstVersionSetupAsync()
     {
         if (!_instancesLoadedSuccessfully)
@@ -3058,7 +3066,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var choice = FirstRunSetupWindow.Show(
             this,
             _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
-            _dshRuntime.IsAvailable ? _dshRuntime.VersionText : _dshRuntime.Error ?? "未安装",
+            _dshRuntime.IsAvailable
+                ? $"{_dshRuntime.DisplayVersionText} · 已找到启动文件"
+                : _dshRuntime.Error ?? "未安装",
             configuredDirectory,
             runtimeReady);
         if (choice is null)
@@ -3109,7 +3119,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             created = await Task.Run(() => _versionPackageService.CreateCleanVersion(
                 template,
-                BuildDefaultFirstVersionName(_dshRuntime.Version)));
+                BuildDefaultFirstVersionNameForRuntime(_dshRuntime)));
             AddCreatedVersion(created);
             ShowNotice($"首个版本已创建：{created.Name}。正在启动…");
             await StartPreparedInstanceAndOpenAsync(created);

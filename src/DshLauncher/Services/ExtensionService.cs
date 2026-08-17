@@ -739,6 +739,17 @@ public sealed class ExtensionService
         }
 
         SetInstanceEnvironment(startInfo, instance);
+        if (nodeRuntime?.IsAvailable == true
+            && !string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
+        {
+            var inheritedPath = startInfo.Environment.TryGetValue("PATH", out var configuredPath)
+                ? configuredPath ?? string.Empty
+                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            startInfo.Environment["PATH"] = DshInstanceRunner.BuildPathWithNodeDirectory(
+                nodeRuntime.ExecutablePath,
+                inheritedPath);
+        }
+
         return startInfo;
     }
 

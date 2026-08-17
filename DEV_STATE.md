@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.2.1`。当前目标是完成插件安装反馈、GitHub/monorepo 校验、主题 README 图片预览、低分辨率窗口适配，以及 Provider/快照/整合包和跨机器 Node PATH 边界修复，并发布 `v0.2.1`。
+当前工作区位于 `feature/runtime-bootstrap`，源码版本仍为 `v0.2.1`。当前目标是让只安装了 DeepSeek Desktop 的电脑自动识别 Desktop 版本、内置 Node、DSh 版本及启动文件，并直接用于首次创建版本。
 
 ## 已完成内容
 
@@ -25,6 +25,7 @@
 - 插件市场的分类保留在主浏览行，“排序”和“来源”改为带独立文字标签的次级筛选，默认项显示为“综合排序 / 全部来源”。
 - 扩展页卡顿修复：已安装插件扫描和插件市场安装状态/主题扫描移到后台线程；已安装列表与市场列表启用虚拟化（Recycling）。打开“扩展”页只读取本地市场缓存，不再每次联网刷新目录；仅在首次无缓存或用户点击“刷新目录”时才联网。缓存载入只按 identity 索引合并一次，搜索、分类和排序不再重复合并；虚拟化列表滚轮改为逐条滚动。
 - 一键运行环境准备：设置/诊断页显示 Node/DSh 状态，缺失时提供“准备运行环境（官方源 / 国内镜像）”按钮。Node 缺失时通过 NodeInstallService 下载 Windows x64 Node.js 官方 MSI 并显示真实字节/百分比进度，经系统授权（msiexec /qn）安装后重新运行 NodeRuntimeDetector，无需重启 Launcher；Node 就绪但 DSh 缺失时复用 DshInstallService 通过 npm 安装 `@deepseek-ai/dsh`（不确定进度），安装后重新运行 DshRuntimeDetector。Node 版本不兼容时只提示安装兼容版本，不自动卸载。启动实例时若运行环境缺失会弹出缺失项并询问是否准备，准备成功后继续原启动流程。Launcher 启动时不静默下载或安装任何内容。Node 检测覆盖 `<ProgramFiles>\nodejs`（官方 MSI 默认位置）。
+- DeepSeek Desktop 自动检测：扫描 `%LOCALAPPDATA%\Programs\DeepSeek Desktop`、Program Files 等标准目录，并读取 Windows 卸载注册表中的自定义安装位置；读取 Desktop 版本、内置 `runtime\node.exe`、官方 DSh package 版本和 `app\node_modules\.bin\dsh` 启动文件，命令版本与 package metadata 一致后才标记可用。首次无版本时会显示 Desktop 与 DSh 两个版本，并可直接创建独立版本，不重复安装环境。手动选择 Desktop 根目录也能解析 DSh package 和启动文件。检测、实例启动及 Plugin CLI 都会给子进程临时加入内置 Node 路径。
 - DSh 可用性检测要求命令返回可解析的语义版本、附近存在官方 `@deepseek-ai/dsh` package root，且命令版本与 `package.json` 一致；残留 shim、损坏包和版本错配不会再被报告为可用，设置页会显示修复原因。
 - 首次运行引导：实例列表成功读取且为空时，在 Node/DSh 检测结束后自动弹出引导，但不会未经确认下载。引导允许选择官方源或 npmmirror、设置 DSh 安装位置；准备成功后创建带独立 `DSH_HOME` 的首个干净版本并继续启动。取消后主启动按钮显示“准备首个版本”，可再次打开引导；实例注册读取失败时不会误当成首次运行。
 - DSh 默认 Plugin 保护：`@deepseek-ai/dsh-base` 与 `@deepseek-ai/dsh-web-app` 保留在已安装列表中，但扩展页操作按钮禁用；`ExtensionService` 同时拒绝对它们执行安装、启用、禁用、更新和删除，包含带 npm 版本后缀的 spec。
@@ -40,7 +41,7 @@
 
 - `src/DshLauncher/MainWindow.xaml(.cs)`、`ChatWindow.xaml(.cs)`、`WindowSizeHelper.cs`：主窗口导航、启动页、Provider、实例生命周期、运行环境准备、低分辨率初始尺寸约束和独立 Chat 窗口。
 - `src/DshLauncher/Services/NodeInstallService.cs`、`RuntimeProgressWindow.cs`：Node 下载（真实进度）、系统安装与准备进度窗口。
-- `src/DshLauncher/Services/DshInstallService.cs`、`DshRuntimeDetector.cs`、`NodeRuntimeDetector.cs`：DSh/Node 检测与 npm 安装。
+- `src/DshLauncher/Services/DshInstallService.cs`、`DshRuntimeDetector.cs`、`NodeRuntimeDetector.cs`、`DeepSeekDesktopDetector.cs`：DSh/Node/DeepSeek Desktop 检测与 npm 安装。
 - `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`、`PluginProgressWindow.cs`：Plugin、Skill、MCP、Agent Preset、市场入口和插件安装进度弹窗。
 - `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`、`ThemePreviewWindow.cs`：市场缓存、来源合并、搜索、排序、GitHub/monorepo 校验、安装状态和 README 图片预览。
 - `src/DshLauncher/Services/SkillMarketService.cs`、`Models/SkillMarketModels.cs`：Skill 市场缓存、GitHub 发现、SKILL.md 校验和实例导入。
@@ -53,6 +54,7 @@
 
 ## 已执行测试及结果
 
+- DeepSeek Desktop 内置运行时检测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug --no-restore` 50/50 通过；WPF Debug 构建 0 warnings、0 errors。新增覆盖 Desktop/DSh 双版本读取、内置 Node 和 `.bin` 启动文件定位、Desktop 根目录反向解析、版本命令 PATH 注入、首次版本名称，以及 Plugin CLI 继承内置 Node 路径。最终完整测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-deepseek-desktop-detection-20260817-final`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.1` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 49/49 通过；Release 单文件自包含预构建 0 warnings、0 errors，文件版本 `0.2.1.0`。新增覆盖 Node 子进程 PATH、Plugin CLI 非动态输出与 allow-build、monorepo 自动发现、GitHub 标题链接、README 图片预览、Provider 事务回滚、快照失败回滚与自动保留，以及 `.dshpack` 普通 key 不被误删。
 - Provider YAML/版本检查/启动错误摘要修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug` 49/49 通过；WPF Debug 构建 0 warnings、0 errors。新增覆盖 DSh Web UI 花括号 Provider 的编辑与跨版本同步、当前 DSh YAML 解析器验收、无效 YAML 行列报告以及启动堆栈摘要。测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-provider-yaml-health-20260817-1035`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.0` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug --no-restore` 49/49 通过；测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-v0.2.0-20260817-010249`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
@@ -91,6 +93,7 @@
 - `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；它是本地回滚点，不是可分享格式，分享继续使用脱敏 `.dshpack`。
 - 官方已安装 DSh 的 package metadata 当前未声明 `engines.node` 时，Node 兼容性只能显示“未声明/Unknown”，不会凭空套用固定版本限制。
 - 一键运行环境准备的端到端链路（真实无 Node 机器上：下载、UAC 授权、msiexec 安装、自动重检测）仍需实机人工验证。
+- DeepSeek Desktop 自定义安装位置依赖 Windows 卸载注册表；若用户手工移动安装目录或删除注册表记录，仍需在设置中手动选择该 Desktop/DSh 目录。
 - 空实例首次运行引导已通过代码测试，但官方源/国内镜像选择、DSh 自定义位置、自动创建并启动首个版本仍需人工走完整安装流程。
 - Skill 市场当前只取 GitHub 搜索前 30 个名称含 `skill` 的仓库；没有聚合社区 catalog，也没有分页。
 - 根目录 `artifacts/` 和 `src/DshLauncher/artifacts/` 是未跟踪的本地诊断/构建目录，未纳入源码提交和 Release。
@@ -115,4 +118,4 @@
 
 ## 下一步最直接的任务
 
-发布并在另一台较低分辨率、Node PATH 尚未刷新或插件仓库为 monorepo 的 Windows 机器上做一次端到端实机验收。
+在图片中的另一台电脑重新打开测试版，确认首次引导显示 DeepSeek Desktop 与 DSh 版本并直接出现“创建并启动”，随后验证实例能用内置启动文件正常打开。
