@@ -8,6 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Text.RegularExpressions;
 using WpfBrush = System.Windows.Media.Brush;
 using WpfBrushes = System.Windows.Media.Brushes;
 using WpfColor = System.Windows.Media.Color;
@@ -106,6 +107,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string PageNotice { get; private set; } = string.Empty;
 
     public Visibility PageNoticeVisibility { get; private set; } = Visibility.Collapsed;
+
+    public string PageNoticeDetail { get; private set; } = string.Empty;
+
+    public Visibility PageNoticeDetailVisibility { get; private set; } = Visibility.Collapsed;
 
     public ObservableCollection<ManagerInstance> Instances { get; } = new();
 
@@ -2429,8 +2434,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, ex.Message);
-            ShowNotice($"启动 DSh 失败：{ex.Message}");
+            UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, ex.ToString());
+            ShowStartFailure(ex.ToString());
         }
         finally
         {
@@ -2571,7 +2576,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
             {
                 UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
-                ShowNotice(result.Error ?? "DSh 重启失败。");
+                ShowStartFailure(result.Error, "DSh 重启失败。");
                 return;
             }
 
@@ -3136,7 +3141,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
         {
-            ShowNotice(result.Error ?? "DSh 启动失败。");
+            ShowStartFailure(result.Error);
             return false;
         }
 
@@ -3378,7 +3383,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             if (!result.IsSuccess || result.WebUrl is null)
             {
-                ShowNotice(result.Error ?? "无法启动实例，暂时不能打开对话。");
+                ShowStartFailure(result.Error, "无法启动实例，暂时不能打开对话。");
                 return false;
             }
 
@@ -3392,8 +3397,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, ex.Message);
-            ShowNotice($"启动实例后打开对话失败：{ex.Message}");
+            UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, ex.ToString());
+            ShowStartFailure(ex.ToString(), "启动实例后打开对话失败。");
             return false;
         }
         finally
@@ -3402,12 +3407,81 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void ShowNotice(string message)
+    private void ShowNotice(string message, string? detail = null)
     {
         PageNotice = message;
         PageNoticeVisibility = Visibility.Visible;
+        PageNoticeDetail = string.IsNullOrWhiteSpace(detail) ? string.Empty : detail.Trim();
+        PageNoticeDetailVisibility = PageNoticeDetail.Length == 0
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         OnPropertyChanged(nameof(PageNotice));
         OnPropertyChanged(nameof(PageNoticeVisibility));
+        OnPropertyChanged(nameof(PageNoticeDetail));
+        OnPropertyChanged(nameof(PageNoticeDetailVisibility));
+    }
+
+    private void ShowStartFailure(string? detail, string fallback = "DSh 启动失败。")
+    {
+        var summary = FormatStartFailure(detail, fallback);
+        ShowNotice(summary, string.IsNullOrWhiteSpace(detail) ? null : detail);
+    }
+
+    internal static string FormatStartFailure(string? detail, string fallback = "DSh 启动失败。")
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+        {
+            return fallback;
+        }
+
+        var normalized = detail.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        if (normalized.Contains("settings-file: invalid document", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("BLOCK_IN_FLOW", StringComparison.Ordinal)
+            || normalized.Contains("MULTILINE_IMPLICIT_KEY", StringComparison.Ordinal)
+            || normalized.Contains("BAD_INDENT", StringComparison.Ordinal))
+        {
+            var position = Regex.Match(
+                normalized,
+                @"line\s+(?<line>\d+)\s*,\s*column\s+(?<column>\d+)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var location = position.Success
+                ? $"（第 {position.Groups["line"].Value} 行，第 {position.Groups["column"].Value} 列）"
+                : string.Empty;
+            return $"DSh 配置文件 settings.yaml 格式无效{location}。请在“版本控制 → 检查版本”查看。";
+        }
+
+        var firstLine = normalized
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line => !line.StartsWith("at ", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(firstLine))
+        {
+            return fallback;
+        }
+
+        firstLine = Regex.Replace(firstLine, "\\x1B\\[[0-9;]*[A-Za-z]", string.Empty);
+        if (firstLine.Length > 180)
+        {
+            firstLine = firstLine[..177] + "…";
+        }
+
+        return firstLine.StartsWith("DSh", StringComparison.OrdinalIgnoreCase)
+            ? firstLine
+            : $"{fallback.TrimEnd('。')}：{firstLine}";
+    }
+
+    private void ViewNoticeDetail_Click(object sender, RoutedEventArgs e)
+    {
+        if (PageNoticeDetail.Length == 0)
+        {
+            return;
+        }
+
+        System.Windows.MessageBox.Show(
+            this,
+            PageNoticeDetail,
+            "启动详情",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     private void OnPropertyChanged(string propertyName)

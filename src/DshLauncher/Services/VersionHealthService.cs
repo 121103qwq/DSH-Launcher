@@ -10,13 +10,16 @@ public sealed class VersionHealthService
     private const long MaximumCredentialsSize = 1024 * 1024;
     private readonly VersionSettingsService _settingsService;
     private readonly ModelService _modelService;
+    private readonly DshSettingsYamlValidator _yamlValidator;
 
     public VersionHealthService(
         VersionSettingsService? settingsService = null,
-        ModelService? modelService = null)
+        ModelService? modelService = null,
+        DshSettingsYamlValidator? yamlValidator = null)
     {
         _settingsService = settingsService ?? new VersionSettingsService();
         _modelService = modelService ?? new ModelService();
+        _yamlValidator = yamlValidator ?? new DshSettingsYamlValidator();
     }
 
     public VersionHealthReport Inspect(
@@ -31,7 +34,7 @@ public sealed class VersionHealthService
         InspectHome(instance, items);
         InspectRuntime(instance, detectedDshRuntime, items);
         InspectNode(instance, nodeRuntime, detectedDshRuntime.NodeEngine, items);
-        InspectConfiguration(instance, items);
+        InspectConfiguration(instance, nodeRuntime, detectedDshRuntime, items);
         InspectRuntimeRecord(instance, isActuallyRunning, items);
 
         return new VersionHealthReport(instance.Id, DateTimeOffset.UtcNow, items);
@@ -196,7 +199,11 @@ public sealed class VersionHealthService
             detail));
     }
 
-    private void InspectConfiguration(ManagerInstance instance, ICollection<VersionHealthItem> items)
+    private void InspectConfiguration(
+        ManagerInstance instance,
+        NodeRuntimeInfo nodeRuntime,
+        DshRuntimeInfo detectedDshRuntime,
+        ICollection<VersionHealthItem> items)
     {
         var problems = new List<string>();
         try
@@ -208,13 +215,21 @@ public sealed class VersionHealthService
             problems.Add($"版本设置损坏：{ex.Message}");
         }
 
-        try
+        var yamlValidation = _yamlValidator.Validate(instance, nodeRuntime, detectedDshRuntime);
+        if (!yamlValidation.IsValid)
         {
-            _ = _modelService.Read(instance);
+            problems.Add(yamlValidation.Error ?? "settings.yaml 校验失败。 ");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        else
         {
-            problems.Add($"Provider 配置无法读取：{ex.Message}");
+            try
+            {
+                _ = _modelService.Read(instance);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                problems.Add($"Provider 配置无法读取：{ex.Message}");
+            }
         }
 
         ValidateJson(Path.Combine(instance.DshHome, ".dsh-launcher", "providers.json"), "Provider 状态", problems);

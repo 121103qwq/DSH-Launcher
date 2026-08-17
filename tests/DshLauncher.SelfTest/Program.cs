@@ -862,6 +862,17 @@ static Task TestStartFlowDecisions()
         "新装 DSh 声明的 engine 与现有 Node 不兼容时全局环境不能判定就绪。");
     Assert(!MainWindow.IsGlobalRuntimeReady(NodeRuntimeInfo.Missing(), null),
         "Node 缺失时全局环境不能判定就绪。");
+
+    var yamlFailure = "DSh 进程启动后提前退出。\nsettings-file: invalid document at C:\\instance\\settings.yaml: BLOCK_IN_FLOW at line 7, column 7\n    at file:///runtime/index.js:10:2";
+    var yamlSummary = MainWindow.FormatStartFailure(yamlFailure);
+    Assert(yamlSummary.Contains("settings.yaml 格式无效", StringComparison.Ordinal)
+        && yamlSummary.Contains("第 7 行，第 7 列", StringComparison.Ordinal)
+        && !yamlSummary.Contains("file:///", StringComparison.Ordinal),
+        "启动页应把 YAML 堆栈缩成可读摘要，并保留错误位置。 ");
+    var genericSummary = MainWindow.FormatStartFailure(
+        "spawn failed because the configured command exited\n    at file:///runtime/index.js:10:2");
+    Assert(genericSummary.Length < 220 && !genericSummary.Contains("file:///", StringComparison.Ordinal),
+        "普通启动错误也不能把完整堆栈铺在启动页。 ");
     return Task.CompletedTask;
 }
 
@@ -2038,7 +2049,7 @@ static byte[] CreateSkillMarketArchive()
     return stream.ToArray();
 }
 
-static Task TestVersionHealthInspectionAndRepair()
+static async Task TestVersionHealthInspectionAndRepair()
 {
     using var temporary = new TestDirectory();
     var packageRoot = Path.Combine(temporary.Path, "runtime", "node_modules", "@deepseek-ai", "dsh");
@@ -2075,7 +2086,34 @@ static Task TestVersionHealthInspectionAndRepair()
         && string.Equals(repaired.Instance.DshExecutablePath, executable, StringComparison.OrdinalIgnoreCase),
         "自动修复应把失效 Installed 版本重新绑定到已验证的 DSh runtime。 ");
     Assert(repaired.Actions.Count == 3, "修复结果应逐项说明实际执行的动作。 ");
-    return Task.CompletedTask;
+
+    var yamlModuleDirectory = Path.Combine(packageRoot, "node_modules", "yaml", "dist");
+    Directory.CreateDirectory(yamlModuleDirectory);
+    File.WriteAllText(
+        Path.Combine(yamlModuleDirectory, "index.js"),
+        "exports.parseDocument = text => ({ errors: text.includes('    {\\n    gateway:') ? [{ code: 'BLOCK_IN_FLOW', linePos: [{ line: 7, col: 7 }] }] : [], toJS: () => ({}) });\n",
+        new UTF8Encoding(false));
+    var detectedNode = await new NodeRuntimeDetector().DetectAsync();
+    Assert(detectedNode.IsAvailable && File.Exists(detectedNode.ExecutablePath),
+        "版本 YAML 校验测试需要当前机器上已安装的 Node.js。 ");
+    File.WriteAllText(
+        Path.Combine(repaired.Instance.DshHome, "settings.yaml"),
+        "llm-pi-ai:\n  providers:\n    {\n    gateway:\n      api: openai-completions\n    }\n",
+        new UTF8Encoding(false));
+    var invalidReport = service.Inspect(repaired.Instance, detectedNode, detected, isActuallyRunning: false);
+    var invalidConfiguration = invalidReport.Items.Single(item => item.Id == "configuration");
+    Assert(invalidConfiguration.State == VersionHealthState.Error
+        && invalidConfiguration.Detail.Contains("BLOCK_IN_FLOW", StringComparison.Ordinal)
+        && invalidConfiguration.Detail.Contains("第 7 行第 7 列", StringComparison.Ordinal),
+        "版本检查必须调用 DSh YAML 解析器，并显示不含配置内容的错误位置。 ");
+
+    File.WriteAllText(
+        Path.Combine(repaired.Instance.DshHome, "settings.yaml"),
+        "llm-pi-ai:\n  providers:\n    {\n      gateway:\n        {\n          api: openai-completions\n        }\n    }\n",
+        new UTF8Encoding(false));
+    var validReport = service.Inspect(repaired.Instance, detectedNode, detected, isActuallyRunning: false);
+    Assert(validReport.Items.Single(item => item.Id == "configuration").State == VersionHealthState.Healthy,
+        "DSh Web UI 的合法花括号 YAML 不能被版本检查误报。 ");
 }
 
 static Task TestEncryptedVersionSnapshotRollback()
@@ -2414,13 +2452,33 @@ static async Task TestModelSettingsRoundTrip()
         Path.Combine(officialHome, "settings.yaml"),
         "llm-pi-ai:\n  providers:\n    {\n      ark:\n        {\n          apiKeyEnv: ARK_API_KEY,\n          api: openai-completions,\n          baseURL: https://ark.example/v3,\n          models: [{ id: doubao-pro, name: Doubao Pro }]\n        }\n    }\n",
         new UTF8Encoding(false));
-    var officialProvider = service.Read(CreateTestInstance("model-official", root, officialHome))
+    var officialInstance = CreateTestInstance("model-official", root, officialHome);
+    var officialProvider = service.Read(officialInstance)
         .Single(provider => provider.SettingsNamespace == "llm-pi-ai");
     Assert(officialProvider.Provider == "ark"
         && officialProvider.ApiKeyEnvironment == "ARK_API_KEY"
         && officialProvider.BaseUrl == "https://ark.example/v3"
         && officialProvider.Models.SequenceEqual(new[] { "doubao-pro" }),
         "模型读取必须兼容 DSh Web UI 写入的花括号映射、尾逗号和内联模型目录。 ");
+    await service.SaveOpenAiCompatibleAsync(
+        officialInstance,
+        "gateway",
+        "GATEWAY_KEY",
+        "https://gateway.example/v1",
+        new[] { "gateway-model" });
+    var normalizedOfficial = File.ReadAllText(Path.Combine(officialHome, "settings.yaml"));
+    Assert(!normalizedOfficial.Split('\n').Any(line => line.Trim().TrimEnd(',') is "{" or "}"),
+        "编辑 DSh Web UI 的花括号 Provider 配置前必须转换为块级 YAML，不能混写两种格式。 ");
+    Assert(service.Read(officialInstance).Count(provider => provider.SettingsNamespace == "llm-pi-ai") == 2,
+        "转换花括号 Provider 配置后必须同时保留原 Provider 和新增 Provider。 ");
+    var actualNode = await new NodeRuntimeDetector().DetectAsync();
+    var actualDsh = await new DshRuntimeDetector().DetectAsync();
+    if (actualNode.IsAvailable && actualDsh.IsAvailable)
+    {
+        var yamlValidation = new DshSettingsYamlValidator().Validate(officialInstance, actualNode, actualDsh);
+        Assert(yamlValidation is { WasChecked: true, IsValid: true },
+            yamlValidation.Error ?? "Provider 写入结果必须通过当前 DSh Runtime 的 YAML 解析器。 ");
+    }
 
     var skeletonHome = Path.Combine(temporary.Path, "skeleton-home");
     Directory.CreateDirectory(skeletonHome);
@@ -2528,6 +2586,10 @@ static Task TestModelProviderSynchronization()
         "https://independent.example/v1",
         new[] { "independent-model" }).GetAwaiter().GetResult();
     File.WriteAllText(
+        Path.Combine(first.DshHome, "settings.yaml"),
+        "unrelated:\n  keep: true\nllm-pi-ai:\n  providers:\n    {\n      ark:\n        {\n          apiKeyEnv: ARK_API_KEY,\n          api: openai-completions,\n          baseURL: https://ark.example/v3,\n          models: [{ id: doubao-pro, name: Doubao Pro }]\n        }\n    }\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(
         Path.Combine(first.DshHome, ".credentials.yaml"),
         "FIRST_KEY: old-first-credential\n",
         new UTF8Encoding(false));
@@ -2562,6 +2624,10 @@ static Task TestModelProviderSynchronization()
         && gateway.Models.SequenceEqual(new[] { "second-model" }), "同步后应保留最新 Provider 的地址和模型列表。 ");
     Assert(!synchronized.Any(provider => provider.Configured && provider.SettingsNamespace == "llm-deepseek"), "同步 Provider 不能保留源版本已经不存在的 DeepSeek 配置。 ");
     Assert(!states.IsEnabled(first, "gateway"), "同步后应复制 Provider 的禁用状态。 ");
+    var synchronizedDocument = File.ReadAllText(Path.Combine(first.DshHome, "settings.yaml"));
+    Assert(synchronizedDocument.Contains("unrelated:", StringComparison.Ordinal)
+        && !synchronizedDocument.Split('\n').Any(line => line.Trim().TrimEnd(',') is "{" or "}"),
+        "Provider 同步必须保留无关顶层设置，并把 DSh Web UI 花括号映射整体替换为有效块级 YAML。 ");
     Assert(File.ReadAllText(Path.Combine(first.DshHome, ".credentials.yaml"), Encoding.UTF8)
             == File.ReadAllText(Path.Combine(second.DshHome, ".credentials.yaml"), Encoding.UTF8),
         "同步 Provider 时必须同步官方 .credentials.yaml 凭据存储。 ");

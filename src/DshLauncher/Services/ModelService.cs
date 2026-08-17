@@ -131,27 +131,7 @@ public sealed class ModelService
         var sourceCompatible = sourceProviders
             .Where(provider => string.Equals(provider.SettingsNamespace, "llm-pi-ai", StringComparison.Ordinal))
             .ToDictionary(provider => provider.Provider, StringComparer.Ordinal);
-        var targetCompatible = Read(target)
-            .Where(provider => string.Equals(provider.SettingsNamespace, "llm-pi-ai", StringComparison.Ordinal))
-            .Select(provider => provider.Provider)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        foreach (var provider in sourceCompatible.Values)
-        {
-            SaveOpenAiCompatibleCore(
-                target,
-                provider.Provider,
-                provider.DisplayName,
-                provider.ApiKeyEnvironment,
-                provider.BaseUrl,
-                provider.Models);
-        }
-
-        foreach (var provider in targetCompatible.Where(provider => !sourceCompatible.ContainsKey(provider)))
-        {
-            RemoveNestedProvider(GetSettingsPath(target), "llm-pi-ai", provider);
-        }
+        ReplaceOpenAiProviders(GetSettingsPath(target), sourceCompatible.Values);
     }
 
     private void EnsureStopped(ManagerInstance instance)
@@ -258,6 +238,8 @@ public sealed class ModelService
             return;
         }
 
+        NormalizeNestedProviderMapping(section, providersStart);
+
         var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
         var providerStart = FindProviderStart(section, providersStart + 1, providersEnd, provider);
         if (providerStart < 0)
@@ -267,6 +249,58 @@ public sealed class ModelService
 
         var providerEnd = FindProviderEnd(section, providerStart, providersEnd);
         section.RemoveRange(providerStart, providerEnd - providerStart);
+        existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
+        existing.InsertRange(sectionStart, section);
+        WriteSettings(path, existing);
+    }
+
+    private static void ReplaceOpenAiProviders(
+        string path,
+        IEnumerable<ModelProviderInfo> providers)
+    {
+        var existing = File.Exists(path)
+            ? File.ReadAllLines(path, Encoding.UTF8).ToList()
+            : new List<string>();
+        var rendered = providers
+            .OrderBy(provider => provider.Provider, StringComparer.Ordinal)
+            .SelectMany(provider => RenderOpenAiProvider(
+                provider.Provider,
+                provider.DisplayName,
+                provider.ApiKeyEnvironment,
+                provider.BaseUrl,
+                provider.Models))
+            .ToList();
+        var sectionStart = FindTopLevelStart(existing, "llm-pi-ai");
+        if (sectionStart < 0)
+        {
+            if (existing.Count > 0 && existing[^1].Length > 0)
+            {
+                existing.Add(string.Empty);
+            }
+
+            existing.Add("llm-pi-ai:");
+            existing.Add("  providers:");
+            existing.AddRange(rendered);
+            WriteSettings(path, existing);
+            return;
+        }
+
+        var sectionEnd = FindTopLevelEnd(existing, sectionStart);
+        var section = existing.GetRange(sectionStart, sectionEnd - sectionStart);
+        var providersStart = FindIndentedSectionStart(section, "providers", 2);
+        if (providersStart < 0)
+        {
+            section.Add("  providers:");
+            section.AddRange(rendered);
+        }
+        else
+        {
+            var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
+            section.RemoveRange(providersStart, providersEnd - providersStart);
+            section.Insert(providersStart, "  providers:");
+            section.InsertRange(providersStart + 1, rendered);
+        }
+
         existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
         existing.InsertRange(sectionStart, section);
         WriteSettings(path, existing);
@@ -322,6 +356,7 @@ public sealed class ModelService
         }
         else
         {
+            NormalizeNestedProviderMapping(section, providersStart);
             var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
             var providerStart = FindProviderStart(section, providersStart + 1, providersEnd, provider);
             if (providerStart < 0)
@@ -339,6 +374,32 @@ public sealed class ModelService
         existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
         existing.InsertRange(sectionStart, section);
         return existing;
+    }
+
+    private static void NormalizeNestedProviderMapping(List<string> section, int providersStart)
+    {
+        var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
+        var body = section
+            .Skip(providersStart + 1)
+            .Take(providersEnd - providersStart - 1)
+            .ToArray();
+        if (!body.Any(IsStandaloneMappingBrace))
+        {
+            return;
+        }
+
+        // DSh Web UI currently writes this mapping in flow style, with standalone
+        // braces and commas. Convert only the providers body to ordinary block YAML
+        // before line-based edits so the two styles can never be mixed.
+        var normalized = NormalizeMappingBraces(body);
+        section.RemoveRange(providersStart + 1, providersEnd - providersStart - 1);
+        section.InsertRange(providersStart + 1, normalized);
+    }
+
+    private static bool IsStandaloneMappingBrace(string line)
+    {
+        var trimmed = line.Trim().TrimEnd(',');
+        return trimmed is "{" or "}";
     }
 
     private static void ReplaceTopLevelSection(List<string> lines, string name, IReadOnlyList<string> replacement)
@@ -526,7 +587,13 @@ public sealed class ModelService
 
             var indentation = line.Length - line.TrimStart().Length;
             var remove = Math.Min(indentation, braceDepth * 2);
-            result.Add(line[remove..]);
+            var normalized = line[remove..].TrimEnd();
+            if (normalized.EndsWith(",", StringComparison.Ordinal))
+            {
+                normalized = normalized[..^1].TrimEnd();
+            }
+
+            result.Add(normalized);
         }
 
         return result;
