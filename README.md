@@ -11,14 +11,6 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 ![DSH Launcher 启动页](./docs/images/launcher-home.png)
 
-## 首次运行演示
-
-当检测到 Node.js 与 DeepSeek Harness 缺失时，Launcher 会先显示环境状态，再让用户选择安装来源；未确认前不会静默下载或安装。
-
-[![DSH Launcher 首次运行演示](./docs/images/dsh-launcher-first-run.gif)](./docs/video/dsh-launcher-first-run.mp4)
-
-> 点击动图查看 1080p / 60fps MP4。演示在独立数据目录中录制，没有修改系统 PATH 或正常 Launcher 工作区。
-
 ## 主要功能
 
 ### 多版本与多实例
