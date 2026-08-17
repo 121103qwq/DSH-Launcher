@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.2.4`。本轮已修复“终端手动 `dsh` 可用，但 Launcher 因父进程 PATH 过期而无法识别或启动”的问题；真实手动 DSh 已完成检测、临时注册、独立 `DSH_HOME` 启动和停止验证。
+当前工作区位于 `main`，源码版本为 `v0.2.4`。本轮已修复“终端手动 `dsh` 可用，但 Launcher 因父进程 PATH 过期而无法识别或启动”的问题；真实手动 DSh 已完成检测、临时注册、独立 `DSH_HOME` 启动和停止验证。
 
 ## 已完成内容
 
@@ -58,6 +58,7 @@
 
 ## 已执行测试及结果
 
+- `v0.2.4` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release` 52/52 通过。Windows x64 自包含单文件 `DSH Launcher.exe` 为 72,408,566 字节，文件版本 `0.2.4.0`，SHA-256 `F6D5C67488164DB21DDA28AE16FEAC4802A5B803943D6579684832DAA6C592D1`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.4-20260817-134346`，桌面同名文件夹顶层发布文件哈希一致。
 - 手动 DSh 发现与启动修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release` 52/52 通过。新增端到端测试直接检测 `D:\DevTools\Scoop\apps\nodejs-lts\current\bin\dsh.cmd`，在临时 Launcher 根目录自动注册对应 Installed 版本并创建独立 `DSH_HOME`，启动至 Web 健康检查通过后成功停止；现有用户实例注册文件未修改。Release 构建同时为 0 warnings、0 errors；Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-manual-dsh-detection-20260817-133127`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.3` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release` 51/51 通过。Computer Use 在停止的独立实例 `DSh 0.1.0-rc.6 (2)` 中通过快速模式成功安装 `dsh-at-file`，独立进度弹窗正常显示，完成后实例列表变为 3 个 Plugin；修复 identity 后发布版搜索卡片显示为“已安装 / 更新状态未知”，无效的 `github.com/@scope/package` 已不再生成。Windows x64 自包含单文件 `DSH Launcher.exe` 为 72,408,444 字节，文件版本 `0.2.3.0`，SHA-256 `DB992B693E513F9E9446FD9504ABD84AFE60086FBA0A3F8E892973DAD8C34B0D`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.3-20260817-1300`，桌面同名文件夹顶层发布文件哈希一致。
 - DSh 多安装自动注册与 GitHub 地址修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj --no-restore` 51/51 通过；WPF Debug 构建 0 warnings、0 errors。新增覆盖两个有效 DSh 同时被扫描、不同 package root 自动注册、独立 `DSH_HOME`、重复扫描去重，以及 scoped npm 包不生成 GitHub 地址且继续通过 npm registry 校验。最终测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-dsh-auto-register-github-url-final-20260817-122024`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
@@ -72,7 +73,7 @@
 - Provider 凭据、`.dshpack` 防泄漏、官方 YAML 与 DSh 可用性检测核验：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug` 46/46 通过。覆盖 `.credentials.yaml` 停止版本同步、凭据/dotenv 排除、内联密钥与 URL 凭据脱敏、恶意导入拒绝、花括号 Provider 配置、损坏命令和版本错配入口拒绝。
 - Provider 刷新并发与只读语义修复后再次运行同一自测：46/46 通过；测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-provider-refresh-20260817-000328`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `dotnet build src\DshLauncher\DshLauncher.csproj -c Debug`：0 warnings、0 errors；测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-provider-security-dsh-detection-20260816-235543`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
-- 当前 Git 分支为 `feature/runtime-bootstrap`；本地 `artifacts/` 与 `src/DshLauncher/artifacts/` 是未跟踪诊断/构建目录，不纳入源码提交或 Release。
+- 当前 Git 分支为 `main`；本地 `artifacts/` 与 `src/DshLauncher/artifacts/` 是未跟踪诊断/构建目录，不纳入源码提交或 Release。
 - `dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug`：46/46 通过；WPF XAML 编译通过，对话与备份条目新增实例名称断言；既有首次运行、默认 Plugin 保护、Skill 市场、工作区和对话恢复测试继续通过。
 - Agent/Skill 市场性能修复后再次运行同一自测：46/46 通过；实际缓存包含 234 个 Skill（约 130 KB），冷读取约 31 ms，现已移到后台线程。
 - 最新 Debug 测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-agent-performance-final-20260816-2300`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
