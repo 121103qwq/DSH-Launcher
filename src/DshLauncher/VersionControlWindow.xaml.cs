@@ -16,6 +16,14 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly Action<ManagerInstance> _versionCreated;
     private readonly Action<ManagerInstance> _versionDeleted;
     private readonly Action<ManagerInstance> _versionSelected;
+    private readonly VersionHealthService _healthService;
+    private readonly VersionSnapshotService _snapshotService;
+    private readonly Func<NodeRuntimeInfo> _nodeRuntimeProvider;
+    private readonly Func<DshRuntimeInfo> _dshRuntimeProvider;
+    private readonly Func<string, bool> _isRunning;
+    private readonly Func<ManagerInstance, ManagerInstance> _versionUpdated;
+    private readonly Action _versionContentChanged;
+    private VersionHealthReport? _healthReport;
     private bool _isBusy;
 
     public VersionControlWindow(
@@ -25,13 +33,27 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Func<ManagerInstance?> templateProvider,
         Action<ManagerInstance> versionCreated,
         Action<ManagerInstance> versionDeleted,
-        Action<ManagerInstance> versionSelected)
+        Action<ManagerInstance> versionSelected,
+        VersionHealthService healthService,
+        VersionSnapshotService snapshotService,
+        Func<NodeRuntimeInfo> nodeRuntimeProvider,
+        Func<DshRuntimeInfo> dshRuntimeProvider,
+        Func<string, bool> isRunning,
+        Func<ManagerInstance, ManagerInstance> versionUpdated,
+        Action versionContentChanged)
     {
         _packageService = packageService;
         _templateProvider = templateProvider;
         _versionCreated = versionCreated;
         _versionDeleted = versionDeleted;
         _versionSelected = versionSelected;
+        _healthService = healthService;
+        _snapshotService = snapshotService;
+        _nodeRuntimeProvider = nodeRuntimeProvider;
+        _dshRuntimeProvider = dshRuntimeProvider;
+        _isRunning = isRunning;
+        _versionUpdated = versionUpdated;
+        _versionContentChanged = versionContentChanged;
         foreach (var version in versions)
         {
             Versions.Add(version);
@@ -43,6 +65,28 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     }
 
     public ObservableCollection<ManagerInstance> Versions { get; } = new();
+
+    public ObservableCollection<VersionHealthItem> HealthItems { get; } = new();
+
+    public ObservableCollection<VersionSnapshotInfo> Snapshots { get; } = new();
+
+    private VersionSnapshotInfo? _selectedSnapshot;
+
+    public VersionSnapshotInfo? SelectedSnapshot
+    {
+        get => _selectedSnapshot;
+        set
+        {
+            if (ReferenceEquals(_selectedSnapshot, value))
+            {
+                return;
+            }
+
+            _selectedSnapshot = value;
+            OnPropertyChanged(nameof(SelectedSnapshot));
+            OnPropertyChanged(nameof(CanRollback));
+        }
+    }
 
     private ManagerInstance? _selectedVersion;
 
@@ -64,6 +108,13 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             OnPropertyChanged(nameof(CloneButtonToolTip));
             OnPropertyChanged(nameof(CanDelete));
             OnPropertyChanged(nameof(DeleteButtonToolTip));
+            _healthReport = null;
+            HealthItems.Clear();
+            OnPropertyChanged(nameof(HealthSummary));
+            OnPropertyChanged(nameof(CanCheck));
+            OnPropertyChanged(nameof(CanRepair));
+            OnPropertyChanged(nameof(CanSnapshot));
+            RefreshSnapshots();
             if (value is not null)
             {
                 _versionSelected(value);
@@ -106,6 +157,24 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
 
     public string PackageFormatText => $"当前格式：{_packageService.PackageExtension}";
 
+    public string HealthSummary => _healthReport?.Summary ?? "尚未检查当前版本。";
+
+    public bool CanCheck => !_isBusy && SelectedVersion is not null;
+
+    public bool CanRepair => !_isBusy
+        && SelectedVersion is { } version
+        && _healthReport?.RepairableCount > 0
+        && !_isRunning(version.Id)
+        && version.RuntimeOwnership != InstanceRuntimeOwnership.Attached;
+
+    public bool CanSnapshot => !_isBusy
+        && SelectedVersion is { } version
+        && !_isRunning(version.Id)
+        && version.RuntimeStatus != InstanceRuntimeStatus.Running
+        && version.RuntimeOwnership != InstanceRuntimeOwnership.Attached;
+
+    public bool CanRollback => CanSnapshot && SelectedSnapshot is not null;
+
     private void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
         if (SelectedVersion is null && Versions.Count > 0)
@@ -121,6 +190,12 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanDelete));
         OnPropertyChanged(nameof(DeleteButtonToolTip));
         OnPropertyChanged(nameof(PackageFormatText));
+        OnPropertyChanged(nameof(CanCheck));
+        OnPropertyChanged(nameof(CanRepair));
+        OnPropertyChanged(nameof(CanSnapshot));
+        OnPropertyChanged(nameof(CanRollback));
+        OnPropertyChanged(nameof(HealthSummary));
+        RefreshSnapshots();
     }
 
     private async void CreateCleanVersion_Click(object sender, RoutedEventArgs e)
@@ -301,6 +376,175 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
     }
 
+    private async void CheckVersion_Click(object sender, RoutedEventArgs e)
+    {
+        var version = SelectedVersion;
+        if (version is null || !CanCheck)
+        {
+            return;
+        }
+
+        SetBusy(true);
+        SetStatus($"正在检查“{version.Name}”…");
+        try
+        {
+            var nodeRuntime = _nodeRuntimeProvider();
+            var dshRuntime = _dshRuntimeProvider();
+            var actuallyRunning = _isRunning(version.Id);
+            var report = await Task.Run(() =>
+                _healthService.Inspect(version, nodeRuntime, dshRuntime, actuallyRunning));
+            _healthReport = report;
+            HealthItems.Clear();
+            foreach (var item in report.Items)
+            {
+                HealthItems.Add(item);
+            }
+
+            OnPropertyChanged(nameof(HealthSummary));
+            OnPropertyChanged(nameof(CanRepair));
+            SetStatus($"检查完成：{report.Summary}。 ");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"检查版本失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void RepairVersion_Click(object sender, RoutedEventArgs e)
+    {
+        var version = SelectedVersion;
+        if (version is null || !CanRepair)
+        {
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            var result = await Task.Run(() => _healthService.Repair(
+                version,
+                _dshRuntimeProvider(),
+                _isRunning(version.Id)));
+            var updated = _versionUpdated(result.Instance);
+            var index = Versions.ToList().FindIndex(item =>
+                string.Equals(item.Id, updated.Id, StringComparison.Ordinal));
+            if (index >= 0)
+            {
+                Versions[index] = updated;
+            }
+
+            SelectedVersion = updated;
+            SetStatus(result.Actions.Count == 0
+                ? "没有可自动修复的项目；其余问题需要按检查说明手动处理。"
+                : string.Join(string.Empty, result.Actions));
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"自动修复失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+
+        CheckVersion_Click(sender, e);
+    }
+
+    private async void CreateSnapshot_Click(object sender, RoutedEventArgs e)
+    {
+        var version = SelectedVersion;
+        if (version is null || !CanSnapshot)
+        {
+            SetStatus("请先停止当前版本，再创建配置快照。 ");
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            var snapshot = await Task.Run(() => _snapshotService.CreateSnapshot(version, "手动快照"));
+            RefreshSnapshots();
+            SelectedSnapshot = Snapshots.FirstOrDefault(item =>
+                string.Equals(item.FilePath, snapshot.FilePath, StringComparison.OrdinalIgnoreCase));
+            SetStatus("配置快照已创建。快照由当前 Windows 用户加密，不包含会话文件。 ");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"创建快照失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void RollbackSnapshot_Click(object sender, RoutedEventArgs e)
+    {
+        var version = SelectedVersion;
+        var snapshot = SelectedSnapshot;
+        if (version is null || snapshot is null || !CanRollback)
+        {
+            SetStatus("请先停止版本并选择一个可用快照。 ");
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"确定把“{version.Name}”的配置恢复到 {snapshot.DisplayName}？\n\n恢复前会再自动创建一个回滚点；会话文件不会改变。",
+                "确认回滚版本配置",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            var rollbackPoint = await Task.Run(() =>
+                _snapshotService.RestoreSnapshot(version, snapshot.FilePath));
+            _versionContentChanged();
+            RefreshSnapshots();
+            SetStatus($"配置已回滚；恢复前状态保存在：{rollbackPoint.DisplayName}。 ");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"回滚失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private void RefreshSnapshots()
+    {
+        Snapshots.Clear();
+        SelectedSnapshot = null;
+        if (SelectedVersion is not { } version)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var snapshot in _snapshotService.ListSnapshots(version))
+            {
+                Snapshots.Add(snapshot);
+            }
+
+            SelectedSnapshot = Snapshots.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"读取版本快照失败：{ex.Message}");
+        }
+    }
+
     private void VersionList_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (e.OriginalSource is not DependencyObject source
@@ -324,6 +568,11 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _isBusy = busy;
         OnPropertyChanged(nameof(CanClone));
         OnPropertyChanged(nameof(CloneButtonToolTip));
+        OnPropertyChanged(nameof(CanDelete));
+        OnPropertyChanged(nameof(CanCheck));
+        OnPropertyChanged(nameof(CanRepair));
+        OnPropertyChanged(nameof(CanSnapshot));
+        OnPropertyChanged(nameof(CanRollback));
     }
 
     private void SetStatus(string message) => StatusText.Text = message;

@@ -19,6 +19,8 @@ public sealed record ModelProviderSyncResult(
 /// </summary>
 public sealed class ModelProviderSyncService
 {
+    private const string CredentialsFileName = ".credentials.yaml";
+    private const long MaximumCredentialsFileBytes = 1024 * 1024;
     private readonly VersionSettingsService _settingsService;
     private readonly ModelService _modelService;
     private readonly ProviderStateService _providerStateService;
@@ -50,7 +52,7 @@ public sealed class ModelProviderSyncService
         }
 
         var configurationSource = stopped
-            .Select(version => (Version: version, Timestamp: GetSettingsTimestamp(version)))
+            .Select(version => (Version: version, Timestamp: GetProviderSnapshotTimestamp(version)))
             .Where(candidate => candidate.Timestamp is not null && HasProviderConfiguration(candidate.Version))
             .OrderByDescending(candidate => candidate.Timestamp)
             .ThenByDescending(candidate => candidate.Version.Id, StringComparer.Ordinal)
@@ -87,6 +89,7 @@ public sealed class ModelProviderSyncService
                     && !string.Equals(configurationSource.Id, target.Id, StringComparison.Ordinal))
                 {
                     _modelService.CopyProviderConfiguration(configurationSource, target);
+                    CopyCredentialStore(configurationSource, target);
                 }
 
                 if (sourceStates is not null
@@ -180,9 +183,25 @@ public sealed class ModelProviderSyncService
         || instance.RuntimeOwnership != InstanceRuntimeOwnership.None
         || _isRunning(instance.Id);
 
-    private static DateTime? GetSettingsTimestamp(ManagerInstance instance)
+    private static DateTime? GetProviderSnapshotTimestamp(ManagerInstance instance)
     {
-        var path = Path.Combine(instance.DshHome, "settings.yaml");
+        var settings = GetFileTimestamp(Path.Combine(instance.DshHome, "settings.yaml"));
+        var credentials = GetFileTimestamp(Path.Combine(instance.DshHome, CredentialsFileName));
+        return settings is null
+            ? credentials
+            : credentials is null
+                ? settings
+                : settings > credentials ? settings : credentials;
+    }
+
+    private static DateTime? GetStateTimestamp(ManagerInstance instance)
+    {
+        var path = Path.Combine(instance.DshHome, ".dsh-launcher", "providers.json");
+        return GetFileTimestamp(path);
+    }
+
+    private static DateTime? GetFileTimestamp(string path)
+    {
         try
         {
             return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
@@ -193,16 +212,59 @@ public sealed class ModelProviderSyncService
         }
     }
 
-    private static DateTime? GetStateTimestamp(ManagerInstance instance)
+    private static void CopyCredentialStore(ManagerInstance source, ManagerInstance target)
     {
-        var path = Path.Combine(instance.DshHome, ".dsh-launcher", "providers.json");
+        var sourcePath = Path.Combine(source.DshHome, CredentialsFileName);
+        if (!File.Exists(sourcePath))
+        {
+            return;
+        }
+
+        RejectCredentialLink(sourcePath);
+        var sourceInfo = new FileInfo(sourcePath);
+        if (sourceInfo.Length > MaximumCredentialsFileBytes)
+        {
+            throw new InvalidDataException("Provider 凭据文件超过 1 MiB，已拒绝同步。 ");
+        }
+
+        var targetPath = Path.Combine(target.DshHome, CredentialsFileName);
+        if (File.Exists(targetPath))
+        {
+            RejectCredentialLink(targetPath);
+        }
+
+        Directory.CreateDirectory(target.DshHome);
+        var temporary = Path.Combine(target.DshHome, $"{CredentialsFileName}.{Guid.NewGuid():N}.tmp");
         try
         {
-            return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
+            using (var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+            using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                input.CopyTo(output);
+                output.Flush(flushToDisk: true);
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            File.Move(temporary, targetPath, overwrite: true);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        finally
         {
-            return null;
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private static void RejectCredentialLink(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException("Provider 凭据文件不能是符号链接或重解析点。 ");
         }
     }
 

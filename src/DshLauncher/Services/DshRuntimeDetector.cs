@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.IO;
+using System.Text.RegularExpressions;
 using DshLauncher.Models;
 
 namespace DshLauncher.Services;
@@ -9,6 +10,9 @@ namespace DshLauncher.Services;
 public sealed class DshRuntimeDetector
 {
     private static readonly TimeSpan CandidateTimeout = TimeSpan.FromSeconds(2);
+    private static readonly Regex ReportedVersion = new(
+        @"(?<![0-9A-Za-z])v?(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?![0-9A-Za-z])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public async Task<DshRuntimeInfo> DetectAsync(CancellationToken cancellationToken = default)
     {
@@ -19,6 +23,7 @@ public sealed class DshRuntimeDetector
         string? preferredInstallDirectory,
         CancellationToken cancellationToken = default)
     {
+        var foundCandidate = false;
         foreach (var candidate in GetCandidates(preferredInstallDirectory))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -28,23 +33,32 @@ public sealed class DshRuntimeDetector
                 continue;
             }
 
-            var version = await ReadVersionAsync(candidate, cancellationToken);
-            if (version is null)
+            foundCandidate = true;
+            var packageRoot = TryFindPackageRoot(candidate);
+            var packageVersion = packageRoot is null ? null : TryReadPackageVersion(packageRoot);
+            if (packageRoot is null || string.IsNullOrWhiteSpace(packageVersion))
             {
                 continue;
             }
 
-            var packageRoot = TryFindPackageRoot(candidate);
+            var reportedVersion = await ReadVersionAsync(candidate, cancellationToken);
+            if (!string.Equals(reportedVersion, packageVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             return new DshRuntimeInfo(
                 true,
                 candidate,
-                version,
+                packageVersion,
                 packageRoot,
                 null,
-                packageRoot is null ? null : TryReadNodeEngine(packageRoot));
+                TryReadNodeEngine(packageRoot));
         }
 
-        return DshRuntimeInfo.Missing("PATH 中没有可运行的 dsh.cmd 或 dsh.exe。");
+        return DshRuntimeInfo.Missing(foundCandidate
+            ? "找到了 DSh 命令，但安装包无法解析、命令不能运行，或命令版本与安装包不一致。请使用“准备运行环境”修复。"
+            : "PATH 和所选安装位置中没有可运行的 dsh.cmd 或 dsh.exe。");
     }
 
     public static string? TryFindPackageRoot(string executablePath)
@@ -379,10 +393,8 @@ public sealed class DshRuntimeDetector
             }
 
             var output = outputTask.Result.Trim();
-            return output
-                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(static line => line.Trim())
-                .FirstOrDefault(static line => line.Length > 0);
+            var match = ReportedVersion.Match(output);
+            return match.Success ? match.Groups["version"].Value : null;
         }
         catch (OperationCanceledException)
         {

@@ -14,11 +14,18 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan HealthRequestTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
+    private const int PortStartAttempts = 3;
 
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly Dictionary<string, RunningDshProcess> _running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, AttachedDshService> _attached = new(StringComparer.Ordinal);
+    private readonly Func<int> _portAllocator;
     private bool _disposed;
+
+    public DshInstanceRunner(Func<int>? portAllocator = null)
+    {
+        _portAllocator = portAllocator ?? AllocateFreePort;
+    }
 
     public bool IsRunning(string instanceId)
     {
@@ -141,7 +148,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     return false;
                 }
 
-                instanceLock = TryAcquireInstanceLock(instance.DshHome);
+                var lockResult = TryAcquireInstanceLock(instance.DshHome);
+                instanceLock = lockResult.Lock;
                 if (instanceLock is null)
                 {
                     return false;
@@ -264,61 +272,85 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             RemoveExited(instance.Id);
 
             InstanceLock? instanceLock = null;
-            Process? process = null;
             try
             {
-                instanceLock = TryAcquireInstanceLock(instance.DshHome);
+                var lockResult = TryAcquireInstanceLock(instance.DshHome);
+                instanceLock = lockResult.Lock;
                 if (instanceLock is null)
                 {
-                    return DshInstanceRunResult.Failure("此实例已由另一个 Launcher 进程管理，不能同时启动相同 DSH_HOME。请先停止另一处运行实例。");
+                    return DshInstanceRunResult.Failure(lockResult.IsHeld
+                        ? "此实例的 DSH_HOME 已被另一个 Launcher 或遗留 DSh 进程锁定，不能重复启动。请先在另一处停止实例；若任务栏已没有对应窗口，请结束残留进程后重试。"
+                        : $"无法建立实例启动锁：{lockResult.Error ?? "锁目录不可访问"}。请检查当前用户对 Launcher 数据目录的权限。");
                 }
 
-                var port = AllocateFreePort();
-                var webUrl = $"http://127.0.0.1:{port}/";
-                process = new Process
+                for (var attempt = 1; attempt <= PortStartAttempts; attempt++)
                 {
-                    StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint),
-                    EnableRaisingEvents = true
-                };
-                var output = new StringBuilder();
-                process.OutputDataReceived += (_, args) => AppendOutput(output, args.Data);
-                process.ErrorDataReceived += (_, args) => AppendOutput(output, args.Data);
-
-                if (!process.Start())
-                {
-                    return DshInstanceRunResult.Failure("DSh 进程无法启动。");
-                }
-
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-                var running = new RunningDshProcess(process, port, webUrl, output, instanceLock);
-                lock (_running)
-                {
-                    _running[instance.Id] = running;
-                }
-                process = null;
-                instanceLock = null;
-
-                try
-                {
-                    var health = await WaitForHealthAsync(running, cancellationToken);
-                    if (!health.IsSuccess)
+                    Process? process = null;
+                    RunningDshProcess? running = null;
+                    try
                     {
-                        await StopCoreAsync(instance.Id, running);
-                        return DshInstanceRunResult.Failure(health.Error ?? "DSh 健康检查失败。");
-                    }
+                        var port = _portAllocator();
+                        var webUrl = $"http://127.0.0.1:{port}/";
+                        process = new Process
+                        {
+                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint),
+                            EnableRaisingEvents = true
+                        };
+                        var output = new StringBuilder();
+                        process.OutputDataReceived += (_, args) => AppendOutput(output, args.Data);
+                        process.ErrorDataReceived += (_, args) => AppendOutput(output, args.Data);
 
-                    return DshInstanceRunResult.Success(running.Process.Id, port, webUrl);
+                        if (!process.Start())
+                        {
+                            return DshInstanceRunResult.Failure("DSh 进程无法启动。 ");
+                        }
+
+                        process.BeginOutputReadLine();
+                        process.BeginErrorReadLine();
+                        running = new RunningDshProcess(process, port, webUrl, output, instanceLock);
+                        lock (_running)
+                        {
+                            _running[instance.Id] = running;
+                        }
+                        process = null;
+
+                        var health = await WaitForHealthAsync(running, cancellationToken);
+                        if (health.IsSuccess)
+                        {
+                            instanceLock = null;
+                            return DshInstanceRunResult.Success(running.Process.Id, port, webUrl);
+                        }
+
+                        var retryPort = attempt < PortStartAttempts && IsPortConflict(health.Error);
+                        await StopCoreAsync(instance.Id, running, releaseInstanceLock: !retryPort);
+                        running = null;
+                        if (retryPort)
+                        {
+                            continue;
+                        }
+
+                        instanceLock = null;
+                        return DshInstanceRunResult.Failure(health.Error ?? "DSh 健康检查失败。 ");
+                    }
+                    catch
+                    {
+                        if (running is not null)
+                        {
+                            await StopCoreAsync(instance.Id, running, releaseInstanceLock: false);
+                        }
+
+                        throw;
+                    }
+                    finally
+                    {
+                        process?.Dispose();
+                    }
                 }
-                catch
-                {
-                    await StopCoreAsync(instance.Id, running);
-                    throw;
-                }
+
+                return DshInstanceRunResult.Failure("连续 3 次分配端口都发生冲突，未启动 DSh。请关闭占用本机临时端口的程序后重试。 ");
             }
             finally
             {
-                process?.Dispose();
                 instanceLock?.Dispose();
             }
         }
@@ -480,6 +512,15 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 using var response = await client.GetAsync(running.WebUrl, cancellationToken);
                 if ((int)response.StatusCode < 500)
                 {
+                    // A port can be stolen after allocation. Do not accept a
+                    // successful response from that unrelated listener while
+                    // our own DSh process is already exiting with EADDRINUSE.
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+                    if (HasExited(running.Process))
+                    {
+                        return HealthResult.Failed($"DSh 在健康检查前退出。{GetDiagnosticSuffix(running)}");
+                    }
+
                     return HealthResult.Ok();
                 }
 
@@ -522,7 +563,10 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
-    private async Task StopCoreAsync(string instanceId, RunningDshProcess running)
+    private async Task StopCoreAsync(
+        string instanceId,
+        RunningDshProcess running,
+        bool releaseInstanceLock = true)
     {
         lock (_running)
         {
@@ -553,7 +597,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
         finally
         {
-            running.InstanceLock.Dispose();
+            if (releaseInstanceLock)
+            {
+                running.InstanceLock.Dispose();
+            }
+
             running.Process.Dispose();
         }
     }
@@ -710,7 +758,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    private static InstanceLock? TryAcquireInstanceLock(string dshHome)
+    private static InstanceLockResult TryAcquireInstanceLock(string dshHome)
     {
         var normalizedHome = Path.GetFullPath(dshHome)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -732,16 +780,31 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 FileShare.None,
                 bufferSize: 1,
                 FileOptions.DeleteOnClose);
-            return new InstanceLock(stream);
+            return InstanceLockResult.Acquired(new InstanceLock(stream));
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            return null;
+            return IsLockContention(ex)
+                ? InstanceLockResult.Held(ex.Message)
+                : InstanceLockResult.Unavailable(ex.Message);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return null;
+            return InstanceLockResult.Unavailable(ex.Message);
         }
+    }
+
+    private static bool IsPortConflict(string? message) =>
+        !string.IsNullOrWhiteSpace(message)
+        && (message.Contains("EADDRINUSE", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("address already in use", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("端口已被占用", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("地址已在使用", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsLockContention(IOException exception)
+    {
+        var windowsError = exception.HResult & 0xFFFF;
+        return windowsError is 32 or 33;
     }
 
     private static bool HasExited(Process process)
@@ -806,6 +869,21 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         {
             _stream.Dispose();
         }
+    }
+
+    private sealed record InstanceLockResult(
+        InstanceLock? Lock,
+        bool IsHeld,
+        string? Error)
+    {
+        public static InstanceLockResult Acquired(InstanceLock instanceLock) =>
+            new(instanceLock, false, null);
+
+        public static InstanceLockResult Held(string error) =>
+            new(null, true, error);
+
+        public static InstanceLockResult Unavailable(string error) =>
+            new(null, false, error);
     }
 
     private sealed record HealthResult(bool IsSuccess, string? Error)

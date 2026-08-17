@@ -32,11 +32,16 @@ public sealed class ExtensionService
     private static readonly Regex SafePackageName = new("^(@[A-Za-z0-9._~-]+/)?[A-Za-z0-9._~-]+$", RegexOptions.CultureInvariant);
     private readonly Func<string, bool> _isRunning;
     private readonly SourceProjectInspector _sourceInspector;
+    private readonly VersionSnapshotService? _snapshotService;
 
-    public ExtensionService(Func<string, bool>? isRunning = null, SourceProjectInspector? sourceInspector = null)
+    public ExtensionService(
+        Func<string, bool>? isRunning = null,
+        SourceProjectInspector? sourceInspector = null,
+        VersionSnapshotService? snapshotService = null)
     {
         _isRunning = isRunning ?? (_ => false);
         _sourceInspector = sourceInspector ?? new SourceProjectInspector();
+        _snapshotService = snapshotService;
     }
 
     public string GetMcpMetadataPath(ManagerInstance instance) =>
@@ -162,6 +167,7 @@ public sealed class ExtensionService
             bundles.RemoveAt(index);
         }
 
+        _snapshotService?.CreateSnapshot(instance, $"{(enabled ? "启用" : "禁用")} Plugin：{entry.Name}");
         WriteJsonAtomically(profilePath, root);
         return Task.CompletedTask;
     }
@@ -610,6 +616,13 @@ public sealed class ExtensionService
             throw new ArgumentOutOfRangeException(nameof(action));
         }
 
+        var actionText = action switch
+        {
+            "add" => "安装",
+            "update" => "更新",
+            _ => "删除"
+        };
+        _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}");
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
         var startInfo = CreatePluginStartInfo(instance, action, packageSpec, nodeRuntime);
         pnpmEnvironment.Apply(startInfo);

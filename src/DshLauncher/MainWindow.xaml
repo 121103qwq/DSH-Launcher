@@ -157,7 +157,23 @@
                                 CornerRadius="9"
                                 Padding="14,10"
                                 Margin="0,16,0,0">
-                            <TextBlock Text="{Binding PageNotice}" Foreground="#8B5A12" TextWrapping="Wrap" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding PageNotice}"
+                                           Foreground="#8B5A12"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Center" />
+                                <Button Grid.Column="1"
+                                        Content="查看详情"
+                                        Visibility="{Binding PageNoticeDetailVisibility}"
+                                        Click="ViewNoticeDetail_Click"
+                                        Margin="12,0,0,0"
+                                        Padding="10,4"
+                                        VerticalAlignment="Center" />
+                            </Grid>
                         </Border>
 
                         <Grid x:Name="MainDashboardGrid" Margin="0,18,0,0">

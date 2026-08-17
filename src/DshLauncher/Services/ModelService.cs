@@ -13,6 +13,9 @@ namespace DshLauncher.Services;
 public sealed class ModelService
 {
     private static readonly Regex TopLevelSection = new("^(?<name>[A-Za-z0-9_-]+):\\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex InlineModelId = new(
+        @"\bid\s*:\s*(?<value>""(?:\\.|[^""\\])*""|'[^']*'|[^,\]}\s]+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly Func<string, bool> _isRunning;
 
     public ModelService(Func<string, bool>? isRunning = null)
@@ -128,27 +131,7 @@ public sealed class ModelService
         var sourceCompatible = sourceProviders
             .Where(provider => string.Equals(provider.SettingsNamespace, "llm-pi-ai", StringComparison.Ordinal))
             .ToDictionary(provider => provider.Provider, StringComparer.Ordinal);
-        var targetCompatible = Read(target)
-            .Where(provider => string.Equals(provider.SettingsNamespace, "llm-pi-ai", StringComparison.Ordinal))
-            .Select(provider => provider.Provider)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        foreach (var provider in sourceCompatible.Values)
-        {
-            SaveOpenAiCompatibleCore(
-                target,
-                provider.Provider,
-                provider.DisplayName,
-                provider.ApiKeyEnvironment,
-                provider.BaseUrl,
-                provider.Models);
-        }
-
-        foreach (var provider in targetCompatible.Where(provider => !sourceCompatible.ContainsKey(provider)))
-        {
-            RemoveNestedProvider(GetSettingsPath(target), "llm-pi-ai", provider);
-        }
+        ReplaceOpenAiProviders(GetSettingsPath(target), sourceCompatible.Values);
     }
 
     private void EnsureStopped(ManagerInstance instance)
@@ -255,6 +238,8 @@ public sealed class ModelService
             return;
         }
 
+        NormalizeNestedProviderMapping(section, providersStart);
+
         var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
         var providerStart = FindProviderStart(section, providersStart + 1, providersEnd, provider);
         if (providerStart < 0)
@@ -264,6 +249,58 @@ public sealed class ModelService
 
         var providerEnd = FindProviderEnd(section, providerStart, providersEnd);
         section.RemoveRange(providerStart, providerEnd - providerStart);
+        existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
+        existing.InsertRange(sectionStart, section);
+        WriteSettings(path, existing);
+    }
+
+    private static void ReplaceOpenAiProviders(
+        string path,
+        IEnumerable<ModelProviderInfo> providers)
+    {
+        var existing = File.Exists(path)
+            ? File.ReadAllLines(path, Encoding.UTF8).ToList()
+            : new List<string>();
+        var rendered = providers
+            .OrderBy(provider => provider.Provider, StringComparer.Ordinal)
+            .SelectMany(provider => RenderOpenAiProvider(
+                provider.Provider,
+                provider.DisplayName,
+                provider.ApiKeyEnvironment,
+                provider.BaseUrl,
+                provider.Models))
+            .ToList();
+        var sectionStart = FindTopLevelStart(existing, "llm-pi-ai");
+        if (sectionStart < 0)
+        {
+            if (existing.Count > 0 && existing[^1].Length > 0)
+            {
+                existing.Add(string.Empty);
+            }
+
+            existing.Add("llm-pi-ai:");
+            existing.Add("  providers:");
+            existing.AddRange(rendered);
+            WriteSettings(path, existing);
+            return;
+        }
+
+        var sectionEnd = FindTopLevelEnd(existing, sectionStart);
+        var section = existing.GetRange(sectionStart, sectionEnd - sectionStart);
+        var providersStart = FindIndentedSectionStart(section, "providers", 2);
+        if (providersStart < 0)
+        {
+            section.Add("  providers:");
+            section.AddRange(rendered);
+        }
+        else
+        {
+            var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
+            section.RemoveRange(providersStart, providersEnd - providersStart);
+            section.Insert(providersStart, "  providers:");
+            section.InsertRange(providersStart + 1, rendered);
+        }
+
         existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
         existing.InsertRange(sectionStart, section);
         WriteSettings(path, existing);
@@ -319,6 +356,7 @@ public sealed class ModelService
         }
         else
         {
+            NormalizeNestedProviderMapping(section, providersStart);
             var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
             var providerStart = FindProviderStart(section, providersStart + 1, providersEnd, provider);
             if (providerStart < 0)
@@ -336,6 +374,32 @@ public sealed class ModelService
         existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
         existing.InsertRange(sectionStart, section);
         return existing;
+    }
+
+    private static void NormalizeNestedProviderMapping(List<string> section, int providersStart)
+    {
+        var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
+        var body = section
+            .Skip(providersStart + 1)
+            .Take(providersEnd - providersStart - 1)
+            .ToArray();
+        if (!body.Any(IsStandaloneMappingBrace))
+        {
+            return;
+        }
+
+        // DSh Web UI currently writes this mapping in flow style, with standalone
+        // braces and commas. Convert only the providers body to ordinary block YAML
+        // before line-based edits so the two styles can never be mixed.
+        var normalized = NormalizeMappingBraces(body);
+        section.RemoveRange(providersStart + 1, providersEnd - providersStart - 1);
+        section.InsertRange(providersStart + 1, normalized);
+    }
+
+    private static bool IsStandaloneMappingBrace(string line)
+    {
+        var trimmed = line.Trim().TrimEnd(',');
+        return trimmed is "{" or "}";
     }
 
     private static void ReplaceTopLevelSection(List<string> lines, string name, IReadOnlyList<string> replacement)
@@ -499,7 +563,40 @@ public sealed class ModelService
         var start = FindTopLevelStart(lines, name);
         if (start < 0) return new List<string>();
         var end = FindTopLevelEnd(lines, start);
-        return lines.Skip(start + 1).Take(end - start - 1).ToList();
+        return NormalizeMappingBraces(lines.Skip(start + 1).Take(end - start - 1));
+    }
+
+    private static List<string> NormalizeMappingBraces(IEnumerable<string> lines)
+    {
+        var result = new List<string>();
+        var braceDepth = 0;
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed == "{")
+            {
+                braceDepth++;
+                continue;
+            }
+
+            if (trimmed.TrimEnd(',') == "}")
+            {
+                braceDepth = Math.Max(0, braceDepth - 1);
+                continue;
+            }
+
+            var indentation = line.Length - line.TrimStart().Length;
+            var remove = Math.Min(indentation, braceDepth * 2);
+            var normalized = line[remove..].TrimEnd();
+            if (normalized.EndsWith(",", StringComparison.Ordinal))
+            {
+                normalized = normalized[..^1].TrimEnd();
+            }
+
+            result.Add(normalized);
+        }
+
+        return result;
     }
 
     private static List<string> ReadNestedSection(IReadOnlyList<string> section, string parent, string child)
@@ -536,8 +633,8 @@ public sealed class ModelService
         {
             var trimmed = line.TrimStart();
             if (!trimmed.StartsWith(key + ":", StringComparison.Ordinal)) continue;
-            var value = trimmed[(key.Length + 1)..].Trim();
-            return value.Trim('"', '\'');
+            var value = trimmed[(key.Length + 1)..].Trim().TrimEnd(',').Trim();
+            return ParseYamlScalar(value);
         }
 
         return null;
@@ -548,7 +645,7 @@ public sealed class ModelService
         var modelsStart = -1;
         for (var index = 0; index < lines.Count; index++)
         {
-            if (lines[index].TrimStart().Equals("models:", StringComparison.Ordinal))
+            if (lines[index].TrimStart().StartsWith("models:", StringComparison.Ordinal))
             {
                 modelsStart = index;
                 break;
@@ -556,6 +653,17 @@ public sealed class ModelService
         }
 
         if (modelsStart < 0) return Array.Empty<string>();
+        var inlineModels = InlineModelId.Matches(lines[modelsStart])
+            .Cast<Match>()
+            .Select(match => ParseYamlScalar(match.Groups["value"].Value))
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (inlineModels.Length > 0)
+        {
+            return inlineModels;
+        }
+
         var baseIndent = lines[modelsStart].Length - lines[modelsStart].TrimStart().Length;
         var result = new List<string>();
         for (var index = modelsStart + 1; index < lines.Count; index++)
@@ -569,6 +677,29 @@ public sealed class ModelService
         }
 
         return result;
+    }
+
+    private static string ParseYamlScalar(string value)
+    {
+        var trimmed = value.Trim().TrimEnd(',').Trim();
+        if (trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"')
+        {
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<string>(trimmed) ?? string.Empty;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return trimmed[1..^1];
+            }
+        }
+
+        if (trimmed.Length >= 2 && trimmed[0] == '\'' && trimmed[^1] == '\'')
+        {
+            return trimmed[1..^1].Replace("''", "'", StringComparison.Ordinal);
+        }
+
+        return trimmed;
     }
 
     private static string NormalizeKey(string value, string label)
