@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.IO.Compression;
 using System.Text;
+using System.Text.RegularExpressions;
 using DshLauncher;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -29,6 +30,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node MSI verification and deferred cleanup", TestNodeMsiVerificationAndDeferredCleanup),
     ("Lifecycle busy guard", TestLifecycleBusyGuard),
     ("Window resize hit testing", TestWindowResizeHitTesting),
+    ("Main window code resource references", TestMainWindowCodeResourceReferences),
     ("Conversation title cache reparse rejection", TestConversationTitleCacheReparseRejection),
     ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
     ("Node engine requirement resolution", TestNodeEngineRequirementResolution),
@@ -477,6 +479,22 @@ static Task TestNodeRuntimeCompatibility()
         "package metadata 未声明 engines.node 时不能凭空添加长期硬编码限制。");
     Assert(NodeRuntimeInfo.EvaluateCompatibility(null, ">=24") == NodeRuntimeCompatibility.Missing,
         "缺少 Node.js 版本时应返回 Missing。");
+
+    var candidates = new (string Path, string Version)[]
+    {
+        ("C:\\node20\\node.exe", "20.19.0"),
+        ("C:\\node24\\node.exe", "24.10.0"),
+        ("C:\\broken\\node.exe", "not-a-version")
+    };
+    var sourceCompatible = NodeRuntimeDetector.SelectBestCandidate(candidates, "^20.0.0");
+    Assert(sourceCompatible?.Path == "C:\\node20\\node.exe",
+        "存在多个 Node.js 时应优先选择满足当前版本 engines.node 的最高版本。");
+    var officialCompatible = NodeRuntimeDetector.SelectBestCandidate(candidates, "^22.19.0 || >=24.0.0");
+    Assert(officialCompatible?.Path == "C:\\node24\\node.exe",
+        "应从多个 Node.js 中选择满足官方 DSh 要求的最高版本。");
+    var diagnosticFallback = NodeRuntimeDetector.SelectBestCandidate(candidates, ">=26.0.0");
+    Assert(diagnosticFallback?.Path == "C:\\node24\\node.exe",
+        "没有兼容版本时仍应返回最高有效版本，以便界面明确显示 Incompatible。");
     return Task.CompletedTask;
 }
 
@@ -741,6 +759,26 @@ static Task TestWindowResizeHitTesting()
     var unchanged = WindowSizeHelper.CalculateInitialSize(986, 617, 1920, 1040);
     Assert(unchanged.Width == 986 && unchanged.Height == 617,
         "屏幕空间充足时不应无故放大或改变已有窗口尺寸。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestMainWindowCodeResourceReferences()
+{
+    var appXamlPath = FindRepositoryFile("src", "DshLauncher", "App.xaml");
+    var mainWindowCodePath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml.cs");
+    var appXaml = File.ReadAllText(appXamlPath, Encoding.UTF8);
+    var mainWindowCode = File.ReadAllText(mainWindowCodePath, Encoding.UTF8);
+    var resourceKeys = Regex.Matches(appXaml, "x:Key=\\\"(?<key>[^\\\"]+)\\\"")
+        .Select(match => match.Groups["key"].Value)
+        .ToHashSet(StringComparer.Ordinal);
+    var missingKeys = Regex.Matches(mainWindowCode, "FindResource\\(\\\"(?<key>[^\\\"]+)\\\"\\)")
+        .Select(match => match.Groups["key"].Value)
+        .Where(key => !resourceKeys.Contains(key))
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
+    Assert(missingKeys.Length == 0,
+        $"MainWindow 代码引用了 App.xaml 中不存在的资源：{string.Join(", ", missingKeys)}");
     return Task.CompletedTask;
 }
 
@@ -3382,6 +3420,20 @@ static ManagerInstance CreateTestInstance(string id, string root, string home) =
     PackageManager: "npm",
     LastError: null,
     RegisteredAt: DateTimeOffset.UtcNow);
+
+static string FindRepositoryFile(params string[] relativeSegments)
+{
+    for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+    {
+        var candidate = relativeSegments.Aggregate(directory.FullName, Path.Combine);
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+    }
+
+    throw new FileNotFoundException($"无法从测试输出目录定位仓库文件：{Path.Combine(relativeSegments)}");
+}
 
 static void AssertThrows<TException>(Action action, string message)
     where TException : Exception

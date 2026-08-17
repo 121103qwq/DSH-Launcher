@@ -69,7 +69,7 @@ public sealed record NodeRuntimeInfo(
             : NodeRuntimeCompatibility.Incompatible;
     }
 
-    private static bool TryParseVersion(string? value, out Version version)
+    internal static bool TryParseVersion(string? value, out Version version)
     {
         version = new Version(0, 0);
         if (string.IsNullOrWhiteSpace(value))

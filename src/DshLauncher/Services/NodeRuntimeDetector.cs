@@ -6,11 +6,19 @@ namespace DshLauncher.Services;
 
 public sealed class NodeRuntimeDetector
 {
+    private const int MaximumConcurrentChecks = 4;
+
     public Task<NodeRuntimeInfo> DetectAsync(CancellationToken cancellationToken = default) =>
-        DetectAsync(preferredPath: null, cancellationToken);
+        DetectAsync(preferredPath: null, requiredEngine: null, cancellationToken);
+
+    public Task<NodeRuntimeInfo> DetectAsync(
+        string? preferredPath,
+        CancellationToken cancellationToken = default) =>
+        DetectAsync(preferredPath, requiredEngine: null, cancellationToken);
 
     public async Task<NodeRuntimeInfo> DetectAsync(
         string? preferredPath,
+        string? requiredEngine,
         CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(preferredPath))
@@ -26,32 +34,75 @@ public sealed class NodeRuntimeDetector
             }
         }
 
-        var available = new List<(string Path, string Version)>();
-        foreach (var candidate in GetCandidates())
+        using var gate = new SemaphoreSlim(MaximumConcurrentChecks);
+        var checks = GetCandidates()
+            .Select(candidate => InspectCandidateAsync(candidate, gate, cancellationToken))
+            .ToArray();
+        var available = (await Task.WhenAll(checks))
+            .Where(static item => item.HasValue)
+            .Select(static item => item!.Value)
+            .ToArray();
+        var best = SelectBestCandidate(available, requiredEngine);
+        if (best is { } selected)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!File.Exists(candidate))
-            {
-                continue;
-            }
-
-            var version = await ReadVersionAsync(candidate, cancellationToken);
-            if (version is not null)
-            {
-                available.Add((candidate, version));
-            }
-        }
-
-        var best = available
-            .OrderByDescending(static item => Version.TryParse(item.Version, out var parsed) ? parsed : new Version(0, 0))
-            .FirstOrDefault();
-        if (best.Path is not null)
-        {
-            return new NodeRuntimeInfo(true, best.Path, best.Version, null);
+            return new NodeRuntimeInfo(true, selected.Path, selected.Version, null);
         }
 
         return NodeRuntimeInfo.Missing("PATH、Windows 常见安装目录和 DeepSeek Desktop 中都没有可用的 node.exe。");
+    }
+
+    internal static (string Path, string Version)? SelectBestCandidate(
+        IReadOnlyList<(string Path, string Version)> available,
+        string? requiredEngine)
+    {
+        var ordered = available
+            .Where(static item => NodeRuntimeInfo.TryParseVersion(item.Version, out _))
+            .OrderByDescending(static item =>
+            {
+                NodeRuntimeInfo.TryParseVersion(item.Version, out var parsed);
+                return parsed;
+            })
+            .ToArray();
+        if (ordered.Length == 0)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(requiredEngine))
+        {
+            var compatible = ordered.FirstOrDefault(item =>
+                NodeRuntimeInfo.EvaluateCompatibility(item.Version, requiredEngine)
+                    == NodeRuntimeCompatibility.Compatible);
+            if (compatible.Path is not null)
+            {
+                return compatible;
+            }
+        }
+
+        return ordered[0];
+    }
+
+    private static async Task<(string Path, string Version)?> InspectCandidateAsync(
+        string candidate,
+        SemaphoreSlim gate,
+        CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!File.Exists(candidate))
+            {
+                return null;
+            }
+
+            var version = await ReadVersionAsync(candidate, cancellationToken);
+            return version is null ? null : (candidate, version);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private static string? NormalizePreferredPath(string path)
@@ -171,7 +222,8 @@ public sealed class NodeRuntimeDetector
                 return null;
             }
 
-            return firstLine.StartsWith('v') ? firstLine[1..] : firstLine;
+            var normalized = firstLine.StartsWith('v') ? firstLine[1..] : firstLine;
+            return NodeRuntimeInfo.TryParseVersion(normalized, out _) ? normalized : null;
         }
         catch (OperationCanceledException)
         {

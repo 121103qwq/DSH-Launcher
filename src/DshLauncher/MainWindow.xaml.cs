@@ -386,7 +386,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var preferredNodePath = GetPreferredNodePath();
             _nodeRuntime = IsRuntimeHiddenForBootstrapTest(TestRuntimeKind.Node)
                 ? NodeRuntimeInfo.Missing("隔离测试模式：已对当前 Launcher 进程隐藏本机 Node.js。")
-                : await _nodeDetector.DetectAsync(preferredNodePath, _windowCancellation.Token);
+                : await _nodeDetector.DetectAsync(
+                    preferredNodePath,
+                    GetNodeEngineRequirement(SelectedInstance),
+                    _windowCancellation.Token);
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeVersionText));
@@ -1483,7 +1486,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         var status = new TextBlock
         {
-            Foreground = (WpfBrush)FindResource("AccentBrush"),
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
             FontSize = 11,
             Margin = new Thickness(24, 12, 0, 0)
         };
