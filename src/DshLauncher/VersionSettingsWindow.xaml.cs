@@ -465,6 +465,6 @@ public partial class VersionSettingsWindow : UserControl
             return null;
         }
 
-        return _snapshotService.CreateSnapshot(_instance, reason);
+        return _snapshotService.CreateSnapshot(_instance, reason, automatic: true);
     }
 }

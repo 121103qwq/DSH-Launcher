@@ -18,6 +18,8 @@ public sealed class VersionSnapshotService
     private const int CurrentFormatVersion = 1;
     private const long MaximumFileSize = 16 * 1024 * 1024;
     private const long MaximumPayloadSize = 64 * 1024 * 1024;
+    private const int MaximumAutomaticSnapshotCount = 10;
+    private const long MaximumAutomaticSnapshotBytes = 256 * 1024 * 1024;
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("DSHSNAP1");
     private static readonly byte[] Entropy = SHA256.HashData(Encoding.UTF8.GetBytes("DSH Launcher version snapshot v1"));
     private static readonly string[] SnapshotFiles =
@@ -51,7 +53,10 @@ public sealed class VersionSnapshotService
         _isRunning = isRunning ?? (_ => false);
     }
 
-    public VersionSnapshotInfo CreateSnapshot(ManagerInstance instance, string reason)
+    public VersionSnapshotInfo CreateSnapshot(
+        ManagerInstance instance,
+        string reason,
+        bool automatic = false)
     {
         EnsureCanMutate(instance);
         EnsureSafeHome(instance);
@@ -91,7 +96,8 @@ public sealed class VersionSnapshotService
                 createdAt,
                 normalizedReason,
                 SnapshotFiles.Select(path => path.Replace('\\', '/')).ToArray(),
-                presentFiles.ToArray());
+                presentFiles.ToArray(),
+                automatic);
             var manifestEntry = archive.CreateEntry("manifest.json", CompressionLevel.Fastest);
             using var writer = new StreamWriter(manifestEntry.Open(), new UTF8Encoding(false));
             writer.Write(JsonSerializer.Serialize(manifest, JsonOptions));
@@ -105,7 +111,7 @@ public sealed class VersionSnapshotService
         var encrypted = ProtectedData.Protect(plainStream.ToArray(), Entropy, DataProtectionScope.CurrentUser);
         var directory = _paths.GetVersionSnapshotDirectory(instance.Id);
         Directory.CreateDirectory(directory);
-        var fileName = $"{createdAt:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.dshsnapshot";
+        var fileName = $"{(automatic ? "auto" : "manual")}-{createdAt:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.dshsnapshot";
         var path = Path.Combine(directory, fileName);
         var temporary = $"{path}.tmp";
         try
@@ -125,6 +131,11 @@ public sealed class VersionSnapshotService
             {
                 File.Delete(temporary);
             }
+        }
+
+        if (automatic)
+        {
+            PruneAutomaticSnapshots(directory, path);
         }
 
         return new VersionSnapshotInfo(path, createdAt, normalizedReason, new FileInfo(path).Length);
@@ -167,20 +178,91 @@ public sealed class VersionSnapshotService
         EnsureCanMutate(instance);
         EnsureSafeHome(instance);
         var snapshot = NormalizeSnapshotPath(instance, snapshotPath);
-        var rollbackPoint = CreateSnapshot(instance, "回滚前自动快照");
         using var payload = ReadSnapshot(snapshot, instance.Id);
-
-        foreach (var relativePath in payload.Manifest.ManagedFiles)
+        using var stagedTarget = StageSnapshot(instance, payload);
+        var rollbackPoint = CreateSnapshot(instance, "回滚前自动快照", automatic: true);
+        using var rollbackPayload = ReadSnapshot(rollbackPoint.FilePath, instance.Id);
+        using var stagedRollback = StageSnapshot(instance, rollbackPayload);
+        try
         {
-            if (!SnapshotFiles.Contains(relativePath, StringComparer.OrdinalIgnoreCase))
+            ApplyStagedSnapshot(instance, stagedTarget);
+        }
+        catch (Exception restoreError)
+        {
+            try
             {
-                throw new InvalidDataException($"快照包含未知的受管路径：{relativePath}");
+                ApplyStagedSnapshot(instance, stagedRollback);
+            }
+            catch (Exception rollbackError)
+            {
+                throw new IOException(
+                    $"快照恢复失败，自动恢复修改前状态时也遇到错误：{rollbackError.Message}",
+                    restoreError);
             }
 
-            var target = ResolveManagedPath(instance, relativePath);
-            RejectExistingReparsePoint(target, relativePath);
-            var entry = payload.Archive.GetEntry($"files/{relativePath.Replace('\\', '/')}");
-            if (entry is null)
+            throw;
+        }
+
+        return rollbackPoint;
+    }
+
+    private StagedSnapshot StageSnapshot(ManagerInstance instance, SnapshotPayload payload)
+    {
+        var stagingRoot = Path.Combine(
+            _paths.GetVersionSnapshotDirectory(instance.Id),
+            $".stage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stagingRoot);
+        var files = new List<StagedSnapshotFile>();
+        try
+        {
+            foreach (var relativePath in payload.Manifest.ManagedFiles)
+            {
+                if (!SnapshotFiles.Contains(relativePath, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException($"快照包含未知的受管路径：{relativePath}");
+                }
+
+                var target = ResolveManagedPath(instance, relativePath);
+                RejectExistingReparsePoint(instance.DshHome, target, relativePath);
+                var entry = payload.Archive.GetEntry($"files/{relativePath.Replace('\\', '/')}");
+                if (entry is null)
+                {
+                    files.Add(new StagedSnapshotFile(relativePath, null));
+                    continue;
+                }
+
+                if (entry.Length > MaximumFileSize)
+                {
+                    throw new InvalidDataException($"快照条目过大：{relativePath}");
+                }
+
+                var stagedPath = Path.Combine(stagingRoot, $"{files.Count:D2}.stage");
+                using (var source = entry.Open())
+                using (var output = new FileStream(stagedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    source.CopyTo(output);
+                    output.Flush(flushToDisk: true);
+                }
+
+                files.Add(new StagedSnapshotFile(relativePath, stagedPath));
+            }
+
+            return new StagedSnapshot(stagingRoot, files);
+        }
+        catch
+        {
+            DeleteStagingFiles(stagingRoot, files);
+            throw;
+        }
+    }
+
+    private static void ApplyStagedSnapshot(ManagerInstance instance, StagedSnapshot snapshot)
+    {
+        foreach (var file in snapshot.Files)
+        {
+            var target = ResolveManagedPath(instance, file.RelativePath);
+            RejectExistingReparsePoint(instance.DshHome, target, file.RelativePath);
+            if (file.StagedPath is null)
             {
                 if (File.Exists(target))
                 {
@@ -190,18 +272,18 @@ public sealed class VersionSnapshotService
                 continue;
             }
 
-            if (entry.Length > MaximumFileSize)
+            if (File.Exists(target) && FilesEqual(target, file.StagedPath))
             {
-                throw new InvalidDataException($"快照条目过大：{relativePath}");
+                continue;
             }
 
             var directory = Path.GetDirectoryName(target)
-                ?? throw new InvalidDataException($"快照目标没有父目录：{relativePath}");
+                ?? throw new InvalidDataException($"快照目标没有父目录：{file.RelativePath}");
             Directory.CreateDirectory(directory);
             var temporary = $"{target}.{Guid.NewGuid():N}.tmp";
             try
             {
-                using (var source = entry.Open())
+                using (var source = new FileStream(file.StagedPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
                     source.CopyTo(output);
@@ -218,8 +300,40 @@ public sealed class VersionSnapshotService
                 }
             }
         }
+    }
 
-        return rollbackPoint;
+    private static bool FilesEqual(string leftPath, string rightPath)
+    {
+        var leftInfo = new FileInfo(leftPath);
+        var rightInfo = new FileInfo(rightPath);
+        if (leftInfo.Length != rightInfo.Length)
+        {
+            return false;
+        }
+
+        using var left = new FileStream(leftPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var right = new FileStream(rightPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Span<byte> leftBuffer = stackalloc byte[8192];
+        Span<byte> rightBuffer = stackalloc byte[8192];
+        while (true)
+        {
+            var leftRead = left.Read(leftBuffer);
+            var rightRead = right.Read(rightBuffer);
+            if (leftRead != rightRead)
+            {
+                return false;
+            }
+
+            if (leftRead == 0)
+            {
+                return true;
+            }
+
+            if (!leftBuffer[..leftRead].SequenceEqual(rightBuffer[..rightRead]))
+            {
+                return false;
+            }
+        }
     }
 
     private SnapshotPayload ReadSnapshot(string snapshotPath, string expectedInstanceId)
@@ -331,18 +445,34 @@ public sealed class VersionSnapshotService
         return target;
     }
 
-    private static void RejectExistingReparsePoint(string path, string label)
+    private static void RejectExistingReparsePoint(string rootPath, string path, string label)
     {
-        var current = Path.GetDirectoryName(path);
-        while (!string.IsNullOrWhiteSpace(current) && Directory.Exists(current))
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
+        var current = File.Exists(path) ? Path.GetFullPath(path) : Path.GetDirectoryName(Path.GetFullPath(path));
+        while (!string.IsNullOrWhiteSpace(current))
         {
-            RejectReparsePoint(current, label);
-            current = Path.GetDirectoryName(current);
-        }
+            var relative = Path.GetRelativePath(root, current);
+            if (Path.IsPathRooted(relative)
+                || string.Equals(relative, "..", StringComparison.Ordinal)
+                || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException($"快照路径越过 DSH_HOME：{label}");
+            }
 
-        if (File.Exists(path))
-        {
-            RejectReparsePoint(path, label);
+            if (File.Exists(current) || Directory.Exists(current))
+            {
+                RejectReparsePoint(current, label);
+            }
+
+            if (string.Equals(
+                    Path.TrimEndingDirectorySeparator(current),
+                    root,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            current = Path.GetDirectoryName(current);
         }
     }
 
@@ -351,6 +481,58 @@ public sealed class VersionSnapshotService
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
         {
             throw new IOException($"{label}不能是符号链接或重解析点。 ");
+        }
+    }
+
+    private static void PruneAutomaticSnapshots(string directory, string newestPath)
+    {
+        var automatic = Directory.EnumerateFiles(directory, "auto-*.dshsnapshot", SearchOption.TopDirectoryOnly)
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .ThenByDescending(file => file.Name, StringComparer.Ordinal)
+            .ToArray();
+        var keptCount = 0;
+        long keptBytes = 0;
+        foreach (var file in automatic)
+        {
+            var isNewest = string.Equals(file.FullName, newestPath, StringComparison.OrdinalIgnoreCase);
+            var keep = isNewest
+                || (keptCount < MaximumAutomaticSnapshotCount
+                    && keptBytes + file.Length <= MaximumAutomaticSnapshotBytes);
+            if (keep)
+            {
+                keptCount++;
+                keptBytes += file.Length;
+                continue;
+            }
+
+            try
+            {
+                file.Delete();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A temporarily locked old snapshot is retried on the next
+                // automatic snapshot instead of failing the user's change.
+            }
+        }
+    }
+
+    private static void DeleteStagingFiles(
+        string stagingRoot,
+        IEnumerable<StagedSnapshotFile> files)
+    {
+        foreach (var file in files)
+        {
+            if (file.StagedPath is not null && File.Exists(file.StagedPath))
+            {
+                File.Delete(file.StagedPath);
+            }
+        }
+
+        if (Directory.Exists(stagingRoot))
+        {
+            Directory.Delete(stagingRoot, recursive: false);
         }
     }
 
@@ -368,7 +550,25 @@ public sealed class VersionSnapshotService
         DateTimeOffset CreatedAt,
         string Reason,
         IReadOnlyList<string> ManagedFiles,
-        IReadOnlyList<string> PresentFiles);
+        IReadOnlyList<string> PresentFiles,
+        bool IsAutomatic = false);
+
+    private sealed record StagedSnapshotFile(string RelativePath, string? StagedPath);
+
+    private sealed class StagedSnapshot : IDisposable
+    {
+        public StagedSnapshot(string stagingRoot, IReadOnlyList<StagedSnapshotFile> files)
+        {
+            StagingRoot = stagingRoot;
+            Files = files;
+        }
+
+        public string StagingRoot { get; }
+
+        public IReadOnlyList<StagedSnapshotFile> Files { get; }
+
+        public void Dispose() => DeleteStagingFiles(StagingRoot, Files);
+    }
 
     private sealed class SnapshotPayload : IDisposable
     {

@@ -147,3 +147,12 @@ public sealed record MarketplaceVerificationResult(
     string? PackageName,
     string? Version,
     string? InstallSpec);
+
+public sealed record ThemeReadmePreview(
+    byte[]? ImageBytes,
+    string? ImageUrl,
+    string Message)
+{
+    [JsonIgnore]
+    public bool HasImage => ImageBytes is { Length: > 0 };
+}

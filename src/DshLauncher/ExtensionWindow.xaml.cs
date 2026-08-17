@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using UserControl = System.Windows.Controls.UserControl;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -643,15 +645,24 @@ public partial class ExtensionWindow : UserControl
             return;
         }
 
+        using var operationCancellation = new CancellationTokenSource();
+        PluginProgressWindow? progressWindow = null;
         try
         {
             EnsureMarketplaceMutationAllowed();
-            BeginMarketplaceMutation(item.IsInstalled ? "正在准备更新 Plugin…" : "正在检查 Plugin…");
-            var verification = await _marketplaceService.VerifyAsync(item);
+            var initialStatus = item.IsInstalled ? "正在准备更新 Plugin…" : "正在检查 Plugin…";
+            BeginMarketplaceMutation(initialStatus);
+            progressWindow = new PluginProgressWindow(
+                Window.GetWindow(this),
+                operationCancellation,
+                item.IsInstalled ? $"更新 Plugin · {item.Name}" : $"安装 Plugin · {item.Name}",
+                initialStatus);
+            progressWindow.Show();
+            var verification = await _marketplaceService.VerifyAsync(item, operationCancellation.Token);
             if (verification.Status == MarketplaceVerificationStatus.Rejected)
             {
                 MarketplaceStatusText.Text = verification.Message;
-                System.Windows.MessageBox.Show(Window.GetWindow(this), verification.Message, "插件不能安装", MessageBoxButton.OK, MessageBoxImage.Warning);
+                progressWindow.Fail(verification.Message);
                 return;
             }
 
@@ -671,16 +682,30 @@ public partial class ExtensionWindow : UserControl
                     }
 
                     SetMarketplaceMutationText("正在更新 Plugin…");
+                    progressWindow.SetStatus("正在通过官方 DSh CLI 更新 Plugin…");
                     output = await _service.UpdatePluginAsync(
                         _instance,
                         installedEntry?.Name ?? verification.PackageName ?? item.PackageName ?? packageSpec,
-                        _nodeRuntime());
+                        _nodeRuntime(),
+                        operationCancellation.Token);
                     StatusText.Text = $"Plugin 更新完成。实例下次启动时加载；备份：{snapshot}";
                 }
                 else
                 {
                     SetMarketplaceMutationText("正在安装 Plugin…");
-                    output = await _service.InstallPluginAsync(_instance, packageSpec, _nodeRuntime());
+                    progressWindow.SetStatus("正在通过官方 DSh CLI 安装 Plugin…");
+                    output = string.IsNullOrWhiteSpace(verification.PackageName)
+                        ? await _service.InstallPluginAsync(
+                            _instance,
+                            packageSpec,
+                            _nodeRuntime(),
+                            operationCancellation.Token)
+                        : await _service.InstallPluginAsync(
+                            _instance,
+                            packageSpec,
+                            _nodeRuntime(),
+                            verification.PackageName,
+                            operationCancellation.Token);
                     StatusText.Text = $"Plugin 安装完成。实例下次启动时加载；备份：{snapshot}";
                 }
             }
@@ -693,12 +718,22 @@ public partial class ExtensionWindow : UserControl
                 ? "操作完成。"
                 : $"操作完成：{Tail(output)}";
             SetMarketplaceMutationText("操作完成，正在刷新实例内容和插件市场…");
+            progressWindow.SetStatus("Plugin 操作完成，正在刷新实例和插件市场…");
             await RefreshAsync();
             await RefreshMarketplaceAsync();
+            progressWindow.Complete(item.IsInstalled ? "Plugin 更新完成。" : "Plugin 安装完成。");
         }
         catch (Exception ex)
         {
-            ShowError(ex);
+            if (progressWindow is null)
+            {
+                ShowError(ex);
+            }
+            else
+            {
+                MarketplaceStatusText.Text = ex.Message;
+                progressWindow.Fail(ex.Message);
+            }
         }
         finally
         {
@@ -766,20 +801,31 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    private void MarketplaceThemePreview_Click(object sender, RoutedEventArgs e)
+    private async void MarketplaceThemePreview_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not MarketplaceItem item || !item.IsTheme)
+        if (_marketplaceService is null
+            || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item
+            || !item.IsTheme)
         {
             return;
         }
 
-        var message = $"{item.Name}\n\n{item.Description}\n\n来源：{item.SourceText}\n分类：主题\n状态：{item.VersionStatusText}\n{item.ThemeStatusText}";
-        System.Windows.MessageBox.Show(
-            Window.GetWindow(this),
-            message,
-            "主题预览",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        var previewWindow = new ThemePreviewWindow(Window.GetWindow(this), item);
+        previewWindow.Show();
+        try
+        {
+            var preview = await _marketplaceService.GetThemeReadmePreviewAsync(
+                item,
+                previewWindow.CancellationToken);
+            if (previewWindow.IsVisible)
+            {
+                previewWindow.SetPreview(preview);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Closing the preview cancels its network request.
+        }
     }
 
     private async void MarketplaceThemeApply_Click(object sender, RoutedEventArgs e)
@@ -910,13 +956,30 @@ public partial class ExtensionWindow : UserControl
     {
         var source = TextPromptWindow.Show(Window.GetWindow(this), "安装 Plugin", "输入 npm 包名、Git 仓库或本地路径：");
         if (string.IsNullOrWhiteSpace(source)) return;
+        using var operationCancellation = new CancellationTokenSource();
+        var progressWindow = new PluginProgressWindow(
+            Window.GetWindow(this),
+            operationCancellation,
+            "安装 Plugin",
+            "正在通过官方 DSh CLI 安装 Plugin…");
+        progressWindow.Show();
         try
         {
-            var output = await _service.InstallPluginAsync(_instance, source, _nodeRuntime());
+            var output = await _service.InstallPluginAsync(
+                _instance,
+                source,
+                _nodeRuntime(),
+                operationCancellation.Token);
             StatusText.Text = string.IsNullOrWhiteSpace(output) ? "Plugin 安装完成。" : $"Plugin 安装完成：{output}";
+            progressWindow.SetStatus("Plugin 安装完成，正在刷新当前实例…");
             await RefreshAsync();
+            progressWindow.Complete("Plugin 安装完成。");
         }
-        catch (Exception ex) { ShowError(ex); }
+        catch (Exception ex)
+        {
+            StatusText.Text = ex.Message;
+            progressWindow.Fail(ex.Message);
+        }
     }
 
     private async void ImportSkill_Click(object sender, RoutedEventArgs e)
@@ -1089,6 +1152,31 @@ public partial class ExtensionWindow : UserControl
         UpdateButton.IsEnabled = true;
         RemoveButton.IsEnabled = true;
         HintText.Text = "修改前请停止实例。Plugin 和 MCP 会在下次启动时生效。";
+    }
+
+    private void MarketplaceTitle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not MarketplaceItem item)
+        {
+            return;
+        }
+
+        var repositoryUrl = MarketplaceService.GetGitHubRepositoryUrl(item);
+        if (repositoryUrl is null)
+        {
+            MarketplaceStatusText.Text = "这个目录条目没有提供 GitHub 仓库地址。";
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(repositoryUrl) { UseShellExecute = true });
+            e.Handled = true;
+        }
+        catch (Exception ex)
+        {
+            MarketplaceStatusText.Text = $"无法打开 GitHub：{ex.Message}";
+        }
     }
 
     private void ShowError(Exception ex)

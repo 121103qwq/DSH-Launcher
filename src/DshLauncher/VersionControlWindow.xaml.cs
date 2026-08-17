@@ -89,6 +89,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     }
 
     private ManagerInstance? _selectedVersion;
+    private int _selectionRevision;
 
     public ManagerInstance? SelectedVersion
     {
@@ -101,6 +102,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             }
 
             _selectedVersion = value;
+            _selectionRevision++;
             OnPropertyChanged(nameof(SelectedVersion));
             OnPropertyChanged(nameof(SelectedVersionName));
             OnPropertyChanged(nameof(SelectedVersionDetails));
@@ -384,6 +386,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             return;
         }
 
+        var selectionRevision = _selectionRevision;
         SetBusy(true);
         SetStatus($"正在检查“{version.Name}”…");
         try
@@ -393,6 +396,13 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             var actuallyRunning = _isRunning(version.Id);
             var report = await Task.Run(() =>
                 _healthService.Inspect(version, nodeRuntime, dshRuntime, actuallyRunning));
+            if (_selectionRevision != selectionRevision
+                || !string.Equals(SelectedVersion?.Id, version.Id, StringComparison.Ordinal))
+            {
+                SetStatus("已切换版本，本次检查结果未应用。 ");
+                return;
+            }
+
             _healthReport = report;
             HealthItems.Clear();
             foreach (var item in report.Items)
@@ -406,7 +416,11 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"检查版本失败：{ex.Message}");
+            if (_selectionRevision == selectionRevision
+                && string.Equals(SelectedVersion?.Id, version.Id, StringComparison.Ordinal))
+            {
+                SetStatus($"检查版本失败：{ex.Message}");
+            }
         }
         finally
         {

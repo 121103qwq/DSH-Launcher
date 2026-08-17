@@ -550,6 +550,12 @@ static Task TestWindowResizeHitTesting()
         "底边必须返回窗口缩放命中。 ");
     Assert(MainWindow.GetResizeHitTest(width, height, 50, 40, border) == 1,
         "窗口内容区域不能被误判成缩放边缘。 ");
+    var fitted = WindowSizeHelper.CalculateInitialSize(1440, 920, 1280, 680);
+    Assert(fitted.Width <= 1280 * 0.92 && fitted.Height <= 680 * 0.90,
+        "默认窗口必须按屏幕可用区域缩小，避免标题栏跑到屏幕外。 ");
+    var unchanged = WindowSizeHelper.CalculateInitialSize(986, 617, 1920, 1040);
+    Assert(unchanged.Width == 986 && unchanged.Height == 617,
+        "屏幕空间充足时不应无故放大或改变已有窗口尺寸。 ");
     return Task.CompletedTask;
 }
 
@@ -804,6 +810,10 @@ static Task TestNodePathPropagation()
 
     Assert(MainWindow.BuildPathWithNodeDirectory(null, existing) == existing,
         "没有可用的 Node 路径时不应改动 PATH。");
+
+    var childPath = DshInstanceRunner.BuildPathWithNodeDirectory(nodeExe, existing);
+    Assert(childPath.StartsWith(@"C:\Program Files\nodejs" + Path.PathSeparator, StringComparison.OrdinalIgnoreCase),
+        "启动 DSh 子进程时必须把已检测到但不在系统 PATH 中的 Node 目录补到最前面。");
     return Task.CompletedTask;
 }
 
@@ -1556,6 +1566,7 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     var home = Path.Combine(temporary.Path, "dsh-home");
     var runtimeDirectory = Path.Combine(temporary.Path, "node-runtime");
     var marker = Path.Combine(temporary.Path, "pnpm-version.txt");
+    var argumentMarker = Path.Combine(temporary.Path, "plugin-arguments.txt");
     Directory.CreateDirectory(root);
     Directory.CreateDirectory(home);
     Directory.CreateDirectory(runtimeDirectory);
@@ -1573,6 +1584,7 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     File.WriteAllText(
         dsh,
         "@echo off\r\n"
+        + "echo %* > \"" + argumentMarker + "\"\r\n"
         + "pnpm --version > \"" + marker + "\" 2>&1\r\n"
         + "if errorlevel 1 exit /b 21\r\n"
         + "exit /b 0\r\n",
@@ -1583,7 +1595,7 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     try
     {
         Environment.SetEnvironmentVariable("PATH", Path.Combine(temporary.Path, "empty-path"));
-        await new ExtensionService().InstallPluginAsync(instance, "demo-plugin", null);
+        await new ExtensionService().InstallPluginAsync(instance, "github:example/demo-plugin", null, "demo-plugin");
     }
     finally
     {
@@ -1592,6 +1604,20 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
 
     Assert(File.Exists(marker), "Plugin CLI 应能通过 Launcher 提供的 pnpm 环境运行。 ");
     Assert(File.ReadAllText(marker).Contains("11.21.0", StringComparison.Ordinal), "Plugin CLI 应使用可用的 Corepack pnpm shim。 ");
+    var arguments = File.ReadAllText(argumentMarker);
+    Assert(arguments.Contains("--reporter=append-only", StringComparison.Ordinal), "Plugin CLI 应使用适合图形界面捕获的 pnpm 输出模式。 ");
+    Assert(arguments.Contains("--allow-build", StringComparison.Ordinal)
+        && arguments.Contains("demo-plugin", StringComparison.Ordinal),
+        "市场已校验 Plugin 应只授权该顶层包运行安装构建。 ");
+
+    var compactFailure = ExtensionService.FormatProcessOutput(
+        "Progress: resolved 1, reused 0, downloaded 0, added 0\rProgress: resolved 64, reused 0, downloaded 64, added 64\n普通输出",
+        "dsh: pnpm failed in profile directory C:\\profile\ndsh: add the exact key under allowBuilds, then re-run",
+        failure: true);
+    Assert(!compactFailure.Contains("Progress:", StringComparison.Ordinal), "Plugin 失败提示不应被 pnpm 进度刷新淹没。 ");
+    Assert(compactFailure.StartsWith("dsh: pnpm failed", StringComparison.Ordinal)
+        && compactFailure.Contains("allowBuilds", StringComparison.Ordinal),
+        "Plugin 失败提示应优先保留 DSh 给出的根因和修复建议。 ");
 }
 
 static async Task TestMarketplaceDiscoveryAndVerification()
@@ -1613,12 +1639,43 @@ static async Task TestMarketplaceDiscoveryAndVerification()
             return JsonResponse("{\"plugins\":[{\"name\":\"demo-plugin\",\"npm\":\"demo-plugin\",\"description\":\"demo\",\"category\":\"tools\"}]}");
         }
 
+        if (url.Contains("api.github.com/repos/demo/community-theme/readme", StringComparison.OrdinalIgnoreCase))
+        {
+            var content = Convert.ToBase64String(Encoding.UTF8.GetBytes("# Theme\n\n![Theme preview](docs/preview.png)"));
+            return JsonResponse($"{{\"content\":\"{content}\",\"download_url\":\"https://raw.githubusercontent.com/demo/community-theme/develop/README.md\"}}");
+        }
+
+        if (url.Contains("raw.githubusercontent.com/demo/community-theme/develop/docs/preview.png", StringComparison.OrdinalIgnoreCase))
+        {
+            var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nJ0AAAAASUVORK5CYII=");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(png)
+            };
+        }
+
+        if (url.Contains("api.github.com/repos/demo/no-preview/readme", StringComparison.OrdinalIgnoreCase))
+        {
+            var content = Convert.ToBase64String(Encoding.UTF8.GetBytes("# Theme without image"));
+            return JsonResponse($"{{\"content\":\"{content}\",\"download_url\":\"https://raw.githubusercontent.com/demo/no-preview/main/README.md\"}}");
+        }
+
         if (url.Contains("api.github.com/repos/demo/monorepo", StringComparison.OrdinalIgnoreCase))
         {
             return JsonResponse("{\"default_branch\":\"develop\"}");
         }
 
         if (url.Contains("api.github.com/repos/demo/community-theme", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"default_branch\":\"develop\"}");
+        }
+
+        if (url.Contains("api.github.com/repos/demo/autodiscovery/git/trees/develop", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"tree\":[{\"path\":\"packages/theme/package.json\",\"type\":\"blob\"},{\"path\":\"packages/library/package.json\",\"type\":\"blob\"}]}");
+        }
+
+        if (url.Contains("api.github.com/repos/demo/autodiscovery", StringComparison.OrdinalIgnoreCase))
         {
             return JsonResponse("{\"default_branch\":\"develop\"}");
         }
@@ -1632,6 +1689,16 @@ static async Task TestMarketplaceDiscoveryAndVerification()
             || url.Contains("raw.githubusercontent.com/demo/monorepo/feature/packages/theme/package.json", StringComparison.OrdinalIgnoreCase))
         {
             return JsonResponse("{\"name\":\"demo-theme\",\"version\":\"2.0.0\",\"main\":\"index.js\",\"dsh.bundle.patch\":{}}");
+        }
+
+        if (url.Contains("raw.githubusercontent.com/demo/autodiscovery/develop/packages/theme/package.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"name\":\"auto-theme\",\"version\":\"3.0.0\",\"main\":\"index.js\",\"dsh.bundle.patch\":{}}");
+        }
+
+        if (url.Contains("raw.githubusercontent.com/demo/autodiscovery/develop/packages/library/package.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse("{\"name\":\"plain-library\",\"version\":\"1.0.0\",\"main\":\"index.js\"}");
         }
 
         if (url.Contains("api.github.com", StringComparison.OrdinalIgnoreCase))
@@ -1746,6 +1813,43 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     Assert(githubDefaultBranch.Status == MarketplaceVerificationStatus.Verified
         && githubDefaultBranch.PackageName == "demo-theme",
         "GitHub 校验应读取 default_branch 并支持 monorepo #path 子目录。 ");
+
+    var githubAutoDiscovered = await service.VerifyAsync(new MarketplaceItem(
+        "github:demo/autodiscovery",
+        "auto-theme",
+        null,
+        null,
+        "theme",
+        "github:demo/autodiscovery",
+        "https://github.com/demo/autodiscovery",
+        "theme",
+        MarketplaceSourceKind.GitHubTopic,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查"));
+    Assert(githubAutoDiscovered.Status == MarketplaceVerificationStatus.Verified
+        && githubAutoDiscovered.PackageName == "auto-theme"
+        && githubAutoDiscovered.InstallSpec == "github:demo/autodiscovery#path:/packages/theme",
+        "仓库根目录没有 package.json 时，应从常见 monorepo 子目录找到真正的 DSh Plugin。 ");
+    Assert(MarketplaceService.GetGitHubRepositoryUrl(commandCatalog[0]) == "https://github.com/demo/community-theme",
+        "插件标题应能解析到对应 GitHub 仓库主页。 ");
+    var themePreview = await service.GetThemeReadmePreviewAsync(commandCatalog[0] with { IsTheme = true });
+    Assert(themePreview.HasImage
+        && themePreview.ImageUrl == "https://raw.githubusercontent.com/demo/community-theme/develop/docs/preview.png",
+        "主题预览应按需读取 GitHub README，并解析其中的相对图片地址。 ");
+    var noThemePreview = await service.GetThemeReadmePreviewAsync(commandCatalog[0] with
+    {
+        Id = "github:demo/no-preview",
+        InstallSpec = "github:demo/no-preview",
+        RepositoryUrl = "https://github.com/demo/no-preview",
+        IsTheme = true
+    });
+    Assert(!noThemePreview.HasImage
+        && noThemePreview.Message.Contains("没有图片", StringComparison.Ordinal),
+        "主题仓库 README 没有图片时必须显示明确提示。 ");
+    Assert(MarketplaceService.EnumerateReadmeImageUrls("<img src=\"https://example.com/theme.jpg\">").Single()
+        == "https://example.com/theme.jpg",
+        "主题预览应同时识别 README 中的 HTML 图片。 ");
 
     var githubExplicitBranch = await service.VerifyAsync(new MarketplaceItem(
         "github:demo/monorepo/tree/feature/packages/theme",
@@ -2158,6 +2262,32 @@ static Task TestEncryptedVersionSnapshotRollback()
         "版本快照不能包含或覆盖会话文件。 ");
     Assert(File.Exists(rollbackPoint.FilePath) && service.ListSnapshots(instance).Count == 2,
         "执行回滚前必须自动保留当前状态作为新的恢复点。 ");
+
+    File.WriteAllText(settingsPath, "current-before-failed-restore", new UTF8Encoding(false));
+    File.WriteAllText(pluginPath, "{\"dependencies\":{\"demo\":\"9.0.0\"}}", new UTF8Encoding(false));
+    using (var pluginLock = new FileStream(pluginPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+    {
+        AssertThrows<UnauthorizedAccessException>(
+            () => service.RestoreSnapshot(instance, snapshot.FilePath),
+            "快照恢复中途遇到被占用文件时必须报告失败。 ");
+    }
+
+    Assert(File.ReadAllText(settingsPath) == "current-before-failed-restore"
+        && File.ReadAllText(pluginPath).Contains("9.0.0", StringComparison.Ordinal),
+        "快照恢复失败后必须自动回到恢复操作开始前的完整状态。 ");
+
+    for (var index = 0; index < 12; index++)
+    {
+        File.WriteAllText(settingsPath, $"auto-{index}", new UTF8Encoding(false));
+        service.CreateSnapshot(instance, $"自动快照 {index}", automatic: true);
+    }
+
+    var retainedSnapshots = service.ListSnapshots(instance);
+    Assert(retainedSnapshots.Count(snapshotInfo => Path.GetFileName(snapshotInfo.FilePath)
+            .StartsWith("auto-", StringComparison.OrdinalIgnoreCase)) == 10
+        && retainedSnapshots.Any(snapshotInfo => Path.GetFileName(snapshotInfo.FilePath)
+            .StartsWith("manual-", StringComparison.OrdinalIgnoreCase)),
+        "自动快照最多保留 10 个，手动快照不能被自动清理。 ");
     return Task.CompletedTask;
 }
 
@@ -2234,7 +2364,7 @@ static Task TestVersionPackageOperations()
     Directory.CreateDirectory(skillDirectory);
     File.WriteAllText(
         Path.Combine(skillDirectory, "SKILL.md"),
-        "---\nname: code-review\ndescription: Review code\n---\napiKey: skill-secret\n",
+        "---\nname: code-review\ndescription: Review code\n---\napiKey: skill-secret\nhotkey: Ctrl+K\npublicKey: public-material\n",
         new UTF8Encoding(false));
     var presetDirectory = Path.Combine(source.DshHome, ".agent-presets", "reviewer");
     Directory.CreateDirectory(presetDirectory);
@@ -2293,7 +2423,11 @@ static Task TestVersionPackageOperations()
         var skillEntry = exported.GetEntry("dsh-home/skills/code-review/SKILL.md");
         Assert(skillEntry is not null, "整合包应包含可分享的 Skill 文件。 ");
         using var skillReader = new StreamReader(skillEntry!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        Assert(!skillReader.ReadToEnd().Contains("skill-secret", StringComparison.Ordinal), "Skill 导出不能携带敏感值。 ");
+        var safeSkill = skillReader.ReadToEnd();
+        Assert(!safeSkill.Contains("skill-secret", StringComparison.Ordinal), "Skill 导出不能携带敏感值。 ");
+        Assert(safeSkill.Contains("hotkey: Ctrl+K", StringComparison.Ordinal)
+            && safeSkill.Contains("publicKey: public-material", StringComparison.Ordinal),
+            "整合包脱敏不能误删 hotkey、publicKey 等正常配置。 ");
         Assert(exported.GetEntry("dsh-home/.agent-presets/reviewer/agent.cordis.yml") is not null,
             "整合包应包含 Agent Preset 配置。 ");
     }
@@ -2450,7 +2584,7 @@ static async Task TestModelSettingsRoundTrip()
     Directory.CreateDirectory(officialHome);
     File.WriteAllText(
         Path.Combine(officialHome, "settings.yaml"),
-        "llm-pi-ai:\n  providers:\n    {\n      ark:\n        {\n          apiKeyEnv: ARK_API_KEY,\n          api: openai-completions,\n          baseURL: https://ark.example/v3,\n          models: [{ id: doubao-pro, name: Doubao Pro }]\n        }\n    }\n",
+        "notes: |\n  {\n    \"theme\": \"dark\"\n  }\nllm-pi-ai:\n  providers:\n    {\n      ark:\n        {\n          apiKeyEnv: ARK_API_KEY,\n          api: openai-completions,\n          baseURL: https://ark.example/v3,\n          models: [{ id: doubao-pro, name: Doubao Pro }]\n        }\n    }\n",
         new UTF8Encoding(false));
     var officialInstance = CreateTestInstance("model-official", root, officialHome);
     var officialProvider = service.Read(officialInstance)
@@ -2467,8 +2601,12 @@ static async Task TestModelSettingsRoundTrip()
         "https://gateway.example/v1",
         new[] { "gateway-model" });
     var normalizedOfficial = File.ReadAllText(Path.Combine(officialHome, "settings.yaml"));
-    Assert(!normalizedOfficial.Split('\n').Any(line => line.Trim().TrimEnd(',') is "{" or "}"),
-        "编辑 DSh Web UI 的花括号 Provider 配置前必须转换为块级 YAML，不能混写两种格式。 ");
+    var standaloneBraces = normalizedOfficial.Split('\n')
+        .Count(line => line.Trim().TrimEnd(',') is "{" or "}");
+    Assert(standaloneBraces == 2
+        && normalizedOfficial.Contains("notes: |", StringComparison.Ordinal)
+        && normalizedOfficial.Contains("\"theme\": \"dark\"", StringComparison.Ordinal),
+        "编辑 DSh Web UI 的花括号 Provider 配置时只能转换结构映射，块标量中的文字花括号必须原样保留。 ");
     Assert(service.Read(officialInstance).Count(provider => provider.SettingsNamespace == "llm-pi-ai") == 2,
         "转换花括号 Provider 配置后必须同时保留原 Provider 和新增 Provider。 ");
     var actualNode = await new NodeRuntimeDetector().DetectAsync();
@@ -2611,6 +2749,9 @@ static Task TestModelProviderSynchronization()
     File.SetLastWriteTimeUtc(
         Path.Combine(second.DshHome, ".credentials.yaml"),
         DateTime.UtcNow);
+    File.SetLastWriteTimeUtc(
+        Path.Combine(first.DshHome, ".credentials.yaml"),
+        DateTime.UtcNow.AddMinutes(2));
 
     var states = new ProviderStateService();
     states.SetEnabled(second, "gateway", false);
@@ -2638,6 +2779,41 @@ static Task TestModelProviderSynchronization()
     Assert(File.ReadAllText(Path.Combine(independent.DshHome, ".credentials.yaml"), Encoding.UTF8)
             .Contains("independent-credential", StringComparison.Ordinal),
         "关闭自动同步的版本不能被其它版本覆盖凭据。 ");
+
+    models.SaveDeepSeekAsync(
+        first,
+        "FIRST_KEY",
+        "https://first-before-failure.example/v1",
+        new[] { "first-before-failure" }).GetAwaiter().GetResult();
+    models.SaveOpenAiCompatibleAsync(
+        second,
+        "gateway",
+        "SECOND_KEY",
+        "https://second-after-change.example/v1",
+        new[] { "second-after-change" }).GetAwaiter().GetResult();
+    File.SetLastWriteTimeUtc(Path.Combine(first.DshHome, "settings.yaml"), DateTime.UtcNow.AddMinutes(-2));
+    File.SetLastWriteTimeUtc(Path.Combine(second.DshHome, "settings.yaml"), DateTime.UtcNow.AddMinutes(-1));
+    var firstSettingsBeforeFailure = File.ReadAllText(Path.Combine(first.DshHome, "settings.yaml"), Encoding.UTF8);
+    var firstCredentialsBeforeFailure = File.ReadAllText(Path.Combine(first.DshHome, ".credentials.yaml"), Encoding.UTF8);
+    var failingSync = new ModelProviderSyncService(
+        settings,
+        models,
+        states,
+        isRunning: null,
+        beforeProviderFileCommit: path =>
+        {
+            if (Path.GetFileName(path).Equals(".credentials.yaml", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("模拟凭据提交失败");
+            }
+        });
+    var failedSync = failingSync.Synchronize(first, new[] { first, second });
+    Assert(failedSync.HasErrors,
+        "凭据文件提交失败时 Provider 同步必须报告失败，不能把半份配置算作成功。 ");
+
+    Assert(File.ReadAllText(Path.Combine(first.DshHome, "settings.yaml"), Encoding.UTF8) == firstSettingsBeforeFailure
+        && File.ReadAllText(Path.Combine(first.DshHome, ".credentials.yaml"), Encoding.UTF8) == firstCredentialsBeforeFailure,
+        "Provider 同步写入凭据失败时必须同时恢复 settings.yaml 和 .credentials.yaml。 ");
 
     var runningSecond = second with
     {

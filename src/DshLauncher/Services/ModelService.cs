@@ -16,6 +16,9 @@ public sealed class ModelService
     private static readonly Regex InlineModelId = new(
         @"\bid\s*:\s*(?<value>""(?:\\.|[^""\\])*""|'[^']*'|[^,\]}\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex BlockScalarIndicator = new(
+        @":\s*[>|][0-9+-]*\s*(?:#.*)?$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly Func<string, bool> _isRunning;
 
     public ModelService(Func<string, bool>? isRunning = null)
@@ -109,29 +112,41 @@ public sealed class ModelService
     /// </summary>
     public void CopyProviderConfiguration(ManagerInstance source, ManagerInstance target)
     {
+        var text = BuildProviderConfigurationText(source, target);
+        WriteSettingsText(GetSettingsPath(target), text);
+    }
+
+    public string BuildProviderConfigurationText(ManagerInstance source, ManagerInstance target)
+    {
         EnsureStopped(source);
         EnsureStopped(target);
 
+        var existing = File.Exists(GetSettingsPath(target))
+            ? File.ReadAllLines(GetSettingsPath(target), Encoding.UTF8).ToList()
+            : new List<string>();
         var sourceProviders = Read(source);
         var sourceDeepSeek = sourceProviders.FirstOrDefault(provider =>
             string.Equals(provider.SettingsNamespace, "llm-deepseek", StringComparison.Ordinal));
         if (sourceDeepSeek is { Configured: true })
         {
-            SaveDeepSeekCore(
-                target,
+            ReplaceTopLevelSection(
+                existing,
+                "llm-deepseek",
+                RenderDeepSeek(
                 sourceDeepSeek.ApiKeyEnvironment,
                 sourceDeepSeek.BaseUrl,
-                sourceDeepSeek.Models);
+                sourceDeepSeek.Models));
         }
         else
         {
-            RemoveTopLevelSection(GetSettingsPath(target), "llm-deepseek");
+            RemoveTopLevelSection(existing, "llm-deepseek");
         }
 
         var sourceCompatible = sourceProviders
             .Where(provider => string.Equals(provider.SettingsNamespace, "llm-pi-ai", StringComparison.Ordinal))
             .ToDictionary(provider => provider.Provider, StringComparer.Ordinal);
-        ReplaceOpenAiProviders(GetSettingsPath(target), sourceCompatible.Values);
+        ReplaceOpenAiProviders(existing, sourceCompatible.Values);
+        return string.Join(Environment.NewLine, existing) + Environment.NewLine;
     }
 
     private void EnsureStopped(ManagerInstance instance)
@@ -216,6 +231,18 @@ public sealed class ModelService
         WriteSettings(path, existing);
     }
 
+    private static void RemoveTopLevelSection(List<string> lines, string sectionName)
+    {
+        var start = FindTopLevelStart(lines, sectionName);
+        if (start < 0)
+        {
+            return;
+        }
+
+        var end = FindTopLevelEnd(lines, start);
+        lines.RemoveRange(start, end - start);
+    }
+
     private static void RemoveNestedProvider(string path, string sectionName, string provider)
     {
         if (!File.Exists(path))
@@ -261,6 +288,14 @@ public sealed class ModelService
         var existing = File.Exists(path)
             ? File.ReadAllLines(path, Encoding.UTF8).ToList()
             : new List<string>();
+        ReplaceOpenAiProviders(existing, providers);
+        WriteSettings(path, existing);
+    }
+
+    private static void ReplaceOpenAiProviders(
+        List<string> existing,
+        IEnumerable<ModelProviderInfo> providers)
+    {
         var rendered = providers
             .OrderBy(provider => provider.Provider, StringComparer.Ordinal)
             .SelectMany(provider => RenderOpenAiProvider(
@@ -281,7 +316,6 @@ public sealed class ModelService
             existing.Add("llm-pi-ai:");
             existing.Add("  providers:");
             existing.AddRange(rendered);
-            WriteSettings(path, existing);
             return;
         }
 
@@ -303,7 +337,6 @@ public sealed class ModelService
 
         existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
         existing.InsertRange(sectionStart, section);
-        WriteSettings(path, existing);
     }
 
     private static void WriteSettings(string path, IReadOnlyList<string> lines)
@@ -318,6 +351,26 @@ public sealed class ModelService
                 temporary,
                 string.Join(Environment.NewLine, lines) + Environment.NewLine,
                 new UTF8Encoding(false));
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private static void WriteSettingsText(string path, string text)
+    {
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("settings.yaml 没有父目录。");
+        Directory.CreateDirectory(directory);
+        var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporary, text, new UTF8Encoding(false));
             File.Move(temporary, path, overwrite: true);
         }
         finally
@@ -383,7 +436,7 @@ public sealed class ModelService
             .Skip(providersStart + 1)
             .Take(providersEnd - providersStart - 1)
             .ToArray();
-        if (!body.Any(IsStandaloneMappingBrace))
+        if (!IsFlowProviderMapping(section[providersStart], body))
         {
             return;
         }
@@ -394,6 +447,25 @@ public sealed class ModelService
         var normalized = NormalizeMappingBraces(body);
         section.RemoveRange(providersStart + 1, providersEnd - providersStart - 1);
         section.InsertRange(providersStart + 1, normalized);
+    }
+
+    private static bool IsFlowProviderMapping(string providersLine, IReadOnlyList<string> body)
+    {
+        var first = Enumerable.Range(0, body.Count)
+            .FirstOrDefault(index => !string.IsNullOrWhiteSpace(body[index]), -1);
+        var last = Enumerable.Range(0, body.Count)
+            .LastOrDefault(index => !string.IsNullOrWhiteSpace(body[index]), -1);
+        if (first < 0 || last < 0)
+        {
+            return false;
+        }
+
+        var providersIndent = providersLine.Length - providersLine.TrimStart().Length;
+        var expectedBraceIndent = providersIndent + 2;
+        return body[first].Length - body[first].TrimStart().Length == expectedBraceIndent
+            && body[last].Length - body[last].TrimStart().Length == expectedBraceIndent
+            && string.Equals(body[first].Trim().TrimEnd(','), "{", StringComparison.Ordinal)
+            && string.Equals(body[last].Trim().TrimEnd(','), "}", StringComparison.Ordinal);
     }
 
     private static bool IsStandaloneMappingBrace(string line)
@@ -570,8 +642,21 @@ public sealed class ModelService
     {
         var result = new List<string>();
         var braceDepth = 0;
+        int? blockScalarIndent = null;
         foreach (var line in lines)
         {
+            var indentation = line.Length - line.TrimStart().Length;
+            if (blockScalarIndent is not null)
+            {
+                if (string.IsNullOrWhiteSpace(line) || indentation > blockScalarIndent.Value)
+                {
+                    result.Add(RemoveStructuralIndent(line, braceDepth, trimTrailingComma: false));
+                    continue;
+                }
+
+                blockScalarIndent = null;
+            }
+
             var trimmed = line.Trim();
             if (trimmed == "{")
             {
@@ -585,18 +670,28 @@ public sealed class ModelService
                 continue;
             }
 
-            var indentation = line.Length - line.TrimStart().Length;
-            var remove = Math.Min(indentation, braceDepth * 2);
-            var normalized = line[remove..].TrimEnd();
-            if (normalized.EndsWith(",", StringComparison.Ordinal))
-            {
-                normalized = normalized[..^1].TrimEnd();
-            }
-
+            var normalized = RemoveStructuralIndent(line, braceDepth, trimTrailingComma: true);
             result.Add(normalized);
+            if (BlockScalarIndicator.IsMatch(line.TrimEnd()))
+            {
+                blockScalarIndent = indentation;
+            }
         }
 
         return result;
+    }
+
+    private static string RemoveStructuralIndent(string line, int braceDepth, bool trimTrailingComma)
+    {
+        var indentation = line.Length - line.TrimStart().Length;
+        var remove = Math.Min(indentation, braceDepth * 2);
+        var normalized = line[remove..].TrimEnd();
+        if (trimTrailingComma && normalized.EndsWith(",", StringComparison.Ordinal))
+        {
+            normalized = normalized[..^1].TrimEnd();
+        }
+
+        return normalized;
     }
 
     private static List<string> ReadNestedSection(IReadOnlyList<string> section, string parent, string child)

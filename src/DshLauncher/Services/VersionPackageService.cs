@@ -26,7 +26,7 @@ public sealed class VersionPackageService
         Converters = { new JsonStringEnumConverter() }
     };
     private static readonly Regex SensitiveInlineValue = new(
-        @"(?i)([""']?(?:[A-Za-z0-9_]*(?:api[-_]?key|token|secret|password)|credential(?:s)?|key)[""']?\s*:\s*)([""'][^""']*[""']|[^,\r\n}\]]+)",
+        @"(?<prefix>[""']?(?<key>[A-Za-z0-9_.-]+)[""']?\s*:\s*)(?<value>[""'][^""']*[""']|[^,\r\n}\]]+)",
         RegexOptions.CultureInvariant);
     private static readonly Regex SensitiveUrlUserInfo = new(
         @"(?i)(https?://)[^/\s:@]+(?::[^/\s@]*)?@",
@@ -681,7 +681,10 @@ public sealed class VersionPackageService
         }
 
         var sanitized = string.Join('\n', lines);
-        sanitized = SensitiveInlineValue.Replace(sanitized, "$1\"<redacted>\"");
+        sanitized = SensitiveInlineValue.Replace(sanitized, match =>
+            IsSensitiveKey(match.Groups["key"].Value)
+                ? $"{match.Groups["prefix"].Value}\"<redacted>\""
+                : match.Value);
         sanitized = SensitiveUrlUserInfo.Replace(sanitized, "$1");
         return SensitiveUrlQuery.Replace(sanitized, "$1<redacted>");
     }
@@ -723,11 +726,45 @@ public sealed class VersionPackageService
 
     private static bool IsSensitiveKey(string key)
     {
-        var normalized = key.Replace("-", string.Empty, StringComparison.Ordinal)
+        var normalized = key.Trim().Trim('"', '\'')
+            .Replace("-", string.Empty, StringComparison.Ordinal)
             .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(".", string.Empty, StringComparison.Ordinal)
             .ToLowerInvariant();
-        return normalized is "apikey" or "token" or "secret" or "password"
-            or "accesstoken" or "refreshtoken" or "credential" or "credentials" or "key";
+        if (normalized is "apikey" or "token" or "secret" or "password"
+            or "accesstoken" or "refreshtoken" or "idtoken" or "authtoken" or "bearertoken"
+            or "apisecret" or "clientsecret" or "privatekey" or "secretaccesskey"
+            or "credential" or "credentials" or "authorization" or "key")
+        {
+            return true;
+        }
+
+        var separated = key.Trim().Trim('"', '\'')
+            .Replace('-', '_')
+            .Replace('.', '_')
+            .ToLowerInvariant();
+        return separated.EndsWith("_api_key", StringComparison.Ordinal)
+            || separated.EndsWith("_access_token", StringComparison.Ordinal)
+            || separated.EndsWith("_refresh_token", StringComparison.Ordinal)
+            || separated.EndsWith("_client_secret", StringComparison.Ordinal)
+            || separated.EndsWith("_private_key", StringComparison.Ordinal)
+            || separated.EndsWith("_secret_access_key", StringComparison.Ordinal)
+            || separated.EndsWith("_password", StringComparison.Ordinal)
+            || separated.EndsWith("_credentials", StringComparison.Ordinal)
+            || IsUppercaseCredentialVariable(key);
+    }
+
+    private static bool IsUppercaseCredentialVariable(string key)
+    {
+        var trimmed = key.Trim().Trim('"', '\'');
+        if (trimmed.Length == 0 || trimmed.Any(character => char.IsLetter(character) && !char.IsUpper(character)))
+        {
+            return false;
+        }
+
+        return trimmed.EndsWith("_TOKEN", StringComparison.Ordinal)
+            || trimmed.EndsWith("_SECRET", StringComparison.Ordinal)
+            || trimmed.EndsWith("_PASSWORD", StringComparison.Ordinal);
     }
 
     private static void CopyDirectoryWithoutReparsePoints(string source, string target)

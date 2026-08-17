@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using DshLauncher.Models;
 
 namespace DshLauncher.Services;
@@ -19,6 +20,13 @@ public sealed class MarketplaceService
     public const string GitHubTopicUrl = "https://api.github.com/search/repositories?q=topic%3Adsh-plugin&per_page=50";
 
     private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(10);
+    private const int MaxThemePreviewBytes = 8 * 1024 * 1024;
+    private static readonly Regex MarkdownImage = new(
+        @"!\[[^\]]*\]\(\s*(?:<(?<url>[^>]+)>|(?<url>[^\s\)]+))(?:\s+[\""'][^\)]*)?\s*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex HtmlImage = new(
+        @"<img\b[^>]*?\bsrc\s*=\s*[\""'](?<url>[^\""']+)[\""'][^>]*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly string[] PluginProfileFiles =
     {
         "package.json",
@@ -36,6 +44,7 @@ public sealed class MarketplaceService
     private readonly HttpClient _httpClient;
     private readonly LauncherPaths _paths;
     private readonly IReadOnlyList<Uri> _customSources;
+    private readonly Dictionary<string, ThemeReadmePreview> _themePreviewCache = new(StringComparer.OrdinalIgnoreCase);
 
     public MarketplaceService(
         LauncherPaths? paths = null,
@@ -266,6 +275,60 @@ public sealed class MarketplaceService
 
     public static IReadOnlySet<string> GetPluginIdentities(MarketplaceItem item) =>
         GetPluginIdentities(item.PackageName, item.Name, item.InstallSpec, item.RepositoryUrl);
+
+    public static string? GetGitHubRepositoryUrl(MarketplaceItem item)
+    {
+        foreach (var value in new[] { item.RepositoryUrl, item.InstallSpec })
+        {
+            if (!string.IsNullOrWhiteSpace(value)
+                && TryGetGitHubRepository(value, out var repository))
+            {
+                return $"https://github.com/{repository.Owner}/{repository.Name}";
+            }
+        }
+
+        return null;
+    }
+
+    public async Task<ThemeReadmePreview> GetThemeReadmePreviewAsync(
+        MarketplaceItem item,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetGitHubRepository(item.RepositoryUrl ?? item.InstallSpec, out var repository))
+        {
+            return new ThemeReadmePreview(null, null, "这个主题条目没有可读取的 GitHub 仓库。");
+        }
+
+        var cacheKey = $"{repository.Owner}/{repository.Name}";
+        lock (_themePreviewCache)
+        {
+            if (_themePreviewCache.TryGetValue(cacheKey, out var cached))
+            {
+                return cached;
+            }
+        }
+
+        ThemeReadmePreview preview;
+        try
+        {
+            preview = await ReadThemePreviewAsync(repository, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            preview = new ThemeReadmePreview(null, null, "读取 GitHub README 超时，请稍后重试。");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or FormatException or InvalidDataException)
+        {
+            preview = new ThemeReadmePreview(null, null, $"无法读取 GitHub README：{ex.Message}");
+        }
+
+        lock (_themePreviewCache)
+        {
+            _themePreviewCache[cacheKey] = preview;
+        }
+
+        return preview;
+    }
 
     public static IReadOnlySet<string> GetPluginIdentities(ExtensionEntry entry) =>
         GetPluginIdentities(entry.Name, entry.Name, entry.Name, null);
@@ -525,9 +588,11 @@ public sealed class MarketplaceService
         }
 
         var branches = new List<string>();
+        string? defaultBranch = null;
         if (!string.IsNullOrWhiteSpace(repository.Branch))
         {
             branches.Add(repository.Branch);
+            defaultBranch = repository.Branch;
         }
         else
         {
@@ -537,7 +602,7 @@ public sealed class MarketplaceService
                 using var metadataRequest = new HttpRequestMessage(HttpMethod.Get, metadataUri);
                 using var metadataResponse = await SendAsync(metadataRequest, cancellationToken);
                 using var metadata = JsonDocument.Parse(await metadataResponse.Content.ReadAsStringAsync(cancellationToken));
-                var defaultBranch = ReadString(metadata.RootElement, "default_branch");
+                defaultBranch = ReadString(metadata.RootElement, "default_branch");
                 if (!string.IsNullOrWhiteSpace(defaultBranch))
                 {
                     branches.Add(defaultBranch);
@@ -563,6 +628,7 @@ public sealed class MarketplaceService
             : repository.Subpath.EndsWith("package.json", StringComparison.OrdinalIgnoreCase)
                 ? repository.Subpath.TrimStart('/')
                 : $"{repository.Subpath.Trim('/')}/package.json";
+        MarketplaceVerificationResult? manifestRejection = null;
         foreach (var branch in branches)
         {
             var encodedPath = string.Join(
@@ -578,7 +644,14 @@ public sealed class MarketplaceService
                 var root = document.RootElement;
                 var packageName = ReadString(root, "name");
                 var version = ReadString(root, "version");
-                return VerifyManifest(root, packageName, version, item.InstallSpec);
+                var verification = VerifyManifest(root, packageName, version, item.InstallSpec);
+                if (verification.Status == MarketplaceVerificationStatus.Verified
+                    || !string.IsNullOrWhiteSpace(repository.Subpath))
+                {
+                    return verification;
+                }
+
+                manifestRejection ??= verification;
             }
             catch (HttpRequestException)
             {
@@ -590,10 +663,306 @@ public sealed class MarketplaceService
             }
         }
 
+        if (string.IsNullOrWhiteSpace(repository.Subpath))
+        {
+            foreach (var discoveryBranch in branches.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var discovered = await FindPluginInRepositoryTreeAsync(
+                    repository,
+                    discoveryBranch,
+                    cancellationToken);
+                if (discovered is not null)
+                {
+                    return discovered;
+                }
+            }
+        }
+
+        if (manifestRejection is not null)
+        {
+            return manifestRejection;
+        }
+
         var location = string.IsNullOrWhiteSpace(repository.Subpath)
             ? "仓库"
             : $"仓库子目录 /{repository.Subpath.Trim('/')}/";
         return Rejected(item, $"{location}没有找到 package.json。", item.InstallSpec);
+    }
+
+    private async Task<ThemeReadmePreview> ReadThemePreviewAsync(
+        GitHubRepository repository,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(SourceTimeout);
+        var readmeUri = new Uri($"https://api.github.com/repos/{repository.Owner}/{repository.Name}/readme");
+        using var readmeRequest = new HttpRequestMessage(HttpMethod.Get, readmeUri);
+        using var readmeResponse = await SendAsync(readmeRequest, timeout.Token);
+        using var document = JsonDocument.Parse(await readmeResponse.Content.ReadAsStringAsync(timeout.Token));
+        var root = document.RootElement;
+        var encodedContent = ReadString(root, "content");
+        var downloadUrl = ReadString(root, "download_url");
+        if (string.IsNullOrWhiteSpace(encodedContent))
+        {
+            return new ThemeReadmePreview(null, null, "仓库 README 中没有可读取的内容，因此没有主题预览图。");
+        }
+
+        var readme = Encoding.UTF8.GetString(Convert.FromBase64String(
+            encodedContent.Replace("\r", string.Empty, StringComparison.Ordinal)
+                .Replace("\n", string.Empty, StringComparison.Ordinal)));
+        var candidates = EnumerateReadmeImageUrls(readme)
+            .Select(url => ResolveReadmeImageUrl(url, downloadUrl))
+            .Where(static url => url is not null)
+            .Cast<Uri>()
+            .DistinctBy(static uri => uri.AbsoluteUri, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(static uri => ThemeImageRank(uri.AbsoluteUri))
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return new ThemeReadmePreview(null, null, "仓库 README 中没有图片，暂时无法提供主题预览。");
+        }
+
+        foreach (var candidate in candidates)
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            if (candidate.AbsolutePath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var imageRequest = new HttpRequestMessage(HttpMethod.Get, candidate);
+                imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
+                using var imageResponse = await SendAsync(imageRequest, timeout.Token);
+                if (imageResponse.Content.Headers.ContentLength is > MaxThemePreviewBytes)
+                {
+                    continue;
+                }
+
+                var bytes = await ReadBoundedBytesAsync(
+                    await imageResponse.Content.ReadAsStreamAsync(timeout.Token),
+                    MaxThemePreviewBytes,
+                    timeout.Token);
+                if (bytes.Length > 0)
+                {
+                    return new ThemeReadmePreview(bytes, candidate.AbsoluteUri, "预览图来自该主题仓库的 README。");
+                }
+            }
+            catch (HttpRequestException)
+            {
+                // Try the next README image instead of failing the whole preview.
+            }
+            catch (InvalidDataException)
+            {
+                // Oversized or empty images are skipped.
+            }
+        }
+
+        return new ThemeReadmePreview(
+            null,
+            null,
+            "README 中找到了图片，但没有可显示的 PNG/JPG/WebP 预览图（SVG 或超大图片不会载入）。");
+    }
+
+    internal static IReadOnlyList<string> EnumerateReadmeImageUrls(string readme)
+    {
+        var urls = new List<string>();
+        urls.AddRange(MarkdownImage.Matches(readme)
+            .Select(match => System.Net.WebUtility.HtmlDecode(match.Groups["url"].Value.Trim())));
+        urls.AddRange(HtmlImage.Matches(readme)
+            .Select(match => System.Net.WebUtility.HtmlDecode(match.Groups["url"].Value.Trim())));
+        return urls.Where(static url => !string.IsNullOrWhiteSpace(url)).ToArray();
+    }
+
+    internal static Uri? ResolveReadmeImageUrl(string value, string? readmeDownloadUrl)
+    {
+        var normalized = value.Trim().Trim('<', '>');
+        if (normalized.StartsWith("//", StringComparison.Ordinal))
+        {
+            normalized = "https:" + normalized;
+        }
+
+        Uri? resolved;
+        if (Uri.TryCreate(normalized, UriKind.Absolute, out var absolute))
+        {
+            resolved = absolute;
+        }
+        else if (Uri.TryCreate(readmeDownloadUrl, UriKind.Absolute, out var readmeUri)
+            && Uri.TryCreate(readmeUri, normalized, out var relative))
+        {
+            resolved = relative;
+        }
+        else
+        {
+            return null;
+        }
+
+        if (resolved.Scheme != Uri.UriSchemeHttps)
+        {
+            return null;
+        }
+
+        if (string.Equals(resolved.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var segments = resolved.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length >= 5 && string.Equals(segments[2], "blob", StringComparison.OrdinalIgnoreCase))
+            {
+                return new Uri(
+                    $"https://raw.githubusercontent.com/{segments[0]}/{segments[1]}/{string.Join('/', segments.Skip(3))}");
+            }
+        }
+
+        return resolved;
+    }
+
+    private static int ThemeImageRank(string url)
+    {
+        var rank = 0;
+        if (url.Contains("preview", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("screenshot", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("theme", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("demo", StringComparison.OrdinalIgnoreCase))
+        {
+            rank += 4;
+        }
+
+        if (url.Contains("badge", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("shields.io", StringComparison.OrdinalIgnoreCase))
+        {
+            rank -= 6;
+        }
+
+        return rank;
+    }
+
+    private static async Task<byte[]> ReadBoundedBytesAsync(
+        Stream source,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        using var memory = new MemoryStream();
+        var buffer = new byte[81920];
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            if (memory.Length + read > maximumBytes)
+            {
+                throw new InvalidDataException("README 预览图过大。");
+            }
+
+            await memory.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+
+        return memory.ToArray();
+    }
+
+    private async Task<MarketplaceVerificationResult?> FindPluginInRepositoryTreeAsync(
+        GitHubRepository repository,
+        string branch,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var treeUri = new Uri(
+                $"https://api.github.com/repos/{repository.Owner}/{repository.Name}/git/trees/{Uri.EscapeDataString(branch)}?recursive=1");
+            using var request = new HttpRequestMessage(HttpMethod.Get, treeUri);
+            using var response = await SendAsync(request, cancellationToken);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            if (!document.RootElement.TryGetProperty("tree", out var tree)
+                || tree.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var packagePaths = tree.EnumerateArray()
+                .Where(entry => string.Equals(ReadString(entry, "type"), "blob", StringComparison.OrdinalIgnoreCase))
+                .Select(entry => ReadString(entry, "path"))
+                .Where(path => !string.IsNullOrWhiteSpace(path)
+                    && path.EndsWith("/package.json", StringComparison.OrdinalIgnoreCase)
+                    && !path.StartsWith("node_modules/", StringComparison.OrdinalIgnoreCase)
+                    && !path.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase))
+                .Cast<string>()
+                .OrderBy(path => RepositoryPackagePathRank(path))
+                .ThenBy(path => path.Count(character => character == '/'))
+                .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Take(24)
+                .ToArray();
+
+            foreach (var packagePath in packagePaths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var encodedPath = string.Join(
+                    "/",
+                    packagePath.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString));
+                var rawUri = new Uri(
+                    $"https://raw.githubusercontent.com/{repository.Owner}/{repository.Name}/{Uri.EscapeDataString(branch)}/{encodedPath}");
+                try
+                {
+                    var json = await GetStringAsync(rawUri, cancellationToken);
+                    using var packageDocument = JsonDocument.Parse(json);
+                    var manifest = packageDocument.RootElement;
+                    if (!HasDshBundlePatch(manifest))
+                    {
+                        continue;
+                    }
+
+                    var directory = packagePath[..^"/package.json".Length];
+                    var installSpec = $"github:{repository.Owner}/{repository.Name}#path:/{directory}";
+                    var verification = VerifyManifest(
+                        manifest,
+                        ReadString(manifest, "name"),
+                        ReadString(manifest, "version"),
+                        installSpec);
+                    if (verification.Status == MarketplaceVerificationStatus.Verified)
+                    {
+                        return verification with
+                        {
+                            Message = $"已在仓库子目录 /{directory} 找到有效的 DSh Plugin package.json。"
+                        };
+                    }
+                }
+                catch (HttpRequestException)
+                {
+                    // A stale tree entry must not prevent checking the next candidate.
+                }
+                catch (JsonException)
+                {
+                    // Ignore unrelated or malformed package manifests in a monorepo.
+                }
+            }
+        }
+        catch (HttpRequestException)
+        {
+            // GitHub tree discovery is a fallback after the normal package path.
+        }
+        catch (JsonException)
+        {
+            // A malformed tree response falls back to the normal validation error.
+        }
+
+        return null;
+    }
+
+    private static int RepositoryPackagePathRank(string path)
+    {
+        var normalized = path.ToLowerInvariant();
+        if (normalized.Contains("plugin", StringComparison.Ordinal)
+            || normalized.Contains("theme", StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        return normalized.StartsWith("packages/", StringComparison.Ordinal)
+            || normalized.StartsWith("plugins/", StringComparison.Ordinal)
+            || normalized.StartsWith("apps/", StringComparison.Ordinal)
+            ? 1
+            : 2;
     }
 
     private static MarketplaceVerificationResult VerifyManifest(

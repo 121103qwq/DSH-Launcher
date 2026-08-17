@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.2.0`。当前目标是修复 Provider 同步生成无效 YAML、让版本检查识别真实 YAML 语法错误，并避免启动页直接铺开完整异常堆栈。
+当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.2.1`。当前目标是完成插件安装反馈、GitHub/monorepo 校验、主题 README 图片预览、低分辨率窗口适配，以及 Provider/快照/整合包和跨机器 Node PATH 边界修复，并发布 `v0.2.1`。
 
 ## 已完成内容
 
@@ -11,12 +11,12 @@
 - 支持 installed/source DSh 实例、独立端口、健康检查、停止/重启、跨 Runner 互斥锁，以及 `Managed` / `Attached` 运行态。Attached 实例可打开 Web UI，但不会被 Stop/Restart 或退出清理误杀。
 - 每个版本使用独立 `DSH_HOME` 和 `DSH_AGENTS_HOME`。实例级 Plugin、Skill、MCP、Provider 状态、Agent Preset、Settings 和 Conversation 文件均以该目录为边界；对话和模型 Provider 支持 Independent、Workspace、All/全配置同步策略。运行中的版本不会被同步写入。
 - 设置/诊断页可选择任意版本并编辑与“版本设置 → 配置”相同的同步选项；工作区管理支持显示成员、添加、重命名和删除。删除工作区只解除成员版本的同步关系并切回 Independent，不删除版本或对话文件。
-- Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、进度反馈和完成后刷新。
+- Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、独立安装弹窗和完成后刷新。市场标题可打开 GitHub；根目录缺少有效 package.json 时会按默认分支并回退 main/master 扫描常见 monorepo 子目录。主题预览按需读取 README 图片，无图或不支持时明确提示。
 - Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter 及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`；扩展和 Agent 页在存在多个版本时可直接切换当前实例。
 - 全局 ComboBox 的点击层使用不绘制悬停背景的专用模板，鼠标移入时只改变外框颜色，不再覆盖选中文字和箭头；可编辑 ComboBox 的内部文本框显式清除重复 Padding，工作区名称不再被垂直裁切。
 - 版本控制支持复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。整合包可包含脱敏后的 Provider 结构和模型目录，但会排除 `.credentials.yaml`、`.env`/`.env.*`、sessions、API Key、Token、密码和 URL 凭据；导入再次拒绝凭据路径并清理可分享文本，始终创建新版本。版本设置个性化页提供版本名称输入框和保存按钮，修改后同步更新实例注册记录、当前选择和页面标题。
 - Provider 启动页支持启用/禁用、`/models` 只读诊断、模型列表/思考档位显示和问题说明；模型设置只保存环境变量名。DSh Web UI 当前生成的花括号映射、行尾逗号和行内模型数组可以被正确读取，不再把 `{` 识别为 Provider 名称。
-- Provider 自动同步会在符合策略的停止版本之间同步模型配置、启用状态和 DSh 官方 `.credentials.yaml`；凭据文件整份原子复制，不由 Launcher 解析、显示或写入自身配置，并拒绝重解析点和超过 1 MiB 的文件。
+- Provider 自动同步会在符合策略的停止版本之间同步模型配置、启用状态和 DSh 官方 `.credentials.yaml`；只用 `settings.yaml` 时间戳选择配置来源，并把设置、状态和同源凭据作为一个事务提交，失败会回滚。凭据文件不由 Launcher 解析、显示或写入自身配置，并拒绝重解析点和超过 1 MiB 的文件。
 - Provider 刷新已改为纯读取与只读诊断，不再顺带执行版本同步。相同实例刷新时旧卡片保留到新结果就绪；取消或过期的并发刷新不能再把旧结果写回，因此不会出现先显示、刷新后消失。
 - `v0.1.9` 已构建、推送并发布；PR #1 已合并到 `main`（merge commit `1eb5f65`）。
 - 对话页支持 JSONL/Zstandard 会话列出、导入、导出、备份、删除、双击打开和停止实例自动启动；当前使用 Chat `localStorage` 预选 session ID。对话列表优先显示会话名称：读取 DSh `storages/session_projcache.json` 的标题，无标题时回退为“未命名 · 项目 · 时间”，不再把原始 session ID 作为首列。导入时可选择目标版本和 sessions 工作区落位，并保留原始会话内容。
@@ -38,11 +38,11 @@
 
 ## 当前主要相关文件
 
-- `src/DshLauncher/MainWindow.xaml(.cs)`：主窗口导航、启动页、Provider、实例生命周期、运行环境准备与内嵌页面切换。
+- `src/DshLauncher/MainWindow.xaml(.cs)`、`ChatWindow.xaml(.cs)`、`WindowSizeHelper.cs`：主窗口导航、启动页、Provider、实例生命周期、运行环境准备、低分辨率初始尺寸约束和独立 Chat 窗口。
 - `src/DshLauncher/Services/NodeInstallService.cs`、`RuntimeProgressWindow.cs`：Node 下载（真实进度）、系统安装与准备进度窗口。
 - `src/DshLauncher/Services/DshInstallService.cs`、`DshRuntimeDetector.cs`、`NodeRuntimeDetector.cs`：DSh/Node 检测与 npm 安装。
-- `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`：Plugin、Skill、MCP、Agent Preset 和市场入口。
-- `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`：市场缓存、来源合并、搜索、排序、校验和安装状态。
+- `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`、`PluginProgressWindow.cs`：Plugin、Skill、MCP、Agent Preset、市场入口和插件安装进度弹窗。
+- `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`、`ThemePreviewWindow.cs`：市场缓存、来源合并、搜索、排序、GitHub/monorepo 校验、安装状态和 README 图片预览。
 - `src/DshLauncher/Services/SkillMarketService.cs`、`Models/SkillMarketModels.cs`：Skill 市场缓存、GitHub 发现、SKILL.md 校验和实例导入。
 - `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionPackageService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`：版本同步策略、工作区管理、版本复制/删除、设置和 `.dshpack`。
 - `src/DshLauncher/Services/VersionHealthService.cs`、`DshSettingsYamlValidator.cs`、`VersionSnapshotService.cs`、`Models/VersionHealthModels.cs`：版本体检、DSh YAML 语义校验、安全自动修复和当前 Windows 用户加密的配置回滚点。
@@ -53,6 +53,7 @@
 
 ## 已执行测试及结果
 
+- `v0.2.1` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 49/49 通过；Release 单文件自包含预构建 0 warnings、0 errors，文件版本 `0.2.1.0`。新增覆盖 Node 子进程 PATH、Plugin CLI 非动态输出与 allow-build、monorepo 自动发现、GitHub 标题链接、README 图片预览、Provider 事务回滚、快照失败回滚与自动保留，以及 `.dshpack` 普通 key 不被误删。
 - Provider YAML/版本检查/启动错误摘要修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug` 49/49 通过；WPF Debug 构建 0 warnings、0 errors。新增覆盖 DSh Web UI 花括号 Provider 的编辑与跨版本同步、当前 DSh YAML 解析器验收、无效 YAML 行列报告以及启动堆栈摘要。测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-provider-yaml-health-20260817-1035`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.0` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug --no-restore` 49/49 通过；测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-v0.2.0-20260817-010249`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.0` Release 单文件自包含 publish：0 errors；`DSH Launcher.exe` 72,380,251 字节，文件版本 `0.2.0.0`，SHA-256 `E5714AA7CB60F2BBB3FEB9C4B0D35F97ACAEC2D438AB2BA70CA1EB7404248065`。完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.0-20260817-010309`，并确认桌面顶层 `C:\Users\121103qwq\Desktop\DSH Launcher\DSH Launcher.exe` 存在。
@@ -81,11 +82,11 @@
 ## 已知问题
 
 - Source 项目的 `.dsh/skills` 和 `.agents/skills` 是 DSh 项目级共享只读资源；实例 `DSH_HOME` 内的 Skill 才是版本私有。
-- Provider 自动同步按停止版本中 `settings.yaml` 或 `.credentials.yaml` 的最新写入时间选择整份来源快照，没有三方合并；运行中的版本会等停止后参与同步。
+- Provider 自动同步按停止版本中 `settings.yaml` 的最新写入时间选择单一来源，没有三方合并；运行中的版本会等停止后参与同步。
 - 对话同步是生命周期边界同步，不是多个运行中 DSh 的实时共享写入；外部程序直接删除会话文件不会触发 Launcher 的删除传播。
 - 当前只使用已验证的 Chat `localStorage` 预选会话，尚未实现官方 `?session=<id>` deep link。
 - MCP 当前是实例级 stdio/streamable-http 配置和 patch 管理，尚未接入完整 MCP Manager 的 connected/needs-auth/authorizing/error、OAuth 和 Tool discovery 状态。
-- 主题当前是市场资源、文字信息预览和 dsh-market 应用桥接，尚未建立视觉预览图或 Wallpaper 资源格式，也未在用户真实实例上做主题视觉验收。
+- 主题市场可按需显示仓库 README 中的首选图片，并保留 dsh-market 应用桥接；Wallpaper 仍未建立独立资源格式，也未在用户真实实例上做主题视觉验收。
 - GitHub Topic 发现仍未做分页加载；真实第三方 Plugin CLI 对 node_modules 的副作用不能由配置快照完全回滚，失败时仍以官方 CLI 输出和 web profile 自动恢复为准。
 - `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；它是本地回滚点，不是可分享格式，分享继续使用脱敏 `.dshpack`。
 - 官方已安装 DSh 的 package metadata 当前未声明 `engines.node` 时，Node 兼容性只能显示“未声明/Unknown”，不会凭空套用固定版本限制。
@@ -101,7 +102,7 @@
 - 一键运行环境准备的实机端到端验证与后续打磨。
 - 官方 Session deep link。
 - 完整 MCP Manager 状态/认证/工具发现整合。
-- 主题视觉预览、Wallpaper 资源格式和用户真实实例视觉验收。
+- Wallpaper 资源格式和用户真实实例主题视觉验收。
 - GitHub Topic 分页和更多真实 Plugin CLI 失败边界。
 - 多个运行中 DSh 的实时会话共享写入。
 
@@ -114,4 +115,4 @@
 
 ## 下一步最直接的任务
 
-用最新测试版对原先会报 `BLOCK_IN_FLOW` 的两个停止版本再执行一次 Provider 同步，然后打开“版本控制 → 检查版本”确认目标 `settings.yaml` 通过，并验证启动失败通知的“查看详情”入口。
+发布并在另一台较低分辨率、Node PATH 尚未刷新或插件仓库为 monorepo 的 Windows 机器上做一次端到端实机验收。

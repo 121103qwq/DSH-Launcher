@@ -22,6 +22,7 @@ public partial class ChatWindow : Window
         _address = parsed.ToString();
         _conversationId = string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim();
         InitializeComponent();
+        WindowSizeHelper.FitInitialSize(this);
     }
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)

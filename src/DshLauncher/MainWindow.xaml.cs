@@ -97,6 +97,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 用“无法优雅关闭”保证 Launcher 重开后不会出现第二次 Node MSI 与残留安装重叠。
         _nodeInstaller.LingeringInstallerCompleted += OnLingeringInstallerCompleted;
         InitializeComponent();
+        WindowSizeHelper.FitInitialSize(this);
         DataContext = this;
     }
 
@@ -1800,7 +1801,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var snapshot = instance.RuntimeStatus != InstanceRuntimeStatus.Running
                     && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
                     && !_instanceRunner.IsRunning(instance.Id)
-                    ? _versionSnapshotService.CreateSnapshot(instance, "保存设置页版本同步配置前")
+                    ? _versionSnapshotService.CreateSnapshot(instance, "保存设置页版本同步配置前", automatic: true)
                     : null;
                 _versionSettingsService.Save(instance, updated);
                 RefreshWorkspaceChoices(workspace);

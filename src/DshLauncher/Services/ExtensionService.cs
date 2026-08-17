@@ -30,6 +30,7 @@ public sealed class ExtensionService
     };
     private static readonly Regex SafeServerName = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
     private static readonly Regex SafePackageName = new("^(@[A-Za-z0-9._~-]+/)?[A-Za-z0-9._~-]+$", RegexOptions.CultureInvariant);
+    private static readonly Regex AnsiEscapeSequence = new("\\x1B(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\x07]*(?:\\x07|\\x1B\\\\))", RegexOptions.CultureInvariant);
     private readonly Func<string, bool> _isRunning;
     private readonly SourceProjectInspector _sourceInspector;
     private readonly VersionSnapshotService? _snapshotService;
@@ -99,7 +100,23 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default)
     {
-        return await RunPluginCommandAsync(instance, "add", packageSpec, nodeRuntime, cancellationToken);
+        return await RunPluginCommandAsync(instance, "add", packageSpec, nodeRuntime, null, cancellationToken);
+    }
+
+    public async Task<string> InstallPluginAsync(
+        ManagerInstance instance,
+        string packageSpec,
+        NodeRuntimeInfo? nodeRuntime,
+        string allowBuildPackageName,
+        CancellationToken cancellationToken = default)
+    {
+        return await RunPluginCommandAsync(
+            instance,
+            "add",
+            packageSpec,
+            nodeRuntime,
+            allowBuildPackageName,
+            cancellationToken);
     }
 
     public async Task<string> UpdatePluginAsync(
@@ -108,7 +125,7 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default)
     {
-        return await RunPluginCommandAsync(instance, "update", packageSpec, nodeRuntime, cancellationToken);
+        return await RunPluginCommandAsync(instance, "update", packageSpec, nodeRuntime, null, cancellationToken);
     }
 
     public async Task<string> RemovePluginAsync(
@@ -117,7 +134,7 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default)
     {
-        return await RunPluginCommandAsync(instance, "remove", packageSpec, nodeRuntime, cancellationToken);
+        return await RunPluginCommandAsync(instance, "remove", packageSpec, nodeRuntime, null, cancellationToken);
     }
 
     public Task SetPluginEnabledAsync(
@@ -167,7 +184,7 @@ public sealed class ExtensionService
             bundles.RemoveAt(index);
         }
 
-        _snapshotService?.CreateSnapshot(instance, $"{(enabled ? "启用" : "禁用")} Plugin：{entry.Name}");
+        _snapshotService?.CreateSnapshot(instance, $"{(enabled ? "启用" : "禁用")} Plugin：{entry.Name}", automatic: true);
         WriteJsonAtomically(profilePath, root);
         return Task.CompletedTask;
     }
@@ -602,6 +619,7 @@ public sealed class ExtensionService
         string action,
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
+        string? allowBuildPackageName,
         CancellationToken cancellationToken)
     {
         EnsureStopped(instance);
@@ -616,23 +634,30 @@ public sealed class ExtensionService
             throw new ArgumentOutOfRangeException(nameof(action));
         }
 
+        if (!string.IsNullOrWhiteSpace(allowBuildPackageName)
+            && !SafePackageName.IsMatch(allowBuildPackageName))
+        {
+            throw new ArgumentException("允许构建的 Plugin 包名格式不正确。", nameof(allowBuildPackageName));
+        }
+
         var actionText = action switch
         {
             "add" => "安装",
             "update" => "更新",
             _ => "删除"
         };
-        _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}");
+        _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}", automatic: true);
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
-        var startInfo = CreatePluginStartInfo(instance, action, packageSpec, nodeRuntime);
+        var startInfo = CreatePluginStartInfo(instance, action, packageSpec, nodeRuntime, allowBuildPackageName);
         pnpmEnvironment.Apply(startInfo);
         var output = await RunProcessAsync(startInfo, cancellationToken);
         if (output.ExitCode != 0)
         {
-            throw new InvalidOperationException($"Plugin {action} 失败（退出码 {output.ExitCode}）。{Tail(output.Output)}");
+            throw new InvalidOperationException(
+                $"Plugin {action} 失败（退出码 {output.ExitCode}）。{FormatProcessOutput(output, failure: true)}");
         }
 
-        return Tail(output.Output);
+        return FormatProcessOutput(output, failure: false);
     }
 
     internal static bool IsProtectedBuiltInPlugin(string? packageSpec)
@@ -650,7 +675,8 @@ public sealed class ExtensionService
         ManagerInstance instance,
         string action,
         string packageSpec,
-        NodeRuntimeInfo? nodeRuntime)
+        NodeRuntimeInfo? nodeRuntime,
+        string? allowBuildPackageName)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -683,6 +709,7 @@ public sealed class ExtensionService
             startInfo.ArgumentList.Add(ProfileName);
             startInfo.ArgumentList.Add(action);
             startInfo.ArgumentList.Add(packageSpec);
+            AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName);
         }
         else
         {
@@ -692,7 +719,11 @@ public sealed class ExtensionService
                 || Path.GetExtension(executable).Equals(".bat", StringComparison.OrdinalIgnoreCase))
             {
                 startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-                var commandLine = $"\"{executable}\" plugin --profile {ProfileName} {action} {QuoteCmdArgument(packageSpec)}";
+                var commandLine = $"\"{executable}\" plugin --profile {ProfileName} {action} {QuoteCmdArgument(packageSpec)} --reporter=append-only";
+                if (action == "add" && !string.IsNullOrWhiteSpace(allowBuildPackageName))
+                {
+                    commandLine += $" --allow-build={QuoteCmdArgument(allowBuildPackageName)}";
+                }
                 startInfo.Arguments = $"/d /s /c \"{commandLine}\"";
             }
             else
@@ -703,11 +734,24 @@ public sealed class ExtensionService
                 startInfo.ArgumentList.Add(ProfileName);
                 startInfo.ArgumentList.Add(action);
                 startInfo.ArgumentList.Add(packageSpec);
+                AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName);
             }
         }
 
         SetInstanceEnvironment(startInfo, instance);
         return startInfo;
+    }
+
+    private static void AddPnpmOptions(
+        ICollection<string> arguments,
+        string action,
+        string? allowBuildPackageName)
+    {
+        arguments.Add("--reporter=append-only");
+        if (action == "add" && !string.IsNullOrWhiteSpace(allowBuildPackageName))
+        {
+            arguments.Add($"--allow-build={allowBuildPackageName}");
+        }
     }
 
     private static PnpmEnvironment PreparePnpmEnvironment(
@@ -1178,8 +1222,7 @@ public sealed class ExtensionService
             throw new TimeoutException($"外部命令超过 {CommandTimeout.TotalMinutes:0} 分钟。");
         }
 
-        var output = $"{await standardOutput}\n{await standardError}";
-        return new ProcessResult(process.ExitCode, output);
+        return new ProcessResult(process.ExitCode, await standardOutput, await standardError);
     }
 
     private static void KillProcessTree(Process process)
@@ -1421,10 +1464,48 @@ public sealed class ExtensionService
 
     private static string YamlString(string value) => JsonSerializer.Serialize(value);
 
-    private static string Tail(string value)
+    internal static string FormatProcessOutput(string standardOutput, string standardError, bool failure)
+        => FormatProcessOutput(new ProcessResult(0, standardOutput, standardError), failure);
+
+    private static string FormatProcessOutput(ProcessResult result, bool failure)
     {
         const int max = 5000;
-        return value.Length <= max ? value.Trim() : value[^max..].Trim();
+        var importantError = NormalizeProcessLines(result.StandardError, suppressProgress: true);
+        var usefulOutput = NormalizeProcessLines(result.StandardOutput, suppressProgress: true);
+        var combined = failure
+            ? string.Join(Environment.NewLine, new[] { importantError, usefulOutput }.Where(value => !string.IsNullOrWhiteSpace(value)))
+            : string.Join(Environment.NewLine, new[] { usefulOutput, importantError }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        if (string.IsNullOrWhiteSpace(combined))
+        {
+            combined = NormalizeProcessLines(
+                $"{result.StandardOutput}{Environment.NewLine}{result.StandardError}",
+                suppressProgress: false);
+        }
+
+        return combined.Length <= max ? combined.Trim() : combined[^max..].Trim();
+    }
+
+    private static string NormalizeProcessLines(string value, bool suppressProgress)
+    {
+        var normalized = AnsiEscapeSequence.Replace(value ?? string.Empty, string.Empty)
+            .Replace('\r', '\n');
+        var lines = normalized
+            .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => !suppressProgress || !line.StartsWith("Progress:", StringComparison.OrdinalIgnoreCase))
+            .Where(line => !line.StartsWith("Packages are hard linked from the content-addressable store", StringComparison.OrdinalIgnoreCase))
+            .Where(line => !line.StartsWith("Content-addressable store is at:", StringComparison.OrdinalIgnoreCase))
+            .Where(line => !line.StartsWith("Virtual store is at:", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var result = new List<string>(lines.Length);
+        foreach (var line in lines)
+        {
+            if (result.Count == 0 || !string.Equals(result[^1], line, StringComparison.Ordinal))
+            {
+                result.Add(line);
+            }
+        }
+
+        return string.Join(Environment.NewLine, result);
     }
 
     private static StoredMcpServer ToStored(McpServerDefinition definition) => new()
@@ -1491,7 +1572,7 @@ public sealed class ExtensionService
         }
     }
 
-    private sealed record ProcessResult(int ExitCode, string Output);
+    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
     private sealed record SkillMetadata(string Name, string Description);
 
