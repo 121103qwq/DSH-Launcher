@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前工作区位于 `feature/runtime-bootstrap`，源码版本仍为 `v0.2.1`。当前目标是让只安装了 DeepSeek Desktop 的电脑自动识别 Desktop 版本、内置 Node、DSh 版本及启动文件，并直接用于首次创建版本。
+当前工作区位于 `feature/runtime-bootstrap`，源码版本为 `v0.2.2`。DeepSeek Desktop 版本、内置 Node、DSh 版本及启动文件自动检测已完成；当前最直接目标是在另一台只安装 DeepSeek Desktop 的电脑验证首次创建与启动。
 
 ## 已完成内容
 
@@ -54,6 +54,7 @@
 
 ## 已执行测试及结果
 
+- `v0.2.2` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 50/50 通过；WPF Release 构建 0 warnings、0 errors。Windows x64 自包含单文件 `DSH Launcher.exe` 为 72,401,273 字节，文件版本 `0.2.2.0`，SHA-256 `AEE6C509709C71A5D1809350C868C858F5067856ED555F27D842144E49BAAD20`。完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v0.2.2-20260817-115854`，桌面同名文件夹顶层发布文件也已更新并核对哈希。
 - DeepSeek Desktop 内置运行时检测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug --no-restore` 50/50 通过；WPF Debug 构建 0 warnings、0 errors。新增覆盖 Desktop/DSh 双版本读取、内置 Node 和 `.bin` 启动文件定位、Desktop 根目录反向解析、版本命令 PATH 注入、首次版本名称，以及 Plugin CLI 继承内置 Node 路径。最终完整测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-deepseek-desktop-detection-20260817-final`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
 - `v0.2.1` 发布前完整自测：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 49/49 通过；Release 单文件自包含预构建 0 warnings、0 errors，文件版本 `0.2.1.0`。新增覆盖 Node 子进程 PATH、Plugin CLI 非动态输出与 allow-build、monorepo 自动发现、GitHub 标题链接、README 图片预览、Provider 事务回滚、快照失败回滚与自动保留，以及 `.dshpack` 普通 key 不被误删。
 - Provider YAML/版本检查/启动错误摘要修复：`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug` 49/49 通过；WPF Debug 构建 0 warnings、0 errors。新增覆盖 DSh Web UI 花括号 Provider 的编辑与跨版本同步、当前 DSh YAML 解析器验收、无效 YAML 行列报告以及启动堆栈摘要。测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-provider-yaml-health-20260817-1035`，确认 `DSH Launcher.exe` 存在，共 13 个文件。
