@@ -347,15 +347,17 @@ public sealed class MarketplaceService
         MarketplaceItem item,
         CancellationToken cancellationToken = default)
     {
+        MarketplaceVerificationResult verification;
         if (item.SourceKind == MarketplaceSourceKind.Official
             && item.VerificationStatus == MarketplaceVerificationStatus.Verified)
         {
-            return new MarketplaceVerificationResult(
+            verification = new MarketplaceVerificationResult(
                 MarketplaceVerificationStatus.Verified,
                 "已从当前 DSh 运行环境读取到有效的 bundle 配置。",
                 item.PackageName,
                 item.Version,
                 item.InstallSpec);
+            return await ApplyReadmeInstallInstructionAsync(item, verification, cancellationToken);
         }
 
         var installTargetsGitHub = TryGetGitHubRepository(item.InstallSpec, out _)
@@ -363,12 +365,14 @@ public sealed class MarketplaceService
                 && !string.IsNullOrWhiteSpace(item.RepositoryUrl));
         if (installTargetsGitHub)
         {
-            return await VerifyGitHubRepositoryAsync(item, cancellationToken);
+            verification = await VerifyGitHubRepositoryAsync(item, cancellationToken);
+            return await ApplyReadmeInstallInstructionAsync(item, verification, cancellationToken);
         }
 
         if (!string.IsNullOrWhiteSpace(item.PackageName))
         {
-            return await VerifyNpmPackageAsync(item, cancellationToken);
+            verification = await VerifyNpmPackageAsync(item, cancellationToken);
+            return await ApplyReadmeInstallInstructionAsync(item, verification, cancellationToken);
         }
 
         return new MarketplaceVerificationResult(
@@ -377,6 +381,165 @@ public sealed class MarketplaceService
             null,
             null,
             null);
+    }
+
+    private async Task<MarketplaceVerificationResult> ApplyReadmeInstallInstructionAsync(
+        MarketplaceItem item,
+        MarketplaceVerificationResult verification,
+        CancellationToken cancellationToken)
+    {
+        if (verification.Status != MarketplaceVerificationStatus.Verified
+            || !TryGetGitHubRepository(item.RepositoryUrl ?? item.InstallSpec, out var repository))
+        {
+            return verification;
+        }
+
+        try
+        {
+            var uri = new Uri($"https://api.github.com/repos/{repository.Owner}/{repository.Name}/readme");
+            var json = await GetStringAsync(uri, cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            var encodedContent = ReadString(document.RootElement, "content");
+            if (string.IsNullOrWhiteSpace(encodedContent))
+            {
+                return verification;
+            }
+
+            var readme = Encoding.UTF8.GetString(Convert.FromBase64String(
+                encodedContent.Replace("\r", string.Empty, StringComparison.Ordinal)
+                    .Replace("\n", string.Empty, StringComparison.Ordinal)));
+            var installSpec = ExtractReadmePluginInstallSpec(
+                readme,
+                verification.PackageName,
+                item.RepositoryUrl ?? item.InstallSpec);
+            return string.IsNullOrWhiteSpace(installSpec)
+                ? verification
+                : verification with
+                {
+                    InstallSpec = installSpec,
+                    Message = $"{verification.Message} README 安装命令已确认，将使用 {installSpec}。"
+                };
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return verification;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or FormatException)
+        {
+            // README is an installation preference, not a replacement for the
+            // package.json safety check. Network/rate-limit failures therefore
+            // keep the already verified catalog/package target.
+            return verification;
+        }
+    }
+
+    internal static string? ExtractReadmePluginInstallSpec(
+        string readme,
+        string? verifiedPackageName,
+        string? repositoryUrl)
+    {
+        if (string.IsNullOrWhiteSpace(readme))
+        {
+            return null;
+        }
+
+        foreach (var rawLine in readme.Split('\n'))
+        {
+            var line = rawLine.Trim().Trim('`').Trim();
+            if (line.StartsWith("$ ", StringComparison.Ordinal)
+                || line.StartsWith("> ", StringComparison.Ordinal))
+            {
+                line = line[2..].TrimStart();
+            }
+
+            if (line.IndexOfAny(['&', '|', ';', '<', '>']) >= 0)
+            {
+                continue;
+            }
+
+            var tokens = SplitCommandArguments(line);
+            if (tokens.Count < 5
+                || !tokens[0].Equals("dsh", StringComparison.OrdinalIgnoreCase)
+                || !tokens[1].Equals("plugin", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var webProfile = false;
+            string? installSpec = null;
+            for (var index = 2; index < tokens.Count; index++)
+            {
+                if (tokens[index].Equals("--profile", StringComparison.OrdinalIgnoreCase)
+                    && index + 1 < tokens.Count)
+                {
+                    webProfile = tokens[++index].Equals("web", StringComparison.OrdinalIgnoreCase);
+                    continue;
+                }
+
+                if (tokens[index].Equals("--profile=web", StringComparison.OrdinalIgnoreCase))
+                {
+                    webProfile = true;
+                    continue;
+                }
+
+                if (tokens[index].Equals("add", StringComparison.OrdinalIgnoreCase)
+                    && index + 1 < tokens.Count)
+                {
+                    installSpec = tokens[index + 1].Trim();
+                    break;
+                }
+            }
+
+            if (!webProfile || string.IsNullOrWhiteSpace(installSpec))
+            {
+                continue;
+            }
+
+            if (TryGetNpmPackageName(installSpec, out var readmePackageName)
+                && string.Equals(readmePackageName, verifiedPackageName, StringComparison.OrdinalIgnoreCase))
+            {
+                return installSpec;
+            }
+
+            if (TryGetGitHubIdentity(installSpec, out var readmeRepository)
+                && TryGetGitHubIdentity(repositoryUrl ?? string.Empty, out var verifiedRepository)
+                && string.Equals(
+                    readmeRepository.Split("#path:", 2, StringSplitOptions.None)[0],
+                    verifiedRepository.Split("#path:", 2, StringSplitOptions.None)[0],
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return installSpec;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryGetNpmPackageName(string value, out string packageName)
+    {
+        packageName = string.Empty;
+        var text = value.Trim();
+        if (text.StartsWith("npm:", StringComparison.OrdinalIgnoreCase))
+        {
+            text = text["npm:".Length..];
+        }
+
+        var versionMarker = text.StartsWith('@')
+            ? text.IndexOf('@', text.IndexOf('/') + 1)
+            : text.IndexOf('@');
+        packageName = versionMarker > 0 ? text[..versionMarker] : text;
+        var version = versionMarker > 0 ? text[(versionMarker + 1)..] : null;
+        if (!IsSafePackageName(packageName)
+            || version is not null
+                && (version.Length == 0
+                    || version.Any(character => !(char.IsLetterOrDigit(character)
+                        || character is '.' or '-' or '_' or '~' or '^' or '*' or '<' or '>' or '='))))
+        {
+            packageName = string.Empty;
+            return false;
+        }
+
+        return true;
     }
 
     public string CreatePluginSnapshot(ManagerInstance instance)
@@ -1400,6 +1563,7 @@ public sealed class MarketplaceService
             IsInstalled = isInstalled,
             IsManaged = first.IsManaged || second.IsManaged,
             CanMutate = first.CanMutate || second.CanMutate,
+            CanInstallOrUpdate = first.CanInstallOrUpdate || second.CanInstallOrUpdate,
             Stars = PickStars(first.Stars, second.Stars),
             PublishedAt = first.PublishedAt >= second.PublishedAt ? first.PublishedAt : second.PublishedAt,
             InstalledVersion = installedVersion,

@@ -11,9 +11,8 @@ namespace DshLauncher.Services;
 
 /// <summary>
 /// Reads and changes the parts of an instance that DSh actually consumes.
-/// The service deliberately refuses mutating operations while the instance is
-/// running: DSh watches some of these files, while plugin composition and
-/// preset loading are not safe to change halfway through a process lifetime.
+/// DSh's official Plugin CLI supports adding and updating client plugins while
+/// an instance is running. Other mutations still require a stopped instance.
 /// </summary>
 public sealed class ExtensionService
 {
@@ -692,7 +691,11 @@ public sealed class ExtensionService
         PluginInstallMode installMode,
         CancellationToken cancellationToken)
     {
-        EnsureStopped(instance);
+        if (instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改它的 Plugin。");
+        }
+
         ValidatePackageSpec(packageSpec);
         if (IsProtectedBuiltInPlugin(packageSpec))
         {
@@ -721,7 +724,19 @@ public sealed class ExtensionService
             "update" => "更新",
             _ => "删除"
         };
-        _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}", automatic: true);
+        var running = _isRunning(instance.Id) || instance.RuntimeStatus == InstanceRuntimeStatus.Running;
+        if (action == "remove")
+        {
+            EnsureStopped(instance);
+        }
+
+        // Version snapshots intentionally reject running instances. The UI
+        // keeps a lightweight web-profile backup for hot add/update and the
+        // full encrypted snapshot remains available for stopped mutations.
+        if (!running)
+        {
+            _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}", automatic: true);
+        }
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
         var startInfo = CreatePluginStartInfo(
             instance,

@@ -12,7 +12,7 @@ namespace DshLauncher;
 
 public partial class ExtensionWindow : UserControl
 {
-    private readonly ManagerInstance _instance;
+    private ManagerInstance _instance;
     private readonly ExtensionService _service;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
     private readonly Func<PluginInstallMode> _pluginInstallMode;
@@ -20,6 +20,7 @@ public partial class ExtensionWindow : UserControl
     private readonly MarketplaceService? _marketplaceService;
     private readonly IReadOnlyList<ManagerInstance>? _instances;
     private readonly Action<ManagerInstance>? _selectInstance;
+    private readonly Func<ManagerInstance, CancellationToken, Task<bool>>? _stopInstanceForPluginRetry;
     private readonly SkillMarketService? _skillMarketService;
     private bool _instanceSelectorReady;
     private readonly DshMarketThemeService _themeService = new();
@@ -49,7 +50,8 @@ public partial class ExtensionWindow : UserControl
         IReadOnlyList<ManagerInstance>? instances = null,
         Action<ManagerInstance>? selectInstance = null,
         SkillMarketService? skillMarketService = null,
-        Func<PluginInstallMode>? pluginInstallMode = null)
+        Func<PluginInstallMode>? pluginInstallMode = null,
+        Func<ManagerInstance, CancellationToken, Task<bool>>? stopInstanceForPluginRetry = null)
     {
         _instance = instance;
         _service = service;
@@ -59,6 +61,7 @@ public partial class ExtensionWindow : UserControl
         _marketplaceService = marketplaceService;
         _instances = instances;
         _selectInstance = selectInstance;
+        _stopInstanceForPluginRetry = stopInstanceForPluginRetry;
         _skillMarketService = skillMarketService;
         InitializeComponent();
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
@@ -624,6 +627,7 @@ public partial class ExtensionWindow : UserControl
                     ? MarketplaceService.GetUpdateStatus(item.Version, installedEntry?.Version)
                     : MarketplaceUpdateStatus.Unknown,
                 CanMutate = canMutate,
+                CanInstallOrUpdate = !instanceAttached && !mutating,
                 IsTheme = isTheme,
                 ThemeMarketAvailable = themeMarketAvailable,
                 ThemeCanApply = themeCanApply,
@@ -708,7 +712,7 @@ public partial class ExtensionWindow : UserControl
         PluginProgressWindow? progressWindow = null;
         try
         {
-            EnsureMarketplaceMutationAllowed();
+            EnsureMarketplaceMutationAllowed(allowRunning: true);
             var initialStatus = item.IsInstalled ? "正在准备更新 Plugin…" : "正在检查 Plugin…";
             BeginMarketplaceMutation(initialStatus);
             progressWindow = new PluginProgressWindow(
@@ -775,30 +779,21 @@ public partial class ExtensionWindow : UserControl
             string output;
             try
             {
-                try
-                {
-                    output = await ExecuteMutationAsync(installMode);
-                }
-                catch (Exception fastError) when (
-                    installMode == PluginInstallMode.Fast
-                    && fastError is not OperationCanceledException
-                    && !operationCancellation.IsCancellationRequested)
-                {
-                    progressWindow.SetProgress(42, "快速安装失败，等待选择是否使用兼容性安装重试…");
-                    if (!ConfirmCompatibilityRetry(progressWindow, fastError))
-                    {
-                        throw;
-                    }
-
-                    output = await ExecuteMutationAsync(PluginInstallMode.Compatibility);
-                }
+                output = await ExecutePluginInstallWithFallbackAsync(
+                    ExecuteMutationAsync,
+                    installMode,
+                    progressWindow,
+                    operationCancellation.Token);
 
                 progressWindow.SetProgress(82, item.IsInstalled
                     ? "Plugin 更新完成，正在整理结果…"
                     : "Plugin 安装完成，正在整理结果…");
+                var activationText = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+                    ? "已热安装；请刷新 DSh 页面，包含 host 改动时仍需重启实例"
+                    : "实例下次启动时加载";
                 StatusText.Text = item.IsInstalled
-                    ? $"Plugin 更新完成。实例下次启动时加载；备份：{snapshot}"
-                    : $"Plugin 安装完成。实例下次启动时加载；备份：{snapshot}";
+                    ? $"Plugin 更新完成。{activationText}；备份：{snapshot}"
+                    : $"Plugin 安装完成。{activationText}；备份：{snapshot}";
             }
             catch (Exception ex)
             {
@@ -1025,16 +1020,16 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    private void EnsureMarketplaceMutationAllowed()
+    private void EnsureMarketplaceMutationAllowed(bool allowRunning = false)
     {
         if (_instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
         {
             throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改它的 Plugin。请先使用 Launcher 管理的实例。");
         }
 
-        if (_instance.RuntimeStatus == InstanceRuntimeStatus.Running)
+        if (!allowRunning && _instance.RuntimeStatus == InstanceRuntimeStatus.Running)
         {
-            throw new InvalidOperationException("请先停止实例，再安装、更新或卸载 Plugin。");
+            throw new InvalidOperationException("请先停止实例，再卸载 Plugin。");
         }
     }
 
@@ -1044,13 +1039,74 @@ public partial class ExtensionWindow : UserControl
         return trimmed.Length <= 600 ? trimmed : trimmed[^600..];
     }
 
-    private static bool ConfirmCompatibilityRetry(Window owner, Exception error) =>
-        System.Windows.MessageBox.Show(
-            owner,
-            $"快速安装失败。是否立即使用兼容性安装重试？\n\n{Tail(error.Message)}",
-            "快速安装失败",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning) == MessageBoxResult.Yes;
+    private async Task<string> ExecutePluginInstallWithFallbackAsync(
+        Func<PluginInstallMode, Task<string>> execute,
+        PluginInstallMode initialMode,
+        PluginProgressWindow progressWindow,
+        CancellationToken cancellationToken)
+    {
+        if (initialMode == PluginInstallMode.Fast)
+        {
+            try
+            {
+                return await execute(PluginInstallMode.Fast);
+            }
+            catch (Exception fastError) when (
+                fastError is not OperationCanceledException
+                && !cancellationToken.IsCancellationRequested)
+            {
+                progressWindow.SetProgress(44, "快速安装失败，正在自动尝试兼容性安装…");
+            }
+        }
+
+        try
+        {
+            return await execute(PluginInstallMode.Compatibility);
+        }
+        catch (Exception compatibilityError) when (
+            compatibilityError is not OperationCanceledException
+            && !cancellationToken.IsCancellationRequested
+            && _instance.RuntimeStatus == InstanceRuntimeStatus.Running)
+        {
+            progressWindow.SetProgress(50, "兼容性热安装仍然失败，等待确认是否停止实例后重试…");
+            if (System.Windows.MessageBox.Show(
+                    progressWindow,
+                    $"热安装未成功。是否由 Launcher 停止当前实例，然后再使用兼容性安装重试？\n\n{Tail(compatibilityError.Message)}",
+                    "热安装失败",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            {
+                throw;
+            }
+
+            if (_stopInstanceForPluginRetry is null)
+            {
+                throw new InvalidOperationException(
+                    "当前页面不能自动停止实例。请手动停止实例后重新安装。",
+                    compatibilityError);
+            }
+
+            progressWindow.SetProgress(56, "正在停止当前实例…");
+            if (!await _stopInstanceForPluginRetry(_instance, cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    "实例未能停止，已取消关闭后安装。请检查实例状态后重试。",
+                    compatibilityError);
+            }
+
+            _instance = _instance with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                RuntimeOwnership = InstanceRuntimeOwnership.None,
+                ProcessId = null,
+                Port = null,
+                WebUrl = null,
+                LastError = null
+            };
+            progressWindow.SetProgress(62, "实例已停止，正在使用兼容性安装重试…");
+            return await execute(PluginInstallMode.Compatibility);
+        }
+    }
 
     private async void InstallPlugin_Click(object sender, RoutedEventArgs e)
     {
@@ -1066,40 +1122,34 @@ public partial class ExtensionWindow : UserControl
         progressWindow.SetProgress(10, "正在准备 Plugin 安装…");
         try
         {
+            EnsureMarketplaceMutationAllowed(allowRunning: true);
             var installMode = _pluginInstallMode();
-            var installModeText = installMode == PluginInstallMode.Fast ? "快速安装" : "兼容性安装";
-            progressWindow.SetProgress(38, $"正在通过官方 DSh CLI 安装 Plugin（{installModeText}）…");
-            string output;
-            try
+            async Task<string> ExecuteMutationAsync(PluginInstallMode mode)
             {
-                output = await _service.InstallPluginAsync(
+                var installModeText = mode == PluginInstallMode.Fast ? "快速安装" : "兼容性安装";
+                progressWindow.SetProgress(
+                    mode == PluginInstallMode.Fast ? 38 : 46,
+                    $"正在通过官方 DSh CLI 安装 Plugin（{installModeText}）…");
+                return await _service.InstallPluginAsync(
                     _instance,
                     source,
                     _nodeRuntime(),
-                    installMode,
+                    mode,
                     operationCancellation.Token);
             }
-            catch (Exception fastError) when (
-                installMode == PluginInstallMode.Fast
-                && fastError is not OperationCanceledException
-                && !operationCancellation.IsCancellationRequested)
-            {
-                progressWindow.SetProgress(38, "快速安装失败，等待选择是否使用兼容性安装重试…");
-                if (!ConfirmCompatibilityRetry(progressWindow, fastError))
-                {
-                    throw;
-                }
 
-                progressWindow.SetProgress(44, "正在通过官方 DSh CLI 使用兼容性安装重试…");
-                output = await _service.InstallPluginAsync(
-                    _instance,
-                    source,
-                    _nodeRuntime(),
-                    PluginInstallMode.Compatibility,
-                    operationCancellation.Token);
-            }
+            var output = await ExecutePluginInstallWithFallbackAsync(
+                ExecuteMutationAsync,
+                installMode,
+                progressWindow,
+                operationCancellation.Token);
             progressWindow.SetProgress(84, "Plugin 安装完成，正在整理结果…");
-            StatusText.Text = string.IsNullOrWhiteSpace(output) ? "Plugin 安装完成。" : $"Plugin 安装完成：{output}";
+            var activationText = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+                ? "已热安装；请刷新 DSh 页面，包含 host 改动时仍需重启实例。"
+                : "实例下次启动时加载。";
+            StatusText.Text = string.IsNullOrWhiteSpace(output)
+                ? $"Plugin 安装完成。{activationText}"
+                : $"Plugin 安装完成。{activationText} {output}";
             progressWindow.SetProgress(92, "Plugin 安装完成，正在刷新当前实例…");
             await RefreshAsync();
             progressWindow.Complete("Plugin 安装完成。");

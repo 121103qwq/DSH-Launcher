@@ -2426,6 +2426,20 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
             new NodeRuntimeInfo(true, node, "22.19.0", null),
             "demo-plugin",
             PluginInstallMode.Fast);
+
+        var runningExtensionService = new ExtensionService(_ => true);
+        await runningExtensionService.InstallPluginAsync(
+            instance,
+            "github:example/demo-plugin",
+            new NodeRuntimeInfo(true, node, "22.19.0", null),
+            "demo-plugin",
+            PluginInstallMode.Fast);
+        await AssertThrowsAsync<InvalidOperationException>(
+            () => runningExtensionService.RemovePluginAsync(
+                instance,
+                "demo-plugin",
+                new NodeRuntimeInfo(true, node, "22.19.0", null)),
+            "运行中的实例应允许 Plugin add 热安装，但仍必须拒绝卸载。 ");
     }
     finally
     {
@@ -2478,7 +2492,8 @@ static async Task TestMarketplaceDiscoveryAndVerification()
 
         if (url.Contains("api.github.com/repos/demo/community-theme/readme", StringComparison.OrdinalIgnoreCase))
         {
-            var content = Convert.ToBase64String(Encoding.UTF8.GetBytes("# Theme\n\n![Theme preview](docs/preview.png)"));
+            var content = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                "# Theme\n\n```sh\ndsh plugin --profile web add community-theme@latest\n```\n\n![Theme preview](docs/preview.png)"));
             return JsonResponse($"{{\"content\":\"{content}\",\"download_url\":\"https://raw.githubusercontent.com/demo/community-theme/develop/README.md\"}}");
         }
 
@@ -2579,8 +2594,9 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         "社区目录的完整 DSh CLI 安装命令应先提取为可传给官方 CLI 的 Plugin spec。 ");
     var commandVerified = await service.VerifyAsync(commandCatalog[0]);
     Assert(commandVerified.Status == MarketplaceVerificationStatus.Verified
-        && commandVerified.InstallSpec == "github:demo/community-theme",
-        "从社区目录提取出的 GitHub Plugin spec 应能通过 package.json 校验。 ");
+        && commandVerified.InstallSpec == "community-theme@latest"
+        && commandVerified.Message.Contains("README", StringComparison.Ordinal),
+        "Plugin 仓库 README 提供正式安装命令时，应在 package.json 校验后优先使用 README 中的 spec。 ");
 
     var githubWithPackageName = commandCatalog[0] with
     {
@@ -2589,8 +2605,31 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     };
     var githubPackageVerified = await service.VerifyAsync(githubWithPackageName);
     Assert(githubPackageVerified.Status == MarketplaceVerificationStatus.Verified
-        && githubPackageVerified.PackageName == "community-theme",
+        && githubPackageVerified.PackageName == "community-theme"
+        && githubPackageVerified.InstallSpec == "community-theme@latest",
         "同时包含展示用包名和 GitHub 安装地址时，应按 GitHub 来源校验而不是误走 npm。 ");
+    Assert(MarketplaceService.ExtractReadmePluginInstallSpec(
+            "dsh plugin --profile web add another-package@latest",
+            "community-theme",
+            "https://github.com/demo/community-theme") is null,
+        "README 安装命令指向不同 npm 包时不能覆盖已校验 Plugin。 ");
+    Assert(MarketplaceService.ExtractReadmePluginInstallSpec(
+            "dsh plugin --profile web add community-theme && echo unsafe",
+            "community-theme",
+            "https://github.com/demo/community-theme") is null,
+        "README 中包含额外 shell 命令的安装行必须被拒绝。 ");
+    Assert(MarketplaceService.ExtractReadmePluginInstallSpec(
+            "dsh plugin --profile=web add community-theme@latest",
+            "community-theme",
+            "https://github.com/demo/community-theme") == "community-theme@latest",
+        "README 使用 --profile=web 写法时也应识别同一个官方安装命令。 ");
+    var runningMarketplaceItem = commandCatalog[0] with
+    {
+        CanMutate = false,
+        CanInstallOrUpdate = true
+    };
+    Assert(runningMarketplaceItem.CanAction && !runningMarketplaceItem.CanRemove,
+        "运行中实例应允许热安装/更新，但卸载按钮必须继续禁用。 ");
 
     var verified = await service.VerifyAsync(new MarketplaceItem(
         "npm:demo-plugin",

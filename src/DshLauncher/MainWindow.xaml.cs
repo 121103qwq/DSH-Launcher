@@ -964,7 +964,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         marketplaceService: _marketplaceService,
                         instances: Instances.ToArray(),
                         selectInstance: candidate => SwitchContextInstance(candidate, section),
-                        pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode),
+                        pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode,
+                        stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync),
                     "Agent" => new ExtensionWindow(
                         instance,
                         _extensionService,
@@ -2726,6 +2727,65 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
         {
             ShowNotice($"打开 DSH Desktop 原生窗口失败：{ex.Message}");
+        }
+    }
+
+    private async Task<bool> StopInstanceForPluginRetryAsync(
+        ManagerInstance instance,
+        CancellationToken cancellationToken)
+    {
+        if (instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会停止该进程。");
+            return false;
+        }
+
+        if (!TryBeginLifecycleOperation())
+        {
+            return false;
+        }
+
+        try
+        {
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _windowCancellation.Token);
+            var result = await _instanceRunner.StopAsync(instance.Id, linkedCancellation.Token);
+            if (!result.IsSuccess)
+            {
+                UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, result.Error);
+                ShowNotice(result.Error ?? "停止 DSh 失败。");
+                return false;
+            }
+
+            CloseChatWindow(instance.Id);
+            var stopped = instance with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                RuntimeOwnership = InstanceRuntimeOwnership.None,
+                ProcessId = null,
+                Port = null,
+                WebUrl = null,
+                LastError = null
+            };
+            UpdateInstance(stopped);
+            await SynchronizeConversationsAsync(stopped);
+            ShowNotice($"实例已停止，正在继续安装 Plugin：{instance.Name}。");
+            return true;
+        }
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested || _windowCancellation.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"停止 DSh 失败：{ex.Message}");
+            return false;
+        }
+        finally
+        {
+            EndLifecycleOperation();
         }
     }
 

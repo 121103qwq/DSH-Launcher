@@ -58,7 +58,8 @@ public sealed record MarketplaceItem(
     bool ThemeCanApply = false,
     string? ThemePackageName = null,
     string? ThemeStatusText = null,
-    IReadOnlyList<MarketplaceSourceKind>? MergedSourceKinds = null)
+    IReadOnlyList<MarketplaceSourceKind>? MergedSourceKinds = null,
+    bool CanInstallOrUpdate = false)
 {
     [JsonIgnore]
     public string SourceText => MergedSourceText ?? (SourceKind switch
@@ -104,7 +105,7 @@ public sealed record MarketplaceItem(
     }
 
     [JsonIgnore]
-    public bool CanAction => CanMutate
+    public bool CanAction => CanInstallOrUpdate
         && VerificationStatus != MarketplaceVerificationStatus.Rejected
         && (!IsInstalled || (IsManaged && UpdateStatus != MarketplaceUpdateStatus.UpToDate));
 
