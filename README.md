@@ -8,7 +8,6 @@
 
 DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行实例、Plugin、Skill、Provider 和对话文件。Launcher 本身可以在没有 Node.js 或 DSh 的环境中打开，并提供运行环境检测与安装引导。
 
-> 当前仍处于早期版本。建议先备份重要的 DSh 配置和对话文件。
 
 ![DSH Launcher 启动页](./docs/images/launcher-home.png)
 
