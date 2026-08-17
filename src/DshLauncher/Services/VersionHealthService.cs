@@ -148,8 +148,7 @@ public sealed class VersionHealthService
         }
 
         var packageRoot = DshRuntimeDetector.TryResolvePackageRoot(instance.RootPath);
-        var executableValid = !string.IsNullOrWhiteSpace(instance.DshExecutablePath)
-            && File.Exists(instance.DshExecutablePath);
+        var executableValid = DshRuntimeCommandFactory.IsUsable(instance.EffectiveDshLaunchSpec);
         if (packageRoot is null || !executableValid)
         {
             items.Add(new VersionHealthItem(
@@ -181,6 +180,17 @@ public sealed class VersionHealthService
         string? detectedNodeEngine,
         ICollection<VersionHealthItem> items)
     {
+        if (instance.EffectiveDshLaunchSpec is { UsesPackagedNode: true } packagedRuntime
+            && DshRuntimeCommandFactory.IsUsable(packagedRuntime))
+        {
+            items.Add(new VersionHealthItem(
+                "node",
+                "Node.js",
+                VersionHealthState.Healthy,
+                $"由 {packagedRuntime.ProductName ?? "封装应用"} 提供内置运行环境，不依赖系统 Node.js。"));
+            return;
+        }
+
         var requirement = DshRuntimeDetector.ResolveNodeEngine(instance, detectedNodeEngine);
         var compatibility = nodeRuntime.GetCompatibility(requirement);
         var detail = compatibility switch

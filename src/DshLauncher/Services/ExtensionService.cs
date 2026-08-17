@@ -760,17 +760,7 @@ public sealed class ExtensionService
         string? allowBuildPackageName,
         PluginInstallMode installMode)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = instance.RootPath,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-
+        DshRuntimeLaunchSpec spec;
         if (instance.Kind == InstanceKind.Source)
         {
             var project = _sourceInspector.Inspect(instance.RootPath);
@@ -784,57 +774,27 @@ public sealed class ExtensionService
                 throw new InvalidOperationException($"Source Plugin 管理需要兼容的 Node.js；当前状态为 {nodeRuntime?.GetCompatibility(nodeEngine).ToString() ?? "Missing"}，要求：{nodeEngine ?? "未声明"}。");
             }
 
-            startInfo.FileName = nodeRuntime.ExecutablePath;
-            startInfo.ArgumentList.Add(entrypoint);
-            startInfo.ArgumentList.Add("plugin");
-            startInfo.ArgumentList.Add("--profile");
-            startInfo.ArgumentList.Add(ProfileName);
-            startInfo.ArgumentList.Add(action);
-            startInfo.ArgumentList.Add(packageSpec);
-            AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName, installMode);
+            spec = new DshRuntimeLaunchSpec(
+                DshRuntimeLaunchMode.NodeScript,
+                nodeRuntime.ExecutablePath,
+                entrypoint,
+                NodeExecutablePath: nodeRuntime.ExecutablePath);
         }
         else
         {
-            var executable = instance.DshExecutablePath
-                ?? throw new InvalidOperationException("实例没有 DSh 可执行入口。");
-            if (Path.GetExtension(executable).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
-                || Path.GetExtension(executable).Equals(".bat", StringComparison.OrdinalIgnoreCase))
-            {
-                startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-                var commandLine = $"\"{executable}\" plugin --profile {ProfileName} {action} {QuoteCmdArgument(packageSpec)}";
-                var pnpmOptions = new List<string>();
-                AddPnpmOptions(pnpmOptions, action, allowBuildPackageName, installMode);
-                foreach (var option in pnpmOptions)
-                {
-                    commandLine += $" {QuoteCmdArgument(option)}";
-                }
-                startInfo.Arguments = $"/d /s /c \"{commandLine}\"";
-            }
-            else
-            {
-                startInfo.FileName = executable;
-                startInfo.ArgumentList.Add("plugin");
-                startInfo.ArgumentList.Add("--profile");
-                startInfo.ArgumentList.Add(ProfileName);
-                startInfo.ArgumentList.Add(action);
-                startInfo.ArgumentList.Add(packageSpec);
-                AddPnpmOptions(startInfo.ArgumentList, action, allowBuildPackageName, installMode);
-            }
+            spec = DshRuntimeCommandFactory.Resolve(instance)
+                ?? throw new InvalidOperationException("实例没有 DSh 启动描述。");
         }
 
-        SetInstanceEnvironment(startInfo, instance);
-        if (nodeRuntime?.IsAvailable == true
-            && !string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
-        {
-            var inheritedPath = startInfo.Environment.TryGetValue("PATH", out var configuredPath)
-                ? configuredPath ?? string.Empty
-                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            startInfo.Environment["PATH"] = DshInstanceRunner.BuildPathWithNodeDirectory(
-                nodeRuntime.ExecutablePath,
-                inheritedPath);
-        }
-
-        return startInfo;
+        var arguments = new List<string> { "plugin", "--profile", ProfileName, action, packageSpec };
+        AddPnpmOptions(arguments, action, allowBuildPackageName, installMode);
+        return DshRuntimeCommandFactory.Create(
+            spec,
+            arguments,
+            instance.RootPath,
+            instance.DshHome,
+            Path.Combine(instance.DshHome, ".agents"),
+            nodeRuntime?.ExecutablePath);
     }
 
     private static void AddPnpmOptions(
@@ -867,6 +827,15 @@ public sealed class ExtensionService
         ManagerInstance instance,
         NodeRuntimeInfo? nodeRuntime)
     {
+        var packagedRuntime = instance.EffectiveDshLaunchSpec;
+        if (packagedRuntime?.Mode == DshRuntimeLaunchMode.ElectronBootstrap
+            && File.Exists(packagedRuntime.HostPath)
+            && !string.IsNullOrWhiteSpace(packagedRuntime.PnpmScriptPath)
+            && File.Exists(packagedRuntime.PnpmScriptPath))
+        {
+            return CreatePackagedPnpmEnvironment(packagedRuntime);
+        }
+
         foreach (var directory in GetRuntimeSearchDirectories(instance, nodeRuntime))
         {
             var pnpm = FindExecutable(directory, "pnpm");
@@ -925,11 +894,57 @@ public sealed class ExtensionService
         }
     }
 
+    private static PnpmEnvironment CreatePackagedPnpmEnvironment(DshRuntimeLaunchSpec runtime)
+    {
+        var shimDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DSH Launcher",
+            "packaged-runtime-shims",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(shimDirectory);
+        try
+        {
+            var host = runtime.HostPath.Replace("\"", "\"\"", StringComparison.Ordinal);
+            var pnpm = runtime.PnpmScriptPath!.Replace("\"", "\"\"", StringComparison.Ordinal);
+            File.WriteAllText(
+                Path.Combine(shimDirectory, "node.cmd"),
+                $"@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n\"{host}\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+                Encoding.ASCII);
+            File.WriteAllText(
+                Path.Combine(shimDirectory, "pnpm.cmd"),
+                $"@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n\"{host}\" \"{pnpm}\" %*\r\nexit /b %ERRORLEVEL%\r\n",
+                Encoding.ASCII);
+            return PnpmEnvironment.FromDirectory(shimDirectory, ownsDirectory: true);
+        }
+        catch
+        {
+            TryDeleteDirectory(shimDirectory);
+            throw;
+        }
+    }
+
     private static IEnumerable<string> GetRuntimeSearchDirectories(
         ManagerInstance instance,
         NodeRuntimeInfo? nodeRuntime)
     {
         var starts = new List<string>();
+        if (instance.EffectiveDshLaunchSpec is { } runtime)
+        {
+            var hostDirectory = Path.GetDirectoryName(runtime.HostPath);
+            if (!string.IsNullOrWhiteSpace(hostDirectory))
+            {
+                starts.Add(hostDirectory);
+            }
+
+            var pnpmDirectory = string.IsNullOrWhiteSpace(runtime.PnpmScriptPath)
+                ? null
+                : Path.GetDirectoryName(runtime.PnpmScriptPath);
+            if (!string.IsNullOrWhiteSpace(pnpmDirectory))
+            {
+                starts.Add(pnpmDirectory);
+            }
+        }
+
         if (instance.Kind == InstanceKind.Installed && !string.IsNullOrWhiteSpace(instance.DshExecutablePath))
         {
             var dshDirectory = Path.GetDirectoryName(instance.DshExecutablePath);

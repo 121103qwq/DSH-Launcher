@@ -40,8 +40,7 @@ public sealed class DetectedRuntimeRegistrationService
         {
             var packageRoot = TryNormalizeRuntimeRoot(runtime.PackageRoot);
             if (packageRoot is null
-                || string.IsNullOrWhiteSpace(runtime.ExecutablePath)
-                || !File.Exists(runtime.ExecutablePath))
+                || !DshRuntimeCommandFactory.IsUsable(runtime.EffectiveLaunchSpec))
             {
                 errors.Add($"{runtime.DisplayVersionText} 的安装目录或启动文件无效，未自动添加。");
                 continue;
@@ -61,7 +60,8 @@ public sealed class DetectedRuntimeRegistrationService
                     InstanceKind.Installed,
                     runtime.ExecutablePath,
                     runtime.Version,
-                    "npm");
+                    "npm",
+                    dshLaunchSpec: runtime.EffectiveLaunchSpec);
                 added.Add(instance);
             }
             catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidOperationException)

@@ -70,7 +70,8 @@ public sealed class InstanceRegistry
         string? dshExecutablePath = null,
         string? detectedVersion = null,
         string? packageManager = null,
-        string? dshHome = null)
+        string? dshHome = null,
+        DshRuntimeLaunchSpec? dshLaunchSpec = null)
     {
         var normalizedName = NormalizeName(name);
         if (!Enum.IsDefined(typeof(InstanceKind), kind))
@@ -95,6 +96,10 @@ public sealed class InstanceRegistry
             throw new IOException("实例 DSH_HOME 不能是符号链接或重解析点。");
         }
         var normalizedExecutable = NormalizeOptionalFile(dshExecutablePath);
+        var normalizedLaunchSpec = NormalizeLaunchSpec(dshLaunchSpec)
+            ?? (normalizedExecutable is null
+                ? null
+                : new DshRuntimeLaunchSpec(DshRuntimeLaunchMode.DirectCommand, normalizedExecutable));
 
         var entry = new ManagerInstance(
             id,
@@ -107,7 +112,8 @@ public sealed class InstanceRegistry
             normalizedExecutable is not null ? InstanceRuntimeStatus.Ready : InstanceRuntimeStatus.Unknown,
             packageManager,
             null,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            DshLaunchSpec: normalizedLaunchSpec);
 
         entries.Add(entry);
         Save(entries);
@@ -199,9 +205,15 @@ public sealed class InstanceRegistry
         }
 
         var executable = NormalizeOptionalFile(entry.DshExecutablePath);
+        var launchSpec = NormalizeLaunchSpec(entry.DshLaunchSpec)
+            ?? (executable is null
+                ? null
+                : new DshRuntimeLaunchSpec(DshRuntimeLaunchMode.DirectCommand, executable));
         var status = entry.RuntimeStatus;
         var error = entry.LastError;
-        if (entry.Kind == InstanceKind.Installed && executable is null && status == InstanceRuntimeStatus.Ready)
+        if (entry.Kind == InstanceKind.Installed
+            && !DshRuntimeCommandFactory.IsUsable(launchSpec)
+            && status == InstanceRuntimeStatus.Ready)
         {
             status = InstanceRuntimeStatus.Unknown;
             error ??= "DSh 可执行入口当前不可用。";
@@ -213,6 +225,7 @@ public sealed class InstanceRegistry
             RootPath = rootPath,
             DshHome = dshHome,
             DshExecutablePath = executable,
+            DshLaunchSpec = launchSpec,
             RuntimeStatus = status,
             LastError = error
         };
@@ -280,5 +293,35 @@ public sealed class InstanceRegistry
 
         var normalized = Path.GetFullPath(path.Trim());
         return File.Exists(normalized) && !IsReparsePoint(normalized) ? normalized : null;
+    }
+
+    private static DshRuntimeLaunchSpec? NormalizeLaunchSpec(DshRuntimeLaunchSpec? spec)
+    {
+        if (spec is null || !Enum.IsDefined(spec.Mode))
+        {
+            return null;
+        }
+
+        var host = NormalizeOptionalFile(spec.HostPath);
+        if (host is null)
+        {
+            return null;
+        }
+
+        var entry = NormalizeOptionalFile(spec.EntryPointPath);
+        if (spec.Mode != DshRuntimeLaunchMode.DirectCommand && entry is null)
+        {
+            return null;
+        }
+
+        return spec with
+        {
+            HostPath = host,
+            EntryPointPath = entry,
+            NodeExecutablePath = NormalizeOptionalFile(spec.NodeExecutablePath),
+            PnpmScriptPath = NormalizeOptionalFile(spec.PnpmScriptPath),
+            ProductName = string.IsNullOrWhiteSpace(spec.ProductName) ? null : spec.ProductName.Trim(),
+            ProductVersion = string.IsNullOrWhiteSpace(spec.ProductVersion) ? null : spec.ProductVersion.Trim()
+        };
     }
 }

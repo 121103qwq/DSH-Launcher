@@ -41,7 +41,8 @@ public sealed record ManagerInstance(
     DateTimeOffset RegisteredAt,
     int? ProcessId = null,
     int? Port = null,
-    string? WebUrl = null)
+    string? WebUrl = null,
+    DshRuntimeLaunchSpec? DshLaunchSpec = null)
 {
     [JsonIgnore]
     public string KindText => Kind == InstanceKind.Installed ? "installed" : "source";
@@ -74,6 +75,15 @@ public sealed record ManagerInstance(
     public string DshVersionText => string.IsNullOrWhiteSpace(DetectedVersion)
         ? "DSh 版本未标记"
         : $"DSh {DetectedVersion}";
+
+    [JsonIgnore]
+    public DshRuntimeLaunchSpec? EffectiveDshLaunchSpec => DshLaunchSpec
+        ?? (string.IsNullOrWhiteSpace(DshExecutablePath)
+            ? null
+            : new DshRuntimeLaunchSpec(DshRuntimeLaunchMode.DirectCommand, DshExecutablePath));
+
+    [JsonIgnore]
+    public bool CanOpenDesktopShell => EffectiveDshLaunchSpec?.SupportsDesktopShell == true;
 
     [JsonIgnore]
     public string ResourceSummaryText => $"{ReadPluginCount()} Plugins · {ReadSkillCount()} Skills";

@@ -17,14 +17,13 @@ public static class InstanceRuntimeRebinder
             || instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached
             || !detected.IsAvailable
             || string.IsNullOrWhiteSpace(detected.PackageRoot)
-            || string.IsNullOrWhiteSpace(detected.ExecutablePath))
+            || !DshRuntimeCommandFactory.IsUsable(detected.EffectiveLaunchSpec))
         {
             return null;
         }
 
         var rootValid = DshRuntimeDetector.TryResolvePackageRoot(instance.RootPath) is not null;
-        var exeValid = !string.IsNullOrWhiteSpace(instance.DshExecutablePath)
-            && File.Exists(instance.DshExecutablePath);
+        var exeValid = DshRuntimeCommandFactory.IsUsable(instance.EffectiveDshLaunchSpec);
         if (rootValid && exeValid)
         {
             return null;
@@ -34,6 +33,7 @@ public static class InstanceRuntimeRebinder
         {
             RootPath = detected.PackageRoot,
             DshExecutablePath = detected.ExecutablePath,
+            DshLaunchSpec = detected.EffectiveLaunchSpec,
             DetectedVersion = detected.Version,
             RuntimeStatus = InstanceRuntimeStatus.Ready,
             LastError = null

@@ -14,10 +14,14 @@ internal sealed class RuntimeProgressWindow : Window
     private readonly CancellationTokenSource _cancellation;
     private bool _isInstallPhase;
 
-    public RuntimeProgressWindow(Window? owner, CancellationTokenSource cancellation)
+    public RuntimeProgressWindow(
+        Window? owner,
+        CancellationTokenSource cancellation,
+        string title = "准备运行环境",
+        string hintText = "准备期间请勿关闭窗口。安装 Node.js 时会弹出系统授权确认。")
     {
         _cancellation = cancellation;
-        Title = "准备运行环境";
+        Title = title;
         Width = 480;
         Height = 210;
         ResizeMode = ResizeMode.NoResize;
@@ -42,7 +46,7 @@ internal sealed class RuntimeProgressWindow : Window
         };
         var hint = new TextBlock
         {
-            Text = "准备期间请勿关闭窗口。安装 Node.js 时会弹出系统授权确认。",
+            Text = hintText,
             Foreground = System.Windows.Media.Brushes.Gray,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
@@ -77,6 +81,14 @@ internal sealed class RuntimeProgressWindow : Window
         _progressBar.IsIndeterminate = false;
         _progressBar.Value = progress.Percent ?? 0;
         _statusText.Text = $"正在下载 Node.js 安装程序… {progress.BytesText}（{progress.PercentText}）";
+    }
+
+    public void SetProgress(int completed, int total, string text)
+    {
+        _progressBar.IsIndeterminate = total <= 0;
+        _progressBar.Maximum = Math.Max(1, total);
+        _progressBar.Value = Math.Clamp(completed, 0, Math.Max(1, total));
+        _statusText.Text = text;
     }
 
     internal static bool IsCloseAllowed(bool installPhase) => !installPhase;

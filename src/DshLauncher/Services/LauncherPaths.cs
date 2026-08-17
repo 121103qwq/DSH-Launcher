@@ -23,6 +23,8 @@ public sealed class LauncherPaths
 
     public string MarketplaceCachePath => Path.Combine(RootDirectory, "marketplace-cache.json");
 
+    public string RuntimeCachePath => Path.Combine(RootDirectory, "runtime-cache.json");
+
     public string VersionSettingsPath => Path.Combine(RootDirectory, "version-settings.json");
 
     public string GetInstanceDshHome(string instanceId) =>

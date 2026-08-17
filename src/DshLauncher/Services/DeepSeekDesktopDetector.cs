@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -10,7 +12,7 @@ namespace DshLauncher.Services;
 public static class DeepSeekDesktopDetector
 {
     private static readonly Regex VersionFilePattern = new(
-        @"(?im)^DeepSeek Desktop\s+v?(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\s*$",
+        @"(?im)^(?:DeepSeek|DSH) Desktop\s+v?(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<DeepSeekDesktopInstallation> DetectInstallations()
@@ -50,20 +52,82 @@ public static class DeepSeekDesktopDetector
             return null;
         }
 
-        if (!File.Exists(Path.Combine(normalizedRoot, "DeepSeek Desktop.exe")))
+        return TryDetectDshDesktopV2(normalizedRoot)
+            ?? TryDetectLegacyDesktop(normalizedRoot);
+    }
+
+    private static DeepSeekDesktopInstallation? TryDetectDshDesktopV2(string installRoot)
+    {
+        var hostExecutable = Path.Combine(installRoot, "DSH Desktop.exe");
+        var unpackedRoot = Path.Combine(installRoot, "resources", "app.asar.unpacked");
+        var packageRoot = Path.Combine(
+            unpackedRoot,
+            "node_modules",
+            "@deepseek-ai",
+            "dsh");
+        var dshEntryPoint = Path.Combine(packageRoot, "lib", "bin.js");
+        var desktopCli = Path.Combine(
+            unpackedRoot,
+            "lib",
+            "desktop-cli.js");
+        var pnpmScript = Path.Combine(
+            unpackedRoot,
+            "node_modules",
+            "pnpm",
+            "bin",
+            "pnpm.mjs");
+        var dshVersion = DshRuntimeDetector.TryReadPackageVersion(packageRoot);
+        if (!File.Exists(hostExecutable)
+            || !File.Exists(dshEntryPoint)
+            || !File.Exists(desktopCli)
+            || !File.Exists(pnpmScript)
+            || string.IsNullOrWhiteSpace(dshVersion))
         {
             return null;
         }
 
-        var nodeExecutable = Path.Combine(normalizedRoot, "runtime", "node.exe");
+        var normalizedHost = Path.GetFullPath(hostExecutable);
+        var normalizedEntryPoint = Path.GetFullPath(dshEntryPoint);
+        var normalizedDesktopCli = Path.GetFullPath(desktopCli);
+        var normalizedPnpmScript = Path.GetFullPath(pnpmScript);
+        var desktopVersion = TryReadFileVersion(normalizedHost)
+            ?? TryReadDesktopVersion(installRoot);
+        var launchSpec = new DshRuntimeLaunchSpec(
+            DshRuntimeLaunchMode.ElectronBootstrap,
+            normalizedHost,
+            EntryPointPath: normalizedDesktopCli,
+            NodeExecutablePath: normalizedHost,
+            PnpmScriptPath: normalizedPnpmScript,
+            ProductName: "DSH Desktop",
+            ProductVersion: desktopVersion);
+
+        return new DeepSeekDesktopInstallation(
+            installRoot,
+            desktopVersion,
+            normalizedHost,
+            normalizedEntryPoint,
+            Path.GetFullPath(packageRoot),
+            dshVersion,
+            launchSpec,
+            "DSH Desktop");
+    }
+
+    private static DeepSeekDesktopInstallation? TryDetectLegacyDesktop(string installRoot)
+    {
+        if (!File.Exists(Path.Combine(installRoot, "DeepSeek Desktop.exe")))
+        {
+            return null;
+        }
+
+        var nodeExecutable = Path.Combine(installRoot, "runtime", "node.exe");
         var packageRoot = Path.Combine(
-            normalizedRoot,
+            installRoot,
             "app",
             "node_modules",
             "@deepseek-ai",
             "dsh");
         var dshVersion = DshRuntimeDetector.TryReadPackageVersion(packageRoot);
-        var dshExecutable = FindDshExecutable(normalizedRoot);
+        var dshExecutable = FindDshExecutable(installRoot);
         if (!File.Exists(nodeExecutable)
             || dshExecutable is null
             || string.IsNullOrWhiteSpace(dshVersion))
@@ -71,13 +135,22 @@ public static class DeepSeekDesktopDetector
             return null;
         }
 
+        var normalizedNode = Path.GetFullPath(nodeExecutable);
+        var normalizedDshExecutable = Path.GetFullPath(dshExecutable);
+        var desktopVersion = TryReadDesktopVersion(installRoot);
         return new DeepSeekDesktopInstallation(
-            normalizedRoot,
-            TryReadDesktopVersion(normalizedRoot),
-            Path.GetFullPath(nodeExecutable),
-            Path.GetFullPath(dshExecutable),
+            installRoot,
+            desktopVersion,
+            normalizedNode,
+            normalizedDshExecutable,
             Path.GetFullPath(packageRoot),
-            dshVersion);
+            dshVersion,
+            new DshRuntimeLaunchSpec(
+                DshRuntimeLaunchMode.DirectCommand,
+                normalizedDshExecutable,
+                NodeExecutablePath: normalizedNode,
+                ProductName: "DeepSeek Desktop",
+                ProductVersion: desktopVersion));
     }
 
     internal static IEnumerable<string> GetInstallRootCandidates()
@@ -98,7 +171,9 @@ public static class DeepSeekDesktopDetector
             foreach (var relative in new[]
             {
                 Path.Combine("Programs", "DeepSeek Desktop"),
-                "DeepSeek Desktop"
+                "DeepSeek Desktop",
+                Path.Combine("Programs", "DSH Desktop"),
+                "DSH Desktop"
             })
             {
                 var candidate = Path.Combine(baseDirectory, relative);
@@ -145,7 +220,7 @@ public static class DeepSeekDesktopDetector
                     }
 
                     var displayName = application.GetValue("DisplayName") as string;
-                    if (displayName?.StartsWith("DeepSeek Desktop", StringComparison.OrdinalIgnoreCase) != true)
+                    if (!IsSupportedDisplayName(displayName))
                     {
                         continue;
                     }
@@ -166,6 +241,10 @@ public static class DeepSeekDesktopDetector
 
         return results;
     }
+
+    private static bool IsSupportedDisplayName(string? displayName) =>
+        displayName?.StartsWith("DeepSeek Desktop", StringComparison.OrdinalIgnoreCase) == true
+        || displayName?.StartsWith("DSH Desktop", StringComparison.OrdinalIgnoreCase) == true;
 
     private static string? FindDshExecutable(string installRoot)
     {
@@ -220,4 +299,20 @@ public static class DeepSeekDesktopDetector
             return null;
         }
     }
+
+    private static string? TryReadFileVersion(string executablePath)
+    {
+        try
+        {
+            var versionInfo = FileVersionInfo.GetVersionInfo(executablePath);
+            return FirstNonEmpty(versionInfo.FileVersion, versionInfo.ProductVersion);
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim();
 }

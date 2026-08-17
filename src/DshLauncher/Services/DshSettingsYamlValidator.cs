@@ -59,9 +59,19 @@ public sealed class DshSettingsYamlValidator
             return DshSettingsValidationResult.Valid();
         }
 
-        if (!nodeRuntime.IsAvailable
-            || string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath)
-            || !File.Exists(nodeRuntime.ExecutablePath))
+        var launchSpec = instance.EffectiveDshLaunchSpec;
+        var packagedHost = launchSpec is { UsesPackagedNode: true }
+            && DshRuntimeCommandFactory.IsUsable(launchSpec)
+                ? launchSpec.NodeExecutablePath ?? launchSpec.HostPath
+                : null;
+        var nodeHost = !string.IsNullOrWhiteSpace(packagedHost) && File.Exists(packagedHost)
+            ? packagedHost
+            : nodeRuntime.IsAvailable
+                && !string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath)
+                && File.Exists(nodeRuntime.ExecutablePath)
+                    ? nodeRuntime.ExecutablePath
+                    : null;
+        if (nodeHost is null)
         {
             return DshSettingsValidationResult.Unavailable("Node.js 不可用，无法调用 DSh 的 YAML 解析器。 ");
         }
@@ -83,13 +93,21 @@ public sealed class DshSettingsYamlValidator
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = nodeRuntime.ExecutablePath,
+                    FileName = nodeHost,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 }
             };
+            if (launchSpec?.Mode == DshRuntimeLaunchMode.ElectronBootstrap
+                && string.Equals(nodeHost, launchSpec.HostPath, StringComparison.OrdinalIgnoreCase))
+            {
+                process.StartInfo.Environment["ELECTRON_RUN_AS_NODE"] = "1";
+            }
+
+            process.StartInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(nodeHost);
+            process.StartInfo.Environment["DSH_HOME"] = instance.DshHome;
             process.StartInfo.ArgumentList.Add("-e");
             process.StartInfo.ArgumentList.Add(ValidationScript);
             process.StartInfo.ArgumentList.Add(yamlEntry);
