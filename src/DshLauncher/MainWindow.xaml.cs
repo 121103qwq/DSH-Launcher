@@ -962,8 +962,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         _extensionService,
                         () => _nodeRuntime,
                         marketplaceService: _marketplaceService,
-                        instances: Instances.ToArray(),
-                        selectInstance: candidate => SwitchContextInstance(candidate, section),
                         pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode,
                         stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync),
                     "Agent" => new ExtensionWindow(
@@ -972,8 +970,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         () => _nodeRuntime,
                         agentOnly: true,
                         marketplaceService: _marketplaceService,
-                        instances: Instances.ToArray(),
-                        selectInstance: candidate => SwitchContextInstance(candidate, section),
                         skillMarketService: _skillMarketService),
                     _ => new ConversationWindow(
                         instance,

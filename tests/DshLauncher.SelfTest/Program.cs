@@ -1230,11 +1230,15 @@ static Task TestMainWindowCodeResourceReferences()
     var appXamlPath = FindRepositoryFile("src", "DshLauncher", "App.xaml");
     var mainWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml");
     var mainWindowCodePath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml.cs");
+    var extensionWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ExtensionWindow.xaml");
+    var extensionWindowCodePath = FindRepositoryFile("src", "DshLauncher", "ExtensionWindow.xaml.cs");
     var versionSettingsXamlPath = FindRepositoryFile("src", "DshLauncher", "VersionSettingsWindow.xaml");
     var versionSettingsCodePath = FindRepositoryFile("src", "DshLauncher", "VersionSettingsWindow.xaml.cs");
     var appXaml = File.ReadAllText(appXamlPath, Encoding.UTF8);
     var mainWindowXaml = File.ReadAllText(mainWindowXamlPath, Encoding.UTF8);
     var mainWindowCode = File.ReadAllText(mainWindowCodePath, Encoding.UTF8);
+    var extensionWindowXaml = File.ReadAllText(extensionWindowXamlPath, Encoding.UTF8);
+    var extensionWindowCode = File.ReadAllText(extensionWindowCodePath, Encoding.UTF8);
     var versionSettingsXaml = File.ReadAllText(versionSettingsXamlPath, Encoding.UTF8);
     var versionSettingsCode = File.ReadAllText(versionSettingsCodePath, Encoding.UTF8);
     var resourceKeys = Regex.Matches(appXaml, "x:Key=\\\"(?<key>[^\\\"]+)\\\"")
@@ -1269,6 +1273,14 @@ static Task TestMainWindowCodeResourceReferences()
     Assert(mainWindowCode.Contains("private async void RunningInstances_MouseDoubleClick", StringComparison.Ordinal)
         && mainWindowCode.Contains("await StartSelectedInstanceAsync();", StringComparison.Ordinal),
         "双击实例必须复用统一启动流程：停止实例启动，运行实例直接打开。 ");
+    Assert(mainWindowXaml.Contains("x:Name=\"ContextInstanceSelector\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("x:Name=\"CurrentInstanceNameText\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("x:Name=\"ExtensionList\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("x:Name=\"EnableButton\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("x:Name=\"RemoveButton\"", StringComparison.Ordinal)
+        && !extensionWindowXaml.Contains("InstanceSelectorBox", StringComparison.Ordinal)
+        && !extensionWindowCode.Contains("InstanceSelector_SelectionChanged", StringComparison.Ordinal),
+        "扩展和 Agent 左栏必须显示当前实例与已安装内容，但不能重复提供实例选择器。 ");
     Assert(versionSettingsXaml.Contains("x:Name=\"SnapshotPage\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"CreateSnapshot_Click\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"RollbackSnapshot_Click\"", StringComparison.Ordinal)

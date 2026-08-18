@@ -18,11 +18,8 @@ public partial class ExtensionWindow : UserControl
     private readonly Func<PluginInstallMode> _pluginInstallMode;
     private readonly bool _agentOnly;
     private readonly MarketplaceService? _marketplaceService;
-    private readonly IReadOnlyList<ManagerInstance>? _instances;
-    private readonly Action<ManagerInstance>? _selectInstance;
     private readonly Func<ManagerInstance, CancellationToken, Task<bool>>? _stopInstanceForPluginRetry;
     private readonly SkillMarketService? _skillMarketService;
-    private bool _instanceSelectorReady;
     private readonly DshMarketThemeService _themeService = new();
     private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
     private bool _isSkillMarketLoading;
@@ -47,8 +44,6 @@ public partial class ExtensionWindow : UserControl
         Func<NodeRuntimeInfo?> nodeRuntime,
         bool agentOnly = false,
         MarketplaceService? marketplaceService = null,
-        IReadOnlyList<ManagerInstance>? instances = null,
-        Action<ManagerInstance>? selectInstance = null,
         SkillMarketService? skillMarketService = null,
         Func<PluginInstallMode>? pluginInstallMode = null,
         Func<ManagerInstance, CancellationToken, Task<bool>>? stopInstanceForPluginRetry = null)
@@ -59,8 +54,6 @@ public partial class ExtensionWindow : UserControl
         _pluginInstallMode = pluginInstallMode ?? (() => PluginInstallMode.Fast);
         _agentOnly = agentOnly;
         _marketplaceService = marketplaceService;
-        _instances = instances;
-        _selectInstance = selectInstance;
         _stopInstanceForPluginRetry = stopInstanceForPluginRetry;
         _skillMarketService = skillMarketService;
         InitializeComponent();
@@ -68,14 +61,6 @@ public partial class ExtensionWindow : UserControl
         SkillMarketCategoryList.Visibility = _agentOnly ? Visibility.Visible : Visibility.Collapsed;
         CurrentInstanceNameText.Text = instance.Name;
         CurrentInstanceDetailsText.Text = $"{instance.KindText} · {instance.RootPath}\nDSH_HOME：{instance.DshHome}";
-        if (_instances is { Count: > 1 } && _selectInstance is not null)
-        {
-            InstanceSelectorBox.ItemsSource = _instances;
-            InstanceSelectorBox.SelectedItem = _instances.FirstOrDefault(candidate =>
-                string.Equals(candidate.Id, instance.Id, StringComparison.Ordinal));
-            InstanceSelectorBox.Visibility = Visibility.Visible;
-            _instanceSelectorReady = true;
-        }
 
         if (_agentOnly)
         {
@@ -102,18 +87,6 @@ public partial class ExtensionWindow : UserControl
             ImportSkillButton.Visibility = Visibility.Collapsed;
             ImportPresetButton.Visibility = Visibility.Collapsed;
         }
-    }
-
-    private void InstanceSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_instanceSelectorReady
-            || InstanceSelectorBox.SelectedItem is not ManagerInstance target
-            || string.Equals(target.Id, _instance.Id, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        _selectInstance?.Invoke(target);
     }
 
     private void SetupSkillMarket()
@@ -293,6 +266,7 @@ public partial class ExtensionWindow : UserControl
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
         _controlLoaded = true;
+        AttachAgentLayoutOwner();
         if (!_agentOnly)
         {
             // Show the cached catalog first; only go online when there is no

@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.0`。本版包含主窗口 UI 重构、运行时与实例导入兼容、生命周期修复、版本快照，以及 Plugin README 指令识别和热安装回退流程。
+当前源码版本为 `v1.0.1`。当前任务是恢复扩展和 Agent 页左侧的当前实例详情、已安装内容和条目操作，同时把实例切换统一保留在标题栏。
 
 ## 已完成内容
 
@@ -16,7 +16,7 @@
 - 设置/诊断页可选择任意版本并编辑与“版本设置 → 配置”相同的同步选项；工作区管理支持显示成员、添加、重命名和删除。删除工作区只解除成员版本的同步关系并切回 Independent，不删除版本或对话文件。
 - Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、独立安装弹窗和完成后刷新。安装弹窗按检查、备份、CLI 操作和刷新显示阶段百分比；操作前可见但完成时被最小化的 Owner 会恢复原状态。市场标题可打开 GitHub；根目录缺少有效 package.json 时会按默认分支并回退 main/master 扫描常见 monorepo 子目录。主题预览按需读取 README 图片，无图或不支持时明确提示。
 - Managed 运行实例现在允许 Plugin 热安装和更新：快速模式失败后自动尝试兼容性模式，兼容性热安装仍失败才询问是否停止实例后重试；卸载仍要求停止，Attached 始终只读。市场在 package/bundle 校验通过后，会读取 GitHub README，并且只在其中的 `dsh plugin --profile web add ...` 目标与已验证包名或仓库身份一致时采用该安装 spec。
-- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`。扩展和 Agent 页的左栏现为纵向分类选择，已安装内容与删除操作统一进入当前实例的版本设置/插件管理页。
+- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`。扩展和 Agent 页左栏显示当前实例详情、已安装条目及启用/禁用/更新/删除操作，右侧保留市场和横向分类；实例切换只保留标题栏入口。
 - 全局 ComboBox 的点击层使用不绘制悬停背景的专用模板，鼠标移入时只改变外框颜色，不再覆盖选中文字和箭头；可编辑 ComboBox 的内部文本框显式清除重复 Padding，工作区名称不再被垂直裁切。
 - 版本控制支持导入实例、复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。“导入实例”可扫描文件夹或解析 Windows `.lnk` 快捷方式的目标/工作目录，再复用现有 DSh Runtime 校验；普通 DSh 使用当前有效的 `$DSH_HOME`（默认 `~/.dsh`），DeepSeek Desktop 从安装包 `.modules.yaml` 反查实际 `%LOCALAPPDATA%\DeepSeek Harness Data`，把工作区、对话、设置、Plugin/Skill 和本机 Provider 凭据复制到独立 HOME，不与原桌面程序共用目录。同一 package root 再次手动导入时更新已有实例，不再建立 `(2)/(3)`；自动检测到同一 root 的真实来源 HOME 改变时也覆盖原停止实例并更新来源记录。覆盖会保留 `.dsh-launcher` 版本设置，运行中的实例拒绝覆盖。导入跳过 `webview2` 浏览器缓存、重解析点和整棵 `node_modules`，新注册失败会撤销。整合包可包含脱敏后的 Provider 结构和模型目录，但会排除 `.credentials.yaml`、`.env`/`.env.*`、sessions、API Key、Token、密码和 URL 凭据；导入再次拒绝凭据路径并清理可分享文本，始终创建新版本。版本设置个性化页提供版本名称输入框和保存按钮，修改后同步更新实例注册记录、当前选择和页面标题。
 - 实例注册文件加载时会合并历史遗留的“相同 DSh package root + 相同导入 DSH_HOME”重复项，保留运行状态更有效或最近使用的一项并持久化结果；没有导入来源的复制版本、干净版本和各自 DSH_HOME 不参与合并，也不会删除旧目录。
@@ -68,6 +68,8 @@
 
 ## 已执行测试及结果
 
+- `v1.0.1` 发布候选：Release 构建 0 warnings、0 errors，完整自测 61/61 通过。Windows x64 自包含压缩单文件为 72,450,328 字节，SHA-256 `5838D7A7C13EA51209D0608BF3EB44194CBAE87E5CABE4C071F49137054AF7F3`；发布候选目录为 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.1-restore-extension-agent-20260818-105725`。桌面顶层旧版 `DSH Launcher.exe` 当时仍被 PID 66680 使用，因此未强制终止用户进程覆盖，Release 使用候选目录中的同一文件。
+- 扩展/Agent 左侧管理区恢复：`ExtensionWindow.xaml` XML 解析通过；Release 构建 0 warnings、0 errors；完整自测 61/61 通过，并新增静态断言确认标题栏保留唯一实例选择入口、左侧实例详情/已安装列表/操作按钮可见且页面内不再存在重复实例选择器。Windows x64 自包含压缩单文件测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\restore-left-management-20260818-011724`；`DSH Launcher.exe` 为 72,450,325 字节，SHA-256 `E12212CDEF7871CEB249D73A6E930BD09D074E682BF844F6583E2485E8BF94A4`。
 - `v1.0.0`“UI 重构”最终发布候选：Release 完整自测 61/61 通过；新增覆盖运行实例热安装、运行中拒绝卸载、README npm spec 优先、身份不一致和 shell 拼接命令拒绝，以及 `--profile web` / `--profile=web` 两种写法。Windows x64 自包含压缩单文件构建成功，文件版本 `1.0.0.0`，`DSH Launcher.exe` 为 72,450,291 字节，SHA-256 `729ED12638E6D6A81297681F754CCB872D71D2CD6D7747A1ACC1E565980B94D0`；完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.0-ui-refactor-final-20260818`，桌面同名文件夹顶层 EXE 哈希一致。
 - 标题栏返回/下拉、实例去重、版本设置快照入口和双击启动/打开：`dotnet build src/DshLauncher/DshLauncher.csproj -c Release --no-restore` 为 0 warnings、0 errors；Release 完整自测 61/61 通过。自测实际创建 DPAPI 加密快照、修改配置并回滚，确认凭据与 Plugin 配置恢复、会话不受影响；同时覆盖重复导入注册合并和相关 XAML/代码入口。最终 Windows x64 自包含单文件测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\instance-dedupe-snapshot-20260818-0002`；`DSH Launcher.exe` 为 72,445,430 字节，SHA-256 `7943DCDD15E125F28084DC50BE52C74267AD229AA9210AA3B2FA56A5A44C29BC`。
 
@@ -138,7 +140,7 @@
 
 ## 尚未完成内容
 
-- 本轮标题栏实例选择、分类侧栏、对话版本筛选和启动页新布局的实机 UI 验收。
+- 本轮标题栏实例选择、扩展/Agent 左侧管理区、对话版本筛选和启动页新布局的实机 UI 验收。
 - 本轮新增设置、工作区、备份恢复、市场筛选及首次运行引导的实机 UI 验收。
 - 版本检查、修复按钮，以及版本控制/版本设置两处快照选择与回滚确认的实机 UI 验收。
 - 一键运行环境准备的实机端到端验证与后续打磨。
