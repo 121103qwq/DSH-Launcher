@@ -63,6 +63,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("dsh-market theme bridge", TestDshMarketThemeBridge),
     ("Plugin command supplies pnpm runtime", TestPluginCommandSuppliesPnpmRuntime),
     ("Marketplace discovery and verification", TestMarketplaceDiscoveryAndVerification),
+    ("Plugin failure report preserves diagnostics", TestPluginFailureReportPreservesDiagnostics),
     ("Skill marketplace discovery and validation", TestSkillMarketplaceDiscoveryAndValidation),
     ("Version copy, clean version and package import", TestVersionPackageOperations),
     ("Version health inspection and repair", TestVersionHealthInspectionAndRepair),
@@ -1278,9 +1279,12 @@ static Task TestMainWindowCodeResourceReferences()
         && extensionWindowXaml.Contains("x:Name=\"ExtensionList\"", StringComparison.Ordinal)
         && extensionWindowXaml.Contains("x:Name=\"EnableButton\"", StringComparison.Ordinal)
         && extensionWindowXaml.Contains("x:Name=\"RemoveButton\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("Value=\"已启用\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("Value=\"已禁用\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("TextTrimming=\"CharacterEllipsis\"", StringComparison.Ordinal)
         && !extensionWindowXaml.Contains("InstanceSelectorBox", StringComparison.Ordinal)
         && !extensionWindowCode.Contains("InstanceSelector_SelectionChanged", StringComparison.Ordinal),
-        "扩展和 Agent 左栏必须显示当前实例与已安装内容，但不能重复提供实例选择器。 ");
+        "扩展和 Agent 左栏必须显示当前实例与已安装内容、限制长文本并显示启用状态，但不能重复提供实例选择器。 ");
     Assert(versionSettingsXaml.Contains("x:Name=\"SnapshotPage\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"CreateSnapshot_Click\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"RollbackSnapshot_Click\"", StringComparison.Ordinal)
@@ -3227,12 +3231,75 @@ static Task TestEncryptedVersionSnapshotRollback()
     return Task.CompletedTask;
 }
 
+static Task TestPluginFailureReportPreservesDiagnostics()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "runtime");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(Path.Combine(home, "profiles", "web"));
+    Directory.CreateDirectory(Path.Combine(home, "sessions"));
+    var instance = CreateTestInstance("plugin-report", root, home);
+    const string secret = "unredacted-test-secret";
+    File.WriteAllText(Path.Combine(home, "settings.yaml"), "provider: test\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(home, ".credentials.yaml"), $"API_KEY: {secret}\n", new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(home, "profiles", "web", "package.json"),
+        "{\"dependencies\":{\"demo\":\"1.0.0\"}}",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(home, "sessions", "should-not-be-included.jsonl"),
+        "conversation",
+        new UTF8Encoding(false));
+
+    var report = new PluginFailureReportService().Create(
+        instance,
+        "install",
+        "demo@1.0.0",
+        new InvalidOperationException("official DSh CLI failed: package.json not found"),
+        rollbackSucceeded: true,
+        rollbackMessage: "web profile restored",
+        snapshotPath: Path.Combine(temporary.Path, "snapshot"));
+
+    Assert(File.Exists(report.ArchivePath), "Plugin 失败后必须生成诊断压缩包。 ");
+    using var archive = ZipFile.OpenRead(report.ArchivePath);
+    var names = archive.Entries.Select(entry => entry.FullName).ToArray();
+    Assert(names.Contains("error.txt", StringComparer.Ordinal)
+        && names.Contains("manifest.json", StringComparer.Ordinal)
+        && names.Contains("files/.credentials.yaml", StringComparer.Ordinal)
+        && names.Contains("files/profiles/web/package.json", StringComparer.Ordinal),
+        "诊断包必须包含错误、清单、凭据和 web profile 配置。 ");
+    Assert(names.All(name => !name.StartsWith("files/sessions/", StringComparison.OrdinalIgnoreCase)
+        && !name.Contains("node_modules", StringComparison.OrdinalIgnoreCase)),
+        "诊断包不能包含会话文件或运行依赖。 ");
+    var credentials = new StreamReader(
+        archive.GetEntry("files/.credentials.yaml")!.Open(),
+        Encoding.UTF8).ReadToEnd();
+    Assert(credentials.Contains(secret, StringComparison.Ordinal),
+        "用户明确要求不脱敏时，诊断包必须保留凭据原文供当前 DSh 排查。 ");
+    var manifest = new StreamReader(
+        archive.GetEntry("manifest.json")!.Open(),
+        Encoding.UTF8).ReadToEnd();
+    Assert(manifest.Contains("\"includesCredentials\": true", StringComparison.Ordinal),
+        "诊断清单必须明确标记该报告包含原始凭据。 ");
+    return Task.CompletedTask;
+}
+
 static Task TestVersionPackageOperations()
 {
     using var temporary = new TestDirectory();
     var launcherRoot = Path.Combine(temporary.Path, "launcher");
     var runtimeRoot = Path.Combine(temporary.Path, "dsh-runtime");
     Directory.CreateDirectory(runtimeRoot);
+    var packageRoot = Path.Combine(runtimeRoot, "node_modules", "@deepseek-ai", "dsh");
+    Directory.CreateDirectory(Path.Combine(packageRoot, "bin"));
+    Directory.CreateDirectory(Path.Combine(runtimeRoot, "node_modules", ".bin"));
+    File.WriteAllText(
+        Path.Combine(packageRoot, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.1.0\",\"bin\":{\"dsh\":\"bin/dsh.js\"}}",
+        new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(packageRoot, "bin", "dsh.js"), "console.log('test');", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(runtimeRoot, "node_modules", ".bin", "dsh.cmd"), "@echo off", new UTF8Encoding(false));
     var registry = new InstanceRegistry(new LauncherPaths(launcherRoot));
     var source = registry.Register("基础版本", runtimeRoot, InstanceKind.Installed, detectedVersion: "0.1.0", packageManager: "npm");
     Directory.CreateDirectory(Path.Combine(source.DshHome, "profiles", "web"));
@@ -3247,14 +3314,21 @@ static Task TestVersionPackageOperations()
     Assert(clean.DshHome != source.DshHome && !Directory.EnumerateFileSystemEntries(clean.DshHome).Any(), "干净版本不能带入旧版本文件。 ");
 
     var settingsService = new VersionSettingsService(new LauncherPaths(launcherRoot));
+    settingsService.SaveLauncherSettings(new LauncherSettingsData
+    {
+        DshInstallDirectory = runtimeRoot
+    });
     settingsService.Save(source, new VersionSettingsData
     {
         ConversationSyncMode = ConversationSyncMode.Workspace,
         ConversationWorkspace = "共享工作区",
         SyncModelProviders = true,
         WindowTitle = "分享用版本",
-        NodeExecutablePath = Path.Combine(temporary.Path, "node.exe")
+        NodeExecutablePath = Path.Combine(temporary.Path, "node.exe"),
+        OpenMode = VersionOpenMode.Desktop
     });
+    Assert(settingsService.Read(source).OpenMode == VersionOpenMode.Desktop,
+        "版本打开方式应能持久化到版本设置。 ");
     var workspacePeer = registry.Register("工作区副本", runtimeRoot, InstanceKind.Installed, detectedVersion: "0.1.0", packageManager: "npm");
     settingsService.Save(workspacePeer, new VersionSettingsData
     {
@@ -3368,7 +3442,18 @@ static Task TestVersionPackageOperations()
             "整合包应包含 Agent Preset 配置。 ");
     }
 
-    var importedDesign = packages.ImportPackage(exportPath, source);
+    var legacyRoot = Path.Combine(temporary.Path, "legacy-import-root");
+    Directory.CreateDirectory(legacyRoot);
+    var legacyTemplate = registry.Register(
+        "旧导入路径模板",
+        legacyRoot,
+        InstanceKind.Installed,
+        detectedVersion: "0.1.0",
+        packageManager: "npm");
+    var importedDesign = packages.ImportPackage(exportPath, legacyTemplate);
+    Assert(importedDesign.RootPath == packageRoot
+        && !string.Equals(importedDesign.RootPath, legacyTemplate.RootPath, StringComparison.OrdinalIgnoreCase),
+        ".dshpack 导入应绑定当前 DSh 安装位置，不能沿用模板或包来源路径。 ");
     Assert(!Directory.Exists(Path.Combine(importedDesign.DshHome, "sessions")),
         "导入分享整合包不能创建 sessions 目录。 ");
     var importedSettings = File.ReadAllText(Path.Combine(importedDesign.DshHome, "settings.yaml"));
@@ -3415,8 +3500,9 @@ static Task TestVersionPackageOperations()
         configWriter.Write("{\"ARK_API_KEY\":\"malicious-inline\",\"url\":\"https://user:password@example.test/v1?token=malicious-query\"}");
     }
 
-    var imported = packages.ImportPackage(packPath, source);
+    var imported = packages.ImportPackage(packPath, legacyTemplate);
     Assert(imported.DetectedVersion == "0.2.0", "整合包 manifest 应能携带版本信息。 ");
+    Assert(imported.RootPath == packageRoot, "整合包导入的运行目录应保持在当前 DSh 安装位置。 ");
     Assert(File.ReadAllText(Path.Combine(imported.DshHome, "imported.txt")) == "imported", "整合包应解压到新版本的 DSH_HOME。 ");
     Assert(!File.Exists(Path.Combine(imported.DshHome, ".credentials.yaml"))
         && !File.Exists(Path.Combine(imported.DshHome, ".env.local")),

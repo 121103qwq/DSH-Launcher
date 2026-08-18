@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
@@ -10,6 +11,8 @@ public partial class ChatWindow : Window
     private readonly string _address;
     private readonly string? _conversationId;
     private bool _conversationSelectionApplied;
+    private readonly TaskCompletionSource<bool> _navigationReady = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
 
     public ChatWindow(string address, string? conversationId = null)
     {
@@ -54,12 +57,14 @@ public partial class ChatWindow : Window
         if (!e.IsSuccess)
         {
             Title = $"DeepSeek - 连接失败 ({e.WebErrorStatus})";
+            _navigationReady.TrySetResult(false);
             return;
         }
 
         Title = "DeepSeek";
         if (_conversationId is null || _conversationSelectionApplied || Browser.CoreWebView2 is null)
         {
+            _navigationReady.TrySetResult(true);
             return;
         }
 
@@ -74,6 +79,126 @@ public partial class ChatWindow : Window
         {
             // A session preselection is best-effort; the running Chat remains usable.
         }
+
+        _navigationReady.TrySetResult(true);
+    }
+
+    public async Task<bool> SendMessageAsync(string message, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(message)
+            || !await WaitForNavigationAsync(cancellationToken)
+            || Browser.CoreWebView2 is null)
+        {
+            return false;
+        }
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(12);
+        while (DateTimeOffset.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var result = await Browser.CoreWebView2.ExecuteScriptAsync(BuildSendMessageScript(message));
+                if (result.Contains("\"sent\":true", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or COMException)
+            {
+                // The page can still be replacing its composer after the first navigation.
+            }
+
+            await Task.Delay(350, cancellationToken);
+        }
+
+        return false;
+    }
+
+    private async Task<bool> WaitForNavigationAsync(CancellationToken cancellationToken)
+    {
+        if (_navigationReady.Task.IsCompleted)
+        {
+            return await _navigationReady.Task;
+        }
+
+        try
+        {
+            return await _navigationReady.Task.WaitAsync(TimeSpan.FromSeconds(12), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static string BuildSendMessageScript(string message)
+    {
+        var serializedMessage = JsonSerializer.Serialize(message);
+        return $$"""
+            (() => {
+              const text = {{serializedMessage}};
+              const visible = (element) => {
+                const style = window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return !element.disabled
+                  && style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && rect.width > 0
+                  && rect.height > 0;
+              };
+              const inputs = Array.from(document.querySelectorAll(
+                'textarea, [contenteditable="true"], [role="textbox"]'))
+                .filter(visible)
+                .sort((left, right) =>
+                  right.getBoundingClientRect().width - left.getBoundingClientRect().width);
+              const input = inputs[0];
+              if (!input) {
+                return JSON.stringify({ sent: false, reason: 'input-not-found' });
+              }
+
+              input.focus();
+              if (input instanceof HTMLTextAreaElement) {
+                const setter = Object.getOwnPropertyDescriptor(
+                  HTMLTextAreaElement.prototype, 'value')?.set;
+                if (setter) setter.call(input, text);
+                else input.value = text;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+              } else {
+                input.textContent = text;
+                input.dispatchEvent(new InputEvent('input', {
+                  bubbles: true,
+                  inputType: 'insertText',
+                  data: text
+                }));
+              }
+
+              const buttons = Array.from(document.querySelectorAll('button, [role="button"]'))
+                .filter(visible);
+              const sendButton = buttons.find((button) => {
+                const hint = [
+                  button.getAttribute('aria-label'),
+                  button.getAttribute('title'),
+                  button.getAttribute('data-testid'),
+                  button.textContent
+                ].filter(Boolean).join(' ');
+                return /send|发送|提交|发送消息/i.test(hint);
+              });
+              if (sendButton) {
+                sendButton.click();
+                return JSON.stringify({ sent: true, method: 'button' });
+              }
+
+              input.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13,
+                bubbles: true
+              }));
+              return JSON.stringify({ sent: true, method: 'enter' });
+            })()
+            """;
     }
 
     private void Browser_NewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)

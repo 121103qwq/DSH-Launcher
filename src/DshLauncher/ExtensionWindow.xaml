@@ -106,19 +106,37 @@
                                         <StackPanel Grid.Column="1">
                                             <TextBlock Text="{Binding Name}"
                                                        FontWeight="SemiBold"
-                                                       TextTrimming="CharacterEllipsis" />
+                                                       HorizontalAlignment="Stretch"
+                                                       MaxWidth="184"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Name}" />
                                             <TextBlock Text="{Binding Description, TargetNullValue=没有描述}"
                                                        Foreground="{StaticResource MutedBrush}"
                                                        FontSize="11"
+                                                       HorizontalAlignment="Stretch"
+                                                       MaxWidth="184"
+                                                       TextWrapping="NoWrap"
                                                        TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Description}"
                                                        Margin="0,3,0,0" />
                                         </StackPanel>
                                         <TextBlock Grid.Column="2"
-                                                   Text="{Binding Enabled}"
-                                                   Foreground="#25875A"
                                                    FontSize="11"
                                                    VerticalAlignment="Center"
-                                                   Margin="8,0,2,0" />
+                                                   Margin="8,0,2,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="已禁用" />
+                                                    <Setter Property="Foreground" Value="#A25A54" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Enabled}" Value="True">
+                                                            <Setter Property="Text" Value="已启用" />
+                                                            <Setter Property="Foreground" Value="#25875A" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </Grid>
                                 </Border>
                             </DataTemplate>

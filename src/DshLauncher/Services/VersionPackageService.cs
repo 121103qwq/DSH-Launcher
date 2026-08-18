@@ -37,12 +37,13 @@ public sealed class VersionPackageService
 
     private readonly InstanceRegistry _registry;
     private readonly LauncherPaths _paths;
-    private readonly VersionSettingsService _versionSettingsService = new();
+    private readonly VersionSettingsService _versionSettingsService;
 
     public VersionPackageService(InstanceRegistry registry, LauncherPaths? paths = null)
     {
         _registry = registry;
         _paths = paths ?? new LauncherPaths();
+        _versionSettingsService = new VersionSettingsService(_paths);
     }
 
     public string PackageExtension => ReadPackageExtension();
@@ -292,14 +293,15 @@ public sealed class VersionPackageService
         var name = string.IsNullOrWhiteSpace(manifest.Name)
             ? $"{template.Name}（导入）"
             : manifest.Name.Trim();
+        var runtime = ResolveImportRuntime(template);
         var created = _registry.Register(
             name,
-            template.RootPath,
-            template.Kind,
-            template.DshExecutablePath,
+            runtime.RootPath,
+            runtime.Kind,
+            runtime.DshExecutablePath,
             manifest.DshVersion ?? manifest.DetectedVersion ?? template.DetectedVersion,
-            manifest.PackageManager ?? template.PackageManager,
-            dshLaunchSpec: template.DshLaunchSpec);
+            manifest.PackageManager ?? runtime.PackageManager,
+            dshLaunchSpec: runtime.LaunchSpec);
         try
         {
             foreach (var entry in archive.Entries)
@@ -315,6 +317,41 @@ public sealed class VersionPackageService
             TryDeleteGeneratedHome(created.DshHome);
             throw;
         }
+    }
+
+    private (string RootPath, InstanceKind Kind, string? DshExecutablePath, DshRuntimeLaunchSpec? LaunchSpec, string? PackageManager)
+        ResolveImportRuntime(ManagerInstance template)
+    {
+        var configuredInstallDirectory = _versionSettingsService.ResolveDshInstallDirectory();
+        var packageRoot = DshRuntimeDetector.TryResolvePackageRoot(configuredInstallDirectory);
+        if (packageRoot is null || !Directory.Exists(packageRoot))
+        {
+            throw new InvalidOperationException(
+                $"当前 DSh 安装位置没有可用运行时：{configuredInstallDirectory}。请先在设置/诊断中安装或检测 DSh。 ");
+        }
+
+        var launchSpec = DshRuntimeDetector.CreateLaunchSpecForPackageRoot(packageRoot);
+        if (launchSpec is null
+            && string.Equals(
+                DshRuntimeDetector.TryResolvePackageRoot(template.RootPath),
+                packageRoot,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            launchSpec = template.EffectiveDshLaunchSpec;
+        }
+
+        if (!DshRuntimeCommandFactory.IsUsable(launchSpec))
+        {
+            throw new InvalidOperationException(
+                $"已找到 DSh 运行目录，但无法构造启动入口：{packageRoot}。请先重新检测或安装 DSh。 ");
+        }
+
+        return (
+            packageRoot,
+            InstanceKind.Installed,
+            launchSpec!.HostPath,
+            launchSpec,
+            "npm");
     }
 
     private ManagerInstance RegisterLike(ManagerInstance template, string name) =>

@@ -3,7 +3,10 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 using UserControl = System.Windows.Controls.UserControl;
+using WpfListBox = System.Windows.Controls.ListBox;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
@@ -19,6 +22,8 @@ public partial class ExtensionWindow : UserControl
     private readonly bool _agentOnly;
     private readonly MarketplaceService? _marketplaceService;
     private readonly Func<ManagerInstance, CancellationToken, Task<bool>>? _stopInstanceForPluginRetry;
+    private readonly Func<ManagerInstance, string, Task<bool>>? _handoffPluginFailure;
+    private readonly PluginFailureReportService _failureReportService = new();
     private readonly SkillMarketService? _skillMarketService;
     private readonly DshMarketThemeService _themeService = new();
     private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
@@ -37,6 +42,10 @@ public partial class ExtensionWindow : UserControl
     private CancellationTokenSource? _searchDebounceCancellation;
     private CancellationTokenSource? _skillSearchDebounceCancellation;
     private Window? _agentLayoutOwner;
+    private readonly Dictionary<string, double> _marketplaceScrollOffsets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, double> _skillMarketScrollOffsets = new(StringComparer.Ordinal);
+    private string _activeMarketplaceCategoryKey = string.Empty;
+    private string _activeSkillMarketCategoryKey = string.Empty;
 
     public ExtensionWindow(
         ManagerInstance instance,
@@ -46,7 +55,8 @@ public partial class ExtensionWindow : UserControl
         MarketplaceService? marketplaceService = null,
         SkillMarketService? skillMarketService = null,
         Func<PluginInstallMode>? pluginInstallMode = null,
-        Func<ManagerInstance, CancellationToken, Task<bool>>? stopInstanceForPluginRetry = null)
+        Func<ManagerInstance, CancellationToken, Task<bool>>? stopInstanceForPluginRetry = null,
+        Func<ManagerInstance, string, Task<bool>>? handoffPluginFailure = null)
     {
         _instance = instance;
         _service = service;
@@ -55,6 +65,7 @@ public partial class ExtensionWindow : UserControl
         _agentOnly = agentOnly;
         _marketplaceService = marketplaceService;
         _stopInstanceForPluginRetry = stopInstanceForPluginRetry;
+        _handoffPluginFailure = handoffPluginFailure;
         _skillMarketService = skillMarketService;
         InitializeComponent();
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
@@ -112,7 +123,9 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    private void RenderSkillMarketItems(IReadOnlyList<SkillMarketItem> items)
+    private void RenderSkillMarketItems(
+        IReadOnlyList<SkillMarketItem> items,
+        string? restoreCategoryKey = null)
     {
         var query = SkillMarketSearchBox.Text.Trim();
         var category = (SkillMarketCategoryList.SelectedItem as ListBoxItem)?.Tag?.ToString() ?? string.Empty;
@@ -131,6 +144,13 @@ public partial class ExtensionWindow : UserControl
         SkillMarketStatusText.Text = items.Count == 0
             ? "目录为空；点击“刷新目录”从 GitHub 搜索。"
             : $"显示 {rendered.Length} / {items.Count} 个 Skill · 安装要求实例已停止";
+        if (restoreCategoryKey is not null)
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => RestoreScrollOffset(
+                SkillMarketList,
+                _skillMarketScrollOffsets,
+                restoreCategoryKey)));
+        }
     }
 
     private async Task RefreshSkillMarketAsync()
@@ -209,9 +229,12 @@ public partial class ExtensionWindow : UserControl
 
     private void SkillMarketCategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        var nextCategoryKey = GetSelectedSkillCategoryKey();
+        SaveScrollOffset(SkillMarketList, _skillMarketScrollOffsets, _activeSkillMarketCategoryKey);
+        _activeSkillMarketCategoryKey = nextCategoryKey;
         if (_skillMarketSnapshot.Count > 0)
         {
-            RenderSkillMarketItems(_skillMarketSnapshot);
+            RenderSkillMarketItems(_skillMarketSnapshot, nextCategoryKey);
         }
     }
 
@@ -266,6 +289,8 @@ public partial class ExtensionWindow : UserControl
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
         _controlLoaded = true;
+        _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
+        _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
         AttachAgentLayoutOwner();
         if (!_agentOnly)
         {
@@ -400,7 +425,17 @@ public partial class ExtensionWindow : UserControl
     {
         if (_controlLoaded)
         {
-            RenderMarketplaceItems();
+            if (ReferenceEquals(sender, MarketplaceCategoryList))
+            {
+                var nextCategoryKey = GetSelectedCategoryKey();
+                SaveScrollOffset(MarketplaceList, _marketplaceScrollOffsets, _activeMarketplaceCategoryKey);
+                _activeMarketplaceCategoryKey = nextCategoryKey;
+                RenderMarketplaceItems(nextCategoryKey);
+            }
+            else
+            {
+                RenderMarketplaceItems();
+            }
         }
     }
 
@@ -502,7 +537,7 @@ public partial class ExtensionWindow : UserControl
 
     private int _marketplaceRenderVersion;
 
-    private void RenderMarketplaceItems()
+    private void RenderMarketplaceItems(string? restoreCategoryKey = null)
     {
         if (_marketplaceService is null)
         {
@@ -550,6 +585,13 @@ public partial class ExtensionWindow : UserControl
                 MarketplaceSummaryText.Text = rendered.Count == snapshot.Count
                     ? $"找到 {snapshot.Count} 个候选插件"
                     : $"显示 {rendered.Count} / {snapshot.Count} 个候选插件";
+                if (restoreCategoryKey is not null)
+                {
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => RestoreScrollOffset(
+                        MarketplaceList,
+                        _marketplaceScrollOffsets,
+                        restoreCategoryKey)));
+                }
             });
         });
     }
@@ -631,8 +673,64 @@ public partial class ExtensionWindow : UserControl
 
     private string? GetSelectedCategory()
     {
-        var tag = (MarketplaceCategoryList.SelectedItem as ListBoxItem)?.Tag as string;
+        var tag = GetSelectedCategoryKey();
         return string.IsNullOrWhiteSpace(tag) ? null : tag;
+    }
+
+    private string GetSelectedCategoryKey() =>
+        (MarketplaceCategoryList.SelectedItem as ListBoxItem)?.Tag as string ?? string.Empty;
+
+    private string GetSelectedSkillCategoryKey() =>
+        (SkillMarketCategoryList.SelectedItem as ListBoxItem)?.Tag?.ToString() ?? string.Empty;
+
+    private static void SaveScrollOffset(
+        WpfListBox list,
+        IDictionary<string, double> offsets,
+        string categoryKey)
+    {
+        if (string.IsNullOrEmpty(categoryKey))
+        {
+            return;
+        }
+
+        var viewer = FindScrollViewer(list);
+        if (viewer is not null)
+        {
+            offsets[categoryKey] = viewer.VerticalOffset;
+        }
+    }
+
+    private static void RestoreScrollOffset(
+        WpfListBox list,
+        IReadOnlyDictionary<string, double> offsets,
+        string categoryKey)
+    {
+        var viewer = FindScrollViewer(list);
+        if (viewer is null)
+        {
+            return;
+        }
+
+        viewer.ScrollToVerticalOffset(offsets.TryGetValue(categoryKey, out var offset) ? offset : 0);
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        if (root is ScrollViewer viewer)
+        {
+            return viewer;
+        }
+
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var found = FindScrollViewer(VisualTreeHelper.GetChild(root, index));
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
     }
 
     private static string GetThemeStatusText(
@@ -771,7 +869,18 @@ public partial class ExtensionWindow : UserControl
             }
             catch (Exception ex)
             {
-                throw CreatePluginRollbackException(snapshot, ex);
+                progressWindow.SetProgress(72, "Plugin 操作失败，正在回档并打包完整诊断报告…");
+                var recovery = await RecoverPluginFailureAsync(
+                    snapshot,
+                    ex,
+                    item.IsInstalled ? "update" : "install",
+                    packageSpec);
+                progressWindow.SetProgress(90, recovery.HandoffSucceeded
+                    ? "已回档，完整报告已发送给当前 DSh。"
+                    : recovery.ReportPath is null
+                        ? "已回档，但诊断报告未能生成。"
+                        : "已回档，正在使用报告路径交给当前 DSh。 ");
+                throw new InvalidOperationException(recovery.Summary, ex);
             }
 
             MarketplaceStatusText.Text = string.IsNullOrWhiteSpace(output)
@@ -842,7 +951,12 @@ public partial class ExtensionWindow : UserControl
             }
             catch (Exception ex)
             {
-                throw CreatePluginRollbackException(snapshot, ex);
+                var recovery = await RecoverPluginFailureAsync(
+                    snapshot,
+                    ex,
+                    "remove",
+                    installedEntry?.Name ?? item.PackageName ?? item.InstallSpec);
+                throw new InvalidOperationException(recovery.Summary, ex);
             }
             StatusText.Text = $"Plugin 卸载完成。实例下次启动时生效；备份：{snapshot}";
             MarketplaceStatusText.Text = string.IsNullOrWhiteSpace(output)
@@ -963,28 +1077,99 @@ public partial class ExtensionWindow : UserControl
         RenderMarketplaceItems();
     }
 
-    private Exception CreatePluginRollbackException(string snapshot, Exception original)
+    private async Task<PluginFailureRecovery> RecoverPluginFailureAsync(
+        string snapshot,
+        Exception original,
+        string operation,
+        string packageSpec)
     {
+        var rollbackSucceeded = false;
+        string rollbackMessage;
         try
         {
-            if (_marketplaceService?.RestorePluginSnapshot(_instance, snapshot) == true)
-            {
-                return new InvalidOperationException(
-                    $"{original.Message}\n已恢复操作前的 web profile 配置。",
-                    original);
-            }
+            rollbackSucceeded = _marketplaceService?.RestorePluginSnapshot(_instance, snapshot) == true;
+            rollbackMessage = rollbackSucceeded
+                ? "已恢复操作前的 web profile 配置。"
+                : "没有可用的 web profile 备份，未能自动恢复。";
         }
         catch (Exception rollbackError)
         {
-            return new InvalidOperationException(
-                $"{original.Message}\n自动恢复 web profile 失败：{rollbackError.Message}",
-                original);
+            rollbackMessage = $"自动恢复 web profile 失败：{rollbackError.Message}";
         }
 
-        return new InvalidOperationException(
-            $"{original.Message}\n没有可用的 web profile 备份，未能自动恢复。",
-            original);
+        PluginFailureReport? report = null;
+        string? reportError = null;
+        try
+        {
+            report = _failureReportService.Create(
+                _instance,
+                operation,
+                packageSpec,
+                original,
+                rollbackSucceeded,
+                rollbackMessage,
+                string.IsNullOrWhiteSpace(snapshot) ? null : snapshot);
+        }
+        catch (Exception ex)
+        {
+            reportError = ex.Message;
+        }
+
+        var handoffSucceeded = false;
+        if (report is not null && _handoffPluginFailure is not null)
+        {
+            try
+            {
+                handoffSucceeded = await _handoffPluginFailure(
+                    _instance,
+                    BuildDshFailurePrompt(report, original, rollbackMessage));
+            }
+            catch (Exception ex)
+            {
+                reportError = string.IsNullOrWhiteSpace(reportError)
+                    ? $"发送给当前 DSh 失败：{ex.Message}"
+                    : $"{reportError}；发送给当前 DSh 失败：{ex.Message}";
+            }
+        }
+
+        var summary = $"{original.Message}\n{rollbackMessage}";
+        if (report is not null)
+        {
+            summary += $"\n完整诊断报告：{report.ArchivePath}";
+            summary += handoffSucceeded
+                ? "\n已把报告路径和错误上下文发送给当前 DSh，请让它读取报告后继续排查和安装。"
+                : "\n当前 DSh 未能自动接收报告，请打开该实例后把报告路径交给它。";
+        }
+        else if (!string.IsNullOrWhiteSpace(reportError))
+        {
+            summary += $"\n诊断报告生成失败：{reportError}";
+        }
+
+        return new PluginFailureRecovery(summary, report?.ArchivePath, handoffSucceeded);
     }
+
+    private static string BuildDshFailurePrompt(
+        PluginFailureReport report,
+        Exception original,
+        string rollbackMessage)
+    {
+        return $"""
+            Launcher 的 Plugin {report.Operation} 失败，Launcher 已先回档。
+
+            实例：{report.InstanceName}
+            Plugin：{report.PackageSpec}
+            回档结果：{rollbackMessage}
+            完整诊断报告压缩包：{report.ArchivePath}
+            错误摘要：{Tail(original.ToString())}
+
+            请在当前实例中读取并检查这个压缩包，定位安装失败的根因，修复必要配置后继续完成这次 Plugin 安装。不要删除 DSH_HOME、会话或工作区，不要重新初始化实例。报告按用户要求保留原始配置和凭据，不要把凭据复制到回复或转发到其它位置。
+            """;
+    }
+
+    private sealed record PluginFailureRecovery(
+        string Summary,
+        string? ReportPath,
+        bool HandoffSucceeded);
 
     private void MarketplaceList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -1094,9 +1279,13 @@ public partial class ExtensionWindow : UserControl
             "正在准备 Plugin 安装…");
         progressWindow.Show();
         progressWindow.SetProgress(10, "正在准备 Plugin 安装…");
+        var snapshot = string.Empty;
+        var mutationStarted = false;
         try
         {
             EnsureMarketplaceMutationAllowed(allowRunning: true);
+            snapshot = _marketplaceService?.CreatePluginSnapshot(_instance) ?? string.Empty;
+            mutationStarted = true;
             var installMode = _pluginInstallMode();
             async Task<string> ExecuteMutationAsync(PluginInstallMode mode)
             {
@@ -1130,8 +1319,22 @@ public partial class ExtensionWindow : UserControl
         }
         catch (Exception ex)
         {
-            StatusText.Text = ex.Message;
-            progressWindow.Fail(ex.Message);
+            if (!mutationStarted)
+            {
+                StatusText.Text = ex.Message;
+                progressWindow.Fail(ex.Message);
+                return;
+            }
+
+            progressWindow.SetProgress(72, "Plugin 安装失败，正在回档并打包完整诊断报告…");
+            var recovery = await RecoverPluginFailureAsync(snapshot, ex, "install", source);
+            progressWindow.SetProgress(90, recovery.HandoffSucceeded
+                ? "已回档，完整报告已发送给当前 DSh。"
+                : recovery.ReportPath is null
+                    ? "已回档，但诊断报告未能生成。"
+                    : "已回档，正在使用报告路径交给当前 DSh。 ");
+            StatusText.Text = recovery.Summary;
+            progressWindow.Fail(recovery.Summary);
         }
     }
 

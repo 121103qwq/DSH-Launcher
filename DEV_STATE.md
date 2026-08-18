@@ -2,10 +2,13 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.1`。当前任务是恢复扩展和 Agent 页左侧的当前实例详情、已安装内容和条目操作，同时把实例切换统一保留在标题栏。
+当前源码版本为 `v1.0.2`。当前任务是确保 Plugin 安装失败可以回档，并把完整诊断报告交给当前 DSh 继续排查；前序 UI、实例导入和版本设置工作保留。
 
 ## 已完成内容
 
+- 本轮新增：Plugin 安装、更新、卸载和手动安装失败会先使用现有 web profile 回档，再生成未脱敏的本地诊断 ZIP；报告保留完整错误、`.credentials.yaml` 和选定配置，排除会话文件、`node_modules` 与运行依赖。若当前 DSh 可用，Launcher 会自动打开或复用 Chat，发送报告路径和继续排查安装的指令。
+
+- 本轮代码已实现：Plugin 与 Skill 分类切换分别保存并恢复列表滚动位置；`.dshpack` 导入只从当前 Launcher 设置的 DSh 安装位置解析运行时，不再沿用整合包或模板的 `RootPath`；检测到 DSH Desktop 入口的版本可在版本设置中绑定“打开窗口”，启动页保留独立的“Launcher 启动”按钮；已安装 Plugin 列表对名称和描述单行省略，并明确显示“已启用/已禁用”。
 - .NET 8 WPF Launcher，目标 Windows x64；发布版为自包含单文件，不内置 Node.js、npm、pnpm 或 DSh。
 - 主窗口采用 PCL2 参考的信息层级：启动、扩展、Agent、对话和设置在主窗口内切换，并移除各模块重复的大号页标题。启动页标题栏左侧显示 `DSH Launcher`；扩展和 Agent 页在同一位置改为当前实例选择器，可下拉快速切换并用绿/灰/红圆点显示运行、停止和错误状态，点击实例名称直接进入该版本的插件管理。Chat WebView2 为无 Owner 的独立窗口，使用黑色 DeepSeek 图标。
 - 标题栏实例下拉已改为紧凑圆角菜单；从扩展或 Agent 进入版本设置后，左上角显示返回原页面的按钮。启动页全部实例支持双击：停止实例复用主启动流程，已运行或 Attached 实例直接打开现有 Web UI。
@@ -68,6 +71,9 @@
 
 ## 已执行测试及结果
 
+- `v1.0.2` 发布候选：Release 构建 0 warnings、0 errors；完整自测 62/62 通过，包含未脱敏 Plugin 失败诊断报告生成测试。Windows x64 自包含单文件为 72,463,029 字节，文件版本 `1.0.2.0`，SHA-256 `4580A74CAAA42E2591AE2592A2B0D60044183C23171D06490791800B5D3DF9AD`；产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.2-plugin-failure-handoff-20260818`。
+- Computer Use 实机验证：启动上述最新构建成功，启动页、扩展页和 Agent/Skill 页均可打开；扩展页读取 1091 个缓存候选，Agent 页显示 234 个 Skill，当前实例名称和实例隔离路径正常显示。验证后已关闭本次启动的测试窗口。
+- 本轮验证（含 Plugin 列表显示修改）：`dotnet build .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 为 0 warnings、0 errors；`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-build --no-restore` 为 61/61 通过；`git diff --check` 通过。更新后的 Windows x64 自包含压缩单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-plugin-status-display-20260818-113529`；`DSH Launcher.exe` 为 72,452,760 字节，SHA-256 `65FA11CDCCBDFA092614ECAE114B3E32BD55C3D9E8477CF35266A1DED1646F51`，并已确认文件存在。
 - `v1.0.1` 发布候选：Release 构建 0 warnings、0 errors，完整自测 61/61 通过。Windows x64 自包含压缩单文件为 72,450,328 字节，SHA-256 `5838D7A7C13EA51209D0608BF3EB44194CBAE87E5CABE4C071F49137054AF7F3`；发布候选目录为 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.1-restore-extension-agent-20260818-105725`。桌面顶层旧版 `DSH Launcher.exe` 当时仍被 PID 66680 使用，因此未强制终止用户进程覆盖，Release 使用候选目录中的同一文件。
 - 扩展/Agent 左侧管理区恢复：`ExtensionWindow.xaml` XML 解析通过；Release 构建 0 warnings、0 errors；完整自测 61/61 通过，并新增静态断言确认标题栏保留唯一实例选择入口、左侧实例详情/已安装列表/操作按钮可见且页面内不再存在重复实例选择器。Windows x64 自包含压缩单文件测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\restore-left-management-20260818-011724`；`DSH Launcher.exe` 为 72,450,325 字节，SHA-256 `E12212CDEF7871CEB249D73A6E930BD09D074E682BF844F6583E2485E8BF94A4`。
 - `v1.0.0`“UI 重构”最终发布候选：Release 完整自测 61/61 通过；新增覆盖运行实例热安装、运行中拒绝卸载、README npm spec 优先、身份不一致和 shell 拼接命令拒绝，以及 `--profile web` / `--profile=web` 两种写法。Windows x64 自包含压缩单文件构建成功，文件版本 `1.0.0.0`，`DSH Launcher.exe` 为 72,450,291 字节，SHA-256 `729ED12638E6D6A81297681F754CCB872D71D2CD6D7747A1ACC1E565980B94D0`；完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.0-ui-refactor-final-20260818`，桌面同名文件夹顶层 EXE 哈希一致。

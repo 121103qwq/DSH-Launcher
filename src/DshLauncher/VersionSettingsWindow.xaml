@@ -118,6 +118,32 @@
                                                Margin="0,8,0,0" />
                                 </StackPanel>
                             </Border>
+                            <Border Background="#F5F9FD" CornerRadius="10" Padding="18" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="绑定打开方式" FontWeight="SemiBold" />
+                                    <TextBlock Text="绑定 DSH Desktop 后，启动页主按钮会显示“打开窗口”；仍会保留一个“Launcher 启动”按钮。"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               TextWrapping="Wrap"
+                                               FontSize="11"
+                                               Margin="0,6,0,12" />
+                                    <ComboBox x:Name="OpenModeBox"
+                                              SelectedValuePath="Tag"
+                                              Height="36">
+                                        <ComboBoxItem Content="Launcher 启动（默认）" Tag="Launcher" />
+                                        <ComboBoxItem Content="DSH Desktop 打开窗口" Tag="Desktop" />
+                                    </ComboBox>
+                                    <TextBlock x:Name="OpenModeStatusText"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               TextWrapping="Wrap"
+                                               FontSize="11"
+                                               Margin="0,8,0,0" />
+                                    <Button Content="保存打开方式"
+                                            Click="SaveOpenMode_Click"
+                                            Style="{StaticResource PrimaryButton}"
+                                            HorizontalAlignment="Left"
+                                            Margin="0,14,0,0" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Border>
                 </StackPanel>

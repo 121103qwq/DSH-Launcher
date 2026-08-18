@@ -149,6 +149,12 @@ public partial class VersionSettingsWindow : UserControl
     {
         WindowTitleBox.Text = _settings.WindowTitle ?? string.Empty;
         NodePathBox.Text = _settings.NodeExecutablePath ?? string.Empty;
+        var openMode = _settings.OpenMode
+            ?? (_instance?.CanOpenDesktopShell == true ? VersionOpenMode.Desktop : VersionOpenMode.Launcher);
+        OpenModeBox.SelectedValue = openMode.ToString();
+        OpenModeStatusText.Text = _instance?.CanOpenDesktopShell == true
+            ? "当前版本已检测到 DSH Desktop 打开入口。"
+            : "当前版本没有检测到可用的 DSH Desktop 打开入口，只能使用 Launcher 启动。";
     }
 
     private string FormatNodeRuntime()
@@ -394,7 +400,57 @@ public partial class VersionSettingsWindow : UserControl
             : null,
         SyncModelProviders = SyncModelProvidersCheckBox.IsChecked == true,
         WindowTitle = _settings.WindowTitle,
-        NodeExecutablePath = _settings.NodeExecutablePath
+        NodeExecutablePath = _settings.NodeExecutablePath,
+        OpenMode = _settings.OpenMode
+    };
+
+    private void SaveOpenMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            OpenModeStatusText.Text = "请先选择版本。";
+            return;
+        }
+
+        if (!Enum.TryParse<VersionOpenMode>(OpenModeBox.SelectedValue?.ToString(), out var openMode))
+        {
+            OpenModeStatusText.Text = "打开方式无效。";
+            return;
+        }
+
+        if (openMode == VersionOpenMode.Desktop && !_instance.CanOpenDesktopShell)
+        {
+            OpenModeStatusText.Text = "当前版本没有可用的 DSH Desktop 打开入口，请先导入或检测 DSH Desktop。";
+            return;
+        }
+
+        try
+        {
+            var updated = CopySettings();
+            updated.OpenMode = openMode;
+            var snapshot = TryCreateSnapshot("保存打开方式前");
+            _settingsService.Save(_instance, updated);
+            _settings = updated;
+            OpenModeStatusText.Text = snapshot is null
+                ? $"已保存：{(openMode == VersionOpenMode.Desktop ? "DSH Desktop 打开窗口" : "Launcher 启动")}。"
+                : $"已保存：{(openMode == VersionOpenMode.Desktop ? "DSH Desktop 打开窗口" : "Launcher 启动")}，并已保留修改前快照。";
+            _settingsSaved();
+        }
+        catch (Exception ex)
+        {
+            OpenModeStatusText.Text = $"保存打开方式失败：{ex.Message}";
+        }
+    }
+
+    private VersionSettingsData CopySettings() => new()
+    {
+        SyncAllConfiguration = _settings.SyncAllConfiguration,
+        ConversationSyncMode = _settings.ConversationSyncMode,
+        ConversationWorkspace = _settings.ConversationWorkspace,
+        SyncModelProviders = _settings.SyncModelProviders,
+        WindowTitle = _settings.WindowTitle,
+        NodeExecutablePath = _settings.NodeExecutablePath,
+        OpenMode = _settings.OpenMode
     };
 
     private async void RefreshPlugins_Click(object sender, RoutedEventArgs e) => await LoadPluginsAsync();
@@ -511,7 +567,8 @@ public partial class VersionSettingsWindow : UserControl
                 ConversationWorkspace = _settings.ConversationWorkspace,
                 SyncModelProviders = _settings.SyncModelProviders,
                 WindowTitle = WindowTitleBox.Text,
-                NodeExecutablePath = nodePath
+                NodeExecutablePath = nodePath,
+                OpenMode = _settings.OpenMode
             };
             var snapshot = TryCreateSnapshot("保存窗口与 Node 设置前");
             _settingsService.Save(_instance, updated);

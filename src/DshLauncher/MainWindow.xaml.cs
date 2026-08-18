@@ -157,6 +157,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(CanStopInstance));
             OnPropertyChanged(nameof(CanRestartInstance));
             OnPropertyChanged(nameof(DesktopShellVisibility));
+            OnPropertyChanged(nameof(LauncherStartVisibility));
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeVersionText));
@@ -236,9 +237,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string StartInstanceButtonText => SelectedInstance is null
         ? "准备首个版本"
-        : _instanceRunner.IsRunning(SelectedInstance.Id)
-            ? "打开实例"
-            : "启动实例";
+        : IsDesktopOpenBound
+            ? "打开窗口"
+            : _instanceRunner.IsRunning(SelectedInstance.Id)
+                ? "打开实例"
+                : "启动实例";
 
     public bool CanStopInstance => CanStopInstanceCore(
         _isLifecycleInProgress,
@@ -248,9 +251,38 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public bool CanRestartInstance => CanStopInstance;
 
-    public Visibility DesktopShellVisibility => SelectedInstance?.CanOpenDesktopShell == true
+    public bool IsDesktopOpenBound => SelectedInstance?.CanOpenDesktopShell == true
+        && GetSelectedOpenMode() == VersionOpenMode.Desktop;
+
+    public Visibility LauncherStartVisibility => IsDesktopOpenBound
         ? Visibility.Visible
         : Visibility.Collapsed;
+
+    public Visibility DesktopShellVisibility => SelectedInstance?.CanOpenDesktopShell == true
+        && !IsDesktopOpenBound
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    private VersionOpenMode GetSelectedOpenMode()
+    {
+        if (SelectedInstance is null)
+        {
+            return VersionOpenMode.Launcher;
+        }
+
+        try
+        {
+            var settings = _versionSettingsService.Read(SelectedInstance);
+            return settings.OpenMode
+                ?? (SelectedInstance.CanOpenDesktopShell
+                    ? VersionOpenMode.Desktop
+                    : VersionOpenMode.Launcher);
+        }
+        catch
+        {
+            return VersionOpenMode.Launcher;
+        }
+    }
 
     internal static bool CanStopInstanceCore(
         bool lifecycleInProgress,
@@ -963,7 +995,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         () => _nodeRuntime,
                         marketplaceService: _marketplaceService,
                         pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode,
-                        stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync),
+                        stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync,
+                        handoffPluginFailure: SendPluginFailureToCurrentInstanceAsync),
                     "Agent" => new ExtensionWindow(
                         instance,
                         _extensionService,
@@ -1126,6 +1159,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (instance is null)
         {
             Title = "DSH Launcher";
+            OnPropertyChanged(nameof(StartInstanceButtonText));
+            OnPropertyChanged(nameof(LauncherStartVisibility));
+            OnPropertyChanged(nameof(DesktopShellVisibility));
             return;
         }
 
@@ -1138,6 +1174,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             Title = "DSH Launcher";
         }
+
+        OnPropertyChanged(nameof(StartInstanceButtonText));
+        OnPropertyChanged(nameof(LauncherStartVisibility));
+        OnPropertyChanged(nameof(DesktopShellVisibility));
     }
 
     private ManagerInstance? GetVersionTemplate()
@@ -2608,6 +2648,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void StartInstance_Click(object sender, RoutedEventArgs e)
     {
+        if (IsDesktopOpenBound)
+        {
+            OpenDesktopShell_Click(sender, e);
+            return;
+        }
+
+        await StartSelectedInstanceAsync();
+    }
+
+    private async void StartLauncherInstance_Click(object sender, RoutedEventArgs e)
+    {
         await StartSelectedInstanceAsync();
     }
 
@@ -3177,6 +3228,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedInstanceStatusBrush));
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(StartInstanceButtonText));
+        OnPropertyChanged(nameof(LauncherStartVisibility));
+        OnPropertyChanged(nameof(DesktopShellVisibility));
         OnPropertyChanged(nameof(CanStopInstance));
         OnPropertyChanged(nameof(CanRestartInstance));
         OnPropertyChanged(nameof(InstanceEndpointText));
@@ -3654,6 +3707,77 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return true;
     }
 
+    private async Task<bool> SendPluginFailureToCurrentInstanceAsync(
+        ManagerInstance target,
+        string prompt)
+    {
+        var instance = ResolveInstanceById(Instances, target.Id) ?? target;
+        if (instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
+            && !_instanceRunner.IsRunning(instance.Id)
+            && instance.RuntimeStatus != InstanceRuntimeStatus.Running)
+        {
+            if (!TryBeginLifecycleOperation())
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!await EnsureRuntimeReadyAsync(instance))
+                {
+                    return false;
+                }
+
+                var resolved = ResolveInstanceById(Instances, instance.Id);
+                if (resolved is null)
+                {
+                    return false;
+                }
+
+                var started = await StartManagedInstanceAsync(resolved);
+                if (started is null || !started.IsSuccess || started.WebUrl is null)
+                {
+                    return false;
+                }
+
+                instance = ResolveInstanceById(Instances, instance.Id) ?? resolved with
+                {
+                    RuntimeStatus = InstanceRuntimeStatus.Running,
+                    RuntimeOwnership = InstanceRuntimeOwnership.Managed,
+                    WebUrl = started.WebUrl
+                };
+            }
+            finally
+            {
+                EndLifecycleOperation();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(instance.WebUrl)
+            || (instance.RuntimeStatus != InstanceRuntimeStatus.Running
+                && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached))
+        {
+            return false;
+        }
+
+        ChatWindow? chat = null;
+        if (TryFocusChatWindow(instance.Id))
+        {
+            _chatWindows.TryGetValue(instance.Id, out chat);
+        }
+        else
+        {
+            chat = OpenChatWindow(instance.Id, instance.WebUrl);
+        }
+
+        if (chat is null)
+        {
+            return false;
+        }
+
+        return await chat.SendMessageAsync(prompt, _windowCancellation.Token);
+    }
+
     protected override void OnClosed(EventArgs e)
     {
         _windowSource?.RemoveHook(WindowProcedure);
@@ -3663,7 +3787,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         base.OnClosed(e);
     }
 
-    private void OpenChatWindow(string instanceId, string address, string? conversationId = null)
+    private ChatWindow? OpenChatWindow(string instanceId, string address, string? conversationId = null)
     {
         CloseChatWindow(instanceId);
         try
@@ -3680,10 +3804,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             };
             chat.Show();
             MarkInstanceUsed(instanceId);
+            return chat;
         }
         catch (Exception ex)
         {
             ShowNotice($"Chat 窗口无法打开：{ex.Message}。Launcher 和实例仍保持运行。");
+            return null;
         }
     }
 

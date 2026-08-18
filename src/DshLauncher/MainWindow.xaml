@@ -331,6 +331,13 @@
                                                         <TextBlock Text="{Binding StartInstanceButtonText}" />
                                                     </StackPanel>
                                                 </Button>
+                                                <Button Content="Launcher 启动"
+                                                        Click="StartLauncherInstance_Click"
+                                                        Visibility="{Binding LauncherStartVisibility}"
+                                                        IsEnabled="{Binding CanStartInstance}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
                                                 <Button Content="停止"
                                                         Click="StopInstance_Click"
                                                         IsEnabled="{Binding CanStopInstance}"
@@ -343,13 +350,13 @@
                                                         Height="40"
                                                         Padding="15,0"
                                                         Margin="0,0,8,8" />
-                                                <Button Content="桌面窗口"
+                                                <Button Content="打开窗口"
                                                         Click="OpenDesktopShell_Click"
                                                         Visibility="{Binding DesktopShellVisibility}"
                                                         Height="40"
                                                         Padding="15,0"
                                                         Margin="0,0,8,8"
-                                                        ToolTip="实验功能：使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口" />
+                                                        ToolTip="使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口" />
                                             </WrapPanel>
                                         </StackPanel>
                                     </Grid>

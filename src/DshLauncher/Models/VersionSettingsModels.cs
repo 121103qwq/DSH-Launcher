@@ -13,6 +13,12 @@ public enum PluginInstallMode
     Compatibility
 }
 
+public enum VersionOpenMode
+{
+    Launcher,
+    Desktop
+}
+
 public sealed class VersionSettingsData
 {
     public bool SyncAllConfiguration { get; set; }
@@ -26,6 +32,12 @@ public sealed class VersionSettingsData
     public string? WindowTitle { get; set; }
 
     public string? NodeExecutablePath { get; set; }
+
+    /// <summary>
+    /// Null keeps the legacy behavior: a detected DSH Desktop runtime opens as
+    /// a desktop window, while normal DSh runtimes use Launcher web startup.
+    /// </summary>
+    public VersionOpenMode? OpenMode { get; set; }
 }
 
 /// <summary>

@@ -315,6 +315,11 @@ public sealed class VersionSettingsService
             settings.ConversationSyncMode = ConversationSyncMode.Independent;
         }
 
+        if (settings.OpenMode is { } openMode && !Enum.IsDefined(openMode))
+        {
+            settings.OpenMode = null;
+        }
+
         settings.ConversationWorkspace = string.IsNullOrWhiteSpace(settings.ConversationWorkspace)
             ? null
             : settings.ConversationWorkspace.Trim();
