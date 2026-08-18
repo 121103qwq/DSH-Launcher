@@ -2,10 +2,12 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.3`。当前任务是完成发布前自检，并补齐精选 Plugin、dsh-market 热加载存档、DSh 版本选择，以及插件开发者头像显示；前序安装失败回档、UI、实例导入和版本设置工作保留。
+当前源码版本为 `v1.0.4`。当前任务是发布 Plugin 安装可靠性、真实进度和 Agent 已安装 Skill 显示修复。
 
 ## 已完成内容
 
+- Plugin CLI 继承当前环境或 Git 全局代理，修复从资源管理器启动 Launcher 后 GitHub codeload 下载没有走既有代理而超时的问题；Plugin 进度改为 pnpm 实际包计数，Skill ZIP 下载显示真实字节进度。README 已加入当前界面截图和本次安装行为说明。
+- 本轮修复：Plugin 安装和更新继续只调用官方 DSh CLI，不再从仓库 README 提取或改写安装指令；调用前会把 web profile 中遗留的 pnpm `allowBuilds` 未决占位明确设为 `false`，当前已验证插件仍单独授权，且 `pnpm-workspace.yaml` 已纳入失败回档。Skill 市场会把当前实例内同名的可管理 Skill 标记为“已安装”并禁用重复安装；Agent 左栏增大独立高度并为已安装列表保留最小可见区域，`grill-me` 这类已安装条目不会再被当前选择区和长路径挤没。
 - 发布前补强：指定 DSh 版本先安装到同级临时目录，校验通过后再替换正式版本目录；离开版本控制会取消下载。`.dshpack` 脱敏已覆盖 YAML 多行 API Key/私钥正文。
 
 - 本轮新增：插件市场提供“精选”分类，按 dsh-market 同源社区目录筛选；GitHub Plugin 卡片显示仓库开发者头像，图片加载失败时保留字母占位。每个实例可独立开启 dsh-market 热加载，应用主题前创建 Plugin 范围自动快照；每个实例最多保留 10 个自动快照，手动快照不参与清理。
@@ -22,8 +24,8 @@
 - 每个版本使用独立 `DSH_HOME` 和 `DSH_AGENTS_HOME`。实例级 Plugin、Skill、MCP、Provider 状态、Agent Preset、Settings 和 Conversation 文件均以该目录为边界；对话和模型 Provider 支持 Independent、Workspace、All/全配置同步策略。运行中的版本不会被同步写入。
 - 设置/诊断页可选择任意版本并编辑与“版本设置 → 配置”相同的同步选项；工作区管理支持显示成员、添加、重命名和删除。删除工作区只解除成员版本的同步关系并切回 Independent，不删除版本或对话文件。
 - Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、独立安装弹窗和完成后刷新。安装弹窗按检查、备份、CLI 操作和刷新显示阶段百分比；操作前可见但完成时被最小化的 Owner 会恢复原状态。市场标题可打开 GitHub；根目录缺少有效 package.json 时会按默认分支并回退 main/master 扫描常见 monorepo 子目录。主题预览按需读取 README 图片，无图或不支持时明确提示。
-- Managed 运行实例现在允许 Plugin 热安装和更新：快速模式失败后自动尝试兼容性模式，兼容性热安装仍失败才询问是否停止实例后重试；卸载仍要求停止，Attached 始终只读。市场在 package/bundle 校验通过后，会读取 GitHub README，并且只在其中的 `dsh plugin --profile web add ...` 目标与已验证包名或仓库身份一致时采用该安装 spec。
-- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`。扩展和 Agent 页左栏显示当前实例详情、已安装条目及启用/禁用/更新/删除操作，右侧保留市场和横向分类；实例切换只保留标题栏入口。
+- Managed 运行实例现在允许 Plugin 热安装和更新：快速模式失败后自动尝试兼容性模式，兼容性热安装仍失败才询问是否停止实例后重试；卸载仍要求停止，Attached 始终只读。市场安装目标只使用目录条目以及 npm/GitHub `package.json` 校验结果，不再读取 README 安装指令。
+- Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`；同名可管理 Skill 已存在时显示“已安装”并禁用按钮。扩展和 Agent 页左栏显示当前实例详情、已安装条目及启用/禁用/更新/删除操作，右侧保留市场和横向分类；实例切换只保留标题栏入口。
 - 全局 ComboBox 的点击层使用不绘制悬停背景的专用模板，鼠标移入时只改变外框颜色，不再覆盖选中文字和箭头；可编辑 ComboBox 的内部文本框显式清除重复 Padding，工作区名称不再被垂直裁切。
 - 版本控制支持导入实例、复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。“导入实例”可扫描文件夹或解析 Windows `.lnk` 快捷方式的目标/工作目录，再复用现有 DSh Runtime 校验；普通 DSh 使用当前有效的 `$DSH_HOME`（默认 `~/.dsh`），DeepSeek Desktop 从安装包 `.modules.yaml` 反查实际 `%LOCALAPPDATA%\DeepSeek Harness Data`，把工作区、对话、设置、Plugin/Skill 和本机 Provider 凭据复制到独立 HOME，不与原桌面程序共用目录。同一 package root 再次手动导入时更新已有实例，不再建立 `(2)/(3)`；自动检测到同一 root 的真实来源 HOME 改变时也覆盖原停止实例并更新来源记录。覆盖会保留 `.dsh-launcher` 版本设置，运行中的实例拒绝覆盖。导入跳过 `webview2` 浏览器缓存、重解析点和整棵 `node_modules`，新注册失败会撤销。整合包可包含脱敏后的 Provider 结构和模型目录，但会排除 `.credentials.yaml`、`.env`/`.env.*`、sessions、API Key、Token、密码和 URL 凭据；导入再次拒绝凭据路径并清理可分享文本，始终创建新版本。版本设置个性化页提供版本名称输入框和保存按钮，修改后同步更新实例注册记录、当前选择和页面标题。
 - 实例注册文件加载时会合并历史遗留的“相同 DSh package root + 相同导入 DSH_HOME”重复项，保留运行状态更有效或最近使用的一项并持久化结果；没有导入来源的复制版本、干净版本和各自 DSH_HOME 不参与合并，也不会删除旧目录。
@@ -75,6 +77,9 @@
 
 ## 已执行测试及结果
 
+- `v1.0.4` 发布候选：Release build 为 0 warnings、0 errors，完整自测 63/63 通过；Windows x64 自包含单文件版本为 `1.0.4.0`，产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.4-plugin-install` 和桌面同名文件夹顶层。最终文件大小与 SHA-256 以 GitHub Release 记录为准。
+- Agent 已安装 Skill 左栏修复：Release 完整自测 63/63 通过，新增检查左侧已安装列表保留最小高度且 Agent 左右栏继续使用独立高度；WPF Release 构建 0 warnings、0 errors。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\skill-installed-list-20260818-161929`，并确认顶层 `DSH Launcher.exe` 存在。
+- 本轮 Plugin/Skill 修复：Release 完整自测 63/63 通过，覆盖 pnpm `allowBuilds` 未决项安全落为 `false`、已明确允许项保持 `true`、README 不改写 Plugin 安装目标，以及已导入 Skill 的市场安装状态；WPF Release 构建 0 warnings、0 errors。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\plugin-skill-official-cli-20260818-161125`，并确认 `win-x64\DSH Launcher.exe` 存在。
 - `v1.0.3` 最终发布前修复：指定 DSh 版本下载改为临时目录校验后替换，`.dshpack` 补齐 YAML 多行敏感值清理；Release build 为 0 warnings、0 errors，完整自测 63/63 通过，`git diff --check` 通过。最终产物信息以 GitHub Release 记录为准。
 
 - 本轮发布前候选：Release 完整自测 63/63 通过，覆盖精选来源与 GitHub 开发者头像、DSh 官方版本目录排序、指定版本安装、dsh-market 热加载开关持久化、运行中 Managed 实例的 Plugin 范围自动快照，以及 10 个自动快照上限和手动快照保留；Release build/publish 为 0 warnings、0 errors，`git diff --check` 通过。Windows x64 自包含单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\pre-release-version-market-avatar-20260818`；`DSH Launcher.exe` 为 72,468,814 字节，SHA-256 `52248320E20F28550A4633B17A602D6EF2D570451D856DC411EDE3E0DA8029DD`。
@@ -143,7 +148,7 @@
 - 主题市场可按需显示仓库 README 中的首选图片，并保留 dsh-market 应用桥接；Wallpaper 仍未建立独立资源格式，也未在用户真实实例上做主题视觉验收。
 - 当前用于实机验证的 `Research` 实例没有安装 dsh-market，因此界面正确禁用了热加载应用；真实 dsh-market 主题应用及其自动快照仍需在已安装该插件的测试实例上验证。
 - GitHub Topic 发现仍未做分页加载；真实第三方 Plugin CLI 对 node_modules 的副作用不能由配置快照完全回滚，失败时仍以官方 CLI 输出和 web profile 自动恢复为准。
-- Plugin 百分比按校验、备份、官方 CLI 与刷新阶段计算；官方 CLI 没有稳定的总字节数，因此不是网络下载字节百分比。
+- Plugin CLI 没有稳定的总下载字节数，因此界面显示 pnpm 实际解析、复用、下载和添加数量，其他无法量化的阶段保持不确定进度；只有可取得 `Content-Length` 的 Skill ZIP 下载显示字节百分比。
 - `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；它是本地回滚点，不是可分享格式，分享继续使用脱敏 `.dshpack`。
 - 官方已安装 DSh 的 package metadata 当前未声明 `engines.node` 时，Node 兼容性只能显示“未声明/Unknown”，不会凭空套用固定版本限制。
 - 一键运行环境准备的端到端链路（真实无 Node 机器上：下载、UAC 授权、msiexec 安装、自动重检测）仍需实机人工验证。
@@ -175,4 +180,4 @@
 
 ## 下一步最直接的任务
 
-在独立测试实例安装 dsh-market 后实际应用一次主题并回滚自动快照；随后用“新建干净版本”实际下载一个本机缺少的官方 DSh 版本，完成两条仍未实机落地的链路。
+在安装了 `dsh-market` 的独立测试实例上实机验证主题热加载和自动快照回滚。

@@ -36,6 +36,7 @@ public partial class ExtensionWindow : UserControl
     private DateTimeOffset _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
     private IReadOnlyList<MarketplaceItem> _marketplaceSnapshot = Array.Empty<MarketplaceItem>();
     private IReadOnlyList<ExtensionEntry> _installedPlugins = Array.Empty<ExtensionEntry>();
+    private IReadOnlyList<ExtensionEntry> _installedSkills = Array.Empty<ExtensionEntry>();
     private bool _marketplaceCanMutate;
     private bool _isMarketplaceLoading;
     private bool _isMarketplaceMutating;
@@ -149,7 +150,10 @@ public partial class ExtensionWindow : UserControl
                 || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || item.Repository.Contains(query, StringComparison.OrdinalIgnoreCase)
                 || (item.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
-            .Select(item => new SkillMarketItemViewModel(item, instanceStopped))
+            .Select(item => new SkillMarketItemViewModel(
+                item,
+                instanceStopped,
+                IsSkillInstalled(item, _installedSkills)))
             .ToArray();
         SkillMarketList.ItemsSource = rendered;
         SkillMarketStatusText.Text = items.Count == 0
@@ -259,16 +263,39 @@ public partial class ExtensionWindow : UserControl
 
         _isSkillMarketMutating = true;
         SkillMarketStatusText.Text = $"正在下载并安装 {viewModel.Item.Repository}…";
+        using var operationCancellation = new CancellationTokenSource();
+        var progressWindow = new PluginProgressWindow(
+            Window.GetWindow(this),
+            operationCancellation,
+            $"安装 Skill · {viewModel.Item.Name}",
+            "正在连接 GitHub 下载 Skill…");
+        progressWindow.Show();
+        progressWindow.SetIndeterminate("正在连接 GitHub 下载 Skill…");
         try
         {
+            var progress = new Progress<SkillInstallProgress>(update =>
+                progressWindow.SetDownloadProgress(update, viewModel.Item.Name));
             var installedName = await Task.Run(() =>
-                _skillMarketService!.InstallAsync(_instance, viewModel.Item));
+                _skillMarketService!.InstallAsync(
+                    _instance,
+                    viewModel.Item,
+                    progress,
+                    operationCancellation.Token));
             SkillMarketStatusText.Text = $"已安装 Skill：{installedName}。";
+            progressWindow.SetIndeterminate("Skill 已导入，正在刷新当前实例…");
             await RefreshAsync();
+            progressWindow.Complete($"Skill 已安装：{installedName}。");
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            const string message = "Skill 安装已取消。";
+            SkillMarketStatusText.Text = message;
+            progressWindow.Canceled(message);
         }
         catch (Exception ex)
         {
             SkillMarketStatusText.Text = $"安装 Skill 失败：{ex.Message}";
+            progressWindow.Fail(ex.Message);
         }
         finally
         {
@@ -278,10 +305,11 @@ public partial class ExtensionWindow : UserControl
 
     private sealed class SkillMarketItemViewModel
     {
-        public SkillMarketItemViewModel(SkillMarketItem item, bool instanceStopped)
+        public SkillMarketItemViewModel(SkillMarketItem item, bool instanceStopped, bool isInstalled)
         {
             Item = item;
-            CanInstall = item.Verified && instanceStopped;
+            IsInstalled = isInstalled;
+            CanInstall = item.Verified && instanceStopped && !isInstalled;
         }
 
         public SkillMarketItem Item { get; }
@@ -289,13 +317,24 @@ public partial class ExtensionWindow : UserControl
         public string Repository => Item.Repository;
         public string? Description => Item.Description;
         public string StarsText => $"{Item.Category} · ★ {Item.Stars} · {(Item.UpdatedAt?.ToLocalTime().ToString("yyyy-MM-dd") ?? "时间未知")}";
-        public string StatusText => Item.Verified
+        public string StatusText => IsInstalled
+            ? "已安装到当前实例"
+            : Item.Verified
             ? "SKILL.md 已校验"
             : Item.ValidationVersion == SkillMarketService.CurrentValidationVersion
                 ? "SKILL.md 未通过格式校验"
                 : "校验暂未完成，可刷新重试";
+        public string ActionText => IsInstalled ? "已安装" : "安装";
+        public bool IsInstalled { get; }
         public bool CanInstall { get; }
     }
+
+    internal static bool IsSkillInstalled(
+        SkillMarketItem item,
+        IEnumerable<ExtensionEntry> installedSkills) =>
+        installedSkills.Any(entry => entry.Kind == ExtensionKind.Skill
+            && entry.Managed
+            && string.Equals(entry.Name, item.Name, StringComparison.OrdinalIgnoreCase));
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
@@ -364,8 +403,8 @@ public partial class ExtensionWindow : UserControl
         var windowHeight = _agentLayoutOwner?.ActualHeight > 0
             ? _agentLayoutOwner.ActualHeight
             : SystemParameters.WorkArea.Height;
-        var rightHeight = Math.Clamp(windowHeight - 210, 420, 760);
-        var leftHeight = Math.Clamp(rightHeight - 80, 360, 580);
+        var rightHeight = Math.Clamp(windowHeight - 170, 500, 760);
+        var leftHeight = Math.Clamp(rightHeight - 36, 464, 700);
         InstalledPanel.Height = leftHeight;
         SkillMarketPanel.Height = rightHeight;
     }
@@ -382,6 +421,16 @@ public partial class ExtensionWindow : UserControl
                     ? entries.Where(entry => entry.Kind is ExtensionKind.Skill or ExtensionKind.Preset or ExtensionKind.Workflow)
                     : entries.Where(entry => entry.Kind is ExtensionKind.Plugin or ExtensionKind.Mcp))
                 .ToList();
+            if (_agentOnly)
+            {
+                _installedSkills = entries
+                    .Where(entry => entry.Kind == ExtensionKind.Skill && entry.Managed)
+                    .ToArray();
+                if (_skillMarketSnapshot.Count > 0)
+                {
+                    RenderSkillMarketItems(_skillMarketSnapshot);
+                }
+            }
             // 整批替换 ItemsSource，避免逐条 Add 触发多次布局。
             ExtensionList.ItemsSource = rendered;
             if (selectedId is not null)
@@ -822,7 +871,7 @@ public partial class ExtensionWindow : UserControl
                 item.IsInstalled ? $"更新 Plugin · {item.Name}" : $"安装 Plugin · {item.Name}",
                 initialStatus);
             progressWindow.Show();
-            progressWindow.SetProgress(8, initialStatus);
+            progressWindow.SetIndeterminate(initialStatus);
             var verification = await _marketplaceService.VerifyAsync(item, operationCancellation.Token);
             if (verification.Status == MarketplaceVerificationStatus.Rejected)
             {
@@ -831,7 +880,7 @@ public partial class ExtensionWindow : UserControl
                 return;
             }
 
-            progressWindow.SetProgress(22, "Plugin 校验通过，正在保存当前配置…");
+            progressWindow.SetIndeterminate("Plugin 校验通过，正在保存当前配置…");
             var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
             var installMode = _pluginInstallMode();
             var installedEntry = item.IsInstalled
@@ -846,35 +895,42 @@ public partial class ExtensionWindow : UserControl
             async Task<string> ExecuteMutationAsync(PluginInstallMode mode)
             {
                 var modeText = mode == PluginInstallMode.Fast ? "快速安装" : "兼容性安装";
-                var cliProgress = mode == PluginInstallMode.Fast ? 42 : 46;
+                var commandText = item.IsInstalled
+                    ? $"正在通过官方 DSh CLI 更新 Plugin（{modeText}）…"
+                    : $"正在通过官方 DSh CLI 安装 Plugin（{modeText}）…";
+                var cliProgress = new Progress<PluginCommandProgress>(update =>
+                    progressWindow.SetPackageProgress(update, commandText));
                 if (item.IsInstalled)
                 {
                     SetMarketplaceMutationText("正在更新 Plugin…");
-                    progressWindow.SetProgress(cliProgress, $"正在通过官方 DSh CLI 更新 Plugin（{modeText}）…");
+                    progressWindow.SetIndeterminate(commandText, "等待 CLI");
                     return await _service.UpdatePluginAsync(
                         _instance,
                         installedEntry?.Name ?? verification.PackageName ?? item.PackageName ?? packageSpec,
                         _nodeRuntime(),
                         mode,
-                        operationCancellation.Token);
+                        operationCancellation.Token,
+                        cliProgress);
                 }
 
                 SetMarketplaceMutationText("正在安装 Plugin…");
-                progressWindow.SetProgress(cliProgress, $"正在通过官方 DSh CLI 安装 Plugin（{modeText}）…");
+                progressWindow.SetIndeterminate(commandText, "等待 CLI");
                 return string.IsNullOrWhiteSpace(verification.PackageName)
                     ? await _service.InstallPluginAsync(
                         _instance,
                         packageSpec,
                         _nodeRuntime(),
                         mode,
-                        operationCancellation.Token)
+                        operationCancellation.Token,
+                        cliProgress)
                     : await _service.InstallPluginAsync(
                         _instance,
                         packageSpec,
                         _nodeRuntime(),
                         verification.PackageName,
                         mode,
-                        operationCancellation.Token);
+                        operationCancellation.Token,
+                        cliProgress);
             }
 
             string output;
@@ -886,7 +942,7 @@ public partial class ExtensionWindow : UserControl
                     progressWindow,
                     operationCancellation.Token);
 
-                progressWindow.SetProgress(82, item.IsInstalled
+                progressWindow.SetIndeterminate(item.IsInstalled
                     ? "Plugin 更新完成，正在整理结果…"
                     : "Plugin 安装完成，正在整理结果…");
                 var activationText = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
@@ -908,13 +964,13 @@ public partial class ExtensionWindow : UserControl
             }
             catch (Exception ex)
             {
-                progressWindow.SetProgress(72, "Plugin 操作失败，正在回档并打包完整诊断报告…");
+                progressWindow.SetIndeterminate("Plugin 操作失败，正在回档并打包完整诊断报告…");
                 var recovery = await RecoverPluginFailureAsync(
                     snapshot,
                     ex,
                     item.IsInstalled ? "update" : "install",
                     packageSpec);
-                progressWindow.SetProgress(90, recovery.HandoffSucceeded
+                progressWindow.SetIndeterminate(recovery.HandoffSucceeded
                     ? "已回档，完整报告已发送给当前 DSh。"
                     : recovery.ReportPath is null
                         ? "已回档，但诊断报告未能生成。"
@@ -926,9 +982,9 @@ public partial class ExtensionWindow : UserControl
                 ? "操作完成。"
                 : $"操作完成：{Tail(output)}";
             SetMarketplaceMutationText("操作完成，正在刷新实例内容和插件市场…");
-            progressWindow.SetProgress(88, "Plugin 操作完成，正在刷新当前实例…");
+            progressWindow.SetIndeterminate("Plugin 操作完成，正在刷新当前实例…");
             await RefreshAsync();
-            progressWindow.SetProgress(95, "当前实例已刷新，正在刷新插件市场…");
+            progressWindow.SetIndeterminate("当前实例已刷新，正在刷新插件市场…");
             await RefreshMarketplaceAsync();
             progressWindow.Complete(item.IsInstalled ? "Plugin 更新完成。" : "Plugin 安装完成。");
         }
@@ -1296,7 +1352,7 @@ public partial class ExtensionWindow : UserControl
                 fastError is not OperationCanceledException
                 && !cancellationToken.IsCancellationRequested)
             {
-                progressWindow.SetProgress(44, "快速安装失败，正在自动尝试兼容性安装…");
+                progressWindow.SetIndeterminate("快速安装失败，正在自动尝试兼容性安装…");
             }
         }
 
@@ -1309,7 +1365,7 @@ public partial class ExtensionWindow : UserControl
             && !cancellationToken.IsCancellationRequested
             && _instance.RuntimeStatus == InstanceRuntimeStatus.Running)
         {
-            progressWindow.SetProgress(50, "兼容性热安装仍然失败，等待确认是否停止实例后重试…");
+            progressWindow.SetIndeterminate("兼容性热安装仍然失败，等待确认是否停止实例后重试…");
             if (System.Windows.MessageBox.Show(
                     progressWindow,
                     $"热安装未成功。是否由 Launcher 停止当前实例，然后再使用兼容性安装重试？\n\n{Tail(compatibilityError.Message)}",
@@ -1327,7 +1383,7 @@ public partial class ExtensionWindow : UserControl
                     compatibilityError);
             }
 
-            progressWindow.SetProgress(56, "正在停止当前实例…");
+            progressWindow.SetIndeterminate("正在停止当前实例…");
             if (!await _stopInstanceForPluginRetry(_instance, cancellationToken))
             {
                 throw new InvalidOperationException(
@@ -1344,7 +1400,7 @@ public partial class ExtensionWindow : UserControl
                 WebUrl = null,
                 LastError = null
             };
-            progressWindow.SetProgress(62, "实例已停止，正在使用兼容性安装重试…");
+            progressWindow.SetIndeterminate("实例已停止，正在使用兼容性安装重试…");
             return await execute(PluginInstallMode.Compatibility);
         }
     }
@@ -1360,7 +1416,7 @@ public partial class ExtensionWindow : UserControl
             "安装 Plugin",
             "正在准备 Plugin 安装…");
         progressWindow.Show();
-        progressWindow.SetProgress(10, "正在准备 Plugin 安装…");
+        progressWindow.SetIndeterminate("正在准备 Plugin 安装…");
         var snapshot = string.Empty;
         var mutationStarted = false;
         try
@@ -1372,15 +1428,17 @@ public partial class ExtensionWindow : UserControl
             async Task<string> ExecuteMutationAsync(PluginInstallMode mode)
             {
                 var installModeText = mode == PluginInstallMode.Fast ? "快速安装" : "兼容性安装";
-                progressWindow.SetProgress(
-                    mode == PluginInstallMode.Fast ? 38 : 46,
-                    $"正在通过官方 DSh CLI 安装 Plugin（{installModeText}）…");
+                var commandText = $"正在通过官方 DSh CLI 安装 Plugin（{installModeText}）…";
+                progressWindow.SetIndeterminate(commandText, "等待 CLI");
+                var cliProgress = new Progress<PluginCommandProgress>(update =>
+                    progressWindow.SetPackageProgress(update, commandText));
                 return await _service.InstallPluginAsync(
                     _instance,
                     source,
                     _nodeRuntime(),
                     mode,
-                    operationCancellation.Token);
+                    operationCancellation.Token,
+                    cliProgress);
             }
 
             var output = await ExecutePluginInstallWithFallbackAsync(
@@ -1388,14 +1446,14 @@ public partial class ExtensionWindow : UserControl
                 installMode,
                 progressWindow,
                 operationCancellation.Token);
-            progressWindow.SetProgress(84, "Plugin 安装完成，正在整理结果…");
+            progressWindow.SetIndeterminate("Plugin 安装完成，正在整理结果…");
             var activationText = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
                 ? "已热安装；请刷新 DSh 页面，包含 host 改动时仍需重启实例。"
                 : "实例下次启动时加载。";
             StatusText.Text = string.IsNullOrWhiteSpace(output)
                 ? $"Plugin 安装完成。{activationText}"
                 : $"Plugin 安装完成。{activationText} {output}";
-            progressWindow.SetProgress(92, "Plugin 安装完成，正在刷新当前实例…");
+            progressWindow.SetIndeterminate("Plugin 安装完成，正在刷新当前实例…");
             await RefreshAsync();
             progressWindow.Complete("Plugin 安装完成。");
         }
@@ -1408,9 +1466,9 @@ public partial class ExtensionWindow : UserControl
                 return;
             }
 
-            progressWindow.SetProgress(72, "Plugin 安装失败，正在回档并打包完整诊断报告…");
+            progressWindow.SetIndeterminate("Plugin 安装失败，正在回档并打包完整诊断报告…");
             var recovery = await RecoverPluginFailureAsync(snapshot, ex, "install", source);
-            progressWindow.SetProgress(90, recovery.HandoffSucceeded
+            progressWindow.SetIndeterminate(recovery.HandoffSucceeded
                 ? "已回档，完整报告已发送给当前 DSh。"
                 : recovery.ReportPath is null
                     ? "已回档，但诊断报告未能生成。"

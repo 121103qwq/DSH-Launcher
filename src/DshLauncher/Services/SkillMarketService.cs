@@ -291,6 +291,7 @@ public sealed class SkillMarketService
     public async Task<string> InstallAsync(
         ManagerInstance instance,
         SkillMarketItem item,
+        IProgress<SkillInstallProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         if (!item.Verified
@@ -308,7 +309,9 @@ public sealed class SkillMarketService
             await DownloadFileAsync(
                 new Uri($"https://codeload.github.com/{item.Repository}/zip/refs/heads/{Uri.EscapeDataString(item.DefaultBranch)}"),
                 zipPath,
+                progress,
                 cancellationToken);
+            progress?.Report(new SkillInstallProgress(0, null, null, "正在解压"));
             ZipFile.ExtractToDirectory(zipPath, temporaryRoot, overwriteFiles: true);
             var extractedRoot = Directory.EnumerateDirectories(temporaryRoot).FirstOrDefault();
             if (extractedRoot is null)
@@ -329,6 +332,7 @@ public sealed class SkillMarketService
 
             var skillDirectory = Path.GetDirectoryName(skillFile)
                 ?? throw new InvalidDataException("无法确定 Skill 所在目录。");
+            progress?.Report(new SkillInstallProgress(0, null, null, "正在导入"));
             var entry = await _extensionService.ImportSkillAsync(
                 instance,
                 skillDirectory,
@@ -654,13 +658,48 @@ public sealed class SkillMarketService
         return 4;
     }
 
-    private async Task DownloadFileAsync(Uri uri, string destinationPath, CancellationToken cancellationToken)
+    private async Task DownloadFileAsync(
+        Uri uri,
+        string destinationPath,
+        IProgress<SkillInstallProgress>? progress,
+        CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(uri, cancellationToken);
+        using var response = await _httpClient.GetAsync(
+            uri,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         response.EnsureSuccessStatusCode();
+        var total = response.Content.Headers.ContentLength;
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var target = File.Create(destinationPath);
-        await source.CopyToAsync(target, cancellationToken);
+        await using var target = new FileStream(
+            destinationPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var buffer = new byte[81920];
+        long received = 0;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            received += read;
+            int? percent = total is > 0
+                ? (int)Math.Clamp(received * 100L / total.Value, 0, 100)
+                : null;
+            progress?.Report(new SkillInstallProgress(received, total, percent, "下载"));
+        }
+
+        if (total is > 0 && received != total.Value)
+        {
+            throw new InvalidDataException($"Skill 下载不完整：应为 {total.Value} 字节，实际收到 {received} 字节。");
+        }
     }
 
     private static string? ReadStringProperty(JsonElement element, string propertyName) =>

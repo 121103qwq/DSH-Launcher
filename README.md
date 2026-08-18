@@ -4,6 +4,18 @@
 
 DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行实例、Plugin、Skill、Provider 和对话文件。Launcher 本身可以在没有 Node.js 或 DSh 的环境中打开，并提供运行环境检测与安装引导。
 
+![DSH Launcher 启动与实例管理界面](docs/images/launcher-home.png)
+
+## 界面预览
+
+| Plugin 市场 | Skill 市场 |
+| --- | --- |
+| ![Plugin 市场](docs/images/plugin-marketplace.png) | ![Skill 市场](docs/images/skill-marketplace.png) |
+
+| 版本控制 | 对话管理 |
+| --- | --- |
+| ![版本控制](docs/images/version-control.png) | ![对话管理](docs/images/conversations.png) |
+
 ## 主要功能
 
 ### 多版本与多实例
@@ -28,8 +40,10 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - Plugin 市场聚合社区目录、GitHub `dsh-plugin` 标签和用户自定义目录。
 - 缓存优先打开，搜索、分类、来源和排序在本地完成；只有刷新目录时才联网。
 - 安装前检查 `package.json`、`dsh.bundle.patch` 和实际安装来源，最后调用官方 DSh Plugin CLI。
+- Plugin 安装目标只来自市场目录和已验证的包元数据，不读取 README 改写安装命令。
 - 默认使用快速安装；快速模式失败时可直接用兼容模式重试，也可在设置中把兼容模式设为默认。
-- 安装、更新、卸载显示进度，完成后自动刷新当前实例状态。
+- 安装、更新、卸载显示 pnpm 实际解析、复用、下载和添加数量；Skill 下载显示真实字节进度，完成后自动刷新当前实例状态。
+- Plugin CLI 会继承当前环境或 Git 全局代理，避免 Launcher 从资源管理器启动后 GitHub codeload 下载绕过已有代理。
 - 默认 Plugin `@deepseek-ai/dsh-base` 与 `@deepseek-ai/dsh-web-app` 只读保护，不能禁用或删除。
 - Skill 市场发现并校验仓库中的单个 `SKILL.md`，支持分类、搜索和按 Skill 目录安装。
 - 支持导入本地 Skill 与 Agent Preset，并按当前版本隔离保存。
@@ -104,4 +118,4 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.0.3**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.0.4**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。

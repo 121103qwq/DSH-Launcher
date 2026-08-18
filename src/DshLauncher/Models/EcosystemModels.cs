@@ -19,6 +19,12 @@ public sealed record ExtensionEntry(
     bool Enabled,
     bool Managed);
 
+public sealed record PluginCommandProgress(
+    int Resolved,
+    int Reused,
+    int Downloaded,
+    int Added);
+
 public sealed record McpServerDefinition(
     string ServerName,
     string Transport,

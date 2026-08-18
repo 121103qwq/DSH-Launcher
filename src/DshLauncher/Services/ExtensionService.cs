@@ -30,6 +30,9 @@ public sealed class ExtensionService
     private static readonly Regex SafeServerName = new("^[A-Za-z0-9_-]{1,32}$", RegexOptions.CultureInvariant);
     private static readonly Regex SafePackageName = new("^(@[A-Za-z0-9._~-]+/)?[A-Za-z0-9._~-]+$", RegexOptions.CultureInvariant);
     private static readonly Regex AnsiEscapeSequence = new("\\x1B(?:\\[[0-?]*[ -/]*[@-~]|\\][^\\x07]*(?:\\x07|\\x1B\\\\))", RegexOptions.CultureInvariant);
+    private static readonly Regex PnpmProgressLine = new(
+        "Progress:\\s*resolved\\s+(?<resolved>\\d+),\\s*reused\\s+(?<reused>\\d+),\\s*downloaded\\s+(?<downloaded>\\d+),\\s*added\\s+(?<added>\\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private readonly Func<string, bool> _isRunning;
     private readonly SourceProjectInspector _sourceInspector;
     private readonly VersionSnapshotService? _snapshotService;
@@ -97,14 +100,16 @@ public sealed class ExtensionService
         ManagerInstance instance,
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
     {
         return await InstallPluginAsync(
             instance,
             packageSpec,
             nodeRuntime,
             PluginInstallMode.Fast,
-            cancellationToken);
+            cancellationToken,
+            progress);
     }
 
     public async Task<string> InstallPluginAsync(
@@ -112,7 +117,8 @@ public sealed class ExtensionService
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
         PluginInstallMode installMode,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
     {
         return await RunPluginCommandAsync(
             instance,
@@ -121,7 +127,8 @@ public sealed class ExtensionService
             nodeRuntime,
             null,
             installMode,
-            cancellationToken);
+            cancellationToken,
+            progress);
     }
 
     public async Task<string> InstallPluginAsync(
@@ -129,7 +136,8 @@ public sealed class ExtensionService
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
         string allowBuildPackageName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
     {
         return await InstallPluginAsync(
             instance,
@@ -137,7 +145,8 @@ public sealed class ExtensionService
             nodeRuntime,
             allowBuildPackageName,
             PluginInstallMode.Fast,
-            cancellationToken);
+            cancellationToken,
+            progress);
     }
 
     public async Task<string> InstallPluginAsync(
@@ -146,7 +155,8 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         string allowBuildPackageName,
         PluginInstallMode installMode,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
     {
         return await RunPluginCommandAsync(
             instance,
@@ -155,21 +165,24 @@ public sealed class ExtensionService
             nodeRuntime,
             allowBuildPackageName,
             installMode,
-            cancellationToken);
+            cancellationToken,
+            progress);
     }
 
     public async Task<string> UpdatePluginAsync(
         ManagerInstance instance,
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
     {
         return await UpdatePluginAsync(
             instance,
             packageSpec,
             nodeRuntime,
             PluginInstallMode.Fast,
-            cancellationToken);
+            cancellationToken,
+            progress);
     }
 
     public async Task<string> UpdatePluginAsync(
@@ -177,7 +190,8 @@ public sealed class ExtensionService
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
         PluginInstallMode installMode,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
     {
         return await RunPluginCommandAsync(
             instance,
@@ -186,14 +200,16 @@ public sealed class ExtensionService
             nodeRuntime,
             null,
             installMode,
-            cancellationToken);
+            cancellationToken,
+            progress);
     }
 
     public async Task<string> RemovePluginAsync(
         ManagerInstance instance,
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
     {
         return await RunPluginCommandAsync(
             instance,
@@ -202,7 +218,8 @@ public sealed class ExtensionService
             nodeRuntime,
             null,
             PluginInstallMode.Fast,
-            cancellationToken);
+            cancellationToken,
+            progress);
     }
 
     public Task SetPluginEnabledAsync(
@@ -689,7 +706,8 @@ public sealed class ExtensionService
         NodeRuntimeInfo? nodeRuntime,
         string? allowBuildPackageName,
         PluginInstallMode installMode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IProgress<PluginCommandProgress>? progress)
     {
         if (instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
         {
@@ -737,6 +755,10 @@ public sealed class ExtensionService
         {
             _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}", automatic: true);
         }
+        if (action is "add" or "update")
+        {
+            ResolvePendingPnpmBuildDecisions(instance);
+        }
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
         var startInfo = CreatePluginStartInfo(
             instance,
@@ -746,7 +768,16 @@ public sealed class ExtensionService
             allowBuildPackageName,
             installMode);
         pnpmEnvironment.Apply(startInfo);
-        var output = await RunProcessAsync(startInfo, cancellationToken);
+        var output = await RunProcessAsync(
+            startInfo,
+            cancellationToken,
+            line =>
+            {
+                if (progress is not null && TryParsePnpmProgress(line, out var update))
+                {
+                    progress.Report(update);
+                }
+            });
         if (output.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -836,6 +867,52 @@ public sealed class ExtensionService
         {
             arguments.Add($"--allow-build={allowBuildPackageName}");
         }
+    }
+
+    internal static bool ResolvePendingPnpmBuildDecisions(ManagerInstance instance)
+    {
+        var workspacePath = Path.Combine(instance.DshHome, "profiles", ProfileName, "pnpm-workspace.yaml");
+        if (!File.Exists(workspacePath))
+        {
+            return false;
+        }
+
+        RejectReparsePoint(workspacePath, "Plugin 构建许可配置");
+        var lines = File.ReadAllLines(workspacePath, Encoding.UTF8);
+        var inAllowBuilds = false;
+        var changed = false;
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var trimmed = lines[index].Trim();
+            var indentation = lines[index].Length - lines[index].TrimStart().Length;
+            if (indentation == 0)
+            {
+                inAllowBuilds = string.Equals(trimmed, "allowBuilds:", StringComparison.Ordinal);
+                continue;
+            }
+
+            if (!inAllowBuilds || trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            const string pendingDecision = "set this to true or false";
+            if (!trimmed.EndsWith(pendingDecision, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var marker = lines[index].LastIndexOf(pendingDecision, StringComparison.Ordinal);
+            lines[index] = lines[index][..marker] + "false" + lines[index][(marker + pendingDecision.Length)..];
+            changed = true;
+        }
+
+        if (changed)
+        {
+            WriteTextAtomically(workspacePath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
+        }
+
+        return changed;
     }
 
     private static PnpmEnvironment PreparePnpmEnvironment(
@@ -1334,7 +1411,8 @@ public sealed class ExtensionService
 
     private static async Task<ProcessResult> RunProcessAsync(
         ProcessStartInfo startInfo,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? lineObserver = null)
     {
         using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
@@ -1342,8 +1420,18 @@ public sealed class ExtensionService
             throw new InvalidOperationException("外部命令无法启动。");
         }
 
-        var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
+        var standardOutput = new StringBuilder();
+        var standardError = new StringBuilder();
+        var outputTask = ReadProcessStreamAsync(
+            process.StandardOutput,
+            standardOutput,
+            lineObserver,
+            cancellationToken);
+        var errorTask = ReadProcessStreamAsync(
+            process.StandardError,
+            standardError,
+            lineObserver,
+            cancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(CommandTimeout);
         try
@@ -1353,6 +1441,7 @@ public sealed class ExtensionService
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
             KillProcessTree(process);
+            await IgnoreProcessReadFailureAsync(outputTask, errorTask);
             if (cancellationToken.IsCancellationRequested)
             {
                 throw;
@@ -1361,7 +1450,52 @@ public sealed class ExtensionService
             throw new TimeoutException($"外部命令超过 {CommandTimeout.TotalMinutes:0} 分钟。");
         }
 
-        return new ProcessResult(process.ExitCode, await standardOutput, await standardError);
+        await Task.WhenAll(outputTask, errorTask);
+        return new ProcessResult(process.ExitCode, standardOutput.ToString(), standardError.ToString());
+    }
+
+    private static async Task ReadProcessStreamAsync(
+        StreamReader reader,
+        StringBuilder destination,
+        Action<string>? lineObserver,
+        CancellationToken cancellationToken)
+    {
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            destination.AppendLine(line);
+            lineObserver?.Invoke(line);
+        }
+    }
+
+    private static async Task IgnoreProcessReadFailureAsync(params Task[] tasks)
+    {
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    internal static bool TryParsePnpmProgress(string? line, out PluginCommandProgress progress)
+    {
+        var match = PnpmProgressLine.Match(AnsiEscapeSequence.Replace(line ?? string.Empty, string.Empty));
+        if (match.Success
+            && int.TryParse(match.Groups["resolved"].Value, out var resolved)
+            && int.TryParse(match.Groups["reused"].Value, out var reused)
+            && int.TryParse(match.Groups["downloaded"].Value, out var downloaded)
+            && int.TryParse(match.Groups["added"].Value, out var added))
+        {
+            progress = new PluginCommandProgress(resolved, reused, downloaded, added);
+            return true;
+        }
+
+        progress = new PluginCommandProgress(0, 0, 0, 0);
+        return false;
     }
 
     private static void KillProcessTree(Process process)
@@ -1700,6 +1834,7 @@ public sealed class ExtensionService
             startInfo.Environment["PATH"] = string.IsNullOrWhiteSpace(inheritedPath)
                 ? DirectoryPath
                 : DirectoryPath + Path.PathSeparator + inheritedPath;
+            ApplyPnpmProxy(startInfo);
         }
 
         public void Dispose()
@@ -1708,6 +1843,64 @@ public sealed class ExtensionService
             {
                 TryDeleteDirectory(DirectoryPath);
             }
+        }
+    }
+
+    private static void ApplyPnpmProxy(ProcessStartInfo startInfo)
+    {
+        var proxy = ReadEnvironmentValue(startInfo, "HTTPS_PROXY")
+            ?? ReadEnvironmentValue(startInfo, "HTTP_PROXY")
+            ?? TryReadGitProxy("https.proxy")
+            ?? TryReadGitProxy("http.proxy");
+        if (!Uri.TryCreate(proxy, UriKind.Absolute, out var proxyUri)
+            || proxyUri.Scheme is not ("http" or "https" or "socks" or "socks5"))
+        {
+            return;
+        }
+
+        startInfo.Environment["HTTP_PROXY"] = proxy;
+        startInfo.Environment["HTTPS_PROXY"] = proxy;
+        startInfo.Environment["npm_config_proxy"] = proxy;
+        startInfo.Environment["npm_config_https_proxy"] = proxy;
+    }
+
+    private static string? ReadEnvironmentValue(ProcessStartInfo startInfo, string name) =>
+        startInfo.Environment.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : null;
+
+    private static string? TryReadGitProxy(string key)
+    {
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = "git",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            info.ArgumentList.Add("config");
+            info.ArgumentList.Add("--global");
+            info.ArgumentList.Add("--get");
+            info.ArgumentList.Add(key);
+            using var process = Process.Start(info);
+            if (process is null || !process.WaitForExit(2000) || process.ExitCode != 0)
+            {
+                if (process is { HasExited: false })
+                {
+                    KillProcessTree(process);
+                }
+                return null;
+            }
+
+            var value = process.StandardOutput.ReadToEnd().Trim();
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        catch (Exception error) when (error is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return null;
         }
     }
 

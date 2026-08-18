@@ -20,3 +20,9 @@ public sealed record SkillMarketRefreshProgress(
     int Completed,
     int Total,
     string Stage);
+
+public sealed record SkillInstallProgress(
+    long BytesReceived,
+    long? TotalBytes,
+    int? Percent,
+    string Stage);

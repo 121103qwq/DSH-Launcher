@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using DshLauncher.Models;
 using Button = System.Windows.Controls.Button;
 using ProgressBar = System.Windows.Controls.ProgressBar;
 using TextBox = System.Windows.Controls.TextBox;
@@ -128,6 +129,51 @@ internal sealed class PluginProgressWindow : Window
         _progressText.Text = $"{value:0}%";
     }
 
+    public void SetIndeterminate(string message, string detail = "处理中")
+    {
+        _statusText.Text = message;
+        _progressBar.IsIndeterminate = true;
+        _progressText.Text = detail;
+    }
+
+    public void SetDownloadProgress(SkillInstallProgress progress, string itemName)
+    {
+        if (!string.Equals(progress.Stage, "下载", StringComparison.Ordinal))
+        {
+            SetIndeterminate($"{progress.Stage} {itemName}…");
+            return;
+        }
+
+        var receivedText = FormatBytes(progress.BytesReceived);
+        if (progress.TotalBytes is > 0)
+        {
+            _progressBar.IsIndeterminate = false;
+            _progressBar.Maximum = progress.TotalBytes.Value;
+            _progressBar.Value = Math.Min(progress.BytesReceived, progress.TotalBytes.Value);
+            _progressText.Text = $"{progress.Percent ?? 0}%";
+            _statusText.Text = $"正在下载 {itemName}… {receivedText} / {FormatBytes(progress.TotalBytes.Value)}";
+            return;
+        }
+
+        SetIndeterminate($"正在下载 {itemName}… 已接收 {receivedText}", "下载中");
+    }
+
+    public void SetPackageProgress(PluginCommandProgress progress, string message)
+    {
+        var completed = Math.Min(
+            progress.Resolved,
+            Math.Max(progress.Reused + progress.Downloaded, progress.Added));
+        _statusText.Text = message;
+        _progressBar.IsIndeterminate = progress.Resolved <= 0;
+        _progressBar.Maximum = Math.Max(1, progress.Resolved);
+        _progressBar.Value = Math.Max(0, completed);
+        _progressText.Text = progress.Resolved <= 0
+            ? "处理中"
+            : $"{completed}/{progress.Resolved}";
+        _detailsBox.Text = $"实际包进度：解析 {progress.Resolved}，复用 {progress.Reused}，下载 {progress.Downloaded}，添加 {progress.Added}";
+        _detailsBox.Visibility = Visibility.Visible;
+    }
+
     public void Complete(string message)
     {
         _canClose = true;
@@ -140,7 +186,7 @@ internal sealed class PluginProgressWindow : Window
     public void Fail(string message)
     {
         _canClose = true;
-        _statusText.Text = "Plugin 操作失败";
+        _statusText.Text = "操作失败";
         _progressBar.IsIndeterminate = false;
         _progressText.Text = "失败";
         _detailsBox.Text = message;
@@ -164,6 +210,15 @@ internal sealed class PluginProgressWindow : Window
 
     internal static double ClampProgress(double percentage) =>
         Math.Clamp(double.IsFinite(percentage) ? percentage : 0, 0, 100);
+
+    internal static string FormatBytes(long bytes)
+    {
+        var value = Math.Max(0, bytes);
+        if (value >= 1024L * 1024 * 1024) return $"{value / (1024d * 1024 * 1024):0.0} GB";
+        if (value >= 1024L * 1024) return $"{value / (1024d * 1024):0.0} MB";
+        if (value >= 1024L) return $"{value / 1024d:0.0} KB";
+        return $"{value} B";
+    }
 
     internal static bool ShouldRestoreOwner(WindowState initialState, WindowState currentState) =>
         initialState != WindowState.Minimized && currentState == WindowState.Minimized;

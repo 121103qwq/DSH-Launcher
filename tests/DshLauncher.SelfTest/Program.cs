@@ -1311,9 +1311,11 @@ static Task TestMainWindowCodeResourceReferences()
         && extensionWindowXaml.Contains("Value=\"已启用\"", StringComparison.Ordinal)
         && extensionWindowXaml.Contains("Value=\"已禁用\"", StringComparison.Ordinal)
         && extensionWindowXaml.Contains("TextTrimming=\"CharacterEllipsis\"", StringComparison.Ordinal)
+        && extensionWindowXaml.Contains("<RowDefinition Height=\"*\" MinHeight=\"96\" />", StringComparison.Ordinal)
+        && extensionWindowCode.Contains("Math.Clamp(rightHeight - 36, 464, 700)", StringComparison.Ordinal)
         && !extensionWindowXaml.Contains("InstanceSelectorBox", StringComparison.Ordinal)
         && !extensionWindowCode.Contains("InstanceSelector_SelectionChanged", StringComparison.Ordinal),
-        "扩展和 Agent 左栏必须显示当前实例与已安装内容、限制长文本并显示启用状态，但不能重复提供实例选择器。 ");
+        "扩展和 Agent 左栏必须为已安装列表保留可见高度、限制长文本并显示启用状态，但不能重复提供实例选择器。 ");
     Assert(versionSettingsXaml.Contains("x:Name=\"SnapshotPage\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"CreateSnapshot_Click\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"RollbackSnapshot_Click\"", StringComparison.Ordinal)
@@ -1578,6 +1580,15 @@ static Task TestPluginProgressWindowState()
             System.Windows.WindowState.Normal,
             System.Windows.WindowState.Normal),
         "Plugin 操作只应恢复被操作流程带入最小化的原本可见 Owner 窗口。 ");
+    Assert(
+        ExtensionService.TryParsePnpmProgress(
+            "Progress: resolved 64, reused 9, downloaded 55, added 42",
+            out var packageProgress)
+        && packageProgress == new PluginCommandProgress(64, 9, 55, 42)
+        && !ExtensionService.TryParsePnpmProgress("Packages: +64", out _),
+        "Plugin 进度应从 pnpm 的实际包计数中读取，不能使用固定阶段伪造下载百分比。 ");
+    Assert(PluginProgressWindow.FormatBytes(1536) == "1.5 KB",
+        "下载进度应显示真实字节量。 ");
     return Task.CompletedTask;
 }
 
@@ -2456,10 +2467,18 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     var runtimeDirectory = Path.Combine(temporary.Path, "node-runtime");
     var marker = Path.Combine(temporary.Path, "pnpm-version.txt");
     var nodePathMarker = Path.Combine(temporary.Path, "node-path.txt");
+    var proxyMarker = Path.Combine(temporary.Path, "https-proxy.txt");
     var argumentMarker = Path.Combine(temporary.Path, "plugin-arguments.txt");
     Directory.CreateDirectory(root);
     Directory.CreateDirectory(home);
     Directory.CreateDirectory(runtimeDirectory);
+    var profileDirectory = Path.Combine(home, "profiles", "web");
+    Directory.CreateDirectory(profileDirectory);
+    var workspacePath = Path.Combine(profileDirectory, "pnpm-workspace.yaml");
+    File.WriteAllText(
+        workspacePath,
+        "packages:\n  - .\n\nallowBuilds:\n  old-plugin: set this to true or false\n  trusted-plugin: true\n",
+        new UTF8Encoding(false));
 
     var dsh = Path.Combine(runtimeDirectory, "dsh.cmd");
     var node = Path.Combine(runtimeDirectory, "node.exe");
@@ -2477,6 +2496,7 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
         + "echo %* > \"" + argumentMarker + "\"\r\n"
         + "\"%SystemRoot%\\System32\\where.exe\" node > \"" + nodePathMarker + "\" 2>&1\r\n"
         + "if errorlevel 1 exit /b 22\r\n"
+        + "echo %HTTPS_PROXY% > \"" + proxyMarker + "\"\r\n"
         + "pnpm --version > \"" + marker + "\" 2>&1\r\n"
         + "if errorlevel 1 exit /b 21\r\n"
         + "exit /b 0\r\n",
@@ -2484,9 +2504,13 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
 
     var instance = CreateTestInstance("plugin-runtime", root, home) with { DshExecutablePath = dsh };
     var previousPath = Environment.GetEnvironmentVariable("PATH");
+    var previousHttpProxy = Environment.GetEnvironmentVariable("HTTP_PROXY");
+    var previousHttpsProxy = Environment.GetEnvironmentVariable("HTTPS_PROXY");
     try
     {
         Environment.SetEnvironmentVariable("PATH", Path.Combine(temporary.Path, "empty-path"));
+        Environment.SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:7892");
+        Environment.SetEnvironmentVariable("HTTPS_PROXY", null);
         var extensionService = new ExtensionService();
         await extensionService.InstallPluginAsync(
             instance,
@@ -2524,12 +2548,17 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
     finally
     {
         Environment.SetEnvironmentVariable("PATH", previousPath);
+        Environment.SetEnvironmentVariable("HTTP_PROXY", previousHttpProxy);
+        Environment.SetEnvironmentVariable("HTTPS_PROXY", previousHttpsProxy);
     }
 
     Assert(File.Exists(marker), "Plugin CLI 应能通过 Launcher 提供的 pnpm 环境运行。 ");
     Assert(File.Exists(nodePathMarker)
         && File.ReadAllText(nodePathMarker).Contains(runtimeDirectory, StringComparison.OrdinalIgnoreCase),
         "Plugin CLI 应同时继承检测到的 Node 目录，不能只注入 pnpm shim。 ");
+    Assert(File.Exists(proxyMarker)
+        && File.ReadAllText(proxyMarker).Contains("http://127.0.0.1:7892", StringComparison.OrdinalIgnoreCase),
+        "Plugin CLI 应把用户已有的 HTTP 代理同步给 HTTPS 下载，避免 GitHub codeload 超时。 ");
     Assert(File.ReadAllText(marker).Contains("11.21.0", StringComparison.Ordinal), "Plugin CLI 应使用可用的 Corepack pnpm shim。 ");
     var arguments = File.ReadAllText(argumentMarker);
     Assert(arguments.Contains("--reporter=append-only", StringComparison.Ordinal), "Plugin CLI 应使用适合图形界面捕获的 pnpm 输出模式。 ");
@@ -2540,6 +2569,11 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
         && !arguments.Contains("--package-import-method=copy", StringComparison.Ordinal)
         && !arguments.Contains("--force", StringComparison.Ordinal),
         "快速安装必须优先使用本地缓存，且不能携带兼容模式的强制复制参数。 ");
+    var workspace = File.ReadAllText(workspacePath);
+    Assert(workspace.Contains("old-plugin: false", StringComparison.Ordinal)
+        && workspace.Contains("trusted-plugin: true", StringComparison.Ordinal)
+        && !workspace.Contains("set this to true or false", StringComparison.Ordinal),
+        "调用官方 DSh Plugin CLI 前应拒绝旧的未决构建脚本，避免 ERR_PNPM_IGNORED_BUILDS 阻断后续安装。 ");
 
     var compactFailure = ExtensionService.FormatProcessOutput(
         "Progress: resolved 1, reused 0, downloaded 0, added 0\rProgress: resolved 64, reused 0, downloaded 64, added 64\n普通输出",
@@ -2683,9 +2717,9 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         "只有 GitHub Topic 发现、没有进入精选目录的仓库不能冒充精选。 ");
     var commandVerified = await service.VerifyAsync(commandCatalog[0]);
     Assert(commandVerified.Status == MarketplaceVerificationStatus.Verified
-        && commandVerified.InstallSpec == "community-theme@latest"
-        && commandVerified.Message.Contains("README", StringComparison.Ordinal),
-        "Plugin 仓库 README 提供正式安装命令时，应在 package.json 校验后优先使用 README 中的 spec。 ");
+        && commandVerified.InstallSpec == "github:demo/community-theme"
+        && !commandVerified.Message.Contains("README", StringComparison.Ordinal),
+        "Plugin 安装目标只能来自目录和 package.json 校验，不应再读取 README 改写官方 CLI 参数。 ");
 
     var githubWithPackageName = commandCatalog[0] with
     {
@@ -2695,23 +2729,8 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     var githubPackageVerified = await service.VerifyAsync(githubWithPackageName);
     Assert(githubPackageVerified.Status == MarketplaceVerificationStatus.Verified
         && githubPackageVerified.PackageName == "community-theme"
-        && githubPackageVerified.InstallSpec == "community-theme@latest",
+        && githubPackageVerified.InstallSpec == "github:demo/community-theme",
         "同时包含展示用包名和 GitHub 安装地址时，应按 GitHub 来源校验而不是误走 npm。 ");
-    Assert(MarketplaceService.ExtractReadmePluginInstallSpec(
-            "dsh plugin --profile web add another-package@latest",
-            "community-theme",
-            "https://github.com/demo/community-theme") is null,
-        "README 安装命令指向不同 npm 包时不能覆盖已校验 Plugin。 ");
-    Assert(MarketplaceService.ExtractReadmePluginInstallSpec(
-            "dsh plugin --profile web add community-theme && echo unsafe",
-            "community-theme",
-            "https://github.com/demo/community-theme") is null,
-        "README 中包含额外 shell 命令的安装行必须被拒绝。 ");
-    Assert(MarketplaceService.ExtractReadmePluginInstallSpec(
-            "dsh plugin --profile=web add community-theme@latest",
-            "community-theme",
-            "https://github.com/demo/community-theme") == "community-theme@latest",
-        "README 使用 --profile=web 写法时也应识别同一个官方安装命令。 ");
     var runningMarketplaceItem = commandCatalog[0] with
     {
         CanMutate = false,
@@ -3160,11 +3179,20 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
     Directory.CreateDirectory(root);
     Directory.CreateDirectory(home);
     var instance = CreateTestInstance("skill-market-install", root, home);
-    var installedName = await service.InstallAsync(instance, goodSkill);
+    var installProgress = new SkillProgressSink();
+    var installedName = await service.InstallAsync(instance, goodSkill, installProgress);
     Assert(installedName == "good-skill"
         && File.Exists(Path.Combine(home, "skills", "good-skill", "SKILL.md"))
         && File.Exists(Path.Combine(home, "skills", "good-skill", "references", "help.md")),
         "市场安装应只复制所选嵌套 Skill 目录，并保留它的配套文件。 ");
+    Assert(installProgress.DownloadUpdates.Count > 0
+        && installProgress.DownloadUpdates[^1].Percent == 100
+        && installProgress.DownloadUpdates[^1].BytesReceived == installProgress.DownloadUpdates[^1].TotalBytes,
+        "Skill 市场安装应报告仓库 ZIP 的真实下载字节和完成百分比。 ");
+    var installedEntries = await new ExtensionService().ListAsync(instance);
+    Assert(ExtensionWindow.IsSkillInstalled(goodSkill, installedEntries)
+        && !ExtensionWindow.IsSkillInstalled(uiSkill, installedEntries),
+        "Skill 市场应把当前实例中已安装的同名 Skill 显示为已安装，其他条目仍可安装。 ");
 
     var refreshed = await service.SearchAsync();
     Assert(refreshed.Count == 2 && goodRawRequests == 3 && badRawRequests == 2 && treeRequests == 3,
@@ -4415,6 +4443,19 @@ file sealed class NodeProgressSink : IProgress<NodeDownloadProgress>
     public NodeDownloadProgress Last { get; private set; } = new(0, null, null);
 
     public void Report(NodeDownloadProgress value) => Last = value;
+}
+
+file sealed class SkillProgressSink : IProgress<SkillInstallProgress>
+{
+    public List<SkillInstallProgress> DownloadUpdates { get; } = new();
+
+    public void Report(SkillInstallProgress value)
+    {
+        if (value.Stage == "下载")
+        {
+            DownloadUpdates.Add(value);
+        }
+    }
 }
 
 file sealed class SlowCancelStream : Stream
