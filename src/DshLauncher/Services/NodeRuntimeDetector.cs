@@ -26,7 +26,6 @@ public sealed class NodeRuntimeDetector
             }
         }
 
-        var available = new List<(string Path, string Version)>();
         foreach (var candidate in GetCandidates())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -39,16 +38,8 @@ public sealed class NodeRuntimeDetector
             var version = await ReadVersionAsync(candidate, cancellationToken);
             if (version is not null)
             {
-                available.Add((candidate, version));
+                return new NodeRuntimeInfo(true, candidate, version, null);
             }
-        }
-
-        var best = available
-            .OrderByDescending(static item => Version.TryParse(item.Version, out var parsed) ? parsed : new Version(0, 0))
-            .FirstOrDefault();
-        if (best.Path is not null)
-        {
-            return new NodeRuntimeInfo(true, best.Path, best.Version, null);
         }
 
         return NodeRuntimeInfo.Missing("PATH、Windows 常见安装目录和 DeepSeek Desktop 中都没有可用的 node.exe。");
