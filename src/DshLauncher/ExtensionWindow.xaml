@@ -68,6 +68,12 @@
                             Click="ImportPreset_Click"
                             Margin="0,0,7,7"
                             Padding="12,7" />
+                    <CheckBox x:Name="DshMarketHotReloadCheckBox"
+                              Content="使用 dsh-market 热加载主题"
+                              Checked="DshMarketHotReloadCheckBox_Changed"
+                              Unchecked="DshMarketHotReloadCheckBox_Changed"
+                              VerticalAlignment="Center"
+                              Margin="2,4,7,7" />
                 </WrapPanel>
 
                 <Border Grid.Row="2"
@@ -261,6 +267,7 @@
                                 </Style>
                             </ListBox.ItemContainerStyle>
                             <ListBoxItem Tag="">全部</ListBoxItem>
+                            <ListBoxItem Tag="__featured__">精选</ListBoxItem>
                             <ListBoxItem Tag="UI">UI</ListBoxItem>
                             <ListBoxItem Tag="工具">工具</ListBoxItem>
                             <ListBoxItem Tag="工作流">工作流</ListBoxItem>
@@ -351,11 +358,17 @@
                                                 Background="#E2EFFB"
                                                 CornerRadius="8"
                                                 VerticalAlignment="Top">
-                                            <TextBlock Text="P"
-                                                       Foreground="{StaticResource BlueBrush}"
-                                                       FontWeight="Bold"
-                                                       HorizontalAlignment="Center"
-                                                       VerticalAlignment="Center" />
+                                            <Grid>
+                                                <TextBlock Text="P"
+                                                           Foreground="{StaticResource BlueBrush}"
+                                                           FontWeight="Bold"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center" />
+                                                <Image Source="{Binding DeveloperAvatarUrl}"
+                                                       Width="36"
+                                                       Height="36"
+                                                       Stretch="UniformToFill" />
+                                            </Grid>
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="12,0,16,0">
                                             <TextBlock Text="{Binding Name}"

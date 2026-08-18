@@ -2,10 +2,14 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.2`。当前任务是确保 Plugin 安装失败可以回档，并把完整诊断报告交给当前 DSh 继续排查；前序 UI、实例导入和版本设置工作保留。
+当前源码版本为 `v1.0.3`。当前任务是完成发布前自检，并补齐精选 Plugin、dsh-market 热加载存档、DSh 版本选择，以及插件开发者头像显示；前序安装失败回档、UI、实例导入和版本设置工作保留。
 
 ## 已完成内容
 
+- 发布前补强：指定 DSh 版本先安装到同级临时目录，校验通过后再替换正式版本目录；离开版本控制会取消下载。`.dshpack` 脱敏已覆盖 YAML 多行 API Key/私钥正文。
+
+- 本轮新增：插件市场提供“精选”分类，按 dsh-market 同源社区目录筛选；GitHub Plugin 卡片显示仓库开发者头像，图片加载失败时保留字母占位。每个实例可独立开启 dsh-market 热加载，应用主题前创建 Plugin 范围自动快照；每个实例最多保留 10 个自动快照，手动快照不参与清理。
+- 本轮新增：版本控制和启动页显示实例实际 DSh 版本；“新建干净版本”可从官方 npm metadata 选择 DSh 版本，本机缺少时精确安装到 Launcher 设置的 DSh 目录下 `versions\\<version>`，不修改系统 PATH、不触发 UAC。
 - 本轮新增：Plugin 安装、更新、卸载和手动安装失败会先使用现有 web profile 回档，再生成未脱敏的本地诊断 ZIP；报告保留完整错误、`.credentials.yaml` 和选定配置，排除会话文件、`node_modules` 与运行依赖。若当前 DSh 可用，Launcher 会自动打开或复用 Chat，发送报告路径和继续排查安装的指令。
 
 - 本轮代码已实现：Plugin 与 Skill 分类切换分别保存并恢复列表滚动位置；`.dshpack` 导入只从当前 Launcher 设置的 DSh 安装位置解析运行时，不再沿用整合包或模板的 `RootPath`；检测到 DSH Desktop 入口的版本可在版本设置中绑定“打开窗口”，启动页保留独立的“Launcher 启动”按钮；已安装 Plugin 列表对名称和描述单行省略，并明确显示“已启用/已禁用”。
@@ -59,10 +63,10 @@
 - `src/DshLauncher/Services/NodeInstallService.cs`、`RuntimeProgressWindow.cs`：Node 下载（真实进度）、系统安装与准备进度窗口。
 - `src/DshLauncher/Models/DshRuntimeLaunchSpec.cs`、`Services/DshRuntimeCommandFactory.cs`、`DshRuntimeDetector.cs`、`DeepSeekDesktopDetector.cs`、`DetectedRuntimeRegistrationService.cs`、`DshHomeImportService.cs`、`NodeRuntimeDetector.cs`、`DshInstallService.cs`：普通 npm、源码、旧 Desktop 与 DSH Desktop v2 的检测、启动描述、命令创建、实例数据导入和 npm 安装。
 - `src/DshLauncher/Services/RuntimeSearchPaths.cs`：合并进程、当前用户和系统 PATH，供 Node/DSh 校验及子进程启动使用。
-- `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`、`PluginProgressWindow.cs`：Plugin、Skill、MCP、Agent Preset、市场入口和插件安装进度弹窗。
-- `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`、`ThemePreviewWindow.cs`：市场缓存、来源合并、搜索、排序、GitHub/monorepo 校验、安装状态和 README 图片预览。
+- `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`、`PluginProgressWindow.cs`：Plugin、Skill、MCP、Agent Preset、市场入口、精选筛选、开发者头像、dsh-market 热加载和插件安装进度弹窗。
+- `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`、`ThemePreviewWindow.cs`：市场缓存、来源合并、搜索、排序、GitHub/monorepo 校验、安装状态、开发者头像地址和 README 图片预览。
 - `src/DshLauncher/Services/SkillMarketService.cs`、`Models/SkillMarketModels.cs`：Skill 市场缓存、GitHub 发现、SKILL.md 校验和实例导入。
-- `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionPackageService.cs`、`VersionSnapshotService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`：版本同步策略、工作区管理、版本复制/删除、加密快照回滚、设置和 `.dshpack`。
+- `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionPackageService.cs`、`VersionSnapshotService.cs`、`DshVersionCatalogService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`、`NewVersionWindow.xaml(.cs)`：版本同步策略、工作区管理、DSh 版本选择与精确安装、版本复制/删除、加密快照回滚、设置和 `.dshpack`。
 - `src/DshLauncher/Services/VersionHealthService.cs`、`DshSettingsYamlValidator.cs`、`VersionSnapshotService.cs`、`Models/VersionHealthModels.cs`：版本体检、DSh YAML 语义校验、安全自动修复和当前 Windows 用户加密的配置回滚点。
 - `src/DshLauncher/Services/ModelService.cs`、`ModelProviderSyncService.cs`、`ProviderStateService.cs`：Provider 配置、同步和启用状态。
 - `src/DshLauncher/Services/ConversationService.cs`、`ConversationSyncService.cs`、`ConversationWindow.xaml(.cs)`：会话文件管理、打开入口和同步策略。
@@ -71,6 +75,10 @@
 
 ## 已执行测试及结果
 
+- `v1.0.3` 最终发布前修复：指定 DSh 版本下载改为临时目录校验后替换，`.dshpack` 补齐 YAML 多行敏感值清理；Release build 为 0 warnings、0 errors，完整自测 63/63 通过，`git diff --check` 通过。最终产物信息以 GitHub Release 记录为准。
+
+- 本轮发布前候选：Release 完整自测 63/63 通过，覆盖精选来源与 GitHub 开发者头像、DSh 官方版本目录排序、指定版本安装、dsh-market 热加载开关持久化、运行中 Managed 实例的 Plugin 范围自动快照，以及 10 个自动快照上限和手动快照保留；Release build/publish 为 0 warnings、0 errors，`git diff --check` 通过。Windows x64 自包含单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\pre-release-version-market-avatar-20260818`；`DSH Launcher.exe` 为 72,468,814 字节，SHA-256 `52248320E20F28550A4633B17A602D6EF2D570451D856DC411EDE3E0DA8029DD`。
+- Computer Use 实机验证：启动页显示实例 DSh 版本；扩展页显示“精选”分类、按实例保存的 dsh-market 开关和 GitHub 开发者头像，头像网络失败时仍有占位；新建干净版本弹窗在 125% 缩放下完整显示按钮，官方版本下拉包含 `0.1.0-rc.7`、`0.1.0-rc.6`。测试用 `Research` 实例已正常停止，本次打开的 Launcher 窗口已关闭，未留下相关 DSh 进程。
 - `v1.0.2` 发布候选：Release 构建 0 warnings、0 errors；完整自测 62/62 通过，包含未脱敏 Plugin 失败诊断报告生成测试。Windows x64 自包含单文件为 72,463,029 字节，文件版本 `1.0.2.0`，SHA-256 `4580A74CAAA42E2591AE2592A2B0D60044183C23171D06490791800B5D3DF9AD`；产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.2-plugin-failure-handoff-20260818`。
 - Computer Use 实机验证：启动上述最新构建成功，启动页、扩展页和 Agent/Skill 页均可打开；扩展页读取 1091 个缓存候选，Agent 页显示 234 个 Skill，当前实例名称和实例隔离路径正常显示。验证后已关闭本次启动的测试窗口。
 - 本轮验证（含 Plugin 列表显示修改）：`dotnet build .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 为 0 warnings、0 errors；`dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-build --no-restore` 为 61/61 通过；`git diff --check` 通过。更新后的 Windows x64 自包含压缩单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\test-plugin-status-display-20260818-113529`；`DSH Launcher.exe` 为 72,452,760 字节，SHA-256 `65FA11CDCCBDFA092614ECAE114B3E32BD55C3D9E8477CF35266A1DED1646F51`，并已确认文件存在。
@@ -133,6 +141,7 @@
 - 当前只使用已验证的 Chat `localStorage` 预选会话，尚未实现官方 `?session=<id>` deep link。
 - MCP 当前是实例级 stdio/streamable-http 配置和 patch 管理，尚未接入完整 MCP Manager 的 connected/needs-auth/authorizing/error、OAuth 和 Tool discovery 状态。
 - 主题市场可按需显示仓库 README 中的首选图片，并保留 dsh-market 应用桥接；Wallpaper 仍未建立独立资源格式，也未在用户真实实例上做主题视觉验收。
+- 当前用于实机验证的 `Research` 实例没有安装 dsh-market，因此界面正确禁用了热加载应用；真实 dsh-market 主题应用及其自动快照仍需在已安装该插件的测试实例上验证。
 - GitHub Topic 发现仍未做分页加载；真实第三方 Plugin CLI 对 node_modules 的副作用不能由配置快照完全回滚，失败时仍以官方 CLI 输出和 web profile 自动恢复为准。
 - Plugin 百分比按校验、备份、官方 CLI 与刷新阶段计算；官方 CLI 没有稳定的总字节数，因此不是网络下载字节百分比。
 - `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；它是本地回滚点，不是可分享格式，分享继续使用脱敏 `.dshpack`。
@@ -146,7 +155,8 @@
 
 ## 尚未完成内容
 
-- 本轮标题栏实例选择、扩展/Agent 左侧管理区、对话版本筛选和启动页新布局的实机 UI 验收。
+- 通过 UI 实际下载并创建一个本机尚未安装的 DSh 版本；本轮只验证了官方版本列表、精确安装代码路径和自测，没有触发外部软件安装。
+- 在安装 dsh-market 的测试实例上实际应用主题，并确认应用前自动快照可回滚。
 - 本轮新增设置、工作区、备份恢复、市场筛选及首次运行引导的实机 UI 验收。
 - 版本检查、修复按钮，以及版本控制/版本设置两处快照选择与回滚确认的实机 UI 验收。
 - 一键运行环境准备的实机端到端验证与后续打磨。
@@ -165,4 +175,4 @@
 
 ## 下一步最直接的任务
 
-在 1K 与常规分辨率下实机检查标题栏实例切换与返回、启动页实例双击启动/打开、版本设置快照选择/回滚，以及扩展/Agent 分类栏和启动页各操作入口。
+在独立测试实例安装 dsh-market 后实际应用一次主题并回滚自动快照；随后用“新建干净版本”实际下载一个本机缺少的官方 DSh 版本，完成两条仍未实机落地的链路。

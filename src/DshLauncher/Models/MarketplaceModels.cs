@@ -59,7 +59,8 @@ public sealed record MarketplaceItem(
     string? ThemePackageName = null,
     string? ThemeStatusText = null,
     IReadOnlyList<MarketplaceSourceKind>? MergedSourceKinds = null,
-    bool CanInstallOrUpdate = false)
+    bool CanInstallOrUpdate = false,
+    string? DeveloperAvatarUrl = null)
 {
     [JsonIgnore]
     public string SourceText => MergedSourceText ?? (SourceKind switch

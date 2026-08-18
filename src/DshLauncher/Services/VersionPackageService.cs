@@ -18,6 +18,9 @@ public sealed class VersionPackageService
 {
     public const int CurrentPackageFormatVersion = 1;
     public const string DefaultPackageExtension = ".dshpack";
+    private const int MaximumPackageEntries = 4096;
+    private const long MaximumPackageEntryBytes = 32L * 1024 * 1024;
+    private const long MaximumPackageUncompressedBytes = 256L * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -34,6 +37,9 @@ public sealed class VersionPackageService
     private static readonly Regex SensitiveUrlQuery = new(
         @"(?i)([?&](?:api[-_]?key|token|secret|password|access[-_]?token|refresh[-_]?token|credential(?:s)?)=)[^&#\s]+",
         RegexOptions.CultureInvariant);
+    private static readonly Regex SensitiveAssignment = new(
+        @"^(?<prefix>\s*(?:export\s+)?(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*).*$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly InstanceRegistry _registry;
     private readonly LauncherPaths _paths;
@@ -260,6 +266,7 @@ public sealed class VersionPackageService
         }
 
         using var archive = ZipFile.OpenRead(packagePath);
+        ValidatePackageArchive(archive);
         var manifest = ReadPackageManifest(archive);
         return new DshPackPreview(
             string.IsNullOrWhiteSpace(manifest.Name) ? "未命名整合包" : manifest.Name,
@@ -281,6 +288,7 @@ public sealed class VersionPackageService
         }
 
         using var archive = ZipFile.OpenRead(packagePath);
+        ValidatePackageArchive(archive);
         var manifestEntry = archive.Entries.FirstOrDefault(entry =>
             string.Equals(entry.FullName.Replace('\\', '/'), "manifest.json", StringComparison.OrdinalIgnoreCase));
         if (manifestEntry is null)
@@ -715,7 +723,35 @@ public sealed class VersionPackageService
                 if (IsSensitiveKey(key))
                 {
                     lines[index] = $"{line[..(separator + 1)]} \"<redacted>\"";
+                    if (IsYamlBlockScalar(line[(separator + 1)..]))
+                    {
+                        var keyIndent = CountLeadingWhitespace(line);
+                        var next = index + 1;
+                        for (; next < lines.Length; next++)
+                        {
+                            if (string.IsNullOrWhiteSpace(lines[next]))
+                            {
+                                lines[next] = string.Empty;
+                                continue;
+                            }
+
+                            if (CountLeadingWhitespace(lines[next]) <= keyIndent)
+                            {
+                                break;
+                            }
+
+                            lines[next] = string.Empty;
+                        }
+
+                        index = next - 1;
+                    }
                 }
+            }
+
+            var assignment = SensitiveAssignment.Match(lines[index]);
+            if (assignment.Success && IsSensitiveKey(assignment.Groups["key"].Value))
+            {
+                lines[index] = assignment.Groups["prefix"].Value + "<redacted>";
             }
         }
 
@@ -726,6 +762,52 @@ public sealed class VersionPackageService
                 : match.Value);
         sanitized = SensitiveUrlUserInfo.Replace(sanitized, "$1");
         return SensitiveUrlQuery.Replace(sanitized, "$1<redacted>");
+    }
+
+    private static bool IsYamlBlockScalar(string value)
+    {
+        var marker = value.Split('#', 2)[0].Trim();
+        return marker.Length > 0
+            && marker[0] is '|' or '>'
+            && marker[1..].All(character => character is '+' or '-' or >= '1' and <= '9');
+    }
+
+    private static int CountLeadingWhitespace(string value)
+    {
+        var count = 0;
+        while (count < value.Length && char.IsWhiteSpace(value[count]))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    private static void ValidatePackageArchive(ZipArchive archive)
+    {
+        if (archive.Entries.Count > MaximumPackageEntries)
+        {
+            throw new InvalidDataException($"整合包条目过多（最多 {MaximumPackageEntries} 个）。");
+        }
+
+        long totalLength = 0;
+        foreach (var entry in archive.Entries)
+        {
+            if (entry.Length > MaximumPackageEntryBytes)
+            {
+                throw new InvalidDataException($"整合包条目过大：{entry.FullName}。");
+            }
+
+            checked
+            {
+                totalLength += entry.Length;
+            }
+
+            if (totalLength > MaximumPackageUncompressedBytes)
+            {
+                throw new InvalidDataException("整合包解压后的总大小超过 256 MB。 ");
+            }
+        }
     }
 
     private static string SanitizeVersionSettingsText(string content)

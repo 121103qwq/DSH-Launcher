@@ -345,7 +345,15 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         }
 
                         var retryPort = attempt < PortStartAttempts && IsPortConflict(health.Error);
-                        await StopCoreAsync(instance.Id, running, releaseInstanceLock: !retryPort);
+                        if (!await StopCoreAsync(instance.Id, running, releaseInstanceLock: !retryPort))
+                        {
+                            // The running entry still owns the lock and process.
+                            // Do not let the outer finally release it while the
+                            // process may still be writing this DSH_HOME.
+                            instanceLock = null;
+                            return DshInstanceRunResult.Failure(
+                                $"DSh 启动失败后无法终止残留进程，请先结束进程 {running.Process.Id} 再重试。{GetDiagnosticSuffix(running)}");
+                        }
                         running = null;
                         if (retryPort)
                         {
@@ -359,7 +367,10 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     {
                         if (running is not null)
                         {
-                            await StopCoreAsync(instance.Id, running, releaseInstanceLock: false);
+                            if (!await StopCoreAsync(instance.Id, running, releaseInstanceLock: false))
+                            {
+                                instanceLock = null;
+                            }
                         }
 
                         throw;
@@ -410,7 +421,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 return DshInstanceRunResult.Failure("实例当前没有由 Launcher 管理的运行进程。");
             }
 
-            await StopCoreAsync(instanceId, running);
+            if (!await StopCoreAsync(instanceId, running))
+            {
+                return DshInstanceRunResult.Failure(
+                    $"无法终止 DSh 进程 {running.Process.Id}；实例仍按运行中保留，未释放实例锁。");
+            }
             return DshInstanceRunResult.Success(0, running.Port, running.WebUrl);
         }
         catch (OperationCanceledException)
@@ -502,7 +517,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         {
             if (TryGetRunning(instanceId, out var running))
             {
-                await StopCoreAsync(instanceId, running);
+                if (!await StopCoreAsync(instanceId, running))
+                {
+                    throw new InvalidOperationException(
+                        $"无法终止 DSh 进程 {running.Process.Id}；已取消后续重启。 ");
+                }
             }
         }
         finally
@@ -588,20 +607,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
-    private async Task StopCoreAsync(
+    private async Task<bool> StopCoreAsync(
         string instanceId,
         RunningDshProcess running,
         bool releaseInstanceLock = true)
     {
-        lock (_running)
-        {
-            if (_running.TryGetValue(instanceId, out var current)
-                && ReferenceEquals(current, running))
-            {
-                _running.Remove(instanceId);
-            }
-        }
-
         try
         {
             if (!HasExited(running.Process))
@@ -616,24 +626,37 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 }
             }
 
-            if (HasExited(running.Process))
+            if (!HasExited(running.Process))
             {
-                await DrainExitedProcessOutputAsync(running.Process);
+                return false;
             }
+
+            await DrainExitedProcessOutputAsync(running.Process);
         }
         catch
         {
-            // Cleanup must not mask the original start/stop result.
-        }
-        finally
-        {
-            if (releaseInstanceLock)
+            if (!HasExited(running.Process))
             {
-                running.InstanceLock.Dispose();
+                return false;
             }
-
-            running.Process.Dispose();
         }
+
+        lock (_running)
+        {
+            if (_running.TryGetValue(instanceId, out var current)
+                && ReferenceEquals(current, running))
+            {
+                _running.Remove(instanceId);
+            }
+        }
+
+        if (releaseInstanceLock)
+        {
+            running.InstanceLock.Dispose();
+        }
+
+        running.Process.Dispose();
+        return true;
     }
 
     private bool TryGetRunning(string instanceId, out RunningDshProcess running)

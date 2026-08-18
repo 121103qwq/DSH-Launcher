@@ -29,6 +29,8 @@ public sealed class VersionSettingsData
 
     public bool SyncModelProviders { get; set; } = true;
 
+    public bool UseDshMarketHotReload { get; set; } = true;
+
     public string? WindowTitle { get; set; }
 
     public string? NodeExecutablePath { get; set; }

@@ -61,6 +61,7 @@ internal static class DshRuntimeCommandFactory
 
         var preferredNode = spec.NodeExecutablePath ?? fallbackNodeExecutablePath;
         startInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(preferredNode);
+        ApplyProxyFallback(startInfo);
         return startInfo;
     }
 
@@ -134,4 +135,67 @@ internal static class DshRuntimeCommandFactory
 
     private static string QuoteForCmd(string value) =>
         "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
+    internal static void ApplyProxyFallback(ProcessStartInfo startInfo)
+    {
+        var hasHttpProxy = TryGetEnvironmentValue(startInfo, "HTTP_PROXY", out var httpProxy)
+            || TryGetEnvironmentValue(startInfo, "http_proxy", out httpProxy);
+        var hasHttpsProxy = TryGetEnvironmentValue(startInfo, "HTTPS_PROXY", out var httpsProxy)
+            || TryGetEnvironmentValue(startInfo, "https_proxy", out httpsProxy);
+
+        if (hasHttpProxy && IsHttpProxy(httpProxy))
+        {
+            SetEnvironmentFallback(startInfo, "npm_config_proxy", httpProxy);
+        }
+
+        if (hasHttpsProxy && IsHttpProxy(httpsProxy))
+        {
+            SetEnvironmentFallback(startInfo, "npm_config_https_proxy", httpsProxy);
+            return;
+        }
+
+        if (!hasHttpProxy || !IsHttpProxy(httpProxy))
+        {
+            return;
+        }
+
+        // npm/pnpm may use a CONNECT tunnel through an HTTP proxy for HTTPS
+        // downloads, but pnpm does not consistently treat HTTP_PROXY as the
+        // HTTPS fallback unless npm-compatible variables are also present.
+        // Keep every fallback local to Launcher child processes.
+        startInfo.Environment["HTTPS_PROXY"] = httpProxy;
+        startInfo.Environment["https_proxy"] = httpProxy;
+        SetEnvironmentFallback(startInfo, "npm_config_https_proxy", httpProxy);
+    }
+
+    private static bool IsHttpProxy(string value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var proxyUri)
+        && proxyUri.Scheme is "http" or "https";
+
+    private static void SetEnvironmentFallback(
+        ProcessStartInfo startInfo,
+        string name,
+        string value)
+    {
+        if (!TryGetEnvironmentValue(startInfo, name, out _))
+        {
+            startInfo.Environment[name] = value;
+        }
+    }
+
+    private static bool TryGetEnvironmentValue(
+        ProcessStartInfo startInfo,
+        string name,
+        out string value)
+    {
+        if (startInfo.Environment.TryGetValue(name, out var candidate)
+            && !string.IsNullOrWhiteSpace(candidate))
+        {
+            value = candidate;
+            return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
 }

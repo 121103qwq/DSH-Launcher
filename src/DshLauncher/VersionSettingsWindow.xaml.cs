@@ -568,7 +568,8 @@ public partial class VersionSettingsWindow : UserControl
                 SyncModelProviders = _settings.SyncModelProviders,
                 WindowTitle = WindowTitleBox.Text,
                 NodeExecutablePath = nodePath,
-                OpenMode = _settings.OpenMode
+                OpenMode = _settings.OpenMode,
+                UseDshMarketHotReload = _settings.UseDshMarketHotReload
             };
             var snapshot = TryCreateSnapshot("保存窗口与 Node 设置前");
             _settingsService.Save(_instance, updated);

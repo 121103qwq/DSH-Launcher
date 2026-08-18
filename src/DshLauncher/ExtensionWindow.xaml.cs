@@ -15,6 +15,7 @@ namespace DshLauncher;
 
 public partial class ExtensionWindow : UserControl
 {
+    private const string FeaturedCategoryKey = "__featured__";
     private ManagerInstance _instance;
     private readonly ExtensionService _service;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
@@ -26,6 +27,8 @@ public partial class ExtensionWindow : UserControl
     private readonly PluginFailureReportService _failureReportService = new();
     private readonly SkillMarketService? _skillMarketService;
     private readonly DshMarketThemeService _themeService = new();
+    private readonly VersionSettingsService? _versionSettingsService;
+    private readonly VersionSnapshotService? _versionSnapshotService;
     private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
     private bool _isSkillMarketLoading;
     private bool _isSkillMarketMutating;
@@ -46,6 +49,7 @@ public partial class ExtensionWindow : UserControl
     private readonly Dictionary<string, double> _skillMarketScrollOffsets = new(StringComparer.Ordinal);
     private string _activeMarketplaceCategoryKey = string.Empty;
     private string _activeSkillMarketCategoryKey = string.Empty;
+    private bool _useDshMarketHotReload = true;
 
     public ExtensionWindow(
         ManagerInstance instance,
@@ -56,7 +60,9 @@ public partial class ExtensionWindow : UserControl
         SkillMarketService? skillMarketService = null,
         Func<PluginInstallMode>? pluginInstallMode = null,
         Func<ManagerInstance, CancellationToken, Task<bool>>? stopInstanceForPluginRetry = null,
-        Func<ManagerInstance, string, Task<bool>>? handoffPluginFailure = null)
+        Func<ManagerInstance, string, Task<bool>>? handoffPluginFailure = null,
+        VersionSettingsService? versionSettingsService = null,
+        VersionSnapshotService? versionSnapshotService = null)
     {
         _instance = instance;
         _service = service;
@@ -67,11 +73,15 @@ public partial class ExtensionWindow : UserControl
         _stopInstanceForPluginRetry = stopInstanceForPluginRetry;
         _handoffPluginFailure = handoffPluginFailure;
         _skillMarketService = skillMarketService;
+        _versionSettingsService = versionSettingsService;
+        _versionSnapshotService = versionSnapshotService;
         InitializeComponent();
+        _useDshMarketHotReload = _versionSettingsService?.Read(instance).UseDshMarketHotReload ?? true;
+        DshMarketHotReloadCheckBox.IsChecked = _useDshMarketHotReload;
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
         SkillMarketCategoryList.Visibility = _agentOnly ? Visibility.Visible : Visibility.Collapsed;
         CurrentInstanceNameText.Text = instance.Name;
-        CurrentInstanceDetailsText.Text = $"{instance.KindText} · {instance.RootPath}\nDSH_HOME：{instance.DshHome}";
+        CurrentInstanceDetailsText.Text = $"{instance.DshVersionText}\n{instance.KindText} · {instance.RootPath}\nDSH_HOME：{instance.DshHome}";
 
         if (_agentOnly)
         {
@@ -88,6 +98,7 @@ public partial class ExtensionWindow : UserControl
             MarketplacePanel.Visibility = Visibility.Collapsed;
             InstallPluginButton.Visibility = Visibility.Collapsed;
             AddMcpButton.Visibility = Visibility.Collapsed;
+            DshMarketHotReloadCheckBox.Visibility = Visibility.Collapsed;
             EnableButton.Visibility = Visibility.Collapsed;
             DisableButton.Visibility = Visibility.Collapsed;
             UpdateButton.Visibility = Visibility.Collapsed;
@@ -515,7 +526,9 @@ public partial class ExtensionWindow : UserControl
         var (installed, themeState) = await Task.Run(async () =>
         {
             var scanned = await _service.ListAsync(_instance, cancellationToken);
-            var theme = await _themeService.ReadAsync(_instance, cancellationToken);
+            var theme = _useDshMarketHotReload
+                ? await _themeService.ReadAsync(_instance, cancellationToken)
+                : DshMarketThemeState.Unavailable("当前实例已关闭 dsh-market 热加载。 ");
             return (scanned, theme);
         }, cancellationToken);
         _installedPlugins = installed
@@ -553,6 +566,11 @@ public partial class ExtensionWindow : UserControl
         var sourceKind = GetSelectedSourceKind();
         var sortOrder = GetSelectedSortOrder();
         var category = GetSelectedCategory();
+        var featuredOnly = string.Equals(category, FeaturedCategoryKey, StringComparison.Ordinal);
+        if (featuredOnly)
+        {
+            category = null;
+        }
         var installedPlugins = _installedPlugins;
         var canMutate = _marketplaceCanMutate;
         var themeState = _themeState;
@@ -568,6 +586,7 @@ public partial class ExtensionWindow : UserControl
                 sourceKind,
                 sortOrder,
                 category,
+                featuredOnly,
                 installedPlugins,
                 canMutate,
                 themeState,
@@ -602,6 +621,7 @@ public partial class ExtensionWindow : UserControl
         MarketplaceSourceKind? sourceKind,
         MarketplaceSortOrder sortOrder,
         string? category,
+        bool featuredOnly,
         IReadOnlyList<ExtensionEntry> installedPlugins,
         bool canMutate,
         DshMarketThemeState themeState,
@@ -615,6 +635,10 @@ public partial class ExtensionWindow : UserControl
             sourceKind: sourceKind,
             sortOrder: sortOrder,
             category: category);
+        if (featuredOnly)
+        {
+            items = items.Where(IsFeaturedMarketplaceItem).ToList();
+        }
         var rendered = new List<MarketplaceItem>(items.Count);
         foreach (var item in items)
         {
@@ -648,6 +672,7 @@ public partial class ExtensionWindow : UserControl
                 ThemeMarketAvailable = themeMarketAvailable,
                 ThemeCanApply = themeCanApply,
                 ThemePackageName = themePackageName,
+                DeveloperAvatarUrl = MarketplaceService.GetDeveloperAvatarUrl(item),
                 ThemeStatusText = isTheme
                     ? GetThemeStatusText(isInstalled, themeMarketAvailable, themePackageName, themeState, instanceRunning, instanceAttached)
                     : null
@@ -656,6 +681,10 @@ public partial class ExtensionWindow : UserControl
 
         return rendered;
     }
+
+    internal static bool IsFeaturedMarketplaceItem(MarketplaceItem item) =>
+        item.SourceKind == MarketplaceSourceKind.CommunityCatalog
+        || item.MergedSourceKinds?.Contains(MarketplaceSourceKind.CommunityCatalog) == true;
 
     private MarketplaceSourceKind? GetSelectedSourceKind()
     {
@@ -867,6 +896,16 @@ public partial class ExtensionWindow : UserControl
                     ? $"Plugin 更新完成。{activationText}；备份：{snapshot}"
                     : $"Plugin 安装完成。{activationText}；备份：{snapshot}";
             }
+            catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+            {
+                var restored = _marketplaceService.RestorePluginSnapshot(_instance, snapshot);
+                var cancellationMessage = restored
+                    ? "Plugin 操作已取消，已恢复操作前配置。"
+                    : "Plugin 操作已取消；没有可恢复的配置备份。";
+                MarketplaceStatusText.Text = cancellationMessage;
+                progressWindow.Canceled(cancellationMessage);
+                return;
+            }
             catch (Exception ex)
             {
                 progressWindow.SetProgress(72, "Plugin 操作失败，正在回档并打包完整诊断报告…");
@@ -892,6 +931,12 @@ public partial class ExtensionWindow : UserControl
             progressWindow.SetProgress(95, "当前实例已刷新，正在刷新插件市场…");
             await RefreshMarketplaceAsync();
             progressWindow.Complete(item.IsInstalled ? "Plugin 更新完成。" : "Plugin 安装完成。");
+        }
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+        {
+            const string cancellationMessage = "Plugin 操作已取消。";
+            MarketplaceStatusText.Text = cancellationMessage;
+            progressWindow?.Canceled(cancellationMessage);
         }
         catch (Exception ex)
         {
@@ -1031,7 +1076,15 @@ public partial class ExtensionWindow : UserControl
                 throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改外部实例主题。 ");
             }
 
+            if (!_useDshMarketHotReload)
+            {
+                throw new InvalidOperationException("当前实例已关闭 dsh-market 热加载，请先在扩展页左侧开启。 ");
+            }
+
             BeginMarketplaceMutation("正在通过 dsh-market 应用主题…");
+            var snapshot = _versionSnapshotService?.CreateLivePluginSnapshot(
+                _instance,
+                $"dsh-market 应用主题：{item.Name}");
             var result = await _themeService.ApplyAsync(_instance, item.ThemePackageName);
             if (!result.IsSuccess)
             {
@@ -1039,7 +1092,9 @@ public partial class ExtensionWindow : UserControl
             }
 
             _themeState = _themeState with { LiveNames = result.LiveNames };
-            MarketplaceStatusText.Text = $"主题已交给 dsh-market 应用：{item.Name}。";
+            MarketplaceStatusText.Text = snapshot is null
+                ? $"主题已交给 dsh-market 应用：{item.Name}。"
+                : $"主题已交给 dsh-market 应用：{item.Name}；已创建自动存档。";
             RenderMarketplaceItems();
         }
         catch (Exception ex)
@@ -1146,6 +1201,33 @@ public partial class ExtensionWindow : UserControl
         }
 
         return new PluginFailureRecovery(summary, report?.ArchivePath, handoffSucceeded);
+    }
+
+    private async void DshMarketHotReloadCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_controlLoaded || _agentOnly || _versionSettingsService is null)
+        {
+            return;
+        }
+
+        _useDshMarketHotReload = DshMarketHotReloadCheckBox.IsChecked == true;
+        try
+        {
+            var settings = _versionSettingsService.Read(_instance);
+            settings.UseDshMarketHotReload = _useDshMarketHotReload;
+            _versionSettingsService.Save(_instance, settings);
+            _themeState = _useDshMarketHotReload
+                ? await _themeService.ReadAsync(_instance)
+                : DshMarketThemeState.Unavailable("当前实例已关闭 dsh-market 热加载。 ");
+            MarketplaceStatusText.Text = _useDshMarketHotReload
+                ? "已开启 dsh-market 热加载；应用主题前会创建自动存档。"
+                : "已关闭 dsh-market 热加载；Plugin 仍可正常安装和管理。";
+            RenderMarketplaceItems();
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
     }
 
     private static string BuildDshFailurePrompt(

@@ -151,6 +151,17 @@ internal sealed class PluginProgressWindow : Window
         PresentResult();
     }
 
+    public void Canceled(string message)
+    {
+        _canClose = true;
+        _statusText.Text = message;
+        _progressBar.IsIndeterminate = false;
+        _progressText.Text = "已取消";
+        _actionButton.Content = "关闭";
+        _actionButton.IsEnabled = true;
+        PresentResult();
+    }
+
     internal static double ClampProgress(double percentage) =>
         Math.Clamp(double.IsFinite(percentage) ? percentage : 0, 0, 100);
 

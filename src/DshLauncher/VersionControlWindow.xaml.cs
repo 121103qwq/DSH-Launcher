@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -26,6 +27,10 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly Func<string, bool> _isRunning;
     private readonly Func<ManagerInstance, ManagerInstance> _versionUpdated;
     private readonly Action _versionContentChanged;
+    private readonly DshInstallService _dshInstallService = new();
+    private readonly DshVersionCatalogService _dshVersionCatalogService = new();
+    private readonly VersionSettingsService _versionSettingsService = new();
+    private readonly CancellationTokenSource _lifetimeCancellation;
     private VersionHealthReport? _healthReport;
     private bool _isBusy;
 
@@ -44,7 +49,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Func<DshRuntimeInfo> dshRuntimeProvider,
         Func<string, bool> isRunning,
         Func<ManagerInstance, ManagerInstance> versionUpdated,
-        Action versionContentChanged)
+        Action versionContentChanged,
+        CancellationToken cancellationToken = default)
     {
         _packageService = packageService;
         _templateProvider = templateProvider;
@@ -59,6 +65,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _isRunning = isRunning;
         _versionUpdated = versionUpdated;
         _versionContentChanged = versionContentChanged;
+        _lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         foreach (var version in versions)
         {
             Versions.Add(version);
@@ -137,7 +144,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         ? _templateProvider() is null
             ? "没有检测到可用的 DSh 运行目录，请先在设置中完成运行环境检测。"
             : "可以直接新建干净版本；首次创建会使用当前检测到的 DSh 运行目录。"
-        : $"{SelectedVersion.KindText} · {SelectedVersion.RootPath}\nDSH_HOME：{SelectedVersion.DshHome}\n状态：{SelectedVersion.StatusText}";
+        : $"{SelectedVersion.DshVersionText}\n{SelectedVersion.KindText} · {SelectedVersion.RootPath}\nDSH_HOME：{SelectedVersion.DshHome}\n状态：{SelectedVersion.StatusText}";
 
     public bool CanClone => !_isBusy
         && SelectedVersion is not null
@@ -208,9 +215,14 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         RefreshSnapshots();
     }
 
+    private void Window_OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        _lifetimeCancellation.Cancel();
+    }
+
     private async void CreateCleanVersion_Click(object sender, RoutedEventArgs e)
     {
-        await CreateVersionAsync(clone: false);
+        await CreateCleanVersionAsync();
     }
 
     private void AddInstance_Click(object sender, RoutedEventArgs e)
@@ -412,6 +424,153 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         {
             SetBusy(false);
         }
+    }
+
+    private async Task CreateCleanVersionAsync()
+    {
+        var template = SelectedVersion ?? _templateProvider();
+        if (template is null)
+        {
+            SetStatus("没有可用的 DSh 运行目录，暂时不能创建版本。请先在设置中完成运行环境检测。 ");
+            return;
+        }
+
+        IReadOnlyList<string> versions;
+        SetBusy(true);
+        SetStatus("正在读取官方 DSh 版本列表…");
+        try
+        {
+            versions = await _dshVersionCatalogService.ReadOfficialVersionsAsync(_lifetimeCancellation.Token);
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidDataException)
+        {
+            versions = string.IsNullOrWhiteSpace(template.DetectedVersion)
+                ? Array.Empty<string>()
+                : new[] { template.DetectedVersion };
+            SetStatus($"官方版本列表暂时不可用：{ex.Message}。当前只能选择本机版本。 ");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+
+        if (versions.Count == 0)
+        {
+            SetStatus("没有读到可创建的 DSh 版本，请检查网络或先导入本机运行时。 ");
+            return;
+        }
+
+        var dialog = new NewVersionWindow(
+            Window.GetWindow(this),
+            versions,
+            template.DetectedVersion ?? versions[0]);
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            var runtimeTemplate = await PrepareRuntimeTemplateAsync(template, dialog.DshVersion);
+            var created = await Task.Run(
+                () => _packageService.CreateCleanVersion(runtimeTemplate, dialog.VersionName),
+                _lifetimeCancellation.Token);
+            Versions.Add(created);
+            SelectedVersion = created;
+            _versionCreated(created);
+            SetStatus($"干净版本已创建：{created.Name} · {created.DshVersionText}。新的 DSH_HOME：{created.DshHome}");
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            SetStatus("创建版本已取消。 ");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"创建版本失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async Task<ManagerInstance> PrepareRuntimeTemplateAsync(
+        ManagerInstance template,
+        string requestedVersion)
+    {
+        var normalizedVersion = requestedVersion.Trim().TrimStart('v', 'V');
+        if (!DshInstallService.IsSafePackageVersion(normalizedVersion))
+        {
+            throw new InvalidDataException("DSh 版本号格式无效。 ");
+        }
+        if (string.Equals(
+                template.DetectedVersion?.TrimStart('v', 'V'),
+                normalizedVersion,
+                StringComparison.OrdinalIgnoreCase)
+            && DshRuntimeCommandFactory.IsUsable(template.EffectiveDshLaunchSpec))
+        {
+            return template;
+        }
+
+        var baseDirectory = _versionSettingsService.ResolveDshInstallDirectory();
+        var versionDirectory = Path.Combine(baseDirectory, "versions", normalizedVersion);
+        var packageRoot = DshRuntimeDetector.TryResolvePackageRoot(versionDirectory);
+        var actualVersion = packageRoot is null ? null : DshRuntimeDetector.TryReadPackageVersion(packageRoot);
+        if (!string.Equals(actualVersion, normalizedVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            var nodeRuntime = _nodeRuntimeProvider();
+            if (!nodeRuntime.IsAvailable)
+            {
+                throw new InvalidOperationException("缺少兼容的 Node.js，无法下载所选 DSh 版本。 ");
+            }
+
+            SetStatus($"本机没有 DSh {normalizedVersion}，正在从官方 npm 包下载…");
+            var install = await _dshInstallService.InstallVersionAsync(
+                nodeRuntime,
+                normalizedVersion,
+                DshInstallService.OfficialRegistry,
+                versionDirectory,
+                _lifetimeCancellation.Token);
+            if (!install.IsSuccess)
+            {
+                throw new InvalidOperationException(install.Error ?? $"DSh {normalizedVersion} 下载失败。 ");
+            }
+
+            packageRoot = DshRuntimeDetector.TryResolvePackageRoot(versionDirectory);
+            actualVersion = packageRoot is null ? null : DshRuntimeDetector.TryReadPackageVersion(packageRoot);
+        }
+
+        if (packageRoot is null || !string.Equals(actualVersion, normalizedVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"下载后没有找到 DSh {normalizedVersion} 的有效运行目录。 ");
+        }
+
+        var launchSpec = DshRuntimeDetector.CreateLaunchSpecForPackageRoot(packageRoot);
+        if (!DshRuntimeCommandFactory.IsUsable(launchSpec))
+        {
+            throw new InvalidOperationException($"DSh {normalizedVersion} 已下载，但启动入口不可用。 ");
+        }
+
+        return template with
+        {
+            RootPath = packageRoot,
+            Kind = InstanceKind.Installed,
+            DshExecutablePath = launchSpec!.HostPath,
+            DetectedVersion = actualVersion,
+            RuntimeStatus = InstanceRuntimeStatus.Ready,
+            PackageManager = "npm",
+            LastError = null,
+            ProcessId = null,
+            Port = null,
+            WebUrl = null,
+            DshLaunchSpec = launchSpec,
+            RuntimeOwnership = InstanceRuntimeOwnership.None
+        };
     }
 
     private async void ImportPackage_Click(object sender, RoutedEventArgs e)

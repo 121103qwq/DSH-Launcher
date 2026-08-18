@@ -50,6 +50,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node path propagation", TestNodePathPropagation),
     ("DSh install guard", TestDshInstallGuard),
     ("DSh custom install prefix", TestDshCustomInstallPrefix),
+    ("DSh official version catalog", TestDshOfficialVersionCatalog),
     ("DSh default install directory", TestDshDefaultInstallDirectory),
     ("Source runner guard", TestSourceRunnerGuard),
     ("Source prepare install/build", TestSourcePrepareInstallAndBuild),
@@ -911,6 +912,34 @@ static Task TestDshDesktopV2RuntimeCompatibility()
     Assert(startInfo.Environment["DSH_HOME"] == Path.GetFullPath(home),
         "封装运行时仍必须使用版本自己的 DSH_HOME。");
 
+    var previousHttpProxy = Environment.GetEnvironmentVariable("HTTP_PROXY");
+    var previousHttpsProxy = Environment.GetEnvironmentVariable("HTTPS_PROXY");
+    var previousNpmProxy = Environment.GetEnvironmentVariable("npm_config_proxy");
+    var previousNpmHttpsProxy = Environment.GetEnvironmentVariable("npm_config_https_proxy");
+    try
+    {
+        Environment.SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:54321");
+        Environment.SetEnvironmentVariable("HTTPS_PROXY", null);
+        Environment.SetEnvironmentVariable("npm_config_proxy", null);
+        Environment.SetEnvironmentVariable("npm_config_https_proxy", null);
+        var proxiedStartInfo = DshRuntimeCommandFactory.Create(
+            launchSpec,
+            new[] { "--version" },
+            packageRoot);
+        Assert(proxiedStartInfo.Environment["HTTPS_PROXY"] == "http://127.0.0.1:54321",
+            "只有 HTTP_PROXY 时，DSh 子进程应继承同一代理处理 GitHub HTTPS 下载。");
+        Assert(proxiedStartInfo.Environment["npm_config_proxy"] == "http://127.0.0.1:54321"
+            && proxiedStartInfo.Environment["npm_config_https_proxy"] == "http://127.0.0.1:54321",
+            "pnpm 子进程应获得 npm 兼容代理变量，避免主题下载绕过 Launcher 代理。");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("HTTP_PROXY", previousHttpProxy);
+        Environment.SetEnvironmentVariable("HTTPS_PROXY", previousHttpsProxy);
+        Environment.SetEnvironmentVariable("npm_config_proxy", previousNpmProxy);
+        Environment.SetEnvironmentVariable("npm_config_https_proxy", previousNpmHttpsProxy);
+    }
+
     var registry = new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
     var instance = registry.Register(
         "DSH Desktop 2",
@@ -1740,6 +1769,15 @@ static Task TestDshCustomInstallPrefix()
         "npm 安装必须通过 NPM_CONFIG_PREFIX 使用用户选择的位置。");
     Assert(!startInfo.Arguments.Contains(prefix, StringComparison.Ordinal),
         "用户选择的路径不能拼入 cmd.exe 命令文本，避免空格或 shell 字符破坏命令。");
+    var versionStartInfo = DshInstallService.CreateStartInfo(
+        "npm.cmd",
+        DshInstallService.OfficialRegistry,
+        normalized,
+        "0.1.0-rc.7");
+    Assert(versionStartInfo.Arguments.Contains("@deepseek-ai/dsh@0.1.0-rc.7", StringComparison.Ordinal)
+        && DshInstallService.IsSafePackageVersion("0.1.0-rc.7")
+        && !DshInstallService.IsSafePackageVersion("../rc.7"),
+        "新建版本应能安装指定的官方 DSh 版本，并拒绝把路径文本当版本号。 ");
 
     var preferredCandidates = DshRuntimeDetector.GetCandidates(prefix).Take(3).ToArray();
     Assert(preferredCandidates.Length == 3
@@ -1767,10 +1805,36 @@ static Task TestDshCustomInstallPrefix()
             prefix),
         "只检测到其它全局 DSh 时，所选安装位置不能被误报为已就绪。");
 
+    var exactVersionDirectory = Path.Combine(temporary.Path, "versions", "0.1.0-rc.7");
+    Directory.CreateDirectory(exactVersionDirectory);
+    File.WriteAllText(Path.Combine(exactVersionDirectory, "partial.txt"), "partial");
+    var stagingDirectory = DshInstallService.CreateVersionStagingDirectory(exactVersionDirectory);
+    Directory.CreateDirectory(stagingDirectory);
+    File.WriteAllText(Path.Combine(stagingDirectory, "complete.txt"), "complete");
+    DshInstallService.PromoteVersionDirectory(stagingDirectory, exactVersionDirectory);
+    Assert(File.Exists(Path.Combine(exactVersionDirectory, "complete.txt"))
+        && !File.Exists(Path.Combine(exactVersionDirectory, "partial.txt"))
+        && !Directory.Exists(stagingDirectory),
+        "指定版本下载应先写临时目录，完成后再原子替换残缺目录。 ");
+
     AssertThrows<ArgumentException>(
         () => DshInstallService.NormalizeInstallDirectory(Path.GetPathRoot(prefix)),
         "DSh 安装位置不能选择磁盘根目录。");
     return Task.CompletedTask;
+}
+
+static async Task TestDshOfficialVersionCatalog()
+{
+    using var client = new HttpClient(new ProviderTestHandler(request =>
+    {
+        Assert(request.RequestUri?.ToString() == DshVersionCatalogService.OfficialMetadataUrl,
+            "DSh 版本列表必须读取官方 @deepseek-ai/dsh 包元数据。 ");
+        return JsonResponse("{\"dist-tags\":{\"latest\":\"0.1.0-rc.7\"},\"versions\":{\"0.1.0-rc.6\":{},\"0.1.0-rc.7\":{}}}");
+    }));
+    using var service = new DshVersionCatalogService(client);
+    var versions = await service.ReadOfficialVersionsAsync();
+    Assert(versions.SequenceEqual(new[] { "0.1.0-rc.7", "0.1.0-rc.6" }),
+        "新建版本选择器应按新到旧显示 rc.7 和 rc.6。 ");
 }
 
 static Task TestDshDefaultInstallDirectory()
@@ -2608,6 +2672,15 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         && commandCatalog[0].InstallSpec == "github:demo/community-theme"
         && commandCatalog[0].RepositoryUrl == "https://github.com/demo/community-theme",
         "社区目录的完整 DSh CLI 安装命令应先提取为可传给官方 CLI 的 Plugin spec。 ");
+    Assert(ExtensionWindow.IsFeaturedMarketplaceItem(commandCatalog[0])
+        && MarketplaceService.GetDeveloperAvatarUrl(commandCatalog[0]) == "https://github.com/demo.png?size=96",
+        "dsh-market 同源社区目录条目应进入精选，并从 GitHub 仓库显示开发者头像。 ");
+    Assert(!ExtensionWindow.IsFeaturedMarketplaceItem(commandCatalog[0] with
+        {
+            SourceKind = MarketplaceSourceKind.GitHubTopic,
+            MergedSourceKinds = new[] { MarketplaceSourceKind.GitHubTopic }
+        }),
+        "只有 GitHub Topic 发现、没有进入精选目录的仓库不能冒充精选。 ");
     var commandVerified = await service.VerifyAsync(commandCatalog[0]);
     Assert(commandVerified.Status == MarketplaceVerificationStatus.Verified
         && commandVerified.InstallSpec == "community-theme@latest"
@@ -2893,6 +2966,30 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         true);
     Assert(MarketplaceService.FindInstalledPlugin(githubOnlyMarketplaceItem, new[] { installedGitHubPackage }) == installedGitHubPackage,
         "GitHub 安装后以 package name 写入 profile 的插件必须在自动刷新后显示为已安装。 ");
+    var installedMonorepoTheme = new ExtensionEntry(
+        "plugin:@dsh-external/dsh-client-ui-skin-maid-atelier",
+        ExtensionKind.Plugin,
+        "@dsh-external/dsh-client-ui-skin-maid-atelier",
+        "git+https://github.com/Small-tailqwq/dsh-deep-whale.git",
+        "installed",
+        "profile",
+        true,
+        true);
+    var monorepoThemeItem = new MarketplaceItem(
+        "github:Small-tailqwq/dsh-deep-whale#path:/maid-atelier",
+        "dsh-deep-whale#maid-atelier",
+        null,
+        null,
+        "test",
+        "github:Small-tailqwq/dsh-deep-whale#path:/maid-atelier",
+        "https://github.com/Small-tailqwq/dsh-deep-whale",
+        "主题",
+        MarketplaceSourceKind.GitHubTopic,
+        "test",
+        MarketplaceVerificationStatus.Unverified,
+        "待检查");
+    Assert(MarketplaceService.FindInstalledPlugin(monorepoThemeItem, new[] { installedMonorepoTheme }) == installedMonorepoTheme,
+        "GitHub monorepo 主题安装后必须通过 profile 保存的仓库来源显示为已安装。 ");
     Assert(MarketplaceService.GetUpdateStatus("1.1.0", "1.0.0") == MarketplaceUpdateStatus.Available, "较新的市场版本应显示可更新。 ");
     Assert(MarketplaceService.GetUpdateStatus("1.0.0", "1.0.0") == MarketplaceUpdateStatus.UpToDate, "相同版本应显示已是最新。 ");
     Assert(MarketplaceService.GetUpdateStatus(null, "1.0.0") == MarketplaceUpdateStatus.Unknown, "缺少版本信息时更新状态应为未知。 ");
@@ -3228,6 +3325,21 @@ static Task TestEncryptedVersionSnapshotRollback()
         && retainedSnapshots.Any(snapshotInfo => Path.GetFileName(snapshotInfo.FilePath)
             .StartsWith("manual-", StringComparison.OrdinalIgnoreCase)),
         "自动快照最多保留 10 个，手动快照不能被自动清理。 ");
+    var runningInstance = instance with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Managed
+    };
+    var liveSnapshot = service.CreateLivePluginSnapshot(runningInstance, "dsh-market 热加载测试");
+    Assert(File.Exists(liveSnapshot.FilePath)
+        && service.ListSnapshots(instance).Count(snapshotInfo => Path.GetFileName(snapshotInfo.FilePath)
+            .StartsWith("auto-", StringComparison.OrdinalIgnoreCase)) == 10,
+        "运行中的 Launcher 实例应能创建插件配置自动存档，且仍只保留最近 10 个自动存档。 ");
+    AssertThrows<InvalidOperationException>(
+        () => service.CreateLivePluginSnapshot(
+            runningInstance with { RuntimeOwnership = InstanceRuntimeOwnership.Attached },
+            "Attached 不应保存"),
+        "Launcher 不能为不归自己管理的 Attached 实例执行 dsh-market 快照。 ");
     return Task.CompletedTask;
 }
 
@@ -3325,10 +3437,13 @@ static Task TestVersionPackageOperations()
         SyncModelProviders = true,
         WindowTitle = "分享用版本",
         NodeExecutablePath = Path.Combine(temporary.Path, "node.exe"),
-        OpenMode = VersionOpenMode.Desktop
+        OpenMode = VersionOpenMode.Desktop,
+        UseDshMarketHotReload = false
     });
     Assert(settingsService.Read(source).OpenMode == VersionOpenMode.Desktop,
         "版本打开方式应能持久化到版本设置。 ");
+    Assert(!settingsService.Read(source).UseDshMarketHotReload,
+        "dsh-market 热加载开关应按版本持久化。 ");
     var workspacePeer = registry.Register("工作区副本", runtimeRoot, InstanceKind.Installed, detectedVersion: "0.1.0", packageManager: "npm");
     settingsService.Save(workspacePeer, new VersionSettingsData
     {
@@ -3354,7 +3469,7 @@ static Task TestVersionPackageOperations()
     var sourceSettings = Path.Combine(source.DshHome, "settings.yaml");
     File.WriteAllText(
         sourceSettings,
-        "llm-deepseek:\n  apiKey: super-secret\n  apiKeyEnv: DEEPSEEK_API_KEY\n  ARK_API_KEY: ark-inline-secret\n  baseURL: https://share-user:url-password@api.example/v1?token=url-query-secret\n  models:\n    - deepseek-chat\n",
+        "llm-deepseek:\n  apiKey: super-secret\n  privateKey: |\n    -----BEGIN PRIVATE KEY-----\n    provider-block-secret\n    -----END PRIVATE KEY-----\n  apiKeyEnv: DEEPSEEK_API_KEY\n  ARK_API_KEY: ark-inline-secret\n  baseURL: https://share-user:url-password@api.example/v1?token=url-query-secret\n  models:\n    - deepseek-chat\n",
         new UTF8Encoding(false));
     File.WriteAllText(
         Path.Combine(source.DshHome, ".credentials.yaml"),
@@ -3374,7 +3489,7 @@ static Task TestVersionPackageOperations()
     Directory.CreateDirectory(skillDirectory);
     File.WriteAllText(
         Path.Combine(skillDirectory, "SKILL.md"),
-        "---\nname: code-review\ndescription: Review code\n---\napiKey: skill-secret\nhotkey: Ctrl+K\npublicKey: public-material\n",
+        "---\nname: code-review\ndescription: Review code\n---\napiKey: skill-secret\nprivateKey: >-\n  skill-block-secret\nOPENAI_API_KEY=skill-assignment-secret\nexport TOKEN=skill-export-secret\nhotkey: Ctrl+K\npublicKey: public-material\n",
         new UTF8Encoding(false));
     var presetDirectory = Path.Combine(source.DshHome, ".agent-presets", "reviewer");
     Directory.CreateDirectory(presetDirectory);
@@ -3396,6 +3511,7 @@ static Task TestVersionPackageOperations()
         using var settingsReader = new StreamReader(exportedSettings!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var safeSettings = settingsReader.ReadToEnd();
         Assert(!safeSettings.Contains("super-secret", StringComparison.Ordinal)
+            && !safeSettings.Contains("provider-block-secret", StringComparison.Ordinal)
             && !safeSettings.Contains("ark-inline-secret", StringComparison.Ordinal)
             && !safeSettings.Contains("url-password", StringComparison.Ordinal)
             && !safeSettings.Contains("url-query-secret", StringComparison.Ordinal)
@@ -3434,7 +3550,11 @@ static Task TestVersionPackageOperations()
         Assert(skillEntry is not null, "整合包应包含可分享的 Skill 文件。 ");
         using var skillReader = new StreamReader(skillEntry!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var safeSkill = skillReader.ReadToEnd();
-        Assert(!safeSkill.Contains("skill-secret", StringComparison.Ordinal), "Skill 导出不能携带敏感值。 ");
+        Assert(!safeSkill.Contains("skill-secret", StringComparison.Ordinal)
+            && !safeSkill.Contains("skill-block-secret", StringComparison.Ordinal)
+            && !safeSkill.Contains("skill-assignment-secret", StringComparison.Ordinal)
+            && !safeSkill.Contains("skill-export-secret", StringComparison.Ordinal),
+            "Skill 导出不能携带冒号、等号或 export 形式的敏感值。 ");
         Assert(safeSkill.Contains("hotkey: Ctrl+K", StringComparison.Ordinal)
             && safeSkill.Contains("publicKey: public-material", StringComparison.Ordinal),
             "整合包脱敏不能误删 hotkey、publicKey 等正常配置。 ");

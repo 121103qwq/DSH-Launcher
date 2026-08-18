@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.IO;
 using DshLauncher.Models;
+using System.Text.RegularExpressions;
 
 namespace DshLauncher.Services;
 
@@ -11,6 +12,7 @@ public sealed class DshInstallService
     public const string ChinaRegistry = "https://registry.npmmirror.com";
 
     private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
+    private static readonly SemaphoreSlim VersionInstallGate = new(1, 1);
 
     /// <summary>
     /// 全局 DSh 只在 Installed 目标（或未指定目标的设置页）缺失时安装；
@@ -40,6 +42,21 @@ public sealed class DshInstallService
         string? installDirectory,
         CancellationToken cancellationToken = default)
     {
+        return await InstallVersionAsync(
+            nodeRuntime,
+            packageVersion: null,
+            registry,
+            installDirectory,
+            cancellationToken);
+    }
+
+    public async Task<DshInstallResult> InstallVersionAsync(
+        NodeRuntimeInfo nodeRuntime,
+        string? packageVersion,
+        string? registry,
+        string? installDirectory,
+        CancellationToken cancellationToken = default)
+    {
         if (!nodeRuntime.IsAvailable || string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
         {
             return DshInstallResult.Failure("未找到可用的 Node.js，不能执行 DSh 安装。");
@@ -62,8 +79,98 @@ public sealed class DshInstallService
             return DshInstallResult.Failure(ex.Message);
         }
 
+        if (!string.IsNullOrWhiteSpace(packageVersion) && !IsSafePackageVersion(packageVersion))
+        {
+            return DshInstallResult.Failure("DSh 版本号格式无效。 ");
+        }
+
         var npmPath = FindNpm(nodeRuntime.ExecutablePath);
-        var startInfo = CreateStartInfo(npmPath, registry, normalizedInstallDirectory);
+        if (!string.IsNullOrWhiteSpace(packageVersion)
+            && !string.IsNullOrWhiteSpace(normalizedInstallDirectory))
+        {
+            return await InstallExactVersionAsync(
+                npmPath,
+                packageVersion,
+                registry,
+                normalizedInstallDirectory,
+                cancellationToken);
+        }
+
+        return await RunNpmInstallAsync(
+            npmPath,
+            packageVersion,
+            registry,
+            normalizedInstallDirectory,
+            cancellationToken);
+    }
+
+    private static async Task<DshInstallResult> InstallExactVersionAsync(
+        string npmPath,
+        string packageVersion,
+        string? registry,
+        string installDirectory,
+        CancellationToken cancellationToken)
+    {
+        await VersionInstallGate.WaitAsync(cancellationToken);
+        string? stagingDirectory = null;
+        try
+        {
+            if (InstalledVersionMatches(installDirectory, packageVersion))
+            {
+                return DshInstallResult.Success($"DSh {packageVersion} 已安装。");
+            }
+
+            stagingDirectory = CreateVersionStagingDirectory(installDirectory);
+            var result = await RunNpmInstallAsync(
+                npmPath,
+                packageVersion,
+                registry,
+                stagingDirectory,
+                cancellationToken);
+            if (!result.IsSuccess)
+            {
+                return result;
+            }
+
+            if (!InstalledVersionMatches(stagingDirectory, packageVersion))
+            {
+                return DshInstallResult.Failure(
+                    $"npm 安装完成，但没有找到 DSh {packageVersion} 的有效运行目录。",
+                    output: result.Output);
+            }
+
+            PromoteVersionDirectory(stagingDirectory, installDirectory);
+            stagingDirectory = null;
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return DshInstallResult.Failure($"保存 DSh {packageVersion} 失败：{ex.Message}");
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(stagingDirectory))
+            {
+                TryDeleteDirectory(stagingDirectory);
+            }
+
+            VersionInstallGate.Release();
+        }
+    }
+
+    private static async Task<DshInstallResult> RunNpmInstallAsync(
+        string npmPath,
+        string? packageVersion,
+        string? registry,
+        string? installDirectory,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = CreateStartInfo(npmPath, registry, installDirectory, packageVersion);
+        DshRuntimeCommandFactory.ApplyProxyFallback(startInfo);
         using var process = new Process { StartInfo = startInfo };
 
         try
@@ -114,6 +221,82 @@ public sealed class DshInstallService
             TryKill(process);
             await WaitForExitSafelyAsync(process);
             return DshInstallResult.Failure($"执行 DSh 安装失败：{ex.Message}");
+        }
+    }
+
+    internal static string CreateVersionStagingDirectory(string installDirectory)
+    {
+        var normalized = NormalizeInstallDirectory(installDirectory)
+            ?? throw new ArgumentException("DSh 安装位置不能为空。", nameof(installDirectory));
+        var parent = Path.GetDirectoryName(normalized)
+            ?? throw new ArgumentException("DSh 安装位置必须有父目录。", nameof(installDirectory));
+        Directory.CreateDirectory(parent);
+        return Path.Combine(parent, $".{Path.GetFileName(normalized)}.install-{Guid.NewGuid():N}");
+    }
+
+    internal static void PromoteVersionDirectory(string stagingDirectory, string installDirectory)
+    {
+        var staging = Path.GetFullPath(stagingDirectory);
+        var target = Path.GetFullPath(installDirectory);
+        var parent = Path.GetDirectoryName(target)
+            ?? throw new InvalidOperationException("DSh 版本目录必须有父目录。");
+        if (!string.Equals(Path.GetDirectoryName(staging), parent, StringComparison.OrdinalIgnoreCase)
+            || !Path.GetFileName(staging).StartsWith($".{Path.GetFileName(target)}.install-", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("DSh 临时安装目录不属于目标版本目录。");
+        }
+
+        var backup = Path.Combine(parent, $".{Path.GetFileName(target)}.backup-{Guid.NewGuid():N}");
+        var movedExisting = false;
+        try
+        {
+            if (Directory.Exists(target))
+            {
+                Directory.Move(target, backup);
+                movedExisting = true;
+            }
+
+            Directory.Move(staging, target);
+        }
+        catch
+        {
+            if (movedExisting && !Directory.Exists(target) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, target);
+            }
+
+            throw;
+        }
+
+        if (movedExisting)
+        {
+            TryDeleteDirectory(backup);
+        }
+    }
+
+    private static bool InstalledVersionMatches(string installDirectory, string packageVersion)
+    {
+        var packageRoot = DshRuntimeDetector.TryResolvePackageRoot(installDirectory);
+        var installedVersion = packageRoot is null
+            ? null
+            : DshRuntimeDetector.TryReadPackageVersion(packageRoot);
+        return string.Equals(installedVersion, packageVersion, StringComparison.OrdinalIgnoreCase)
+            && DshRuntimeCommandFactory.IsUsable(
+                packageRoot is null ? null : DshRuntimeDetector.CreateLaunchSpecForPackageRoot(packageRoot));
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+            // A stale temp/backup directory is safer than deleting an uncertain target.
         }
     }
 
@@ -170,12 +353,20 @@ public sealed class DshInstallService
         return normalized;
     }
 
+    internal static bool IsSafePackageVersion(string? packageVersion) =>
+        !string.IsNullOrWhiteSpace(packageVersion)
+        && Regex.IsMatch(packageVersion, "^[0-9A-Za-z][0-9A-Za-z.+-]{0,79}$", RegexOptions.CultureInvariant);
+
     internal static ProcessStartInfo CreateStartInfo(
         string npmPath,
         string? registry,
-        string? installDirectory)
+        string? installDirectory,
+        string? packageVersion = null)
     {
-        var commandArguments = "install --global @deepseek-ai/dsh"
+        var packageSpec = string.IsNullOrWhiteSpace(packageVersion)
+            ? "@deepseek-ai/dsh"
+            : $"@deepseek-ai/dsh@{packageVersion}";
+        var commandArguments = $"install --global {packageSpec}"
             + (string.IsNullOrWhiteSpace(registry) ? string.Empty : $" --registry={registry}");
         var startInfo = new ProcessStartInfo
         {

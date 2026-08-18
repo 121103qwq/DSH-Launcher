@@ -98,7 +98,7 @@ public partial class ChatWindow : Window
             try
             {
                 var result = await Browser.CoreWebView2.ExecuteScriptAsync(BuildSendMessageScript(message));
-                if (result.Contains("\"sent\":true", StringComparison.OrdinalIgnoreCase))
+                if (bool.TryParse(result, out var sent) && sent)
                 {
                     return true;
                 }
@@ -153,7 +153,7 @@ public partial class ChatWindow : Window
                   right.getBoundingClientRect().width - left.getBoundingClientRect().width);
               const input = inputs[0];
               if (!input) {
-                return JSON.stringify({ sent: false, reason: 'input-not-found' });
+                return false;
               }
 
               input.focus();
@@ -186,7 +186,7 @@ public partial class ChatWindow : Window
               });
               if (sendButton) {
                 sendButton.click();
-                return JSON.stringify({ sent: true, method: 'button' });
+                return true;
               }
 
               input.dispatchEvent(new KeyboardEvent('keydown', {
@@ -196,7 +196,7 @@ public partial class ChatWindow : Window
                 which: 13,
                 bubbles: true
               }));
-              return JSON.stringify({ sent: true, method: 'enter' });
+              return true;
             })()
             """;
     }

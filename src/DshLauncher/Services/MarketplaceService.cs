@@ -290,6 +290,13 @@ public sealed class MarketplaceService
         return null;
     }
 
+    public static string? GetDeveloperAvatarUrl(MarketplaceItem item)
+    {
+        return TryGetGitHubRepository(item.RepositoryUrl ?? item.InstallSpec, out var repository)
+            ? $"https://github.com/{repository.Owner}.png?size=96"
+            : null;
+    }
+
     public async Task<ThemeReadmePreview> GetThemeReadmePreviewAsync(
         MarketplaceItem item,
         CancellationToken cancellationToken = default)
@@ -331,7 +338,7 @@ public sealed class MarketplaceService
     }
 
     public static IReadOnlySet<string> GetPluginIdentities(ExtensionEntry entry) =>
-        GetPluginIdentities(entry.Name, entry.Name, entry.Name, null);
+        GetPluginIdentities(entry.Name, entry.Name, entry.Version, null);
 
     public static ExtensionEntry? FindInstalledPlugin(
         MarketplaceItem item,

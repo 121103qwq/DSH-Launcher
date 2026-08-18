@@ -996,14 +996,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         marketplaceService: _marketplaceService,
                         pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode,
                         stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync,
-                        handoffPluginFailure: SendPluginFailureToCurrentInstanceAsync),
+                        handoffPluginFailure: SendPluginFailureToCurrentInstanceAsync,
+                        versionSettingsService: _versionSettingsService,
+                        versionSnapshotService: _versionSnapshotService),
                     "Agent" => new ExtensionWindow(
                         instance,
                         _extensionService,
                         () => _nodeRuntime,
                         agentOnly: true,
                         marketplaceService: _marketplaceService,
-                        skillMarketService: _skillMarketService),
+                        skillMarketService: _skillMarketService,
+                        versionSettingsService: _versionSettingsService,
+                        versionSnapshotService: _versionSnapshotService),
                     _ => new ConversationWindow(
                         instance,
                         _conversationService,
@@ -1080,7 +1084,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             () =>
             {
                 ApplySelectedVersionSettings(SelectedInstance);
-            }));
+            },
+            _windowCancellation.Token));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -1994,7 +1999,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     ConversationWorkspace = workspace,
                     SyncModelProviders = syncProviders.IsChecked == true,
                     WindowTitle = current.WindowTitle,
-                    NodeExecutablePath = current.NodeExecutablePath
+                    NodeExecutablePath = current.NodeExecutablePath,
+                    OpenMode = current.OpenMode,
+                    UseDshMarketHotReload = current.UseDshMarketHotReload
                 };
                 var snapshot = instance.RuntimeStatus != InstanceRuntimeStatus.Running
                     && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached

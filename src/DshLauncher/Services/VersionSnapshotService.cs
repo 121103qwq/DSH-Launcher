@@ -36,6 +36,14 @@ public sealed class VersionSnapshotService
         "profiles/web/yarn.lock",
         "profiles/web/cordis.patch.yml"
     };
+    private static readonly string[] LivePluginSnapshotFiles =
+    {
+        "profiles/web/package.json",
+        "profiles/web/pnpm-lock.yaml",
+        "profiles/web/package-lock.json",
+        "profiles/web/yarn.lock",
+        "profiles/web/cordis.patch.yml"
+    };
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -59,6 +67,27 @@ public sealed class VersionSnapshotService
         bool automatic = false)
     {
         EnsureCanMutate(instance);
+        return CreateSnapshotCore(instance, reason, automatic, SnapshotFiles);
+    }
+
+    public VersionSnapshotInfo CreateLivePluginSnapshot(
+        ManagerInstance instance,
+        string reason)
+    {
+        if (instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            throw new InvalidOperationException("Attached 版本不能创建 Launcher 热加载存档。 ");
+        }
+
+        return CreateSnapshotCore(instance, reason, automatic: true, LivePluginSnapshotFiles);
+    }
+
+    private VersionSnapshotInfo CreateSnapshotCore(
+        ManagerInstance instance,
+        string reason,
+        bool automatic,
+        IReadOnlyList<string> managedFiles)
+    {
         EnsureSafeHome(instance);
         var normalizedReason = NormalizeReason(reason);
         var createdAt = DateTimeOffset.UtcNow;
@@ -67,7 +96,7 @@ public sealed class VersionSnapshotService
         using var plainStream = new MemoryStream();
         using (var archive = new ZipArchive(plainStream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var relativePath in SnapshotFiles)
+            foreach (var relativePath in managedFiles)
             {
                 var source = ResolveManagedPath(instance, relativePath);
                 if (!File.Exists(source))
@@ -83,7 +112,11 @@ public sealed class VersionSnapshotService
                 }
 
                 var entry = archive.CreateEntry($"files/{relativePath.Replace('\\', '/')}", CompressionLevel.Fastest);
-                using var sourceStream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var sourceStream = new FileStream(
+                    source,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
                 using var entryStream = entry.Open();
                 sourceStream.CopyTo(entryStream);
                 presentFiles.Add(relativePath.Replace('\\', '/'));
@@ -95,7 +128,7 @@ public sealed class VersionSnapshotService
                 instance.Name,
                 createdAt,
                 normalizedReason,
-                SnapshotFiles.Select(path => path.Replace('\\', '/')).ToArray(),
+                managedFiles.Select(path => path.Replace('\\', '/')).ToArray(),
                 presentFiles.ToArray(),
                 automatic);
             var manifestEntry = archive.CreateEntry("manifest.json", CompressionLevel.Fastest);
