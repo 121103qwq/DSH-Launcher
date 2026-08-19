@@ -1119,6 +1119,14 @@ public sealed class MarketplaceService
             ?? ReadString(entry, "package")
             ?? ReadString(entry, "npm");
         var repository = ReadRepositoryUrl(entry);
+        var rawCatalogUrl = ReadString(entry, "url")?.Trim();
+        var dshMarketUrl = sourceKind == MarketplaceSourceKind.CommunityCatalog
+            && Uri.TryCreate(rawCatalogUrl, UriKind.Absolute, out var catalogUri)
+            && (string.Equals(catalogUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(catalogUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                ? rawCatalogUrl
+                : null;
+        repository ??= NormalizeRepositoryUrl(dshMarketUrl);
         var rawInstallSpec = ReadString(entry, "installSpec")
             ?? ReadString(entry, "install")
             ?? (IsSafePackageName(packageName) ? packageName : null)
@@ -1163,7 +1171,8 @@ public sealed class MarketplaceService
             ReadInt64(entry, "stars") ?? ReadInt64(entry, "starCount") ?? ReadInt64(entry, "stargazers_count"),
             ReadDateTimeOffset(entry, "publishedAt")
                 ?? ReadDateTimeOffset(entry, "published_at")
-                ?? ReadDateTimeOffset(entry, "releaseDate"));
+                ?? ReadDateTimeOffset(entry, "releaseDate"),
+            DshMarketUrl: dshMarketUrl);
     }
 
     private static string? ReadDescription(JsonElement entry)
@@ -1441,7 +1450,8 @@ public sealed class MarketplaceService
             InstalledVersion = installedVersion,
             UpdateStatus = updateStatus,
             MergedSourceText = sources.Length > 1 ? string.Join(" / ", sources) : null,
-            MergedSourceKinds = sourceKinds.Length > 1 ? sourceKinds : null
+            MergedSourceKinds = sourceKinds.Length > 1 ? sourceKinds : null,
+            DshMarketUrl = primary.DshMarketUrl ?? secondary.DshMarketUrl
         };
     }
 

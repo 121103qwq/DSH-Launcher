@@ -18,3 +18,9 @@ public sealed record DshMarketThemeApplyResult(
     bool IsSuccess,
     IReadOnlySet<string> LiveNames,
     string? Error);
+
+public sealed record DshMarketPluginMutationResult(
+    bool IsSuccess,
+    bool IsHotLoaded,
+    string? Error,
+    string Output);

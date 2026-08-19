@@ -2425,9 +2425,39 @@ static async Task TestDshMarketThemeBridge()
             };
         }
 
-        Assert(request.RequestUri?.AbsolutePath == "/dsh-market/use-skin", "主题应用必须调用 dsh-market 的 use-skin 路由。");
         Assert(request.Headers.TryGetValues("Origin", out var origins)
-            && origins.Single() == "http://127.0.0.1:43123", "主题应用必须发送当前实例的同源 Origin。");
+            && origins.Single() == "http://127.0.0.1:43123", "dsh-market 写操作必须发送当前实例的同源 Origin。");
+        if (request.RequestUri?.AbsolutePath == "/dsh-market/install")
+        {
+            var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            Assert(body.Contains("https://github.com/demo/plugin/", StringComparison.Ordinal),
+                "dsh-market 热安装必须传递社区目录的原始仓库 URL。");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"ok\":true,\"hot\":true,\"stdout\":\"installed\",\"stderr\":\"\"}",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+
+        if (request.RequestUri?.AbsolutePath == "/dsh-market/update")
+        {
+            var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            Assert(body.Contains("dsh-theme-dark", StringComparison.Ordinal),
+                "dsh-market 热更新必须传递当前 profile 中的真实包名。");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"ok\":true,\"hot\":false,\"stdout\":\"updated\",\"stderr\":\"\"}",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+
+        Assert(request.RequestUri?.AbsolutePath == "/dsh-market/use-skin", "主题应用必须调用 dsh-market 的 use-skin 路由。");
+        Assert(request.Headers.TryGetValues("Origin", out var themeOrigins)
+            && themeOrigins.Single() == "http://127.0.0.1:43123", "主题应用必须发送当前实例的同源 Origin。");
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(
@@ -2449,7 +2479,13 @@ static async Task TestDshMarketThemeBridge()
 
     var applied = await service.ApplyAsync(instance, "dsh-theme-dark");
     Assert(applied.IsSuccess && applied.LiveNames.Contains("dsh-theme-dark"), "应通过 dsh-market 应用主题并读取结果。");
-    Assert(requests.Count == 2, "主题桥接应只执行一次状态读取和一次应用请求。");
+    var installed = await service.InstallPluginAsync(instance, "https://github.com/demo/plugin/");
+    Assert(installed.IsSuccess && installed.IsHotLoaded && installed.Output.Contains("installed", StringComparison.Ordinal),
+        "运行中的 Plugin 安装必须交给 dsh-market 并读取热加载结果。");
+    var updated = await service.UpdatePluginAsync(instance, "dsh-theme-dark");
+    Assert(updated.IsSuccess && !updated.IsHotLoaded && updated.Output.Contains("updated", StringComparison.Ordinal),
+        "运行中的 Plugin 更新必须交给 dsh-market 并保留需刷新或重启的结果。");
+    Assert(requests.Count == 4, "dsh-market 桥接应执行状态读取、主题应用、Plugin 安装和更新请求。");
 
     var unavailable = await service.ReadAsync(instance with
     {
@@ -2908,6 +2944,45 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         query: "Aegis",
         category: "工具");
     Assert(localFiltered.Count == 1 && localFiltered[0].Name == "Aegis Tools", "本地搜索应同时支持即时关键词和分类过滤。 ");
+
+    var dshMarketCatalog = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[{\"name\":\"market-hot\",\"url\":\"https://github.com/demo/market-hot/\",\"npm\":\"market-hot\",\"install\":\"dsh plugin --profile web add market-hot\"}]}",
+        MarketplaceSourceKind.CommunityCatalog,
+        "社区目录");
+    Assert(dshMarketCatalog.Count == 1
+        && dshMarketCatalog[0].DshMarketUrl == "https://github.com/demo/market-hot/"
+        && dshMarketCatalog[0].RepositoryUrl == "https://github.com/demo/market-hot",
+        "社区目录必须保留 dsh-market 安装接口要求的原始仓库 URL。 ");
+    var hotRendered = ExtensionWindow.BuildMarketplaceItems(
+        dshMarketCatalog,
+        null,
+        null,
+        MarketplaceSortOrder.Relevance,
+        null,
+        false,
+        Array.Empty<ExtensionEntry>(),
+        false,
+        DshMarketThemeState.Unavailable("test"),
+        true,
+        false,
+        false);
+    Assert(hotRendered.Count == 1 && hotRendered[0].ActionText == "热加载" && hotRendered[0].CanAction,
+        "Managed 实例运行时，未安装插件的市场动作必须显示为可点击的热加载。 ");
+    var stoppedRendered = ExtensionWindow.BuildMarketplaceItems(
+        dshMarketCatalog,
+        null,
+        null,
+        MarketplaceSortOrder.Relevance,
+        null,
+        false,
+        Array.Empty<ExtensionEntry>(),
+        true,
+        DshMarketThemeState.Unavailable("test"),
+        false,
+        false,
+        false);
+    Assert(stoppedRendered[0].ActionText == "安装",
+        "实例停止后市场动作必须恢复普通安装。 ");
 
     var merged = MarketplaceService.MergeItems(new[]
     {

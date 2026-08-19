@@ -7,12 +7,14 @@ using DshLauncher.Models;
 namespace DshLauncher.Services;
 
 /// <summary>
-/// Optional bridge to the ecosystem's dsh-market theme routes. The Launcher
-/// never edits DSh Web UI files or invents a second theme format.
+/// Optional bridge to the ecosystem's dsh-market loopback routes. The Launcher
+/// uses these routes for live Plugin installation and theme activation instead
+/// of editing DSh Web UI files or inventing a second format.
 /// </summary>
 public sealed class DshMarketThemeService : IDisposable
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MutationTimeout = TimeSpan.FromMinutes(15);
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
 
@@ -20,7 +22,7 @@ public sealed class DshMarketThemeService : IDisposable
     {
         _client = client ?? new HttpClient();
         _ownsClient = client is null;
-        _client.Timeout = RequestTimeout;
+        _client.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<DshMarketThemeState> ReadAsync(
@@ -34,19 +36,20 @@ public sealed class DshMarketThemeService : IDisposable
 
         try
         {
+            using var timeout = CreateTimeout(cancellationToken, RequestTimeout);
             using var response = await _client.GetAsync(
                 new Uri(baseUri, "dsh-market/installed"),
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
+                timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return DshMarketThemeState.Unavailable(
                     response.StatusCode == HttpStatusCode.NotFound
-                        ? "当前实例没有安装 dsh-market，主题只能作为插件资源管理。"
+                        ? "当前实例没有安装或没有启用 dsh-market。"
                         : $"dsh-market 状态接口返回 HTTP {(int)response.StatusCode}。 ");
             }
 
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(cancellationToken));
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(timeout.Token));
             var root = document.RootElement;
             return new DshMarketThemeState(
                 true,
@@ -87,6 +90,7 @@ public sealed class DshMarketThemeService : IDisposable
 
         try
         {
+            using var timeout = CreateTimeout(cancellationToken, RequestTimeout);
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
                 new Uri(baseUri, "dsh-market/use-skin"));
@@ -101,8 +105,8 @@ public sealed class DshMarketThemeService : IDisposable
             using var response = await _client.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                timeout.Token);
+            var body = await response.Content.ReadAsStringAsync(timeout.Token);
             using var document = JsonDocument.Parse(body);
             var root = document.RootElement;
             var live = ReadStringSet(root, "live");
@@ -131,6 +135,51 @@ public sealed class DshMarketThemeService : IDisposable
         }
     }
 
+    public Task<DshMarketPluginMutationResult> InstallPluginAsync(
+        ManagerInstance instance,
+        string catalogUrl,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Uri.TryCreate(catalogUrl, UriKind.Absolute, out var parsed)
+            || parsed.Scheme is not ("http" or "https"))
+        {
+            return Task.FromResult(new DshMarketPluginMutationResult(
+                false,
+                false,
+                "该插件不在 dsh-market 目录中，无法热加载。请停止实例后再普通安装。",
+                string.Empty));
+        }
+
+        return MutatePluginAsync(
+            instance,
+            "dsh-market/install",
+            new { url = catalogUrl.Trim() },
+            cancellationToken);
+    }
+
+    public Task<DshMarketPluginMutationResult> UpdatePluginAsync(
+        ManagerInstance instance,
+        string packageName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packageName)
+            || packageName.Length > 214
+            || packageName.Any(char.IsControl))
+        {
+            return Task.FromResult(new DshMarketPluginMutationResult(
+                false,
+                false,
+                "Plugin 包名无效。",
+                string.Empty));
+        }
+
+        return MutatePluginAsync(
+            instance,
+            "dsh-market/update",
+            new { name = packageName },
+            cancellationToken);
+    }
+
     public void Dispose()
     {
         if (_ownsClient)
@@ -156,6 +205,81 @@ public sealed class DshMarketThemeService : IDisposable
         reason = string.Empty;
         return true;
     }
+
+    private async Task<DshMarketPluginMutationResult> MutatePluginAsync(
+        ManagerInstance instance,
+        string route,
+        object body,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetBaseUri(instance, out var baseUri, out var reason))
+        {
+            return new DshMarketPluginMutationResult(false, false, reason, string.Empty);
+        }
+
+        try
+        {
+            using var timeout = CreateTimeout(cancellationToken, MutationTimeout);
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, route));
+            request.Headers.TryAddWithoutValidation(
+                "Origin",
+                baseUri.GetLeftPart(UriPartial.Authority).TrimEnd('/'));
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(body),
+                Encoding.UTF8,
+                "application/json");
+
+            using var response = await _client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token);
+            var responseBody = await response.Content.ReadAsStringAsync(timeout.Token);
+            using var document = JsonDocument.Parse(responseBody);
+            var root = document.RootElement;
+            var ok = response.IsSuccessStatusCode
+                && root.TryGetProperty("ok", out var okValue)
+                && okValue.ValueKind == JsonValueKind.True;
+            var hot = root.TryGetProperty("hot", out var hotValue)
+                && hotValue.ValueKind == JsonValueKind.True;
+            var error = root.TryGetProperty("error", out var errorValue)
+                && errorValue.ValueKind == JsonValueKind.String
+                ? errorValue.GetString()
+                : ok
+                    ? null
+                    : $"dsh-market Plugin 操作失败（HTTP {(int)response.StatusCode}）。";
+            var output = string.Join(
+                Environment.NewLine,
+                ReadString(root, "stdout"),
+                ReadString(root, "stderr"));
+            return new DshMarketPluginMutationResult(ok, hot, error, output);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new DshMarketPluginMutationResult(false, false, "dsh-market Plugin 操作超时。", string.Empty);
+        }
+        catch (HttpRequestException ex)
+        {
+            return new DshMarketPluginMutationResult(false, false, $"当前实例无法访问 dsh-market：{ex.Message}", string.Empty);
+        }
+        catch (JsonException ex)
+        {
+            return new DshMarketPluginMutationResult(false, false, $"dsh-market 返回的数据格式无效：{ex.Message}", string.Empty);
+        }
+    }
+
+    private static CancellationTokenSource CreateTimeout(
+        CancellationToken cancellationToken,
+        TimeSpan timeout)
+    {
+        var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        source.CancelAfter(timeout);
+        return source;
+    }
+
+    private static string ReadString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
 
     private static IReadOnlySet<string> ReadObjectNames(JsonElement root, string propertyName)
     {

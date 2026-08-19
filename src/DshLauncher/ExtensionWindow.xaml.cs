@@ -722,6 +722,7 @@ public partial class ExtensionWindow : UserControl
                 ThemeCanApply = themeCanApply,
                 ThemePackageName = themePackageName,
                 DeveloperAvatarUrl = MarketplaceService.GetDeveloperAvatarUrl(item),
+                IsHotLoadAction = instanceRunning && !instanceAttached && !isInstalled,
                 ThemeStatusText = isTheme
                     ? GetThemeStatusText(isInstalled, themeMarketAvailable, themePackageName, themeState, instanceRunning, instanceAttached)
                     : null
@@ -863,7 +864,10 @@ public partial class ExtensionWindow : UserControl
         try
         {
             EnsureMarketplaceMutationAllowed(allowRunning: true);
-            var initialStatus = item.IsInstalled ? "正在准备更新 Plugin…" : "正在检查 Plugin…";
+            var useDshMarket = _instance.RuntimeStatus == InstanceRuntimeStatus.Running;
+            var initialStatus = useDshMarket
+                ? "正在检查当前实例的 dsh-market…"
+                : item.IsInstalled ? "正在准备更新 Plugin…" : "正在检查 Plugin…";
             BeginMarketplaceMutation(initialStatus);
             progressWindow = new PluginProgressWindow(
                 Window.GetWindow(this),
@@ -872,6 +876,52 @@ public partial class ExtensionWindow : UserControl
                 initialStatus);
             progressWindow.Show();
             progressWindow.SetIndeterminate(initialStatus);
+            if (useDshMarket)
+            {
+                if (!_useDshMarketHotReload)
+                {
+                    const string message = "当前实例已关闭 dsh-market 热加载。请先停止实例，再点击“安装”或使用“手动安装 Plugin”。";
+                    MarketplaceStatusText.Text = message;
+                    progressWindow.Fail(message);
+                    System.Windows.MessageBox.Show(
+                        Window.GetWindow(this),
+                        message,
+                        "无法热加载",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+
+                _themeState = await _themeService.ReadAsync(_instance, operationCancellation.Token);
+                if (!_themeState.IsAvailable)
+                {
+                    var message = $"当前实例没有可用的 dsh-market，运行中不能热加载。请先停止实例，再点击“安装”或使用“手动安装 Plugin”。\n\n{_themeState.Error}";
+                    MarketplaceStatusText.Text = message;
+                    progressWindow.Fail(message);
+                    System.Windows.MessageBox.Show(
+                        Window.GetWindow(this),
+                        message,
+                        "未检测到 dsh-market",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+
+                if (!item.IsInstalled && string.IsNullOrWhiteSpace(item.DshMarketUrl))
+                {
+                    const string message = "该插件不在 dsh-market 目录中，无法在运行中热加载。请先停止实例，再点击“安装”进行普通安装。";
+                    MarketplaceStatusText.Text = message;
+                    progressWindow.Fail(message);
+                    System.Windows.MessageBox.Show(
+                        Window.GetWindow(this),
+                        message,
+                        "dsh-market 不支持该条目",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+            }
+
             var verification = await _marketplaceService.VerifyAsync(item, operationCancellation.Token);
             if (verification.Status == MarketplaceVerificationStatus.Rejected)
             {
@@ -934,19 +984,50 @@ public partial class ExtensionWindow : UserControl
             }
 
             string output;
+            var dshMarketHotLoaded = false;
             try
             {
-                output = await ExecutePluginInstallWithFallbackAsync(
-                    ExecuteMutationAsync,
-                    installMode,
-                    progressWindow,
-                    operationCancellation.Token);
+                if (useDshMarket)
+                {
+                    SetMarketplaceMutationText(item.IsInstalled
+                        ? "正在通过 dsh-market 更新 Plugin…"
+                        : "正在通过 dsh-market 热加载 Plugin…");
+                    progressWindow.SetIndeterminate(item.IsInstalled
+                        ? "正在通过 dsh-market 更新 Plugin…"
+                        : "正在通过 dsh-market 安装并热加载 Plugin…");
+                    var result = item.IsInstalled
+                        ? await _themeService.UpdatePluginAsync(
+                            _instance,
+                            installedEntry?.Name ?? verification.PackageName ?? item.PackageName ?? packageSpec,
+                            operationCancellation.Token)
+                        : await _themeService.InstallPluginAsync(
+                            _instance,
+                            item.DshMarketUrl!,
+                            operationCancellation.Token);
+                    if (!result.IsSuccess)
+                    {
+                        throw new InvalidOperationException(result.Error ?? "dsh-market Plugin 操作失败。");
+                    }
+
+                    output = result.Output;
+                    dshMarketHotLoaded = result.IsHotLoaded;
+                }
+                else
+                {
+                    output = await ExecutePluginInstallWithFallbackAsync(
+                        ExecuteMutationAsync,
+                        installMode,
+                        progressWindow,
+                        operationCancellation.Token);
+                }
 
                 progressWindow.SetIndeterminate(item.IsInstalled
                     ? "Plugin 更新完成，正在整理结果…"
                     : "Plugin 安装完成，正在整理结果…");
-                var activationText = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
-                    ? "已热安装；请刷新 DSh 页面，包含 host 改动时仍需重启实例"
+                var activationText = useDshMarket
+                    ? dshMarketHotLoaded
+                        ? "dsh-market 已完成热加载；请刷新 DSh 页面"
+                        : "dsh-market 已完成安装；该 Plugin 需要刷新页面或重启实例"
                     : "实例下次启动时加载";
                 StatusText.Text = item.IsInstalled
                     ? $"Plugin 更新完成。{activationText}；备份：{snapshot}"
@@ -986,7 +1067,9 @@ public partial class ExtensionWindow : UserControl
             await RefreshAsync();
             progressWindow.SetIndeterminate("当前实例已刷新，正在刷新插件市场…");
             await RefreshMarketplaceAsync();
-            progressWindow.Complete(item.IsInstalled ? "Plugin 更新完成。" : "Plugin 安装完成。");
+            progressWindow.Complete(item.IsInstalled
+                ? "Plugin 更新完成。"
+                : useDshMarket ? "Plugin 热加载完成。" : "Plugin 安装完成。");
         }
         catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
         {

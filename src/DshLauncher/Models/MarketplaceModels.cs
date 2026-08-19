@@ -60,7 +60,9 @@ public sealed record MarketplaceItem(
     string? ThemeStatusText = null,
     IReadOnlyList<MarketplaceSourceKind>? MergedSourceKinds = null,
     bool CanInstallOrUpdate = false,
-    string? DeveloperAvatarUrl = null)
+    string? DeveloperAvatarUrl = null,
+    string? DshMarketUrl = null,
+    bool IsHotLoadAction = false)
 {
     [JsonIgnore]
     public string SourceText => MergedSourceText ?? (SourceKind switch
@@ -86,7 +88,7 @@ public sealed record MarketplaceItem(
         {
             if (!IsInstalled)
             {
-                return "安装";
+                return IsHotLoadAction ? "热加载" : "安装";
             }
 
             if (!IsManaged)

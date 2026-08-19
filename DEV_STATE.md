@@ -2,10 +2,11 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.4`。当前任务是发布 Plugin 安装可靠性、真实进度和 Agent 已安装 Skill 显示修复。
+当前源码版本为 `v1.0.5`。运行中的 Managed 实例已接入 dsh-market Plugin 热加载；当前任务是完成实机验证并发布。
 
 ## 已完成内容
 
+- 本轮新增：Managed 实例运行时，未安装的市场 Plugin 显示“热加载”；点击后先检查该实例的 dsh-market 状态和候选目录 URL，满足条件时调用官方 loopback `/install`，已安装项更新调用 `/update`。dsh-market 不可用、实例关闭热加载或候选不在其目录时，不再直接修改运行中 profile，而是提示停止实例后普通安装。停止实例仍使用现有 DSh Plugin CLI。
 - Plugin CLI 继承当前环境或 Git 全局代理，修复从资源管理器启动 Launcher 后 GitHub codeload 下载没有走既有代理而超时的问题；Plugin 进度改为 pnpm 实际包计数，Skill ZIP 下载显示真实字节进度。README 已加入当前界面截图和本次安装行为说明。
 - 本轮修复：Plugin 安装和更新继续只调用官方 DSh CLI，不再从仓库 README 提取或改写安装指令；调用前会把 web profile 中遗留的 pnpm `allowBuilds` 未决占位明确设为 `false`，当前已验证插件仍单独授权，且 `pnpm-workspace.yaml` 已纳入失败回档。Skill 市场会把当前实例内同名的可管理 Skill 标记为“已安装”并禁用重复安装；Agent 左栏增大独立高度并为已安装列表保留最小可见区域，`grill-me` 这类已安装条目不会再被当前选择区和长路径挤没。
 - 发布前补强：指定 DSh 版本先安装到同级临时目录，校验通过后再替换正式版本目录；离开版本控制会取消下载。`.dshpack` 脱敏已覆盖 YAML 多行 API Key/私钥正文。
@@ -24,7 +25,7 @@
 - 每个版本使用独立 `DSH_HOME` 和 `DSH_AGENTS_HOME`。实例级 Plugin、Skill、MCP、Provider 状态、Agent Preset、Settings 和 Conversation 文件均以该目录为边界；对话和模型 Provider 支持 Independent、Workspace、All/全配置同步策略。运行中的版本不会被同步写入。
 - 设置/诊断页可选择任意版本并编辑与“版本设置 → 配置”相同的同步选项；工作区管理支持显示成员、添加、重命名和删除。删除工作区只解除成员版本的同步关系并切回 Independent，不删除版本或对话文件。
 - Plugin 通过官方 DSh CLI 安装、更新、删除和启停；市场支持缓存优先、本地即时搜索、分类、来源、发布时间/Star 排序、多来源 identity 合并、GitHub monorepo 校验、安装前 package.json/bundle 检查、独立安装弹窗和完成后刷新。安装弹窗按检查、备份、CLI 操作和刷新显示阶段百分比；操作前可见但完成时被最小化的 Owner 会恢复原状态。市场标题可打开 GitHub；根目录缺少有效 package.json 时会按默认分支并回退 main/master 扫描常见 monorepo 子目录。主题预览按需读取 README 图片，无图或不支持时明确提示。
-- Managed 运行实例现在允许 Plugin 热安装和更新：快速模式失败后自动尝试兼容性模式，兼容性热安装仍失败才询问是否停止实例后重试；卸载仍要求停止，Attached 始终只读。市场安装目标只使用目录条目以及 npm/GitHub `package.json` 校验结果，不再读取 README 安装指令。
+- Managed 运行实例的 Plugin 安装和更新只调用 dsh-market 热加载接口；dsh-market 不可用或候选不在其目录时提示停止实例后重试。停止实例继续使用快速/兼容模式的官方 DSh Plugin CLI；卸载仍要求停止，Attached 始终只读。市场安装目标只使用目录条目以及 npm/GitHub `package.json` 校验结果，不读取 README 安装指令。
 - Agent 页提供缓存优先的 Skill 市场：缓存文件在后台解析，输入搜索使用 180ms 防抖，结果列表启用 Recycling 虚拟化和逻辑滚动。刷新时并行扫描 GitHub 仓库树中的嵌套 `SKILL.md`，再并行校验闭合 frontmatter及非空 `name`、`description`；扫描阶段复用未变化的快照，校验阶段只在实际报告批次生成快照，UI 按结果变化和最小时间间隔更新列表。通过校验的文件按单个 Skill 展示并归入开发、设计、文档、效率、Agent、其他分类，无效文件不显示。同仓库同名副本优先标准 Skill 目录，仓库分支和更新时间未变化时复用缓存，暂时性网络失败保留为可重试状态。安装只复制所选 Skill 目录及其配套文件到当前停止实例的 `skills`；同名可管理 Skill 已存在时显示“已安装”并禁用按钮。扩展和 Agent 页左栏显示当前实例详情、已安装条目及启用/禁用/更新/删除操作，右侧保留市场和横向分类；实例切换只保留标题栏入口。
 - 全局 ComboBox 的点击层使用不绘制悬停背景的专用模板，鼠标移入时只改变外框颜色，不再覆盖选中文字和箭头；可编辑 ComboBox 的内部文本框显式清除重复 Padding，工作区名称不再被垂直裁切。
 - 版本控制支持导入实例、复制版本、新建干净版本、删除版本、双击进入版本设置和 `.dshpack` 导入/导出。“导入实例”可扫描文件夹或解析 Windows `.lnk` 快捷方式的目标/工作目录，再复用现有 DSh Runtime 校验；普通 DSh 使用当前有效的 `$DSH_HOME`（默认 `~/.dsh`），DeepSeek Desktop 从安装包 `.modules.yaml` 反查实际 `%LOCALAPPDATA%\DeepSeek Harness Data`，把工作区、对话、设置、Plugin/Skill 和本机 Provider 凭据复制到独立 HOME，不与原桌面程序共用目录。同一 package root 再次手动导入时更新已有实例，不再建立 `(2)/(3)`；自动检测到同一 root 的真实来源 HOME 改变时也覆盖原停止实例并更新来源记录。覆盖会保留 `.dsh-launcher` 版本设置，运行中的实例拒绝覆盖。导入跳过 `webview2` 浏览器缓存、重解析点和整棵 `node_modules`，新注册失败会撤销。整合包可包含脱敏后的 Provider 结构和模型目录，但会排除 `.credentials.yaml`、`.env`/`.env.*`、sessions、API Key、Token、密码和 URL 凭据；导入再次拒绝凭据路径并清理可分享文本，始终创建新版本。版本设置个性化页提供版本名称输入框和保存按钮，修改后同步更新实例注册记录、当前选择和页面标题。
@@ -77,6 +78,9 @@
 
 ## 已执行测试及结果
 
+- 本轮 dsh-market Plugin 热加载自测：Release 完整自测 63/63 通过；覆盖运行中按钮文案、社区目录原始 URL 保留、同源请求头、`/install` 与 `/update` 请求体及返回状态解析。Windows x64 自包含压缩单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\dsh-market-hot-load-20260819-144730`；`DSH Launcher.exe` 为 72,475,323 字节，SHA-256 `AD9191623F094F3C4F3AF6594F6AA25D16C0FDEA47144DE61952150072D15C28`。
+- 本轮 dsh-market 实机验证：在隔离的临时 `DSH_HOME` 中通过官方 DSh CLI 安装 `dshmarket 1.12.1`，启动真实 DSh 后调用其 loopback `/install` 热加载 `dsh-session-hotkeys 1.5.1`，接口返回 HTTP 200、`ok=true`、`hot=true`，安装后状态为 live；测试版 Launcher 能正常打开扩展页并读取 1331 个缓存候选。测试窗口已关闭，临时 DSh 进程已停止且端口已释放。
+- `v1.0.5` 发布候选：Release 完整自测 63/63 通过；Windows x64 自包含压缩单文件版本为 `1.0.5.0`，大小 72,475,314 字节，SHA-256 `622A9B5320315AF676B6D9E36FA63730F39131B958F555C5CF04F609DBEA2369`。最终 EXE 已复制到桌面 `DSH Launcher` 文件夹顶层及 `release-v1.0.5-dsh-market-hot-load-20260819-150902`；通过 Computer Use 启动最终 EXE，主界面和 4 个实例正常显示，随后已关闭测试窗口。
 - `v1.0.4` 发布候选：Release build 为 0 warnings、0 errors，完整自测 63/63 通过；Windows x64 自包含单文件版本为 `1.0.4.0`，产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.4-plugin-install` 和桌面同名文件夹顶层。最终文件大小与 SHA-256 以 GitHub Release 记录为准。
 - Agent 已安装 Skill 左栏修复：Release 完整自测 63/63 通过，新增检查左侧已安装列表保留最小高度且 Agent 左右栏继续使用独立高度；WPF Release 构建 0 warnings、0 errors。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\skill-installed-list-20260818-161929`，并确认顶层 `DSH Launcher.exe` 存在。
 - 本轮 Plugin/Skill 修复：Release 完整自测 63/63 通过，覆盖 pnpm `allowBuilds` 未决项安全落为 `false`、已明确允许项保持 `true`、README 不改写 Plugin 安装目标，以及已导入 Skill 的市场安装状态；WPF Release 构建 0 warnings、0 errors。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\plugin-skill-official-cli-20260818-161125`，并确认 `win-x64\DSH Launcher.exe` 存在。
@@ -146,7 +150,7 @@
 - 当前只使用已验证的 Chat `localStorage` 预选会话，尚未实现官方 `?session=<id>` deep link。
 - MCP 当前是实例级 stdio/streamable-http 配置和 patch 管理，尚未接入完整 MCP Manager 的 connected/needs-auth/authorizing/error、OAuth 和 Tool discovery 状态。
 - 主题市场可按需显示仓库 README 中的首选图片，并保留 dsh-market 应用桥接；Wallpaper 仍未建立独立资源格式，也未在用户真实实例上做主题视觉验收。
-- 当前用于实机验证的 `Research` 实例没有安装 dsh-market，因此界面正确禁用了热加载应用；真实 dsh-market 主题应用及其自动快照仍需在已安装该插件的测试实例上验证。
+- dsh-market Plugin 热加载已经在隔离实例上实机通过；主题应用和自动快照回滚仍需在测试实例中完成实机验证。
 - GitHub Topic 发现仍未做分页加载；真实第三方 Plugin CLI 对 node_modules 的副作用不能由配置快照完全回滚，失败时仍以官方 CLI 输出和 web profile 自动恢复为准。
 - Plugin CLI 没有稳定的总下载字节数，因此界面显示 pnpm 实际解析、复用、下载和添加数量，其他无法量化的阶段保持不确定进度；只有可取得 `Content-Length` 的 Skill ZIP 下载显示字节百分比。
 - `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；它是本地回滚点，不是可分享格式，分享继续使用脱敏 `.dshpack`。
@@ -161,7 +165,7 @@
 ## 尚未完成内容
 
 - 通过 UI 实际下载并创建一个本机尚未安装的 DSh 版本；本轮只验证了官方版本列表、精确安装代码路径和自测，没有触发外部软件安装。
-- 在安装 dsh-market 的测试实例上实际应用主题，并确认应用前自动快照可回滚。
+- 在安装 dsh-market 的测试实例上应用一个主题，并确认主题状态刷新和自动快照可回滚。
 - 本轮新增设置、工作区、备份恢复、市场筛选及首次运行引导的实机 UI 验收。
 - 版本检查、修复按钮，以及版本控制/版本设置两处快照选择与回滚确认的实机 UI 验收。
 - 一键运行环境准备的实机端到端验证与后续打磨。
@@ -180,4 +184,4 @@
 
 ## 下一步最直接的任务
 
-在安装了 `dsh-market` 的独立测试实例上实机验证主题热加载和自动快照回滚。
+在安装了 `dsh-market` 的独立测试实例上实机验证主题应用、状态刷新和自动快照回滚。
