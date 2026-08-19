@@ -2,10 +2,11 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.6`。版本设置已支持手动绑定本地打开方式；发布候选已完成代码验证和单文件构建，当前任务是提交并发布 GitHub Release。
+当前源码版本为 `v1.0.7`。本版让 Launcher 内打开的 DeepSeek Chat 在 Windows 任务栏中与 Launcher 独立分组；代码和回归测试已完成，尚未进行 Computer Use 实机观察。
 
 ## 已完成内容
 
+- 本轮修复：DeepSeek Chat 继续保持无 Owner 窗口，并在 HWND 创建后写入独立的窗口级 AppUserModelID；因此它不再与 Launcher 共用任务栏分组，同时保留黑色 DeepSeek 图标以及现有实例生命周期清理。
 - 本轮新增：任意版本可在“版本设置 → 个性化 → 绑定打开方式”中手动选择 EXE、COM、BAT、CMD、PowerShell 脚本、LNK 快捷方式或其它 Windows 可打开文件。启动页主按钮改为“打开窗口”，同时保留 Launcher 启动；可直接启动的目标继承当前版本 `DSH_HOME` 和 `DSH_AGENTS_HOME`。本机绑定路径不会进入 `.dshpack`。
 - 本轮新增：Managed 实例运行时，未安装的市场 Plugin 显示“热加载”；点击后先检查该实例的 dsh-market 状态和候选目录 URL，满足条件时调用官方 loopback `/install`，已安装项更新调用 `/update`。dsh-market 不可用、实例关闭热加载或候选不在其目录时，不再直接修改运行中 profile，而是提示停止实例后普通安装。停止实例仍使用现有 DSh Plugin CLI。
 - Plugin CLI 继承当前环境或 Git 全局代理，修复从资源管理器启动 Launcher 后 GitHub codeload 下载没有走既有代理而超时的问题；Plugin 进度改为 pnpm 实际包计数，Skill ZIP 下载显示真实字节进度。README 已加入当前界面截图和本次安装行为说明。
@@ -18,7 +19,7 @@
 
 - 本轮代码已实现：Plugin 与 Skill 分类切换分别保存并恢复列表滚动位置；`.dshpack` 导入只从当前 Launcher 设置的 DSh 安装位置解析运行时，不再沿用整合包或模板的 `RootPath`；检测到 DSH Desktop 入口的版本可在版本设置中绑定“打开窗口”，启动页保留独立的“Launcher 启动”按钮；已安装 Plugin 列表对名称和描述单行省略，并明确显示“已启用/已禁用”。
 - .NET 8 WPF Launcher，目标 Windows x64；发布版为自包含单文件，不内置 Node.js、npm、pnpm 或 DSh。
-- 主窗口采用 PCL2 参考的信息层级：启动、扩展、Agent、对话和设置在主窗口内切换，并移除各模块重复的大号页标题。启动页标题栏左侧显示 `DSH Launcher`；扩展和 Agent 页在同一位置改为当前实例选择器，可下拉快速切换并用绿/灰/红圆点显示运行、停止和错误状态，点击实例名称直接进入该版本的插件管理。Chat WebView2 为无 Owner 的独立窗口，使用黑色 DeepSeek 图标。
+- 主窗口采用 PCL2 参考的信息层级：启动、扩展、Agent、对话和设置在主窗口内切换，并移除各模块重复的大号页标题。启动页标题栏左侧显示 `DSH Launcher`；扩展和 Agent 页在同一位置改为当前实例选择器，可下拉快速切换并用绿/灰/红圆点显示运行、停止和错误状态，点击实例名称直接进入该版本的插件管理。Chat WebView2 为无 Owner 窗口，使用独立 AppUserModelID 和黑色 DeepSeek 图标，在任务栏中与 Launcher 分组分离。
 - 标题栏实例下拉已改为紧凑圆角菜单；从扩展或 Agent 进入版本设置后，左上角显示返回原页面的按钮。启动页全部实例支持双击：停止实例复用主启动流程，已运行或 Attached 实例直接打开现有 Web UI。
 - 启动页先从本地注册文件立即显示全部实例；界面恢复响应后再核对遗留运行状态并扫描 DSh/Node。左侧为固定窄度的当前实例状态、重命名、实例设置和启动/停止/重启操作，右侧为更宽的全部实例列表与版本控制入口；左右容器高度解耦，实例列表在右栏内部滚动。最近使用时间仍用于启动时默认选择，不再限制启动页显示数量。
 - Launcher 保持单实例；第二次启动通过命名管道要求已有进程显示、恢复并聚焦主窗口，旧版兼容回退才按窗口句柄查找。已有进程处于退出阶段时可等待锁释放后接管。主窗口关闭先取消当前操作并异步清理实例，清理完成后的最终 `Close` 通过 Dispatcher 排到原 `Closing` 事件结束后，避免同步完成时重入关闭而留下无窗口后台进程。
@@ -63,7 +64,7 @@
 ## 当前主要相关文件
 
 - `src/DshLauncher/App.xaml.cs`、`SingleInstanceActivationChannel.cs`：Launcher 单实例互斥、进程间窗口唤醒、退出阶段锁接管与异常后台残留恢复。
-- `src/DshLauncher/MainWindow.xaml(.cs)`、`ChatWindow.xaml(.cs)`、`WindowSizeHelper.cs`：主窗口导航、本地优先启动页、实例生命周期、异步关闭清理、运行环境准备、低分辨率初始尺寸约束和独立 Chat 窗口。
+- `src/DshLauncher/MainWindow.xaml(.cs)`、`ChatWindow.xaml(.cs)`、`TaskbarWindowIdentity.cs`、`WindowSizeHelper.cs`：主窗口导航、本地优先启动页、实例生命周期、异步关闭清理、运行环境准备、低分辨率初始尺寸约束和独立任务栏分组的 Chat 窗口。
 - `src/DshLauncher/Services/NodeInstallService.cs`、`RuntimeProgressWindow.cs`：Node 下载（真实进度）、系统安装与准备进度窗口。
 - `src/DshLauncher/Models/DshRuntimeLaunchSpec.cs`、`Services/DshRuntimeCommandFactory.cs`、`DshRuntimeDetector.cs`、`DeepSeekDesktopDetector.cs`、`DetectedRuntimeRegistrationService.cs`、`DshHomeImportService.cs`、`NodeRuntimeDetector.cs`、`DshInstallService.cs`：普通 npm、源码、旧 Desktop 与 DSH Desktop v2 的检测、启动描述、命令创建、实例数据导入和 npm 安装。
 - `src/DshLauncher/Services/RuntimeSearchPaths.cs`：合并进程、当前用户和系统 PATH，供 Node/DSh 校验及子进程启动使用。
@@ -79,6 +80,7 @@
 
 ## 已执行测试及结果
 
+- `v1.0.7` DeepSeek 任务栏独立发布候选：Release build/publish 为 0 warnings、0 errors；完整自测 65/65 通过，新增验证 Chat 无 MainWindow Owner、独立 AppUserModelID、任务栏可见性和 DeepSeek 图标。Windows x64 自包含单文件 `DSH.Launcher.exe` 为 72,480,217 字节，文件版本 `1.0.7.0`，SHA-256 `4AE02F2C4A728D7048FC38756485C09C3B1A928E29C47194C244F94DB27037B6`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.7-independent-taskbar-20260819`，桌面顶层 `DSH Launcher.exe` 已同步。按当前任务未使用 Computer Use。
 - 本轮手动打开方式代码级自测：Release build 为 0 warnings、0 errors；完整自测 64/64 通过。覆盖 CMD/BAT 真实执行并读取版本 `DSH_HOME`、LNK 目标解析、版本设置持久化，以及 `.dshpack` 不携带本机绑定路径。按用户要求未使用 Computer Use。Windows x64 自包含单文件 `DSH Launcher.exe` 为 72,479,128 字节，文件版本 `1.0.6.0`，SHA-256 `8F794DE5F7532CCDFFB95FB65E9F8B94782380F2BA825C269E3A98985C6598FD`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.6-custom-open-target-20260819`，桌面顶层发布文件哈希一致。
 - 本轮 dsh-market Plugin 热加载自测：Release 完整自测 63/63 通过；覆盖运行中按钮文案、社区目录原始 URL 保留、同源请求头、`/install` 与 `/update` 请求体及返回状态解析。Windows x64 自包含压缩单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\dsh-market-hot-load-20260819-144730`；`DSH Launcher.exe` 为 72,475,323 字节，SHA-256 `AD9191623F094F3C4F3AF6594F6AA25D16C0FDEA47144DE61952150072D15C28`。
 - 本轮 dsh-market 实机验证：在隔离的临时 `DSH_HOME` 中通过官方 DSh CLI 安装 `dshmarket 1.12.1`，启动真实 DSh 后调用其 loopback `/install` 热加载 `dsh-session-hotkeys 1.5.1`，接口返回 HTTP 200、`ok=true`、`hot=true`，安装后状态为 live；测试版 Launcher 能正常打开扩展页并读取 1331 个缓存候选。测试窗口已关闭，临时 DSh 进程已停止且端口已释放。
@@ -146,6 +148,7 @@
 
 ## 已知问题
 
+- DeepSeek 独立任务栏分组已通过代码和回归测试，仍需在 Windows Shell 中实际打开一次 Chat 窗口确认视觉分组；本轮按默认规则未使用 Computer Use。
 - Source 项目的 `.dsh/skills` 和 `.agents/skills` 是 DSh 项目级共享只读资源；实例 `DSH_HOME` 内的 Skill 才是版本私有。
 - Provider 自动同步按停止版本中 `settings.yaml` 的最新写入时间选择单一来源，没有三方合并；运行中的版本会等停止后参与同步。
 - 对话同步是生命周期边界同步，不是多个运行中 DSh 的实时共享写入；外部程序直接删除会话文件不会触发 Launcher 的删除传播。
@@ -166,6 +169,7 @@
 
 ## 尚未完成内容
 
+- 实机打开一个 Launcher Chat，确认任务栏同时出现相互独立的 Launcher 与黑色 DeepSeek 图标。
 - 通过 UI 实际下载并创建一个本机尚未安装的 DSh 版本；本轮只验证了官方版本列表、精确安装代码路径和自测，没有触发外部软件安装。
 - 在安装 dsh-market 的测试实例上应用一个主题，并确认主题状态刷新和自动快照可回滚。
 - 本轮新增设置、工作区、备份恢复、市场筛选及首次运行引导的实机 UI 验收。
@@ -186,4 +190,4 @@
 
 ## 下一步最直接的任务
 
-在安装了 `dsh-market` 的独立测试实例上实机验证主题应用、状态刷新和自动快照回滚。
+实机打开一个实例的 DeepSeek Chat，确认它与 Launcher 在 Windows 任务栏中独立显示且关闭 Chat 不停止实例。

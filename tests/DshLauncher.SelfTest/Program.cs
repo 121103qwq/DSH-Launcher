@@ -38,6 +38,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Lifecycle busy guard", TestLifecycleBusyGuard),
     ("Single instance activation channel", TestSingleInstanceActivationChannel),
     ("Window resize hit testing", TestWindowResizeHitTesting),
+    ("Chat window independent taskbar identity", TestChatWindowIndependentTaskbarIdentity),
     ("Main window code resource references", TestMainWindowCodeResourceReferences),
     ("Conversation title cache reparse rejection", TestConversationTitleCacheReparseRejection),
     ("Installed instance runtime rebinding", TestInstanceRuntimeRebinding),
@@ -1253,6 +1254,33 @@ static Task TestWindowResizeHitTesting()
     var unchanged = WindowSizeHelper.CalculateInitialSize(986, 617, 1920, 1040);
     Assert(unchanged.Width == 986 && unchanged.Height == 617,
         "屏幕空间充足时不应无故放大或改变已有窗口尺寸。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestChatWindowIndependentTaskbarIdentity()
+{
+    var chatWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ChatWindow.xaml");
+    var chatWindowCodePath = FindRepositoryFile("src", "DshLauncher", "ChatWindow.xaml.cs");
+    var mainWindowCodePath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml.cs");
+    var taskbarIdentityPath = FindRepositoryFile("src", "DshLauncher", "TaskbarWindowIdentity.cs");
+    var chatWindowXaml = File.ReadAllText(chatWindowXamlPath, Encoding.UTF8);
+    var chatWindowCode = File.ReadAllText(chatWindowCodePath, Encoding.UTF8);
+    var mainWindowCode = File.ReadAllText(mainWindowCodePath, Encoding.UTF8);
+    var taskbarIdentityCode = File.ReadAllText(taskbarIdentityPath, Encoding.UTF8);
+
+    Assert(chatWindowXaml.Contains("ShowInTaskbar=\"True\"", StringComparison.Ordinal)
+        && chatWindowXaml.Contains("Icon=\"Assets/DeepSeek.ico\"", StringComparison.Ordinal),
+        "DeepSeek 窗口必须显示独立任务栏按钮并使用自己的图标。 ");
+    Assert(chatWindowCode.Contains("OnSourceInitialized", StringComparison.Ordinal)
+        && chatWindowCode.Contains("TaskbarWindowIdentity.TrySetAppUserModelId", StringComparison.Ordinal)
+        && chatWindowCode.Contains("DSHLauncher.DeepSeekWindow", StringComparison.Ordinal),
+        "DeepSeek 窗口必须在句柄创建后设置独立的窗口级 AppUserModelID。 ");
+    Assert(!mainWindowCode.Contains("chat.Owner", StringComparison.Ordinal),
+        "Launcher 打开的 DeepSeek 窗口不能设置 MainWindow Owner。 ");
+    Assert(taskbarIdentityCode.Contains("SHGetPropertyStoreForWindow", StringComparison.Ordinal)
+        && taskbarIdentityCode.Contains("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3", StringComparison.Ordinal)
+        && Regex.IsMatch(taskbarIdentityCode, "9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3\\\"\\),\\s*5\\)"),
+        "任务栏标识必须写入 Windows 的 System.AppUserModel.ID 属性。 ");
     return Task.CompletedTask;
 }
 

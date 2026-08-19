@@ -2,12 +2,14 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 
 namespace DshLauncher;
 
 public partial class ChatWindow : Window
 {
+    private const string DeepSeekWindowAppUserModelId = "DSHLauncher.DeepSeekWindow";
     private readonly string _address;
     private readonly string? _conversationId;
     private bool _conversationSelectionApplied;
@@ -26,6 +28,14 @@ public partial class ChatWindow : Window
         _conversationId = string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim();
         InitializeComponent();
         WindowSizeHelper.FitInitialSize(this);
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        TaskbarWindowIdentity.TrySetAppUserModelId(
+            new WindowInteropHelper(this).Handle,
+            DeepSeekWindowAppUserModelId);
     }
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
