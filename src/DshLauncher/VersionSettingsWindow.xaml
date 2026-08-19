@@ -121,17 +121,35 @@
                             <Border Background="#F5F9FD" CornerRadius="10" Padding="18" Margin="0,14,0,0">
                                 <StackPanel>
                                     <TextBlock Text="绑定打开方式" FontWeight="SemiBold" />
-                                    <TextBlock Text="绑定 DSH Desktop 后，启动页主按钮会显示“打开窗口”；仍会保留一个“Launcher 启动”按钮。"
+                                    <TextBlock Text="可绑定 DSH Desktop，或手动选择 EXE、BAT、CMD、PowerShell 脚本和 LNK 快捷方式。绑定后启动页主按钮显示“打开窗口”，同时保留“Launcher 启动”。"
                                                Foreground="{StaticResource MutedBrush}"
                                                TextWrapping="Wrap"
                                                FontSize="11"
                                                Margin="0,6,0,12" />
                                     <ComboBox x:Name="OpenModeBox"
                                               SelectedValuePath="Tag"
+                                              SelectionChanged="OpenModeBox_SelectionChanged"
                                               Height="36">
                                         <ComboBoxItem Content="Launcher 启动（默认）" Tag="Launcher" />
                                         <ComboBoxItem Content="DSH Desktop 打开窗口" Tag="Desktop" />
+                                        <ComboBoxItem Content="手动绑定程序、脚本或快捷方式" Tag="Custom" />
                                     </ComboBox>
+                                    <Grid x:Name="CustomOpenTargetPanel" Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="CustomOpenTargetBox"
+                                                 Height="36"
+                                                 VerticalContentAlignment="Center"
+                                                 ToolTip="选择 EXE、COM、BAT、CMD、PS1、LNK，或其他可由 Windows 打开的文件" />
+                                        <Button Grid.Column="1"
+                                                Content="选择文件"
+                                                Click="BrowseOpenTarget_Click"
+                                                Height="36"
+                                                Padding="14,0"
+                                                Margin="8,0,0,0" />
+                                    </Grid>
                                     <TextBlock x:Name="OpenModeStatusText"
                                                Foreground="{StaticResource MutedBrush}"
                                                TextWrapping="Wrap"

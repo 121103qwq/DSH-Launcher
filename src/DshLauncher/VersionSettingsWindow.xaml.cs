@@ -152,9 +152,13 @@ public partial class VersionSettingsWindow : UserControl
         var openMode = _settings.OpenMode
             ?? (_instance?.CanOpenDesktopShell == true ? VersionOpenMode.Desktop : VersionOpenMode.Launcher);
         OpenModeBox.SelectedValue = openMode.ToString();
-        OpenModeStatusText.Text = _instance?.CanOpenDesktopShell == true
-            ? "当前版本已检测到 DSH Desktop 打开入口。"
-            : "当前版本没有检测到可用的 DSH Desktop 打开入口，只能使用 Launcher 启动。";
+        CustomOpenTargetBox.Text = _settings.CustomOpenTargetPath ?? string.Empty;
+        UpdateCustomOpenTargetEnabled();
+        OpenModeStatusText.Text = openMode == VersionOpenMode.Custom
+            ? "当前版本将使用手动绑定的本地入口，并继承此版本的 DSH_HOME。"
+            : _instance?.CanOpenDesktopShell == true
+                ? "当前版本已检测到 DSH Desktop 打开入口。"
+                : "当前版本没有检测到 DSH Desktop；仍可使用 Launcher 或手动绑定打开方式。";
     }
 
     private string FormatNodeRuntime()
@@ -399,10 +403,44 @@ public partial class VersionSettingsWindow : UserControl
             ? ConversationWorkspaceBox.Text
             : null,
         SyncModelProviders = SyncModelProvidersCheckBox.IsChecked == true,
+        UseDshMarketHotReload = _settings.UseDshMarketHotReload,
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
-        OpenMode = _settings.OpenMode
+        OpenMode = _settings.OpenMode,
+        CustomOpenTargetPath = _settings.CustomOpenTargetPath
     };
+
+    private void OpenModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateCustomOpenTargetEnabled();
+
+    private void UpdateCustomOpenTargetEnabled()
+    {
+        if (CustomOpenTargetPanel is null)
+        {
+            return;
+        }
+
+        CustomOpenTargetPanel.IsEnabled = string.Equals(
+            OpenModeBox.SelectedValue?.ToString(),
+            VersionOpenMode.Custom.ToString(),
+            StringComparison.Ordinal);
+        CustomOpenTargetPanel.Opacity = CustomOpenTargetPanel.IsEnabled ? 1 : 0.55;
+    }
+
+    private void BrowseOpenTarget_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new Forms.OpenFileDialog
+        {
+            Title = "选择这个版本的打开方式",
+            Filter = "程序、脚本和快捷方式|*.exe;*.com;*.bat;*.cmd;*.ps1;*.lnk|所有文件|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog() == Forms.DialogResult.OK)
+        {
+            CustomOpenTargetBox.Text = dialog.FileName;
+        }
+    }
 
     private void SaveOpenMode_Click(object sender, RoutedEventArgs e)
     {
@@ -424,16 +462,43 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
+        var customOpenTargetPath = _settings.CustomOpenTargetPath;
+        if (openMode == VersionOpenMode.Custom)
+        {
+            try
+            {
+                customOpenTargetPath = Path.GetFullPath(CustomOpenTargetBox.Text.Trim());
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                OpenModeStatusText.Text = "手动绑定的文件路径无效。";
+                return;
+            }
+
+            if (!File.Exists(customOpenTargetPath))
+            {
+                OpenModeStatusText.Text = "手动绑定的文件不存在，请重新选择。";
+                return;
+            }
+        }
+
         try
         {
             var updated = CopySettings();
             updated.OpenMode = openMode;
+            updated.CustomOpenTargetPath = customOpenTargetPath;
             var snapshot = TryCreateSnapshot("保存打开方式前");
             _settingsService.Save(_instance, updated);
             _settings = updated;
+            var modeText = openMode switch
+            {
+                VersionOpenMode.Desktop => "DSH Desktop 打开窗口",
+                VersionOpenMode.Custom => $"手动打开 {Path.GetFileName(customOpenTargetPath)}",
+                _ => "Launcher 启动"
+            };
             OpenModeStatusText.Text = snapshot is null
-                ? $"已保存：{(openMode == VersionOpenMode.Desktop ? "DSH Desktop 打开窗口" : "Launcher 启动")}。"
-                : $"已保存：{(openMode == VersionOpenMode.Desktop ? "DSH Desktop 打开窗口" : "Launcher 启动")}，并已保留修改前快照。";
+                ? $"已保存：{modeText}。"
+                : $"已保存：{modeText}，并已保留修改前快照。";
             _settingsSaved();
         }
         catch (Exception ex)
@@ -448,9 +513,11 @@ public partial class VersionSettingsWindow : UserControl
         ConversationSyncMode = _settings.ConversationSyncMode,
         ConversationWorkspace = _settings.ConversationWorkspace,
         SyncModelProviders = _settings.SyncModelProviders,
+        UseDshMarketHotReload = _settings.UseDshMarketHotReload,
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
-        OpenMode = _settings.OpenMode
+        OpenMode = _settings.OpenMode,
+        CustomOpenTargetPath = _settings.CustomOpenTargetPath
     };
 
     private async void RefreshPlugins_Click(object sender, RoutedEventArgs e) => await LoadPluginsAsync();
@@ -569,6 +636,7 @@ public partial class VersionSettingsWindow : UserControl
                 WindowTitle = WindowTitleBox.Text,
                 NodeExecutablePath = nodePath,
                 OpenMode = _settings.OpenMode,
+                CustomOpenTargetPath = _settings.CustomOpenTargetPath,
                 UseDshMarketHotReload = _settings.UseDshMarketHotReload
             };
             var snapshot = TryCreateSnapshot("保存窗口与 Node 设置前");

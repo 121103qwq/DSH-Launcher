@@ -24,6 +24,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - 支持复制现有版本、新建干净版本、删除版本和修改版本名称。
 - 支持导入、导出 `.dshpack` 整合包；密钥、dotenv 和会话不会进入分享包，导入时创建新版本且不覆盖已有版本。
 - 同一个 DSh 运行目录可供多个隔离版本使用，并可同时启动多个实例。
+- 每个版本可把“打开窗口”绑定到 DSH Desktop，或本机的 EXE、BAT/CMD、PowerShell 脚本和 LNK 快捷方式；仍可随时改用 Launcher 启动。
 - 区分 Launcher 自己启动的 **Managed** 实例与连接外部服务的 **Attached** 实例；Attached 实例不会被停止或重启操作误杀。
 
 ### 运行环境
@@ -118,4 +119,4 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.0.4**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.0.6**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。

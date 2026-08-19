@@ -817,6 +817,11 @@ public sealed class VersionPackageService
             var settings = JsonSerializer.Deserialize<VersionSettingsData>(content, JsonOptions)
                 ?? new VersionSettingsData();
             settings.NodeExecutablePath = null;
+            settings.CustomOpenTargetPath = null;
+            if (settings.OpenMode == VersionOpenMode.Custom)
+            {
+                settings.OpenMode = VersionOpenMode.Launcher;
+            }
             return JsonSerializer.Serialize(settings, JsonOptions);
         }
         catch (JsonException)

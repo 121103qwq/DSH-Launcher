@@ -237,7 +237,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string StartInstanceButtonText => SelectedInstance is null
         ? "准备首个版本"
-        : IsDesktopOpenBound
+        : IsExternalOpenBound
             ? "打开窗口"
             : _instanceRunner.IsRunning(SelectedInstance.Id)
                 ? "打开实例"
@@ -254,12 +254,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public bool IsDesktopOpenBound => SelectedInstance?.CanOpenDesktopShell == true
         && GetSelectedOpenMode() == VersionOpenMode.Desktop;
 
-    public Visibility LauncherStartVisibility => IsDesktopOpenBound
+    public bool IsCustomOpenBound => SelectedInstance is not null
+        && GetSelectedOpenMode() == VersionOpenMode.Custom;
+
+    public bool IsExternalOpenBound => IsDesktopOpenBound || IsCustomOpenBound;
+
+    public Visibility LauncherStartVisibility => IsExternalOpenBound
         ? Visibility.Visible
         : Visibility.Collapsed;
 
     public Visibility DesktopShellVisibility => SelectedInstance?.CanOpenDesktopShell == true
-        && !IsDesktopOpenBound
+        && !IsExternalOpenBound
         ? Visibility.Visible
         : Visibility.Collapsed;
 
@@ -2001,6 +2006,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     WindowTitle = current.WindowTitle,
                     NodeExecutablePath = current.NodeExecutablePath,
                     OpenMode = current.OpenMode,
+                    CustomOpenTargetPath = current.CustomOpenTargetPath,
                     UseDshMarketHotReload = current.UseDshMarketHotReload
                 };
                 var snapshot = instance.RuntimeStatus != InstanceRuntimeStatus.Running
@@ -2661,6 +2667,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        if (IsCustomOpenBound)
+        {
+            OpenCustomTarget();
+            return;
+        }
+
         await StartSelectedInstanceAsync();
     }
 
@@ -2840,6 +2852,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         finally
         {
             EndLifecycleOperation();
+        }
+    }
+
+    private void OpenCustomTarget()
+    {
+        var instance = SelectedInstance;
+        if (instance is null)
+        {
+            ShowNotice("请先选择版本。");
+            return;
+        }
+
+        if (_instanceRunner.IsRunning(instance.Id)
+            || instance.RuntimeStatus == InstanceRuntimeStatus.Running)
+        {
+            ShowNotice("请先停止这个版本，再使用绑定的打开方式，避免两个进程同时写入同一个 DSH_HOME。");
+            return;
+        }
+
+        try
+        {
+            var settings = _versionSettingsService.Read(instance);
+            var startInfo = VersionOpenTargetService.CreateStartInfo(
+                instance,
+                settings.CustomOpenTargetPath ?? string.Empty);
+            if (Process.Start(startInfo) is null)
+            {
+                ShowNotice("绑定的打开方式启动失败。");
+                return;
+            }
+
+            ShowNotice($"已通过 {Path.GetFileName(settings.CustomOpenTargetPath)} 打开 {instance.Name}，并传入该版本的隔离数据目录。");
+        }
+        catch (Exception ex) when (ex is Win32Exception
+            or IOException
+            or InvalidOperationException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            ShowNotice($"打开绑定入口失败：{ex.Message}");
         }
     }
 

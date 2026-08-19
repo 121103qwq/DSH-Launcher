@@ -2,10 +2,11 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.5`。运行中的 Managed 实例已接入 dsh-market Plugin 热加载；当前任务是完成实机验证并发布。
+当前源码版本为 `v1.0.6`。版本设置已支持手动绑定本地打开方式；发布候选已完成代码验证和单文件构建，当前任务是提交并发布 GitHub Release。
 
 ## 已完成内容
 
+- 本轮新增：任意版本可在“版本设置 → 个性化 → 绑定打开方式”中手动选择 EXE、COM、BAT、CMD、PowerShell 脚本、LNK 快捷方式或其它 Windows 可打开文件。启动页主按钮改为“打开窗口”，同时保留 Launcher 启动；可直接启动的目标继承当前版本 `DSH_HOME` 和 `DSH_AGENTS_HOME`。本机绑定路径不会进入 `.dshpack`。
 - 本轮新增：Managed 实例运行时，未安装的市场 Plugin 显示“热加载”；点击后先检查该实例的 dsh-market 状态和候选目录 URL，满足条件时调用官方 loopback `/install`，已安装项更新调用 `/update`。dsh-market 不可用、实例关闭热加载或候选不在其目录时，不再直接修改运行中 profile，而是提示停止实例后普通安装。停止实例仍使用现有 DSh Plugin CLI。
 - Plugin CLI 继承当前环境或 Git 全局代理，修复从资源管理器启动 Launcher 后 GitHub codeload 下载没有走既有代理而超时的问题；Plugin 进度改为 pnpm 实际包计数，Skill ZIP 下载显示真实字节进度。README 已加入当前界面截图和本次安装行为说明。
 - 本轮修复：Plugin 安装和更新继续只调用官方 DSh CLI，不再从仓库 README 提取或改写安装指令；调用前会把 web profile 中遗留的 pnpm `allowBuilds` 未决占位明确设为 `false`，当前已验证插件仍单独授权，且 `pnpm-workspace.yaml` 已纳入失败回档。Skill 市场会把当前实例内同名的可管理 Skill 标记为“已安装”并禁用重复安装；Agent 左栏增大独立高度并为已安装列表保留最小可见区域，`grill-me` 这类已安装条目不会再被当前选择区和长路径挤没。
@@ -69,7 +70,7 @@
 - `src/DshLauncher/Services/ExtensionService.cs`、`ExtensionWindow.xaml(.cs)`、`PluginProgressWindow.cs`：Plugin、Skill、MCP、Agent Preset、市场入口、精选筛选、开发者头像、dsh-market 热加载和插件安装进度弹窗。
 - `src/DshLauncher/Services/MarketplaceService.cs`、`Models/MarketplaceModels.cs`、`ThemePreviewWindow.cs`：市场缓存、来源合并、搜索、排序、GitHub/monorepo 校验、安装状态、开发者头像地址和 README 图片预览。
 - `src/DshLauncher/Services/SkillMarketService.cs`、`Models/SkillMarketModels.cs`：Skill 市场缓存、GitHub 发现、SKILL.md 校验和实例导入。
-- `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionPackageService.cs`、`VersionSnapshotService.cs`、`DshVersionCatalogService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`、`NewVersionWindow.xaml(.cs)`：版本同步策略、工作区管理、DSh 版本选择与精确安装、版本复制/删除、加密快照回滚、设置和 `.dshpack`。
+- `src/DshLauncher/Services/VersionSettingsService.cs`、`VersionOpenTargetService.cs`、`ShortcutTargetResolver.cs`、`VersionPackageService.cs`、`VersionSnapshotService.cs`、`DshVersionCatalogService.cs`、`VersionControlWindow.xaml(.cs)`、`VersionSettingsWindow.xaml(.cs)`、`NewVersionWindow.xaml(.cs)`：版本同步策略、手动打开方式、快捷方式解析、工作区管理、DSh 版本选择与精确安装、版本复制/删除、加密快照回滚、设置和 `.dshpack`。
 - `src/DshLauncher/Services/VersionHealthService.cs`、`DshSettingsYamlValidator.cs`、`VersionSnapshotService.cs`、`Models/VersionHealthModels.cs`：版本体检、DSh YAML 语义校验、安全自动修复和当前 Windows 用户加密的配置回滚点。
 - `src/DshLauncher/Services/ModelService.cs`、`ModelProviderSyncService.cs`、`ProviderStateService.cs`：Provider 配置、同步和启用状态。
 - `src/DshLauncher/Services/ConversationService.cs`、`ConversationSyncService.cs`、`ConversationWindow.xaml(.cs)`：会话文件管理、打开入口和同步策略。
@@ -78,6 +79,7 @@
 
 ## 已执行测试及结果
 
+- 本轮手动打开方式代码级自测：Release build 为 0 warnings、0 errors；完整自测 64/64 通过。覆盖 CMD/BAT 真实执行并读取版本 `DSH_HOME`、LNK 目标解析、版本设置持久化，以及 `.dshpack` 不携带本机绑定路径。按用户要求未使用 Computer Use。Windows x64 自包含单文件 `DSH Launcher.exe` 为 72,479,128 字节，文件版本 `1.0.6.0`，SHA-256 `8F794DE5F7532CCDFFB95FB65E9F8B94782380F2BA825C269E3A98985C6598FD`；完整产物位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.6-custom-open-target-20260819`，桌面顶层发布文件哈希一致。
 - 本轮 dsh-market Plugin 热加载自测：Release 完整自测 63/63 通过；覆盖运行中按钮文案、社区目录原始 URL 保留、同源请求头、`/install` 与 `/update` 请求体及返回状态解析。Windows x64 自包含压缩单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\dsh-market-hot-load-20260819-144730`；`DSH Launcher.exe` 为 72,475,323 字节，SHA-256 `AD9191623F094F3C4F3AF6594F6AA25D16C0FDEA47144DE61952150072D15C28`。
 - 本轮 dsh-market 实机验证：在隔离的临时 `DSH_HOME` 中通过官方 DSh CLI 安装 `dshmarket 1.12.1`，启动真实 DSh 后调用其 loopback `/install` 热加载 `dsh-session-hotkeys 1.5.1`，接口返回 HTTP 200、`ok=true`、`hot=true`，安装后状态为 live；测试版 Launcher 能正常打开扩展页并读取 1331 个缓存候选。测试窗口已关闭，临时 DSh 进程已停止且端口已释放。
 - `v1.0.5` 发布候选：Release 完整自测 63/63 通过；Windows x64 自包含压缩单文件版本为 `1.0.5.0`，大小 72,475,314 字节，SHA-256 `622A9B5320315AF676B6D9E36FA63730F39131B958F555C5CF04F609DBEA2369`。最终 EXE 已复制到桌面 `DSH Launcher` 文件夹顶层及 `release-v1.0.5-dsh-market-hot-load-20260819-150902`；通过 Computer Use 启动最终 EXE，主界面和 4 个实例正常显示，随后已关闭测试窗口。

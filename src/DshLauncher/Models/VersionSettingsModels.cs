@@ -16,7 +16,8 @@ public enum PluginInstallMode
 public enum VersionOpenMode
 {
     Launcher,
-    Desktop
+    Desktop,
+    Custom
 }
 
 public sealed class VersionSettingsData
@@ -40,6 +41,12 @@ public sealed class VersionSettingsData
     /// a desktop window, while normal DSh runtimes use Launcher web startup.
     /// </summary>
     public VersionOpenMode? OpenMode { get; set; }
+
+    /// <summary>
+    /// Local executable, script or Windows shortcut used when OpenMode is Custom.
+    /// This machine-specific path is not included in shareable version packages.
+    /// </summary>
+    public string? CustomOpenTargetPath { get; set; }
 }
 
 /// <summary>

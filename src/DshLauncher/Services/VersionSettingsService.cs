@@ -327,6 +327,7 @@ public sealed class VersionSettingsService
             ? null
             : settings.WindowTitle.Trim();
         settings.NodeExecutablePath = NormalizePath(settings.NodeExecutablePath);
+        settings.CustomOpenTargetPath = NormalizePath(settings.CustomOpenTargetPath);
 
         if (settings.ConversationWorkspace?.Length > 80)
         {

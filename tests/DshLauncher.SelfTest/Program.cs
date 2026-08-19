@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Recent instance selection", TestRecentInstanceSelection),
     ("Manual DSh detect, register and start", TestManualDshDetectRegisterAndStart),
     ("Shortcut scan directory resolution", TestShortcutScanDirectoryResolution),
+    ("Version custom open target", TestVersionCustomOpenTarget),
     ("DeepSeek Desktop bundled runtime detection", TestDeepSeekDesktopRuntimeDetection),
     ("DSH Desktop 2 packaged runtime compatibility", TestDshDesktopV2RuntimeCompatibility),
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
@@ -1557,6 +1558,91 @@ static Task TestShortcutScanDirectoryResolution()
     Assert(
         ShortcutTargetResolver.ResolveExistingDirectory(null, Path.Combine(temporary.Path, "missing")) is null,
         "快捷方式目标和工作目录都失效时不应返回扫描目录。");
+    return Task.CompletedTask;
+}
+
+static Task TestVersionCustomOpenTarget()
+{
+    using var temporary = new TestDirectory();
+    var dshHome = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(dshHome);
+    var instance = new ManagerInstance(
+        "custom-open",
+        "视频演示版本",
+        temporary.Path,
+        InstanceKind.Installed,
+        dshHome,
+        null,
+        "test",
+        InstanceRuntimeStatus.Stopped,
+        null,
+        null,
+        DateTimeOffset.UtcNow);
+
+    var script = Path.Combine(temporary.Path, "open version.cmd");
+    var observedHome = Path.Combine(temporary.Path, "observed-home.txt");
+    File.WriteAllText(
+        script,
+        $"@echo off\r\n>\"{observedHome}\" echo %DSH_HOME%\r\n",
+        new UTF8Encoding(false));
+    var scriptStartInfo = VersionOpenTargetService.CreateStartInfo(instance, script);
+    Assert(Path.GetFileName(scriptStartInfo.FileName).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase)
+        && scriptStartInfo.Arguments.Contains(script, StringComparison.OrdinalIgnoreCase)
+        && scriptStartInfo.Environment["DSH_HOME"] == dshHome
+        && scriptStartInfo.Environment["DSH_AGENTS_HOME"] == Path.Combine(dshHome, ".agents"),
+        "BAT/CMD 打开方式必须通过命令解释器启动，并继承版本隔离环境。 ");
+    scriptStartInfo.CreateNoWindow = true;
+    using (var process = System.Diagnostics.Process.Start(scriptStartInfo))
+    {
+        Assert(process is not null && process.WaitForExit(5000) && process.ExitCode == 0,
+            "BAT/CMD 手动绑定入口必须能够真实执行完成。 ");
+    }
+    Assert(File.Exists(observedHome)
+        && string.Equals(File.ReadAllText(observedHome).Trim(), dshHome, StringComparison.OrdinalIgnoreCase),
+        "真实执行的绑定脚本必须收到当前版本的 DSH_HOME。 ");
+
+    var settings = new VersionSettingsService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    settings.Save(instance, new VersionSettingsData
+    {
+        OpenMode = VersionOpenMode.Custom,
+        CustomOpenTargetPath = script
+    });
+    var saved = settings.Read(instance);
+    Assert(saved.OpenMode == VersionOpenMode.Custom
+        && string.Equals(saved.CustomOpenTargetPath, script, StringComparison.OrdinalIgnoreCase),
+        "手动绑定的打开方式必须按版本持久化。 ");
+
+    var shortcut = Path.Combine(temporary.Path, "open version.lnk");
+    object? shell = null;
+    object? link = null;
+    try
+    {
+        var shellType = Type.GetTypeFromProgID("WScript.Shell")
+            ?? throw new NotSupportedException("测试环境不能创建 Windows 快捷方式。 ");
+        shell = Activator.CreateInstance(shellType);
+        link = ((dynamic)shell!).CreateShortcut(shortcut);
+        ((dynamic)link).TargetPath = script;
+        ((dynamic)link).WorkingDirectory = temporary.Path;
+        ((dynamic)link).Save();
+    }
+    finally
+    {
+        if (link is not null && System.Runtime.InteropServices.Marshal.IsComObject(link))
+        {
+            System.Runtime.InteropServices.Marshal.FinalReleaseComObject(link);
+        }
+
+        if (shell is not null && System.Runtime.InteropServices.Marshal.IsComObject(shell))
+        {
+            System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
+        }
+    }
+
+    var shortcutStartInfo = VersionOpenTargetService.CreateStartInfo(instance, shortcut);
+    Assert(Path.GetFileName(shortcutStartInfo.FileName).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase)
+        && shortcutStartInfo.Arguments.Contains(script, StringComparison.OrdinalIgnoreCase)
+        && shortcutStartInfo.Environment["DSH_HOME"] == dshHome,
+        "LNK 打开方式必须解析真实目标，并继承版本隔离环境。 ");
     return Task.CompletedTask;
 }
 
@@ -3597,6 +3683,12 @@ static Task TestVersionPackageOperations()
     var presetDirectory = Path.Combine(source.DshHome, ".agent-presets", "reviewer");
     Directory.CreateDirectory(presetDirectory);
     File.WriteAllText(Path.Combine(presetDirectory, "agent.cordis.yml"), "name: reviewer\n", new UTF8Encoding(false));
+    var customOpenScript = Path.Combine(temporary.Path, "local-open.cmd");
+    File.WriteAllText(customOpenScript, "@echo off\r\n", new UTF8Encoding(false));
+    var customOpenSettings = settingsService.Read(source);
+    customOpenSettings.OpenMode = VersionOpenMode.Custom;
+    customOpenSettings.CustomOpenTargetPath = customOpenScript;
+    settingsService.Save(source, customOpenSettings);
     var exportPath = Path.Combine(temporary.Path, "share.dshpack");
     packages.ExportPackage(
         source,
@@ -3690,6 +3782,9 @@ static Task TestVersionPackageOperations()
         "导入整合包应恢复 Agent Preset。 ");
     Assert(settingsService.Read(importedDesign).NodeExecutablePath is null,
         "整合包不能恢复本机 Node.js 路径。 ");
+    Assert(settingsService.Read(importedDesign).CustomOpenTargetPath is null
+        && settingsService.Read(importedDesign).OpenMode == VersionOpenMode.Launcher,
+        "整合包不能携带或恢复本机绑定的打开方式路径。 ");
 
     var packPath = Path.Combine(temporary.Path, "import.dshpack");
     using (var archive = ZipFile.Open(packPath, ZipArchiveMode.Create))

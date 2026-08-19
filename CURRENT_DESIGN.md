@@ -7,7 +7,7 @@
 
 - 市场分类切换分别保存 Plugin 与 Skill 列表的滚动位置；搜索、排序和来源筛选仍只在当前内存快照上重新筛选。
 - `.dshpack` 导入始终创建新的版本，但运行时只从当前 Launcher 设置的 DSh 安装位置解析，不沿用整合包或模板的 `RootPath`；该位置没有可用运行时时拒绝导入。
-- 版本设置可以把已检测到的 DSH Desktop 入口绑定为“打开窗口”；绑定后启动页主按钮打开 DSH Desktop，并保留独立的“Launcher 启动”按钮，普通 DSh 仍使用 Launcher 启动。
+- 版本设置可以把已检测到的 DSH Desktop，或用户选择的本地 EXE、COM、BAT、CMD、PowerShell 脚本、LNK 快捷方式及其它 Windows 可打开文件绑定为“打开窗口”；Launcher 为可直接启动的入口注入该版本的 `DSH_HOME` / `DSH_AGENTS_HOME`，并保留独立的“Launcher 启动”按钮。手动绑定路径属于本机版本设置，不进入可分享 `.dshpack`。
 - 已安装 Plugin 管理列表对名称和描述使用单行省略并保留悬停全文；状态明确显示“已启用”或“已禁用”，不显示布尔值。
 
 - 技术栈：.NET 8 WPF，目标 Windows x64；发布版采用自包含单文件，不依赖 Node.js、npm、pnpm 或已经安装的 DSh。

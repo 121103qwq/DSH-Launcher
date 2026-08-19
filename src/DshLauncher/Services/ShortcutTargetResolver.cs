@@ -5,6 +5,11 @@ namespace DshLauncher.Services;
 
 public static class ShortcutTargetResolver
 {
+    public sealed record ShortcutLaunchTarget(
+        string TargetPath,
+        string? Arguments,
+        string? WorkingDirectory);
+
     public static string ResolveScanDirectory(string shortcutPath)
     {
         if (string.IsNullOrWhiteSpace(shortcutPath)
@@ -36,6 +41,56 @@ public static class ShortcutTargetResolver
         catch (Exception ex) when (ex is not ArgumentException
             and not FileNotFoundException
             and not DirectoryNotFoundException
+            and not NotSupportedException)
+        {
+            throw new InvalidDataException("Windows 无法读取这个快捷方式。 ", ex);
+        }
+        finally
+        {
+            ReleaseComObject(shortcut);
+            ReleaseComObject(shell);
+        }
+    }
+
+    public static ShortcutLaunchTarget ResolveLaunchTarget(string shortcutPath)
+    {
+        if (string.IsNullOrWhiteSpace(shortcutPath)
+            || !string.Equals(Path.GetExtension(shortcutPath), ".lnk", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("请选择 Windows .lnk 快捷方式。", nameof(shortcutPath));
+        }
+
+        var normalizedShortcut = Path.GetFullPath(shortcutPath);
+        if (!File.Exists(normalizedShortcut))
+        {
+            throw new FileNotFoundException("所选快捷方式不存在。", normalizedShortcut);
+        }
+
+        object? shell = null;
+        object? shortcut = null;
+        try
+        {
+            var shellType = Type.GetTypeFromProgID("WScript.Shell")
+                ?? throw new NotSupportedException("当前 Windows 环境不能读取快捷方式。 ");
+            shell = Activator.CreateInstance(shellType)
+                ?? throw new NotSupportedException("当前 Windows 环境不能创建快捷方式解析器。 ");
+            shortcut = ((dynamic)shell).CreateShortcut(normalizedShortcut);
+            var targetPath = NormalizeCandidate(Convert.ToString(((dynamic)shortcut).TargetPath));
+            if (targetPath is null || (!File.Exists(targetPath) && !Directory.Exists(targetPath)))
+            {
+                throw new FileNotFoundException("快捷方式指向的目标不存在。", targetPath ?? normalizedShortcut);
+            }
+
+            var workingDirectory = NormalizeCandidate(Convert.ToString(((dynamic)shortcut).WorkingDirectory));
+            return new ShortcutLaunchTarget(
+                targetPath,
+                NormalizeText(Convert.ToString(((dynamic)shortcut).Arguments)),
+                workingDirectory is not null && Directory.Exists(workingDirectory)
+                    ? workingDirectory
+                    : null);
+        }
+        catch (Exception ex) when (ex is not ArgumentException
+            and not FileNotFoundException
             and not NotSupportedException)
         {
             throw new InvalidDataException("Windows 无法读取这个快捷方式。 ", ex);
@@ -86,6 +141,9 @@ public static class ShortcutTargetResolver
             return null;
         }
     }
+
+    private static string? NormalizeText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static void ReleaseComObject(object? value)
     {
