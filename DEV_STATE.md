@@ -2,7 +2,7 @@
 
 ## 当前目标
 
-当前源码版本仍为 `v1.0.7`。独立分支正在完成 DeepSea Glass 第一阶段生产级现代化：统一设计资源、主窗口与启动页、Windows 11 DWM backdrop 回退、可取消的 last-request-wins 页面转场和 reduced motion；不改变业务语义、不升版本、不发布 Release。按任务约束不使用 Computer Use，真实视觉、DWM 材质和 DPI 实机表现保持未证明状态。
+当前源码版本仍为 `v1.0.7`。DeepSea Glass 第一阶段的代码、自动验证和测试产物已完成，并已提交到 Draft PR [#10](https://github.com/121103qwq/DSH-Launcher/pull/10)：统一设计资源、主窗口与启动页、Windows 11 DWM backdrop 回退、可取消的 last-request-wins 页面转场、reduced motion 和 P0 可访问性收口；不改变业务语义、不升版本、不发布 Release、不合并 PR。按任务约束不使用 Computer Use，真实视觉、DWM 材质和 DPI 实机表现保持未证明状态。
 
 ## 已完成内容
 
