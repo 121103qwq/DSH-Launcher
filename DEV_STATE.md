@@ -2,10 +2,11 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.7`。本版让 Launcher 内打开的 DeepSeek Chat 在 Windows 任务栏中与 Launcher 独立分组；代码和回归测试已完成，尚未进行 Computer Use 实机观察。
+当前源码版本仍为 `v1.0.7`。独立分支正在完成 DeepSea Glass 第一阶段生产级现代化：统一设计资源、主窗口与启动页、Windows 11 DWM backdrop 回退、可取消的 last-request-wins 页面转场和 reduced motion；不改变业务语义、不升版本、不发布 Release。按任务约束不使用 Computer Use，真实视觉、DWM 材质和 DPI 实机表现保持未证明状态。
 
 ## 已完成内容
 
+- DeepSea Glass 第一阶段：主窗口和启动页已切换到统一暗色深海材质资源、固定顶部导航与移动选中层，并按 P0 补齐三层材质宪法、Primary/Secondary/Tertiary 层级、停止非危险态、High Contrast 系统色/去高光阴影、2 DIP 键盘焦点与根布局像素对齐。系统材质通过普通 HWND 和 Windows 11 DWM attribute 38 应用，能力不足、透明效果关闭、高对比度、强制关闭或 DWM 失败时使用完整不透明 fallback。页面切换集中为可取消的 last-request-wins Opacity/TranslateTransform 转场，使用 180ms EaseOut 入场和 120ms EaseIn 退场，打断时继承当前视觉值，并将实例 ID 纳入页面 identity。Release 自检 `73/73` 通过，Windows x64 自包含单文件 publish 成功且版本仍为 `1.0.7.0`；最终测试产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\deepsea-glass-ui-final-20260821-021109`，`DSH Launcher.exe` 为 72,498,257 字节，SHA-256 `3319CFB4DA7D108DAED6B3C01179EFF5A6B9EF0FAA2BB26FE885D81DF99E1B74`。按任务约束未使用 Computer Use，真实视觉、DWM、DPI/缩放、输入法、系统动画关闭及旧嵌入页面内部异步取消仍未证明。
 - 本轮修复：DeepSeek Chat 继续保持无 Owner 窗口，并在 HWND 创建后写入独立的窗口级 AppUserModelID；因此它不再与 Launcher 共用任务栏分组，同时保留黑色 DeepSeek 图标以及现有实例生命周期清理。
 - 本轮新增：任意版本可在“版本设置 → 个性化 → 绑定打开方式”中手动选择 EXE、COM、BAT、CMD、PowerShell 脚本、LNK 快捷方式或其它 Windows 可打开文件。启动页主按钮改为“打开窗口”，同时保留 Launcher 启动；可直接启动的目标继承当前版本 `DSH_HOME` 和 `DSH_AGENTS_HOME`。本机绑定路径不会进入 `.dshpack`。
 - 本轮新增：Managed 实例运行时，未安装的市场 Plugin 显示“热加载”；点击后先检查该实例的 dsh-market 状态和候选目录 URL，满足条件时调用官方 loopback `/install`，已安装项更新调用 `/update`。dsh-market 不可用、实例关闭热加载或候选不在其目录时，不再直接修改运行中 profile，而是提示停止实例后普通安装。停止实例仍使用现有 DSh Plugin CLI。
