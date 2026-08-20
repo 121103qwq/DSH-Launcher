@@ -11,10 +11,8 @@
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         ResizeMode="CanResize"
-        AllowsTransparency="False"
-        UseLayoutRounding="True"
-        SnapsToDevicePixels="True"
-        Background="{StaticResource DeepSeaBackgroundGradientBrush}"
+        AllowsTransparency="True"
+        Background="Transparent"
         FontFamily="{StaticResource UiFont}"
         Foreground="{StaticResource TextBrush}"
         PreviewMouseWheel="Window_PreviewMouseWheel"
@@ -22,7 +20,7 @@
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0"
                             ResizeBorderThickness="0"
-                            GlassFrameThickness="-1"
+                            GlassFrameThickness="0"
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
@@ -38,128 +36,64 @@
         </Style>
     </Window.Resources>
 
-    <Border x:Name="WindowShell"
-            Margin="4"
-            Background="{StaticResource DeepSeaBackgroundGradientBrush}"
-            BorderBrush="{StaticResource DeepSeaGradientBorderBrush}"
+    <Border Margin="4"
+            Background="{StaticResource PageBrush}"
+            BorderBrush="#D6E4F1"
             BorderThickness="1"
-            CornerRadius="22"
-            ClipToBounds="True"
-            SnapsToDevicePixels="True">
-        <Grid>
+            CornerRadius="18">
+            <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="76" />
+                <RowDefinition Height="72" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <Grid x:Name="AmbientHighlightLayer"
-                  Grid.RowSpan="2"
-                  IsHitTestVisible="False"
-                  ClipToBounds="True">
-                <Border Width="520"
-                        Height="360"
-                        Margin="-140,-150,0,0"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Top"
-                        Opacity="0.72">
-                    <Border.Background>
-                        <RadialGradientBrush Center="0.42,0.42"
-                                             GradientOrigin="0.42,0.42"
-                                             RadiusX="0.58"
-                                             RadiusY="0.58">
-                            <GradientStop Color="#7045D5FF" Offset="0" />
-                            <GradientStop Color="#222A76D5" Offset="0.52" />
-                            <GradientStop Color="#00122538" Offset="1" />
-                        </RadialGradientBrush>
-                    </Border.Background>
-                </Border>
-                <Border Width="560"
-                        Height="420"
-                        Margin="0,0,-190,-190"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Bottom"
-                        Opacity="0.55">
-                    <Border.Background>
-                        <RadialGradientBrush Center="0.52,0.48"
-                                             GradientOrigin="0.52,0.48"
-                                             RadiusX="0.58"
-                                             RadiusY="0.58">
-                            <GradientStop Color="#5A9C7CFF" Offset="0" />
-                            <GradientStop Color="#20254F8A" Offset="0.52" />
-                            <GradientStop Color="#00122538" Offset="1" />
-                        </RadialGradientBrush>
-                    </Border.Background>
-                </Border>
-            </Grid>
-
             <Border Grid.Row="0"
-                    Background="{StaticResource DeepSeaBackdropTintBrush}"
-                    BorderBrush="{StaticResource DeepSeaBorderBrush}"
-                    BorderThickness="0,0,0,1"
-                    CornerRadius="21,21,0,0"
+                    Background="{StaticResource BlueBrush}"
+                    CornerRadius="17,17,0,0"
                     MouseLeftButtonDown="TitleBar_OnMouseLeftButtonDown">
                 <Grid Margin="18,0,16,0">
-                    <Grid x:Name="StartupBrandText"
-                          Width="214"
-                          HorizontalAlignment="Left"
-                          VerticalAlignment="Center">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="44" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Border Width="40"
-                                Height="40"
-                                CornerRadius="13"
-                                BorderBrush="#80C9F4FF"
-                                BorderThickness="1">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop Color="#F047D8FF" Offset="0" />
-                                    <GradientStop Color="#D83D8FEF" Offset="0.58" />
-                                    <GradientStop Color="#D8866BFF" Offset="1" />
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <TextBlock Text="DSH"
-                                       Foreground="#061523"
-                                       FontSize="12"
-                                       FontWeight="Bold"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center" />
-                        </Border>
-                        <StackPanel Grid.Column="1"
-                                    Margin="10,0,0,0"
-                                    VerticalAlignment="Center">
-                            <TextBlock Text="DSH Launcher"
-                                       Foreground="{StaticResource DeepSeaTextBrush}"
-                                       FontSize="17"
-                                       FontWeight="SemiBold" />
-                            <TextBlock Text="DEEPSEA CONTROL"
-                                       Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                       FontSize="9"
-                                       FontWeight="SemiBold"
-                                       Margin="0,2,0,0" />
-                        </StackPanel>
-                    </Grid>
+                    <TextBlock x:Name="StartupBrandText"
+                               Text="DSH Launcher"
+                               Foreground="White"
+                               FontSize="20"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Left"
+                               VerticalAlignment="Center" />
                     <Button x:Name="VersionSettingsBackButton"
-                            Width="214"
+                            Width="190"
                             Height="44"
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center"
-                            Style="{StaticResource DeepSeaButton}"
-                            HorizontalContentAlignment="Left"
+                            Foreground="White"
+                            Background="#2578C4"
+                            BorderBrush="#80FFFFFF"
+                            BorderThickness="1"
+                            Cursor="Hand"
                             Visibility="Collapsed"
                             Click="VersionSettingsBack_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="BackChrome"
+                                        Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        CornerRadius="10">
+                                    <ContentPresenter HorizontalAlignment="Left"
+                                                      VerticalAlignment="Center"
+                                                      Margin="13,0" />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="BackChrome" Property="Background" Value="#3388D3" />
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="BackChrome" Property="Background" Value="#1D69AF" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
                         <StackPanel Orientation="Horizontal">
-                            <Path Width="14"
-                                  Height="14"
-                                  Data="M12,2 L4,8 L12,14 M4,8 L17,8"
-                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}"
-                                  StrokeThickness="1.8"
-                                  StrokeStartLineCap="Round"
-                                  StrokeEndLineCap="Round"
-                                  StrokeLineJoin="Round"
-                                  Stretch="Uniform"
-                                  Margin="0,0,10,0" />
+                            <TextBlock Text="←" FontSize="18" Margin="0,0,9,0" />
                             <TextBlock x:Name="VersionSettingsBackText"
                                        Text="返回"
                                        FontWeight="SemiBold"
@@ -167,14 +101,14 @@
                         </StackPanel>
                     </Button>
                     <Border x:Name="ContextInstanceSelector"
-                            Width="214"
+                            Width="190"
                             Height="44"
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center"
-                            Background="{StaticResource DeepSeaGlassElevatedBrush}"
-                            BorderBrush="{StaticResource DeepSeaGradientBorderBrush}"
+                            Background="#2578C4"
+                            BorderBrush="#80FFFFFF"
                             BorderThickness="1"
-                            CornerRadius="14"
+                            CornerRadius="10"
                             ClipToBounds="True"
                             Visibility="Collapsed">
                         <Grid>
@@ -184,7 +118,9 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <Button Click="ContextInstanceSettings_Click"
-                                    Style="{StaticResource DeepSeaTertiaryButton}"
+                                    Background="Transparent"
+                                    BorderThickness="0"
+                                    Foreground="White"
                                     Padding="12,0"
                                     HorizontalContentAlignment="Left"
                                     ToolTip="打开当前实例的插件控制">
@@ -203,79 +139,48 @@
                                     Padding="0"
                                     Background="Transparent"
                                     BorderThickness="0"
-                                    Foreground="{StaticResource DeepSeaTextBrush}"
+                                    Foreground="White"
                                     Click="ContextInstanceMenu_Click"
-                                    AutomationProperties.Name="快速切换实例"
                                     ToolTip="快速切换实例">
-                                <Path Width="10"
-                                      Height="6"
-                                      Data="M1,1 L5,5 L9,1"
-                                      Stroke="{StaticResource DeepSeaMutedTextBrush}"
-                                      StrokeThickness="1.6"
-                                      StrokeStartLineCap="Round"
-                                      StrokeEndLineCap="Round"
-                                      StrokeLineJoin="Round"
-                                      Stretch="Uniform" />
+                                <TextBlock Text="⌄" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Button>
                         </Grid>
                     </Border>
-                    <Grid x:Name="NavigationBar"
-                          Height="48"
-                          HorizontalAlignment="Center"
-                          VerticalAlignment="Center">
-                        <Border x:Name="NavigationSelectionPill"
-                                Width="84"
-                                Height="42"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Center"
-                                IsHitTestVisible="False"
-                                BorderBrush="{StaticResource DeepSeaGradientBorderBrush}"
-                                BorderThickness="1"
-                                CornerRadius="14">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                    <GradientStop Color="#5048D9FF" Offset="0" />
-                                    <GradientStop Color="#303A8BFF" Offset="0.58" />
-                                    <GradientStop Color="#389A78FF" Offset="1" />
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <Border.RenderTransform>
-                                <TranslateTransform />
-                            </Border.RenderTransform>
-                        </Border>
-                        <StackPanel Orientation="Horizontal">
-                            <Button x:Name="NavigationHome" Width="84" Height="44" Tag="启动" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
-                                <StackPanel Orientation="Horizontal">
-                                    <Path Width="13" Height="13" Data="M2,1 L13,7 L2,13 Z" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" Stretch="Uniform" Margin="0,0,7,0" />
-                                    <TextBlock Text="启动" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="NavigationExtensions" Width="84" Height="44" Tag="扩展" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
-                                <StackPanel Orientation="Horizontal">
-                                    <Path Width="14" Height="14" Data="M7,1 L13,7 L7,13 L1,7 Z M7,4 L10,7 L7,10 L4,7 Z" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" StrokeThickness="1.4" Stretch="Uniform" Margin="0,0,7,0" />
-                                    <TextBlock Text="扩展" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="NavigationAgent" Width="90" Height="44" Tag="Agent" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
-                                <StackPanel Orientation="Horizontal">
-                                    <Path Width="14" Height="14" Data="M7,0.8 L8.7,5.3 L13.2,7 L8.7,8.7 L7,13.2 L5.3,8.7 L0.8,7 L5.3,5.3 Z" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" Stretch="Uniform" Margin="0,0,7,0" />
-                                    <TextBlock Text="Agent" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="NavigationConversations" Width="84" Height="44" Tag="对话" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
-                                <StackPanel Orientation="Horizontal">
-                                    <Path Width="14" Height="14" Data="M2,2 L12,2 L12,10 L7,10 L4,13 L4,10 L2,10 Z M4,5 L10,5 M4,7.5 L9,7.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" StrokeThickness="1.3" StrokeLineJoin="Round" Stretch="Uniform" Margin="0,0,7,0" />
-                                    <TextBlock Text="对话" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="NavigationSettings" Width="96" Height="44" Tag="设置 / 诊断" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
-                                <StackPanel Orientation="Horizontal">
-                                    <Path Width="14" Height="14" Data="M7,1 A6,6 0 1 1 6.99,1 M7,4 A3,3 0 1 1 6.99,4 M7,0 L7,3 M7,11 L7,14 M0,7 L3,7 M11,7 L14,7" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" StrokeThickness="1.3" StrokeStartLineCap="Round" Stretch="Uniform" Margin="0,0,7,0" />
-                                    <TextBlock Text="设置" />
-                                </StackPanel>
-                            </Button>
-                        </StackPanel>
-                    </Grid>
+                    <StackPanel
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <Button x:Name="NavigationHome" Tag="启动" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="▶" Margin="0,0,7,0" />
+                                <TextBlock Text="启动" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="NavigationExtensions" Tag="扩展" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="◇" Margin="0,0,7,0" />
+                                <TextBlock Text="扩展" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="NavigationAgent" Tag="Agent" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="✦" Margin="0,0,7,0" />
+                                <TextBlock Text="Agent" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="NavigationConversations" Tag="对话" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="☷" Margin="0,0,7,0" />
+                                <TextBlock Text="对话" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="NavigationSettings" Tag="设置 / 诊断" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="⚙" Margin="0,0,7,0" />
+                                <TextBlock Text="设置 / 诊断" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
@@ -283,19 +188,21 @@
                                 Width="42"
                                 Height="42"
                                 Padding="0"
-                                Style="{StaticResource DeepSeaWindowButton}"
-                                AutomationProperties.Name="最小化"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                Foreground="White"
                                 ToolTip="最小化">
-                            <Path Width="13" Height="2" Data="M1,1 L12,1" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" StrokeThickness="1.5" StrokeStartLineCap="Round" Stretch="Fill" />
+                            <TextBlock Text="—" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
                         <Button Click="Close_Click"
                                 Width="42"
                                 Height="42"
                                 Padding="0"
-                                Style="{StaticResource DeepSeaCloseButton}"
-                                AutomationProperties.Name="关闭"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                Foreground="White"
                                 ToolTip="关闭">
-                            <Path Width="12" Height="12" Data="M1,1 L11,11 M11,1 L1,11" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}" StrokeThickness="1.5" StrokeStartLineCap="Round" Stretch="Fill" />
+                            <TextBlock Text="×" FontSize="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -308,12 +215,12 @@
                               HorizontalContentAlignment="Stretch"
                               CanContentScroll="False"
                               PanningMode="VerticalOnly">
-                    <StackPanel Margin="20,14,20,24">
+                    <StackPanel Margin="18,10,18,24">
                         <Border Visibility="{Binding PageNoticeVisibility}"
-                                Background="{StaticResource DeepSeaGlassElevatedBrush}"
-                                BorderBrush="{StaticResource DeepSeaWarningBrush}"
+                                Background="#FFF4DF"
+                                BorderBrush="#F1C26B"
                                 BorderThickness="1"
-                                CornerRadius="12"
+                                CornerRadius="9"
                                 Padding="14,10"
                                 Margin="0,0,0,12">
                             <Grid>
@@ -322,332 +229,233 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{Binding PageNotice}"
-                                           Foreground="{StaticResource DeepSeaTextBrush}"
+                                           Foreground="#8B5A12"
                                            TextWrapping="Wrap"
                                            VerticalAlignment="Center" />
                                 <Button Grid.Column="1"
                                         Content="查看详情"
                                         Visibility="{Binding PageNoticeDetailVisibility}"
                                         Click="ViewNoticeDetail_Click"
-                                        Style="{StaticResource DeepSeaButton}"
                                         Margin="12,0,0,0"
                                         Padding="10,4"
                                         VerticalAlignment="Center" />
                             </Grid>
                         </Border>
 
-                        <Grid x:Name="PageTransitionHost">
-                            <Grid x:Name="MainDashboardGrid"
-                                  VerticalAlignment="Top"
-                                  TextElement.Foreground="{StaticResource DeepSeaTextBrush}"
-                                  Panel.ZIndex="0">
-                                <Grid.RenderTransform>
-                                    <TranslateTransform />
-                                </Grid.RenderTransform>
-                                <Grid.Resources>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-                                    </Style>
-                                </Grid.Resources>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="326" />
-                                    <ColumnDefinition Width="18" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Border Grid.Column="0"
-                                        Style="{StaticResource DeepSeaGlassCard}"
-                                        Padding="20"
-                                        VerticalAlignment="Top">
+                        <Grid x:Name="MainDashboardGrid" VerticalAlignment="Top">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="320" />
+                                <ColumnDefinition Width="18" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0"
+                                    Background="{StaticResource CardBrush}"
+                                    CornerRadius="13"
+                                    Padding="18"
+                                    VerticalAlignment="Top"
+                                    BorderBrush="{StaticResource LineBrush}"
+                                    BorderThickness="1">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
                                     <Grid>
-                                        <Border Height="1"
-                                                Margin="12,-20,12,0"
-                                                VerticalAlignment="Top"
-                                                Background="{StaticResource DeepSeaTopHighlightBrush}"
-                                                IsHitTestVisible="False" />
-                                        <Grid>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="*" />
-                                            </Grid.RowDefinitions>
-                                            <Grid>
-                                                <StackPanel>
-                                                    <TextBlock Text="当前实例"
-                                                               FontSize="18"
-                                                               FontWeight="SemiBold" />
-                                                    <TextBlock Text="运行上下文与快捷操作"
-                                                               Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                                               FontSize="11"
-                                                               Margin="0,3,0,0" />
-                                                </StackPanel>
-                                                <Border HorizontalAlignment="Right"
-                                                        VerticalAlignment="Top"
-                                                        Style="{StaticResource DeepSeaStatusBadge}">
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <Ellipse Width="8"
-                                                                 Height="8"
-                                                                 Fill="{Binding SelectedInstanceStatusBrush}"
-                                                                 Margin="0,0,6,0" />
-                                                        <TextBlock Text="{Binding SelectedInstanceStatus}"
-                                                                   Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                                                   FontSize="11" />
-                                                    </StackPanel>
-                                                </Border>
-                                            </Grid>
-                                            <Grid Grid.Row="1" Margin="0,24,0,0">
-                                                <StackPanel VerticalAlignment="Center"
-                                                            Visibility="{Binding NoInstancesVisibility}">
-                                                    <Border Width="62"
-                                                            Height="62"
-                                                            CornerRadius="20"
-                                                            HorizontalAlignment="Center"
-                                                            BorderBrush="{StaticResource DeepSeaGradientBorderBrush}"
-                                                            BorderThickness="1">
-                                                        <Border.Background>
-                                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                                <GradientStop Color="#3E45D5FF" Offset="0" />
-                                                                <GradientStop Color="#269A78FF" Offset="1" />
-                                                            </LinearGradientBrush>
-                                                        </Border.Background>
-                                                        <Path Width="22"
-                                                              Height="22"
-                                                              Data="M11,2 L11,20 M2,11 L20,11"
-                                                              Stroke="{StaticResource DeepSeaElectricCyanBrush}"
-                                                              StrokeThickness="2"
-                                                              StrokeStartLineCap="Round"
-                                                              Stretch="Uniform" />
-                                                    </Border>
-                                                    <TextBlock Text="尚未创建 DSh 版本"
-                                                               HorizontalAlignment="Center"
-                                                               FontSize="15"
-                                                               FontWeight="SemiBold"
-                                                               Margin="0,16,0,0" />
-                                                    <TextBlock Text="按引导准备运行环境，并创建拥有独立 DSH_HOME 的首个版本。"
-                                                               Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                                               TextWrapping="Wrap"
-                                                               TextAlignment="Center"
-                                                               FontSize="12"
-                                                               Margin="8,8,8,0" />
-                                                    <Button Click="StartInstance_Click"
-                                                            IsEnabled="{Binding CanStartInstance}"
-                                                            Style="{StaticResource DeepSeaPrimaryButton}"
-                                                            HorizontalAlignment="Center"
-                                                            Margin="0,18,0,0"
-                                                            Padding="18,9"
-                                                            Content="准备首个版本" />
-                                                </StackPanel>
-                                                <StackPanel Visibility="{Binding InstancesVisibility}"
-                                                            VerticalAlignment="Top">
-                                                    <TextBlock Text="{Binding SelectedInstanceName}"
-                                                               FontSize="24"
-                                                               FontWeight="SemiBold"
-                                                               TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Text="{Binding SelectedInstanceSummary}"
-                                                               Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                                               FontSize="12"
-                                                               TextWrapping="Wrap"
-                                                               Margin="0,8,0,0" />
-                                                    <TextBlock Text="{Binding InstanceEndpointText}"
-                                                               Foreground="{StaticResource DeepSeaElectricCyanBrush}"
-                                                               FontSize="12"
-                                                               TextWrapping="Wrap"
-                                                               Margin="0,8,0,0" />
-                                                    <WrapPanel Margin="0,24,0,0">
-                                                        <Button Content="重命名"
-                                                                Click="RenameSelectedInstance_Click"
-                                                                Style="{StaticResource DeepSeaTertiaryButton}"
-                                                                Height="40"
-                                                                Padding="15,0"
-                                                                Margin="0,0,8,8" />
-                                                        <Button Content="实例设置"
-                                                                Click="VersionSettings_Click"
-                                                                Style="{StaticResource DeepSeaTertiaryButton}"
-                                                                Height="40"
-                                                                Padding="15,0"
-                                                                Margin="0,0,8,8" />
-                                                        <Button Click="StartInstance_Click"
-                                                                IsEnabled="{Binding CanStartInstance}"
-                                                                Style="{StaticResource DeepSeaPrimaryButton}"
-                                                                Height="40"
-                                                                Padding="15,0"
-                                                                Margin="0,0,8,8">
-                                                            <StackPanel Orientation="Horizontal">
-                                                                <Path Width="11"
-                                                                      Height="11"
-                                                                      Data="M1,0 L10,5.5 L1,11 Z"
-                                                                      Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Button}}}"
-                                                                      Stretch="Uniform"
-                                                                      Margin="0,0,7,0" />
-                                                                <TextBlock Text="{Binding StartInstanceButtonText}" />
-                                                            </StackPanel>
-                                                        </Button>
-                                                        <Button Content="Launcher 启动"
-                                                                Click="StartLauncherInstance_Click"
-                                                                Visibility="{Binding LauncherStartVisibility}"
-                                                                IsEnabled="{Binding CanStartInstance}"
-                                                                Style="{StaticResource DeepSeaButton}"
-                                                                Height="40"
-                                                                Padding="15,0"
-                                                                Margin="0,0,8,8" />
-                                                        <Button Content="停止"
-                                                                Click="StopInstance_Click"
-                                                                IsEnabled="{Binding CanStopInstance}"
-                                                                Style="{StaticResource DeepSeaButton}"
-                                                                Height="40"
-                                                                Padding="15,0"
-                                                                Margin="0,0,8,8" />
-                                                        <Button Content="重启"
-                                                                Click="RestartInstance_Click"
-                                                                IsEnabled="{Binding CanRestartInstance}"
-                                                                Style="{StaticResource DeepSeaButton}"
-                                                                Height="40"
-                                                                Padding="15,0"
-                                                                Margin="0,0,8,8" />
-                                                        <Button Content="打开窗口"
-                                                                Click="OpenDesktopShell_Click"
-                                                                Visibility="{Binding DesktopShellVisibility}"
-                                                                Style="{StaticResource DeepSeaButton}"
-                                                                Height="40"
-                                                                Padding="15,0"
-                                                                Margin="0,0,8,8"
-                                                                ToolTip="使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口" />
-                                                    </WrapPanel>
-                                                </StackPanel>
-                                            </Grid>
-                                        </Grid>
+                                        <TextBlock Text="实例状态" FontSize="18" FontWeight="SemiBold" />
+                                        <Border HorizontalAlignment="Right" Background="#F1F5F9" CornerRadius="10" Padding="9,4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Ellipse Width="8" Height="8" Fill="{Binding SelectedInstanceStatusBrush}" Margin="0,0,6,0" />
+                                                <TextBlock Text="{Binding SelectedInstanceStatus}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                                            </StackPanel>
+                                        </Border>
                                     </Grid>
-                                </Border>
+                                    <Grid Grid.Row="1" Margin="0,22,0,0">
+                                        <StackPanel VerticalAlignment="Center" Visibility="{Binding NoInstancesVisibility}">
+                                            <Border Width="58" Height="58" Background="#EAF3FC" CornerRadius="18" HorizontalAlignment="Center">
+                                                <TextBlock Text="＋" Foreground="{StaticResource BlueBrush}" FontSize="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="尚未创建 DSh 版本"
+                                                       HorizontalAlignment="Center"
+                                                       FontSize="15"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,16,0,0" />
+                                            <TextBlock Text="点击下方“准备首个版本”，按引导准备运行环境并创建独立 DSH_HOME。"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       TextWrapping="Wrap"
+                                                       TextAlignment="Center"
+                                                       FontSize="12"
+                                                       Margin="8,8,8,0" />
+                                            <Button Click="StartInstance_Click"
+                                                    IsEnabled="{Binding CanStartInstance}"
+                                                    Style="{StaticResource PrimaryButton}"
+                                                    HorizontalAlignment="Center"
+                                                    Margin="0,18,0,0"
+                                                    Padding="18,9">
+                                                <TextBlock Text="准备首个版本" />
+                                            </Button>
+                                        </StackPanel>
+                                        <StackPanel Visibility="{Binding InstancesVisibility}" VerticalAlignment="Top">
+                                            <TextBlock Text="{Binding SelectedInstanceName}"
+                                                       FontSize="24"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding SelectedInstanceSummary}"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding InstanceEndpointText}"
+                                                       Foreground="{StaticResource BlueBrush}"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,8,0,0" />
+                                            <WrapPanel Margin="0,24,0,0">
+                                                <Button Content="重命名"
+                                                        Click="RenameSelectedInstance_Click"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Content="实例设置"
+                                                        Click="VersionSettings_Click"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Click="StartInstance_Click"
+                                                        IsEnabled="{Binding CanStartInstance}"
+                                                        Style="{StaticResource PrimaryButton}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="▶" Margin="0,0,6,0" />
+                                                        <TextBlock Text="{Binding StartInstanceButtonText}" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button Content="Launcher 启动"
+                                                        Click="StartLauncherInstance_Click"
+                                                        Visibility="{Binding LauncherStartVisibility}"
+                                                        IsEnabled="{Binding CanStartInstance}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Content="停止"
+                                                        Click="StopInstance_Click"
+                                                        IsEnabled="{Binding CanStopInstance}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Content="重启"
+                                                        Click="RestartInstance_Click"
+                                                        IsEnabled="{Binding CanRestartInstance}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
+                                                <Button Content="打开窗口"
+                                                        Click="OpenDesktopShell_Click"
+                                                        Visibility="{Binding DesktopShellVisibility}"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8"
+                                                        ToolTip="使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口" />
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </Grid>
+                            </Border>
 
-                                <Border x:Name="InstanceWorkspacePanel"
-                                        Grid.Column="2"
-                                        Height="520"
-                                        VerticalAlignment="Top"
-                                        Style="{StaticResource DeepSeaGlassCard}"
-                                        Padding="20">
+                            <Border x:Name="InstanceWorkspacePanel"
+                                    Grid.Column="2"
+                                    Height="520"
+                                    VerticalAlignment="Top"
+                                    Background="{StaticResource CardBrush}"
+                                    CornerRadius="13"
+                                    Padding="18"
+                                    BorderBrush="{StaticResource LineBrush}"
+                                    BorderThickness="1">
                                     <Grid>
-                                        <Border Height="1"
-                                                Margin="12,-20,12,0"
-                                                VerticalAlignment="Top"
-                                                Background="{StaticResource DeepSeaTopHighlightBrush}"
-                                                IsHitTestVisible="False" />
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
                                         <Grid>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="*" />
-                                            </Grid.RowDefinitions>
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel>
-                                                    <TextBlock Text="全部实例"
-                                                               FontSize="18"
-                                                               FontWeight="SemiBold" />
-                                                    <TextBlock Text="{Binding InstanceCountText}"
-                                                               Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                                               FontSize="11"
-                                                               Margin="0,3,0,0" />
-                                                </StackPanel>
-                                                <Button Grid.Column="1"
-                                                        Content="版本控制"
-                                                        Click="VersionControl_Click"
-                                                        Style="{StaticResource DeepSeaTertiaryButton}"
-                                                        Padding="12,6"
-                                                        VerticalAlignment="Top" />
-                                            </Grid>
-                                            <ListBox Grid.Row="1"
-                                                     x:Name="RunningInstancesList"
-                                                     ItemsSource="{Binding Instances}"
-                                                     SelectedItem="{Binding SelectedInstance, Mode=TwoWay}"
-                                                     MouseDoubleClick="RunningInstances_MouseDoubleClick"
-                                                     Visibility="{Binding InstancesVisibility}"
-                                                     BorderThickness="0"
-                                                     Background="Transparent"
-                                                     Margin="0,18,0,0"
-                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                                     ScrollViewer.CanContentScroll="True"
-                                                     VirtualizingPanel.IsVirtualizing="True"
-                                                     VirtualizingPanel.VirtualizationMode="Recycling"
-                                                     ItemContainerStyle="{StaticResource DeepSeaInstanceItem}">
-                                                <ListBox.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <Grid Margin="14,11">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="启动实例" FontSize="18" FontWeight="SemiBold" />
+                                                <TextBlock Text="{Binding InstanceCountText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1"
+                                                    Content="版本控制"
+                                                    Click="VersionControl_Click"
+                                                    Padding="11,6"
+                                                    VerticalAlignment="Top" />
+                                        </Grid>
+                                        <ListBox Grid.Row="1"
+                                                 x:Name="RunningInstancesList"
+                                                 ItemsSource="{Binding Instances}"
+                                                 SelectedItem="{Binding SelectedInstance, Mode=TwoWay}"
+                                                 MouseDoubleClick="RunningInstances_MouseDoubleClick"
+                                                 Visibility="{Binding InstancesVisibility}"
+                                                 BorderThickness="0"
+                                                 Background="Transparent"
+                                                 Margin="0,18,0,0"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 ScrollViewer.CanContentScroll="True"
+                                                 VirtualizingPanel.IsVirtualizing="True"
+                                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="Padding" Value="0" />
+                                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#F5F9FD" CornerRadius="9" Padding="12">
+                                                        <Grid>
                                                             <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="24" />
+                                                                <ColumnDefinition Width="22" />
                                                                 <ColumnDefinition Width="*" />
-                                                                <ColumnDefinition Width="Auto" />
                                                             </Grid.ColumnDefinitions>
-                                                            <Ellipse Width="9"
-                                                                     Height="9"
-                                                                     VerticalAlignment="Top"
-                                                                     Margin="0,5,0,0">
+                                                            <Ellipse Width="9" Height="9" VerticalAlignment="Top" Margin="0,5,0,0">
                                                                 <Ellipse.Style>
                                                                     <Style TargetType="Ellipse">
-                                                                        <Setter Property="Fill" Value="{StaticResource DeepSeaMutedTextBrush}" />
+                                                                        <Setter Property="Fill" Value="#96A3B5" />
                                                                         <Style.Triggers>
                                                                             <DataTrigger Binding="{Binding RuntimeStatus}" Value="Running">
-                                                                                <Setter Property="Fill" Value="{StaticResource DeepSeaSuccessBrush}" />
+                                                                                <Setter Property="Fill" Value="#2EA66B" />
                                                                             </DataTrigger>
                                                                             <DataTrigger Binding="{Binding RuntimeStatus}" Value="Error">
-                                                                                <Setter Property="Fill" Value="{StaticResource DeepSeaErrorBrush}" />
+                                                                                <Setter Property="Fill" Value="#D94A4A" />
                                                                             </DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
                                                                 </Ellipse.Style>
                                                             </Ellipse>
                                                             <StackPanel Grid.Column="1">
-                                                                <TextBlock Text="{Binding Name}"
-                                                                           FontWeight="SemiBold"
-                                                                           TextTrimming="CharacterEllipsis" />
-                                                                <TextBlock Text="{Binding DshVersionText}"
-                                                                           Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                                                           FontSize="11"
-                                                                           Margin="0,3,0,0" />
-                                                                <TextBlock Text="{Binding ResourceSummaryText}"
-                                                                           Foreground="{StaticResource DeepSeaMutedTextBrush}"
-                                                                           FontSize="11" />
+                                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Text="{Binding DshVersionText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
+                                                                <TextBlock Text="{Binding ResourceSummaryText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                                                                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource BlueBrush}" FontSize="11" />
                                                             </StackPanel>
-                                                            <Border Grid.Column="2"
-                                                                    Style="{StaticResource DeepSeaStatusBadge}"
-                                                                    Margin="10,0,0,0"
-                                                                    VerticalAlignment="Top">
-                                                                <TextBlock Text="{Binding StatusText}"
-                                                                           Foreground="{StaticResource DeepSeaElectricCyanBrush}"
-                                                                           FontSize="10" />
-                                                            </Border>
                                                         </Grid>
-                                                    </DataTemplate>
-                                                </ListBox.ItemTemplate>
-                                            </ListBox>
-                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
                                     </Grid>
-                                </Border>
-                            </Grid>
-                            <ContentControl x:Name="EmbeddedPageHost"
-                                            Visibility="Collapsed"
-                                            Margin="0"
-                                            MinHeight="620"
-                                            Panel.ZIndex="1"
-                                            HorizontalContentAlignment="Stretch"
-                                            VerticalContentAlignment="Stretch">
-                                <ContentControl.RenderTransform>
-                                    <TranslateTransform />
-                                </ContentControl.RenderTransform>
-                            </ContentControl>
-                            <ContentControl x:Name="TransitionOutgoingHost"
-                                            Visibility="Collapsed"
-                                            Margin="0"
-                                            MinHeight="620"
-                                            Panel.ZIndex="10"
-                                            IsHitTestVisible="False"
-                                            HorizontalContentAlignment="Stretch"
-                                            VerticalContentAlignment="Stretch">
-                                <ContentControl.RenderTransform>
-                                    <TranslateTransform />
-                                </ContentControl.RenderTransform>
-                            </ContentControl>
+                            </Border>
                         </Grid>
+                        <ContentControl x:Name="EmbeddedPageHost"
+                                        Visibility="Collapsed"
+                                        Margin="0"
+                                        MinHeight="620"
+                                        HorizontalContentAlignment="Stretch"
+                                        VerticalContentAlignment="Stretch" />
                     </StackPanel>
                 </ScrollViewer>
             </Grid>

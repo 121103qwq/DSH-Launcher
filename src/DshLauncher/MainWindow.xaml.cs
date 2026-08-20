@@ -8,14 +8,12 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Data;
 using System.Windows.Threading;
 using System.Text.RegularExpressions;
 using WpfBrush = System.Windows.Media.Brush;
 using WpfBrushes = System.Windows.Media.Brushes;
 using WpfColor = System.Windows.Media.Color;
-using SystemColors = System.Windows.SystemColors;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
@@ -83,15 +81,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string _currentSection = "启动";
     private Action? _runtimePanelUpdateStatus;
     private HwndSource? _windowSource;
-    private readonly PageTransitionCoordinator _pageTransitions = new();
-    private readonly DeepSeaAccessibilityResources _accessibilityResources;
-    private readonly WpfBrush _standardNavigationSelectionBackground;
-    private readonly WpfBrush _standardNavigationSelectionBorderBrush;
-    private bool _isDashboardPresented = true;
-    private string _presentedPageKey = "启动";
-    private string? _presentedInstanceId;
-    private MotionDecision _motionDecision;
-    private bool _isPageTransitionInProgress;
 
     public MainWindow()
     {
@@ -123,12 +112,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 用“无法优雅关闭”保证 Launcher 重开后不会出现第二次 Node MSI 与残留安装重叠。
         _nodeInstaller.LingeringInstallerCompleted += OnLingeringInstallerCompleted;
         InitializeComponent();
-        _accessibilityResources = new DeepSeaAccessibilityResources(System.Windows.Application.Current.Resources);
-        _standardNavigationSelectionBackground = NavigationSelectionPill.Background;
-        _standardNavigationSelectionBorderBrush = NavigationSelectionPill.BorderBrush;
-        _motionDecision = MotionPolicy.Current();
-        ApplyAccessibilityPresentation();
-        SystemParameters.StaticPropertyChanged += SystemParameters_StaticPropertyChanged;
         WindowSizeHelper.FitInitialSize(this);
         DataContext = this;
     }
@@ -876,11 +859,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void SwitchContextInstance(ManagerInstance target, string section)
     {
-        if (_shutdownCleanupStarted)
-        {
-            return;
-        }
-
         SelectedInstance = target;
         MarkInstanceUsed(target.Id);
         SwitchSection(section);
@@ -888,24 +866,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void Navigation_Click(object sender, RoutedEventArgs e)
     {
-        if (_shutdownCleanupStarted)
-        {
-            return;
-        }
-
         if (sender is not FrameworkElement element || element.Tag is not string section)
-        {
-            return;
-        }
-
-        if (string.Equals(section, _currentSection, StringComparison.Ordinal)
-            && IsSamePagePresentation(
-                _presentedPageKey,
-                _presentedInstanceId,
-                _isDashboardPresented,
-                section,
-                GetPresentationInstanceId(section),
-                section == "启动"))
         {
             return;
         }
@@ -990,83 +951,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void SwitchSection(string section)
     {
-        if (_shutdownCleanupStarted)
-        {
-            return;
-        }
-
         if (section == "实例")
         {
             section = "启动";
-        }
-
-        object? page = null;
-        var showDashboard = section == "启动";
-        var showMissingInstanceNotice = false;
-        var pageTitle = section;
-        var pageSubtitle = section == "启动"
-            ? "启动实例并查看正在运行的 DeepSeek Harness"
-            : "DSH Launcher Core 设置与诊断";
-
-        try
-        {
-            if (section is "扩展" or "Agent" or "对话")
-            {
-                if (SelectedInstance is not { } instance)
-                {
-                    showDashboard = true;
-                    showMissingInstanceNotice = true;
-                    pageSubtitle = "请先在“启动”工作区注册并选择一个 DSh 实例";
-                }
-                else
-                {
-                    pageSubtitle = section switch
-                    {
-                        "扩展" => "管理当前实例的 Plugin 与 MCP",
-                        "Agent" => "管理当前实例的 Skill、Agent Preset 与 Workflow",
-                        _ => "管理当前实例的 session.jsonl / .zstd 对话文件"
-                    };
-                    page = section switch
-                    {
-                        "扩展" => new ExtensionWindow(
-                            instance,
-                            _extensionService,
-                            () => _nodeRuntime,
-                            marketplaceService: _marketplaceService,
-                            pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode,
-                            stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync,
-                            handoffPluginFailure: SendPluginFailureToCurrentInstanceAsync,
-                            versionSettingsService: _versionSettingsService,
-                            versionSnapshotService: _versionSnapshotService),
-                        "Agent" => new ExtensionWindow(
-                            instance,
-                            _extensionService,
-                            () => _nodeRuntime,
-                            agentOnly: true,
-                            marketplaceService: _marketplaceService,
-                            skillMarketService: _skillMarketService,
-                            versionSettingsService: _versionSettingsService,
-                            versionSnapshotService: _versionSnapshotService),
-                        _ => new ConversationWindow(
-                            instance,
-                            _conversationService,
-                            entry => OpenConversationAsync(instance, entry),
-                            () => SynchronizeConversationsAsync(instance),
-                            relativePath => PropagateConversationDeletionAsync(instance, relativePath),
-                            instances: Instances.ToArray(),
-                            selectInstance: candidate => SwitchContextInstance(candidate, section))
-                    };
-                }
-            }
-            else if (!showDashboard)
-            {
-                page = CreateSettingsPage();
-            }
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"打开“{section}”失败：{ex.Message}");
-            return;
         }
 
         _currentSection = section;
@@ -1079,21 +966,70 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ? Visibility.Visible
             : Visibility.Collapsed;
         PageNoticeVisibility = Visibility.Collapsed;
-        PageTitle = pageTitle;
-        PageSubtitle = pageSubtitle;
 
-        if (showDashboard)
+        if (section == "启动")
         {
-            ShowMainDashboard(section, GetPresentationInstanceId(section));
+            PageTitle = "启动";
+            PageSubtitle = "启动实例并查看正在运行的 DeepSeek Harness";
+            ShowMainDashboard();
+        }
+        else if (section is "扩展" or "Agent" or "对话")
+        {
+            if (SelectedInstance is not { } instance)
+            {
+                PageTitle = section;
+                PageSubtitle = "请先在“启动”工作区注册并选择一个 DSh 实例";
+                ShowMainDashboard();
+                ShowNotice($"请先注册并选择一个 DSh 实例，再打开“{section}”。");
+            }
+            else
+            {
+                PageTitle = section;
+                PageSubtitle = section switch
+                {
+                    "扩展" => "管理当前实例的 Plugin 与 MCP",
+                    "Agent" => "管理当前实例的 Skill、Agent Preset 与 Workflow",
+                    _ => "管理当前实例的 session.jsonl / .zstd 对话文件"
+                };
+
+                object page = section switch
+                {
+                    "扩展" => new ExtensionWindow(
+                        instance,
+                        _extensionService,
+                        () => _nodeRuntime,
+                        marketplaceService: _marketplaceService,
+                        pluginInstallMode: () => _versionSettingsService.ReadLauncherSettings().PluginInstallMode,
+                        stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync,
+                        handoffPluginFailure: SendPluginFailureToCurrentInstanceAsync,
+                        versionSettingsService: _versionSettingsService,
+                        versionSnapshotService: _versionSnapshotService),
+                    "Agent" => new ExtensionWindow(
+                        instance,
+                        _extensionService,
+                        () => _nodeRuntime,
+                        agentOnly: true,
+                        marketplaceService: _marketplaceService,
+                        skillMarketService: _skillMarketService,
+                        versionSettingsService: _versionSettingsService,
+                        versionSnapshotService: _versionSnapshotService),
+                    _ => new ConversationWindow(
+                        instance,
+                        _conversationService,
+                        entry => OpenConversationAsync(instance, entry),
+                        () => SynchronizeConversationsAsync(instance),
+                        relativePath => PropagateConversationDeletionAsync(instance, relativePath),
+                        instances: Instances.ToArray(),
+                        selectInstance: candidate => SwitchContextInstance(candidate, section))
+                };
+                ShowEmbeddedPage(page);
+            }
         }
         else
         {
-            ShowEmbeddedPage(page!, section, GetPresentationInstanceId(section));
-        }
-
-        if (showMissingInstanceNotice)
-        {
-            ShowNotice($"请先注册并选择一个 DSh 实例，再打开“{section}”。");
+            PageTitle = section;
+            PageSubtitle = "DSH Launcher Core 设置与诊断";
+            ShowEmbeddedPage(CreateSettingsPage());
         }
 
         OnPropertyChanged(nameof(PageTitle));
@@ -1101,292 +1037,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(PageNoticeVisibility));
     }
 
-    private string? GetPresentationInstanceId(string pageKey) =>
-        pageKey is "扩展" or "Agent" or "对话" or "版本设置"
-            ? SelectedInstance?.Id
-            : null;
-
-    private void ShowMainDashboard(string pageKey = "启动", string? instanceId = null)
+    private void ShowMainDashboard()
     {
-        BeginPageTransition(page: null, pageKey: pageKey, instanceId: instanceId);
+        EmbeddedPageHost.Content = null;
+        EmbeddedPageHost.Visibility = Visibility.Collapsed;
+        MainDashboardGrid.Visibility = Visibility.Visible;
     }
 
-    private void ShowEmbeddedPage(object page, string pageKey, string? instanceId = null)
+    private void ShowEmbeddedPage(object page)
     {
-        BeginPageTransition(page, pageKey, instanceId);
+        MainDashboardGrid.Visibility = Visibility.Collapsed;
+        EmbeddedPageHost.Content = page;
+        EmbeddedPageHost.Visibility = Visibility.Visible;
     }
-
-    private void BeginPageTransition(object? page, string pageKey, string? instanceId)
-    {
-        var targetDashboard = page is null;
-        if (IsSamePagePresentation(
-            _presentedPageKey,
-            _presentedInstanceId,
-            _isDashboardPresented,
-            pageKey,
-            instanceId,
-            targetDashboard))
-        {
-            return;
-        }
-
-        var interrupted = _isPageTransitionInProgress;
-        var dashboardVisual = ReadElementVisualState(MainDashboardGrid);
-        var embeddedVisual = ReadElementVisualState(EmbeddedPageHost);
-        var request = _pageTransitions.Begin(_windowCancellation.Token);
-        NormalizePagePresentation();
-
-        var wasDashboard = _isDashboardPresented;
-        if (targetDashboard && wasDashboard)
-        {
-            _presentedPageKey = pageKey;
-            _presentedInstanceId = instanceId;
-            _isPageTransitionInProgress = false;
-            return;
-        }
-
-        FrameworkElement? outgoing = null;
-        if (wasDashboard && !targetDashboard)
-        {
-            outgoing = MainDashboardGrid;
-        }
-        else if (!wasDashboard)
-        {
-            // Embedded business pages are removed immediately instead of being
-            // re-parented for animation. This preserves their existing Unloaded
-            // cleanup semantics and prevents duplicate Loaded refreshes.
-            EmbeddedPageHost.Content = null;
-            EmbeddedPageHost.Visibility = Visibility.Collapsed;
-        }
-
-        FrameworkElement target;
-        if (targetDashboard)
-        {
-            MainDashboardGrid.Visibility = Visibility.Visible;
-            target = MainDashboardGrid;
-        }
-        else
-        {
-            if (!wasDashboard)
-            {
-                MainDashboardGrid.Visibility = Visibility.Collapsed;
-            }
-
-            EmbeddedPageHost.Content = page;
-            EmbeddedPageHost.Visibility = Visibility.Visible;
-            target = EmbeddedPageHost;
-        }
-
-        _isDashboardPresented = targetDashboard;
-        _presentedPageKey = pageKey;
-        _presentedInstanceId = instanceId;
-        TransitionOutgoingHost.Content = null;
-        TransitionOutgoingHost.Visibility = Visibility.Collapsed;
-
-        if (_motionDecision.ReducedMotion || _motionDecision.IsImmediate)
-        {
-            CompletePageTransition(target, targetDashboard, outgoing);
-            return;
-        }
-
-        var incomingDuration = GetMotionDuration(
-            "DeepSeaMotionDurationMedium",
-            _motionDecision.Duration);
-        var outgoingDuration = GetMotionDuration(
-            "DeepSeaMotionDurationFast",
-            TimeSpan.FromMilliseconds(120));
-        var incomingVisual = ReferenceEquals(target, MainDashboardGrid)
-            ? dashboardVisual
-            : embeddedVisual;
-        var inheritIncomingVisual = interrupted && incomingVisual.WasVisible;
-        StartElementAnimation(
-            target,
-            inheritIncomingVisual ? incomingVisual.Opacity : 0,
-            1,
-            inheritIncomingVisual ? incomingVisual.TranslateY : 7,
-            0,
-            incomingDuration,
-            EasingMode.EaseOut);
-        if (outgoing is not null && !ReferenceEquals(outgoing, target))
-        {
-            var outgoingVisual = ReferenceEquals(outgoing, MainDashboardGrid)
-                ? dashboardVisual
-                : embeddedVisual;
-            var inheritOutgoingVisual = interrupted && outgoingVisual.WasVisible;
-            StartElementAnimation(
-                outgoing,
-                inheritOutgoingVisual ? outgoingVisual.Opacity : 1,
-                0,
-                inheritOutgoingVisual ? outgoingVisual.TranslateY : 0,
-                -5,
-                outgoingDuration,
-                EasingMode.EaseIn);
-        }
-
-        _isPageTransitionInProgress = true;
-        _ = CompletePageTransitionAsync(
-            request,
-            target,
-            targetDashboard,
-            outgoing,
-            incomingDuration >= outgoingDuration ? incomingDuration : outgoingDuration);
-    }
-
-    private async Task CompletePageTransitionAsync(
-        PageTransitionRequest request,
-        FrameworkElement target,
-        bool targetDashboard,
-        FrameworkElement? outgoing,
-        TimeSpan duration)
-    {
-        try
-        {
-            await Task.Delay(duration, request.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        if (!_pageTransitions.IsCurrent(request))
-        {
-            return;
-        }
-
-        CompletePageTransition(target, targetDashboard, outgoing);
-    }
-
-    private void CompletePageTransition(
-        FrameworkElement target,
-        bool targetDashboard,
-        FrameworkElement? outgoing)
-    {
-        _isPageTransitionInProgress = false;
-        StopElementAnimation(target, makeVisible: true);
-        if (outgoing is not null && !ReferenceEquals(outgoing, target))
-        {
-            StopElementAnimation(outgoing, makeVisible: false);
-        }
-
-        if (targetDashboard)
-        {
-            MainDashboardGrid.Visibility = Visibility.Visible;
-            EmbeddedPageHost.Content = null;
-            EmbeddedPageHost.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            MainDashboardGrid.Visibility = Visibility.Collapsed;
-            EmbeddedPageHost.Visibility = Visibility.Visible;
-        }
-
-        TransitionOutgoingHost.Content = null;
-        TransitionOutgoingHost.Visibility = Visibility.Collapsed;
-    }
-
-    private void NormalizePagePresentation()
-    {
-        StopElementAnimation(MainDashboardGrid, _isDashboardPresented);
-        StopElementAnimation(EmbeddedPageHost, !_isDashboardPresented);
-        TransitionOutgoingHost.BeginAnimation(OpacityProperty, null);
-        if (TransitionOutgoingHost.RenderTransform is TranslateTransform outgoingTransform)
-        {
-            outgoingTransform.BeginAnimation(TranslateTransform.YProperty, null);
-            outgoingTransform.Y = 0;
-        }
-
-        TransitionOutgoingHost.Content = null;
-        TransitionOutgoingHost.Visibility = Visibility.Collapsed;
-        if (_isDashboardPresented)
-        {
-            EmbeddedPageHost.Content = null;
-        }
-    }
-
-    private static void StartElementAnimation(
-        FrameworkElement element,
-        double opacityFrom,
-        double opacityTo,
-        double translateFrom,
-        double translateTo,
-        TimeSpan duration,
-        EasingMode easingMode)
-    {
-        if (element.RenderTransform is not TranslateTransform transform)
-        {
-            transform = new TranslateTransform();
-            element.RenderTransform = transform;
-        }
-
-        var easing = new CubicEase { EasingMode = easingMode };
-        element.Opacity = opacityFrom;
-        transform.Y = translateFrom;
-        element.BeginAnimation(
-            OpacityProperty,
-            new DoubleAnimation(opacityFrom, opacityTo, new Duration(duration))
-            {
-                EasingFunction = easing,
-                FillBehavior = FillBehavior.Stop
-            },
-            HandoffBehavior.SnapshotAndReplace);
-        transform.BeginAnimation(
-            TranslateTransform.YProperty,
-            new DoubleAnimation(translateFrom, translateTo, new Duration(duration))
-            {
-                EasingFunction = easing,
-                FillBehavior = FillBehavior.Stop
-            },
-            HandoffBehavior.SnapshotAndReplace);
-        element.Opacity = opacityTo;
-        transform.Y = translateTo;
-    }
-
-    private static TransitionVisualState ReadElementVisualState(FrameworkElement element)
-    {
-        var translateY = element.RenderTransform is TranslateTransform transform
-            ? transform.Y
-            : 0;
-        return new(
-            Opacity: element.Opacity,
-            TranslateY: translateY,
-            WasVisible: element.Visibility == Visibility.Visible);
-    }
-
-    private static void StopElementAnimation(FrameworkElement element, bool makeVisible)
-    {
-        element.BeginAnimation(OpacityProperty, null);
-        element.Opacity = 1;
-        if (element.RenderTransform is TranslateTransform transform)
-        {
-            transform.BeginAnimation(TranslateTransform.YProperty, null);
-            transform.Y = 0;
-        }
-
-        element.Visibility = makeVisible ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private TimeSpan GetMotionDuration(string resourceKey, TimeSpan fallback)
-    {
-        return TryFindResource(resourceKey) is Duration { HasTimeSpan: true } duration
-            ? duration.TimeSpan
-            : fallback;
-    }
-
-    private readonly record struct TransitionVisualState(
-        double Opacity,
-        double TranslateY,
-        bool WasVisible);
-
-    internal static bool IsSamePagePresentation(
-        string currentPageKey,
-        string? currentInstanceId,
-        bool currentIsDashboard,
-        string targetPageKey,
-        string? targetInstanceId,
-        bool targetIsDashboard) =>
-        string.Equals(currentPageKey, targetPageKey, StringComparison.Ordinal)
-        && string.Equals(currentInstanceId, targetInstanceId, StringComparison.Ordinal)
-        && currentIsDashboard == targetIsDashboard;
 
     private void VersionControl_Click(object sender, RoutedEventArgs e) => ShowVersionControl();
 
@@ -1394,98 +1057,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ShowVersionControl()
     {
-        VersionControlWindow page;
-        try
-        {
-            page = new VersionControlWindow(
-                Instances,
-                SelectedInstance,
-                _versionPackageService,
-                GetVersionTemplate,
-                AddCreatedVersion,
-                RemoveDeletedVersion,
-                version =>
-                {
-                    SelectedInstance = version;
-                    MarkInstanceUsed(version.Id);
-                },
-                ScanAndRegisterRuntimeDirectoryAsync,
-                _versionHealthService,
-                _versionSnapshotService,
-                () => _nodeRuntime,
-                () => _dshRuntime,
-                id => _instanceRunner.IsRunning(id),
-                updated =>
-                {
-                    UpdateInstance(updated);
-                    return Instances.First(instance =>
-                        string.Equals(instance.Id, updated.Id, StringComparison.Ordinal));
-                },
-                () =>
-                {
-                    ApplySelectedVersionSettings(SelectedInstance);
-                },
-                _windowCancellation.Token);
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"打开“版本控制”失败：{ex.Message}");
-            return;
-        }
-
         VersionSettingsBackButton.Visibility = Visibility.Collapsed;
         StartupBrandText.Visibility = Visibility.Collapsed;
         ContextInstanceSelector.Visibility = Visibility.Collapsed;
         PageTitle = "版本控制";
         PageSubtitle = "按版本选择、复制版本或导入整合包；每个版本使用独立 DSH_HOME";
-        ShowEmbeddedPage(page, "版本控制");
+        ShowEmbeddedPage(new VersionControlWindow(
+            Instances,
+            SelectedInstance,
+            _versionPackageService,
+            GetVersionTemplate,
+            AddCreatedVersion,
+            RemoveDeletedVersion,
+            version =>
+            {
+                SelectedInstance = version;
+                MarkInstanceUsed(version.Id);
+            },
+            ScanAndRegisterRuntimeDirectoryAsync,
+            _versionHealthService,
+            _versionSnapshotService,
+            () => _nodeRuntime,
+            () => _dshRuntime,
+            id => _instanceRunner.IsRunning(id),
+            updated =>
+            {
+                UpdateInstance(updated);
+                return Instances.First(instance =>
+                    string.Equals(instance.Id, updated.Id, StringComparison.Ordinal));
+            },
+            () =>
+            {
+                ApplySelectedVersionSettings(SelectedInstance);
+            },
+            _windowCancellation.Token));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
 
     public void ShowVersionSettings(bool openPluginPage = false)
     {
-        VersionSettingsWindow page;
-        try
-        {
-            page = new VersionSettingsWindow(
-                SelectedInstance,
-                Instances,
-                _versionSettingsService,
-                _extensionService,
-                () => _nodeRuntime,
-                _versionPackageService,
-                _versionSnapshotService,
-                (current, name) =>
-                {
-                    var updated = current with { Name = name };
-                    UpdateInstance(updated);
-                    var saved = Instances.First(instance =>
-                        string.Equals(instance.Id, current.Id, StringComparison.Ordinal));
-                    PageTitle = $"版本设置 - {saved.Name}";
-                    PageSubtitle = $"当前实例：{saved.Name} · 管理个性化、配置、插件和分享导出";
-                    OnPropertyChanged(nameof(PageTitle));
-                    OnPropertyChanged(nameof(PageSubtitle));
-                    return saved;
-                },
-                () =>
-                {
-                    ApplySelectedVersionSettings(SelectedInstance);
-                    _ = RefreshNodeAsync();
-                    if (SelectedInstance is { } current)
-                    {
-                        _ = SynchronizeModelProvidersAsync(current, notifyNoConfiguration: true);
-                        _ = SynchronizeConversationsAsync(current);
-                    }
-                },
-                openPluginPage);
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"打开“版本设置”失败：{ex.Message}");
-            return;
-        }
-
         _versionSettingsReturnSection = _currentSection is "扩展" or "Agent"
             ? _currentSection
             : "启动";
@@ -1501,7 +1112,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PageSubtitle = SelectedInstance is { } selected
             ? $"当前实例：{selected.Name} · 管理个性化、配置、插件和分享导出"
             : "按 PCL2 的版本设置方式管理个性化、配置、插件和分享导出";
-        ShowEmbeddedPage(page, "版本设置", SelectedInstance?.Id);
+        ShowEmbeddedPage(new VersionSettingsWindow(
+            SelectedInstance,
+            Instances,
+            _versionSettingsService,
+            _extensionService,
+            () => _nodeRuntime,
+            _versionPackageService,
+            _versionSnapshotService,
+            (current, name) =>
+            {
+                var updated = current with { Name = name };
+                UpdateInstance(updated);
+                var saved = Instances.First(instance =>
+                    string.Equals(instance.Id, current.Id, StringComparison.Ordinal));
+                PageTitle = $"版本设置 - {saved.Name}";
+                PageSubtitle = $"当前实例：{saved.Name} · 管理个性化、配置、插件和分享导出";
+                OnPropertyChanged(nameof(PageTitle));
+                OnPropertyChanged(nameof(PageSubtitle));
+                return saved;
+            },
+            () =>
+            {
+                ApplySelectedVersionSettings(SelectedInstance);
+                _ = RefreshNodeAsync();
+                if (SelectedInstance is { } current)
+                {
+                    _ = SynchronizeModelProvidersAsync(current, notifyNoConfiguration: true);
+                    _ = SynchronizeConversationsAsync(current);
+                }
+            },
+            openPluginPage));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -2883,59 +2524,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         foreach (var button in buttons)
         {
             button.Background = WpfBrushes.Transparent;
-            button.Foreground = SystemParameters.HighContrast
-                ? SystemColors.WindowTextBrush
-                : (WpfBrush)FindResource("DeepSeaMutedTextBrush");
+            button.Foreground = WpfBrushes.White;
         }
 
         var selected = buttons.FirstOrDefault(button => string.Equals(button.Tag as string, section, StringComparison.Ordinal));
         if (selected is not null)
         {
-            selected.Foreground = SystemParameters.HighContrast
-                ? SystemColors.HighlightTextBrush
-                : (WpfBrush)FindResource("DeepSeaTextBrush");
-            UpdateNavigationSelectionPill(selected);
+            selected.Background = WpfBrushes.White;
+            selected.Foreground = (WpfBrush)FindResource("BlueBrush");
         }
-    }
-
-    private void UpdateNavigationSelectionPill(System.Windows.Controls.Button selected)
-    {
-        _ = Dispatcher.BeginInvoke(() =>
-        {
-            if (!selected.IsVisible || selected.ActualWidth <= 0)
-            {
-                return;
-            }
-
-            var targetX = selected.TranslatePoint(new System.Windows.Point(0, 0), NavigationBar).X;
-            NavigationSelectionPill.Width = selected.ActualWidth;
-            if (NavigationSelectionPill.RenderTransform is not TranslateTransform transform)
-            {
-                transform = new TranslateTransform();
-                NavigationSelectionPill.RenderTransform = transform;
-            }
-
-            transform.BeginAnimation(TranslateTransform.XProperty, null);
-            if (_motionDecision.ReducedMotion || !IsLoaded)
-            {
-                transform.X = targetX;
-                return;
-            }
-
-            var duration = GetMotionDuration(
-                "DeepSeaMotionDurationShort",
-                TimeSpan.FromMilliseconds(160));
-            var animation = new DoubleAnimation(transform.X, targetX, new Duration(duration))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-                FillBehavior = FillBehavior.Stop
-            };
-            transform.BeginAnimation(
-                TranslateTransform.XProperty,
-                animation,
-                HandoffBehavior.SnapshotAndReplace);
-            transform.X = targetX;
-        }, DispatcherPriority.Loaded);
     }
 
     private async void AddInstance_Click(object sender, RoutedEventArgs e)
@@ -3754,15 +3351,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (e.LeftButton == MouseButtonState.Pressed
             && !IsInsideButton(e.OriginalSource as DependencyObject))
         {
-            if (e.ClickCount == 2)
-            {
-                WindowState = WindowState == WindowState.Maximized
-                    ? WindowState.Normal
-                    : WindowState.Maximized;
-                e.Handled = true;
-                return;
-            }
-
             DragMove();
         }
     }
@@ -3771,7 +3359,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         while (source is not null)
         {
-            if (source is System.Windows.Controls.Primitives.ButtonBase)
+            if (source is System.Windows.Controls.Button)
             {
                 return true;
             }
@@ -3780,22 +3368,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         return false;
-    }
-
-    protected override void OnStateChanged(EventArgs e)
-    {
-        base.OnStateChanged(e);
-        if (WindowShell is null)
-        {
-            return;
-        }
-
-        WindowShell.Margin = WindowState == WindowState.Maximized
-            ? new Thickness(0)
-            : new Thickness(4);
-        WindowShell.CornerRadius = WindowState == WindowState.Maximized
-            ? new CornerRadius(0)
-            : new CornerRadius(22);
     }
 
     private void Brand_Click(object sender, RoutedEventArgs e)
@@ -3839,14 +3411,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 Width = 8,
                 Height = 8,
-                Fill = SystemParameters.HighContrast
-                    ? SystemColors.HighlightBrush
-                    : instance.RuntimeStatus switch
-                    {
-                        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromRgb(46, 166, 107)),
-                        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromRgb(217, 74, 74)),
-                        _ => new SolidColorBrush(WpfColor.FromRgb(150, 163, 181))
-                    },
+                Fill = instance.RuntimeStatus switch
+                {
+                    InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromRgb(46, 166, 107)),
+                    InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromRgb(217, 74, 74)),
+                    _ => new SolidColorBrush(WpfColor.FromRgb(150, 163, 181))
+                },
                 Margin = new Thickness(0, 0, 8, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -3855,18 +3425,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             header.Children.Add(new TextBlock
             {
                 Text = instance.Name,
-                MaxWidth = 164,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            header.Children.Add(new TextBlock
-            {
-                Text = $"· {instance.StatusText}",
-                MaxWidth = 62,
-                Margin = new Thickness(8, 0, 0, 0),
-                Foreground = SystemParameters.HighContrast
-                    ? SystemColors.WindowTextBrush
-                    : (WpfBrush)FindResource("DeepSeaMutedTextBrush"),
+                MaxWidth = 222,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -3930,10 +3489,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        _pageTransitions.Cancel();
-        NormalizePagePresentation();
-        _isPageTransitionInProgress = false;
-
         if (!_shutdownCleanupCompleted)
         {
             e.Cancel = true;
@@ -3943,7 +3498,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             _shutdownCleanupStarted = true;
-            IsEnabled = false;
             _windowCancellation.Cancel();
             CloseAllChatWindows();
             try
@@ -3968,76 +3522,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         base.OnSourceInitialized(e);
         _windowSource = PresentationSource.FromVisual(this) as HwndSource;
         _windowSource?.AddHook(WindowProcedure);
-        ApplySystemBackdrop();
-    }
-
-    private void ApplySystemBackdrop()
-    {
-        var handle = _windowSource?.Handle ?? IntPtr.Zero;
-        var result = SystemBackdrop.TryApply(handle, SystemParameters.HighContrast);
-        if (result.Applied)
-        {
-            Background = WpfBrushes.Transparent;
-            WindowShell.Background = (WpfBrush)FindResource("DeepSeaBackdropTintBrush");
-        }
-        else
-        {
-            var fallback = (WpfBrush)FindResource("DeepSeaBackgroundGradientBrush");
-            Background = fallback;
-            WindowShell.Background = fallback;
-        }
-
-        Debug.WriteLine($"[DeepSeaGlass] System backdrop: {result.Result}; {result.Detail}");
-    }
-
-    private void ApplyAccessibilityPresentation()
-    {
-        var highContrast = SystemParameters.HighContrast;
-        _accessibilityResources.Apply(highContrast);
-        AmbientHighlightLayer.Visibility = highContrast
-            ? Visibility.Collapsed
-            : Visibility.Visible;
-
-        if (highContrast)
-        {
-            NavigationSelectionPill.Background = SystemColors.HighlightBrush;
-            NavigationSelectionPill.BorderBrush = SystemColors.WindowTextBrush;
-            WindowShell.BorderBrush = SystemColors.WindowTextBrush;
-        }
-        else
-        {
-            NavigationSelectionPill.Background = _standardNavigationSelectionBackground;
-            NavigationSelectionPill.BorderBrush = _standardNavigationSelectionBorderBrush;
-            WindowShell.BorderBrush = (WpfBrush)FindResource("DeepSeaGradientBorderBrush");
-        }
-    }
-
-    private void SystemParameters_StaticPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (!Dispatcher.CheckAccess())
-        {
-            _ = Dispatcher.BeginInvoke(
-                () => SystemParameters_StaticPropertyChanged(sender, e),
-                DispatcherPriority.Background);
-            return;
-        }
-
-        if (e.PropertyName == nameof(SystemParameters.HighContrast))
-        {
-            ApplyAccessibilityPresentation();
-        }
-
-        if (e.PropertyName is nameof(SystemParameters.ClientAreaAnimation)
-            or nameof(SystemParameters.HighContrast))
-        {
-            _motionDecision = MotionPolicy.Current();
-            SetNavigationSelection(_currentSection);
-        }
-
-        if (e.PropertyName == nameof(SystemParameters.HighContrast))
-        {
-            ApplySystemBackdrop();
-        }
     }
 
     private IntPtr WindowProcedure(
@@ -4355,8 +3839,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     protected override void OnClosed(EventArgs e)
     {
-        SystemParameters.StaticPropertyChanged -= SystemParameters_StaticPropertyChanged;
-        _pageTransitions.Dispose();
         _windowSource?.RemoveHook(WindowProcedure);
         _windowSource = null;
         CloseAllChatWindows();

@@ -12,310 +12,6 @@
         <SolidColorBrush x:Key="TextBrush" Color="#26384A" />
         <SolidColorBrush x:Key="MutedBrush" Color="#718196" />
         <SolidColorBrush x:Key="LineBrush" Color="#D7E4F2" />
-
-        <!-- DeepSea Glass design tokens. These keyed resources are additive so the
-             existing implicit control styles and legacy resources stay compatible. -->
-        <Color x:Key="DeepSeaBlueColor">#102A4A</Color>
-        <Color x:Key="DeepSeaElectricCyanColor">#62F5EA</Color>
-        <Color x:Key="DeepSeaLightPurpleColor">#B79CFF</Color>
-        <Color x:Key="DeepSeaBackgroundColor">#071526</Color>
-        <Color x:Key="DeepSeaPageSurfaceColor">#0D213A</Color>
-        <Color x:Key="DeepSeaGlassSurfaceColor">#CC112A47</Color>
-        <Color x:Key="DeepSeaGlassElevatedColor">#E0183859</Color>
-        <Color x:Key="DeepSeaGlassFloatingColor">#F0204568</Color>
-        <Color x:Key="DeepSeaApplicationFallbackColor">#FF0B1E33</Color>
-        <Color x:Key="DeepSeaBackdropTintColor">#9A17324F</Color>
-        <Color x:Key="DeepSeaTextColor">#F1F7FF</Color>
-        <Color x:Key="DeepSeaMutedTextColor">#A9BCD2</Color>
-        <Color x:Key="DeepSeaBorderColor">#66456A87</Color>
-        <Color x:Key="DeepSeaSuccessColor">#4DDBA5</Color>
-        <Color x:Key="DeepSeaWarningColor">#F5C86D</Color>
-        <Color x:Key="DeepSeaErrorColor">#FF7189</Color>
-        <Color x:Key="DeepSeaPrimarySurfaceColor">#FF087D9A</Color>
-        <Color x:Key="DeepSeaPrimaryHoverColor">#FF0A9DBB</Color>
-        <Color x:Key="DeepSeaDangerSurfaceColor">#A83C203B</Color>
-        <Color x:Key="DeepSeaDangerHoverColor">#C94A2745</Color>
-
-        <SolidColorBrush x:Key="DeepSeaBlueBrush" Color="{StaticResource DeepSeaBlueColor}" />
-        <SolidColorBrush x:Key="DeepSeaElectricCyanBrush" Color="{StaticResource DeepSeaElectricCyanColor}" />
-        <SolidColorBrush x:Key="DeepSeaLightPurpleBrush" Color="{StaticResource DeepSeaLightPurpleColor}" />
-        <SolidColorBrush x:Key="DeepSeaBackgroundBrush" Color="{StaticResource DeepSeaBackgroundColor}" />
-        <SolidColorBrush x:Key="DeepSeaPageSurfaceBrush" Color="{StaticResource DeepSeaPageSurfaceColor}" />
-        <SolidColorBrush x:Key="DeepSeaGlassSurfaceBrush" Color="{StaticResource DeepSeaGlassSurfaceColor}" />
-        <SolidColorBrush x:Key="DeepSeaGlassElevatedBrush" Color="{StaticResource DeepSeaGlassElevatedColor}" />
-        <SolidColorBrush x:Key="DeepSeaGlassFloatingBrush" Color="{StaticResource DeepSeaGlassFloatingColor}" />
-        <SolidColorBrush x:Key="DeepSeaSurfaceBrush" Color="{StaticResource DeepSeaGlassSurfaceColor}" />
-        <SolidColorBrush x:Key="DeepSeaElevatedSurfaceBrush" Color="{StaticResource DeepSeaGlassElevatedColor}" />
-        <SolidColorBrush x:Key="DeepSeaFloatingSurfaceBrush" Color="{StaticResource DeepSeaGlassFloatingColor}" />
-        <SolidColorBrush x:Key="DeepSeaApplicationFallbackBrush" Color="{StaticResource DeepSeaApplicationFallbackColor}" />
-        <SolidColorBrush x:Key="DeepSeaBackdropTintBrush" Color="{StaticResource DeepSeaBackdropTintColor}" />
-        <SolidColorBrush x:Key="DeepSeaTextBrush" Color="{StaticResource DeepSeaTextColor}" />
-        <SolidColorBrush x:Key="DeepSeaPrimaryTextBrush" Color="#FFFFFFFF" />
-        <SolidColorBrush x:Key="DeepSeaMutedTextBrush" Color="{StaticResource DeepSeaMutedTextColor}" />
-        <SolidColorBrush x:Key="DeepSeaBorderBrush" Color="{StaticResource DeepSeaBorderColor}" />
-        <SolidColorBrush x:Key="DeepSeaSuccessBrush" Color="{StaticResource DeepSeaSuccessColor}" />
-        <SolidColorBrush x:Key="DeepSeaWarningBrush" Color="{StaticResource DeepSeaWarningColor}" />
-        <SolidColorBrush x:Key="DeepSeaErrorBrush" Color="{StaticResource DeepSeaErrorColor}" />
-        <SolidColorBrush x:Key="DeepSeaPrimarySurfaceBrush" Color="{StaticResource DeepSeaPrimarySurfaceColor}" />
-        <SolidColorBrush x:Key="DeepSeaPrimaryHoverBrush" Color="{StaticResource DeepSeaPrimaryHoverColor}" />
-        <SolidColorBrush x:Key="DeepSeaDangerSurfaceBrush" Color="{StaticResource DeepSeaDangerSurfaceColor}" />
-        <SolidColorBrush x:Key="DeepSeaDangerHoverBrush" Color="{StaticResource DeepSeaDangerHoverColor}" />
-        <SolidColorBrush x:Key="DeepSeaNavHoverBrush" Color="#2AFFFFFF" />
-        <SolidColorBrush x:Key="DeepSeaNavPressedBrush" Color="#3DFFFFFF" />
-        <SolidColorBrush x:Key="DeepSeaNavBorderBrush" Color="#66FFFFFF" />
-
-        <LinearGradientBrush x:Key="DeepSeaGradientBorderBrush" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#B862F5EA" Offset="0" />
-            <GradientStop Color="#7AB79CFF" Offset="0.52" />
-            <GradientStop Color="#66456A87" Offset="1" />
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="DeepSeaTopHighlightBrush" StartPoint="0,0" EndPoint="1,0">
-            <GradientStop Color="#BFFFFFFF" Offset="0" />
-            <GradientStop Color="#45FFFFFF" Offset="0.42" />
-            <GradientStop Color="#00FFFFFF" Offset="1" />
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="DeepSeaBackgroundGradientBrush" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#FF071526" Offset="0" />
-            <GradientStop Color="#FF102A4A" Offset="0.62" />
-            <GradientStop Color="#FF251E4B" Offset="1" />
-        </LinearGradientBrush>
-
-        <DropShadowEffect x:Key="DeepSeaCardShadow"
-                          Color="#E6000816"
-                          BlurRadius="22"
-                          ShadowDepth="2"
-                          Opacity="0.24"
-                          RenderingBias="Performance" />
-        <CornerRadius x:Key="DeepSeaCornerRadiusSmall">8</CornerRadius>
-        <CornerRadius x:Key="DeepSeaCornerRadiusMedium">12</CornerRadius>
-        <CornerRadius x:Key="DeepSeaCornerRadiusLarge">16</CornerRadius>
-        <CornerRadius x:Key="DeepSeaCornerRadius">16</CornerRadius>
-        <Thickness x:Key="DeepSeaGlassBorderThickness">1</Thickness>
-        <Duration x:Key="DeepSeaMotionDurationFast">0:0:0.12</Duration>
-        <Duration x:Key="DeepSeaMotionDurationShort">0:0:0.14</Duration>
-        <Duration x:Key="DeepSeaMotionDurationMedium">0:0:0.18</Duration>
-        <Duration x:Key="DeepSeaMotionDurationLong">0:0:0.24</Duration>
-        <Duration x:Key="DeepSeaMotionDuration">0:0:0.18</Duration>
-
-        <Style x:Key="DeepSeaFocusVisualStyle" TargetType="Control">
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Control">
-                        <Grid>
-                            <Rectangle Margin="1"
-                                       RadiusX="9"
-                                       RadiusY="9"
-                                       Stroke="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
-                                       StrokeThickness="2"
-                                       SnapsToDevicePixels="True" />
-                            <Rectangle Margin="3"
-                                       RadiusX="7"
-                                       RadiusY="7"
-                                       Stroke="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"
-                                       StrokeThickness="1"
-                                       SnapsToDevicePixels="True" />
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="DeepSeaGlassCard" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource DeepSeaGlassSurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource DeepSeaGradientBorderBrush}" />
-            <Setter Property="BorderThickness" Value="{StaticResource DeepSeaGlassBorderThickness}" />
-            <Setter Property="CornerRadius" Value="{StaticResource DeepSeaCornerRadiusLarge}" />
-            <Setter Property="Padding" Value="18" />
-            <Setter Property="Effect" Value="{StaticResource DeepSeaCardShadow}" />
-        </Style>
-
-        <Style x:Key="DeepSeaButtonBase" TargetType="Button">
-            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource DeepSeaFocusVisualStyle}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="10"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Opacity" Value="0.5" />
-                    <Setter Property="Cursor" Value="Arrow" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="DeepSeaButton" TargetType="Button" BasedOn="{StaticResource DeepSeaButtonBase}">
-            <Setter Property="Background" Value="{StaticResource DeepSeaGlassSurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource DeepSeaGradientBorderBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-            <Setter Property="Padding" Value="16,9" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaGlassElevatedBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaTopHighlightBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaGlassFloatingBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="DeepSeaPrimaryButton" TargetType="Button" BasedOn="{StaticResource DeepSeaButton}">
-            <Setter Property="Background" Value="{StaticResource DeepSeaPrimarySurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaPrimaryTextBrush}" />
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaPrimaryHoverBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource DeepSeaPrimaryTextBrush}" />
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaPrimarySurfaceBrush}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="DeepSeaDangerButton" TargetType="Button" BasedOn="{StaticResource DeepSeaButton}">
-            <Setter Property="Background" Value="{StaticResource DeepSeaDangerSurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource DeepSeaErrorBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaDangerHoverBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaErrorBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaDangerSurfaceBrush}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="DeepSeaTertiaryButton" TargetType="Button" BasedOn="{StaticResource DeepSeaButtonBase}">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaMutedTextBrush}" />
-            <Setter Property="Padding" Value="12,7" />
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaNavHoverBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaNavPressedBrush}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="DeepSeaStatusBadge" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource DeepSeaGlassElevatedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource DeepSeaBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="{StaticResource DeepSeaCornerRadiusSmall}" />
-            <Setter Property="Padding" Value="8,3" />
-            <Setter Property="SnapsToDevicePixels" Value="True" />
-        </Style>
-
-        <Style x:Key="DeepSeaInstanceItem" TargetType="ListBoxItem">
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="0,0,0,8" />
-            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource DeepSeaFocusVisualStyle}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ListBoxItem">
-                        <Border x:Name="ItemChrome"
-                                Background="{StaticResource DeepSeaGlassSurfaceBrush}"
-                                BorderBrush="{StaticResource DeepSeaBorderBrush}"
-                                BorderThickness="1"
-                                CornerRadius="{StaticResource DeepSeaCornerRadiusMedium}"
-                                Padding="{TemplateBinding Padding}"
-                                Margin="{TemplateBinding Margin}"
-                                SnapsToDevicePixels="True">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                                              Content="{TemplateBinding Content}"
-                                              ContentTemplate="{TemplateBinding ContentTemplate}"
-                                              ContentStringFormat="{TemplateBinding ContentStringFormat}"
-                                              TextElement.Foreground="{TemplateBinding Foreground}" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource DeepSeaGlassElevatedBrush}" />
-                                <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{StaticResource DeepSeaTopHighlightBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource DeepSeaGlassFloatingBrush}" />
-                                <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsMouseCaptureWithin" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource DeepSeaNavPressedBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-                                <Setter TargetName="ItemChrome" Property="BorderThickness" Value="2" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.55" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="DeepSeaWindowButton" TargetType="Button" BasedOn="{StaticResource DeepSeaButtonBase}">
-            <Setter Property="Width" Value="36" />
-            <Setter Property="Height" Value="32" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaNavHoverBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaNavBorderBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaNavPressedBrush}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="DeepSeaCloseButton" TargetType="Button" BasedOn="{StaticResource DeepSeaWindowButton}">
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaDangerHoverBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaErrorBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaDangerSurfaceBrush}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
         <Style x:Key="ContextInstanceMenuStyle" TargetType="ContextMenu">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -325,10 +21,10 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ContextMenu">
-                        <Border Background="{StaticResource DeepSeaGlassFloatingBrush}"
-                                BorderBrush="{StaticResource DeepSeaGradientBorderBrush}"
+                        <Border Background="White"
+                                BorderBrush="#C8DDF0"
                                 BorderThickness="1"
-                                CornerRadius="12"
+                                CornerRadius="10"
                                 Padding="6">
                             <ScrollViewer VerticalScrollBarVisibility="Auto"
                                           HorizontalScrollBarVisibility="Disabled"
@@ -341,20 +37,15 @@
             </Setter>
         </Style>
         <Style x:Key="ContextInstanceMenuItemStyle" TargetType="MenuItem">
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="10,8" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource DeepSeaFocusVisualStyle}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="MenuItem">
                         <Border x:Name="ItemChrome"
                                 Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="7"
                                 Padding="{TemplateBinding Padding}"
                                 Margin="0,1">
@@ -364,16 +55,11 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource DeepSeaNavHoverBrush}" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="#E8F3FE" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource DeepSeaGlassElevatedBrush}" />
-                                <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-                                <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="ItemChrome" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}" />
-                                <Setter TargetName="ItemChrome" Property="BorderThickness" Value="2" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="#DCEEFF" />
+                                <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -389,7 +75,6 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="16,9" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource DeepSeaFocusVisualStyle}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -476,7 +161,6 @@
             <Setter Property="Padding" Value="10,6" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource DeepSeaFocusVisualStyle}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBox">
@@ -561,10 +245,6 @@
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource BlueBrush}" />
                             </Trigger>
-                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-                                <Setter TargetName="Chrome" Property="BorderThickness" Value="2" />
-                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.5" />
                             </Trigger>
@@ -578,7 +258,6 @@
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="Padding" Value="10,7" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource DeepSeaFocusVisualStyle}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
@@ -596,10 +275,6 @@
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="ItemChrome" Property="Background" Value="#E7F1FC" />
                                 <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -675,24 +350,14 @@
         <Style x:Key="TopNavButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource DeepSeaFocusVisualStyle}" />
+            <Setter Property="Foreground" Value="White" />
             <Setter Property="Padding" Value="15,8" />
             <Setter Property="FontSize" Value="14" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="3,0" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaNavHoverBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaNavBorderBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource DeepSeaTextBrush}" />
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DeepSeaNavPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaElectricCyanBrush}" />
-                </Trigger>
-                <Trigger Property="IsKeyboardFocused" Value="True">
-                    <Setter Property="BorderBrush" Value="{StaticResource DeepSeaElectricCyanBrush}" />
+                    <Setter Property="Background" Value="#2D8BE0" />
+                    <Setter Property="BorderBrush" Value="#2D8BE0" />
+                    <Setter Property="Foreground" Value="White" />
                 </Trigger>
             </Style.Triggers>
         </Style>
