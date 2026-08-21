@@ -2,7 +2,6 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
@@ -157,8 +156,8 @@ public partial class MainWindow
             return;
         }
 
-        // Re-publish the mutually exclusive dashboard states and refresh any
-        // bindings that were created before DataContext became available.
+        // Re-publish the mutually exclusive dashboard states. DataContext is set
+        // in OnInitialized, so normal WPF binding invalidation can now do the rest.
         OnPropertyChanged(nameof(NoInstancesVisibility));
         OnPropertyChanged(nameof(InstancesVisibility));
         OnPropertyChanged(nameof(InstanceCountText));
@@ -175,34 +174,6 @@ public partial class MainWindow
         OnPropertyChanged(nameof(DesktopShellVisibility));
         OnPropertyChanged(nameof(PageNoticeVisibility));
         OnPropertyChanged(nameof(PageNoticeDetailVisibility));
-
-        UpdateBindingTargets(this);
-    }
-
-    private static void UpdateBindingTargets(DependencyObject root)
-    {
-        var localValues = root.GetLocalValueEnumerator();
-        while (localValues.MoveNext())
-        {
-            switch (localValues.Current.Value)
-            {
-                case BindingExpression binding:
-                    binding.UpdateTarget();
-                    break;
-                case MultiBindingExpression multiBinding:
-                    multiBinding.UpdateTarget();
-                    break;
-                case PriorityBindingExpression priorityBinding:
-                    priorityBinding.UpdateTarget();
-                    break;
-            }
-        }
-
-        var childCount = VisualTreeHelper.GetChildrenCount(root);
-        for (var index = 0; index < childCount; index++)
-        {
-            UpdateBindingTargets(VisualTreeHelper.GetChild(root, index));
-        }
     }
 
     private void MainWindow_PreviewInputForSnapshot(object sender, MouseButtonEventArgs e)
@@ -303,7 +274,9 @@ public partial class MainWindow
 
             // Avoid pathological allocations on malformed layout values while
             // retaining full fidelity for normal and high-DPI desktop windows.
-            if (pixelWidth > 8192 || pixelHeight > 8192)
+            if (pixelWidth > 8192
+                || pixelHeight > 8192
+                || (long)pixelWidth * pixelHeight > 24_000_000)
             {
                 return;
             }
