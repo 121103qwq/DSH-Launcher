@@ -1,0 +1,32 @@
+name: DeepSea Glass live-fix validation
+
+on:
+  push:
+    branches:
+      - codex/deepsea-glass-ui-spike
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-self-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore .\src\DshLauncher\DshLauncher.csproj
+
+      - name: Build Release x64
+        run: dotnet build .\src\DshLauncher\DshLauncher.csproj -c Release -r win-x64 --no-restore
+
+      - name: Run SelfTest
+        run: dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release
