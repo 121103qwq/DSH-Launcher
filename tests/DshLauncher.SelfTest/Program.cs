@@ -12,6 +12,14 @@ using ZstdSharp;
 
 var tests = new (string Name, Func<Task> Run)[]
 {
+    ("System backdrop policy", TestSystemBackdropPolicy),
+    ("System backdrop DWM failure fallback", TestSystemBackdropDwmFailureFallback),
+    ("DeepSea high contrast resources", TestDeepSeaHighContrastResources),
+    ("Reduced motion policy", TestMotionPolicy),
+    ("Page transition last request wins", TestPageTransitionLastRequestWins),
+    ("Page presentation includes instance identity", TestPagePresentationIdentity),
+    ("Page transition 50 requests", TestPageTransitionManyRequests),
+    ("Page transition cancellation token", TestPageTransitionCancellation),
     ("Instance registry round-trip", TestInstanceRegistryRoundTrip),
     ("Instance registry rename persists", TestInstanceRegistryRenamePersists),
     ("Instance registry allows shared roots for isolated versions", TestInstanceRegistryAllowsSharedRoots),
@@ -78,6 +86,227 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Conversation file management", TestConversationFileManagement),
     ("Conversation synchronization", TestConversationSynchronization)
 };
+
+static Task TestSystemBackdropPolicy()
+{
+    var supported = new SystemBackdropEnvironment(
+        WindowsBuild: 22621,
+        DwmCompositionEnabled: true,
+        TransparencyEffectsEnabled: true,
+        HighContrast: false);
+    var enabled = SystemBackdropPolicy.Evaluate(supported);
+    Assert(enabled.Result == SystemBackdropResult.Enabled && enabled.ShouldApply,
+        "满足 Windows 11 build、DWM composition 和系统透明条件时应启用 backdrop。");
+
+    var unsupported = SystemBackdropPolicy.Evaluate(supported with { WindowsBuild = 22000 });
+    Assert(unsupported.IsFallback && unsupported.ReasonCode == SystemBackdropReason.UnsupportedWindows,
+        "Windows 11 build 22621 以下必须回退到实色背景。");
+
+    var noComposition = SystemBackdropPolicy.Evaluate(supported with { DwmCompositionEnabled = false });
+    Assert(noComposition.IsFallback && noComposition.ReasonCode == SystemBackdropReason.DwmCompositionDisabled,
+        "DWM composition 关闭时必须回退。");
+
+    var noTransparency = SystemBackdropPolicy.Evaluate(supported with { TransparencyEffectsEnabled = false });
+    Assert(noTransparency.IsFallback && noTransparency.ReasonCode == SystemBackdropReason.TransparencyEffectsDisabled,
+        "系统透明效果关闭时必须回退。");
+
+    var highContrast = SystemBackdropPolicy.Evaluate(supported with { HighContrast = true });
+    Assert(highContrast.IsFallback && highContrast.ReasonCode == SystemBackdropReason.HighContrast,
+        "高对比度模式必须回退以保持可读性。");
+
+    var forced = SystemBackdropPolicy.Evaluate(supported with { ForceDisabled = true });
+    Assert(forced.IsFallback && forced.ReasonCode == SystemBackdropReason.ForcedDisabled,
+        "强制关闭 backdrop 时必须回退。");
+
+    Assert(SystemBackdropPolicy.IsEnvironmentFlagEnabled("1")
+        && SystemBackdropPolicy.IsEnvironmentFlagEnabled("true")
+        && SystemBackdropPolicy.IsEnvironmentFlagEnabled("yes")
+        && !SystemBackdropPolicy.IsEnvironmentFlagEnabled("0"),
+        "backdrop 环境变量应支持明确的布尔值，不应把 0 当作开启。");
+    return Task.CompletedTask;
+}
+
+static Task TestSystemBackdropDwmFailureFallback()
+{
+    var supported = new SystemBackdropEnvironment(
+        WindowsBuild: 22621,
+        DwmCompositionEnabled: true,
+        TransparencyEffectsEnabled: true,
+        HighContrast: false,
+        SimulateDwmFailure: true);
+    var simulated = SystemBackdropPolicy.Evaluate(supported);
+    Assert(simulated.IsFallback && simulated.ReasonCode == SystemBackdropReason.SimulatedDwmFailure,
+        "模拟 DWM 失败必须在纯决策层返回 fallback。");
+
+    var applied = SystemBackdrop.Apply(IntPtr.Zero, supported);
+    Assert(applied.IsFallback && applied.ReasonCode == SystemBackdropReason.SimulatedDwmFailure,
+        "模拟 DWM 失败时 Apply 不能调用真实 HWND，也必须返回明确原因。");
+
+    var invalidWindow = SystemBackdrop.Apply(
+        IntPtr.Zero,
+        supported with { SimulateDwmFailure = false });
+    Assert(invalidWindow.IsFallback && invalidWindow.ReasonCode == SystemBackdropReason.InvalidWindowHandle,
+        "缺少 HWND 时必须安全回退，而不能把无效句柄传入 DWM。");
+    return Task.CompletedTask;
+}
+
+static Task TestDeepSeaHighContrastResources()
+{
+    var originalText = System.Windows.Media.Color.FromRgb(10, 20, 30);
+    var originalBackground = System.Windows.Media.Color.FromRgb(20, 30, 40);
+    var originalGradientStart = System.Windows.Media.Color.FromRgb(30, 40, 50);
+    var originalGradientEnd = System.Windows.Media.Color.FromRgb(50, 60, 70);
+    var textBrush = new System.Windows.Media.SolidColorBrush(originalText);
+    var backgroundBrush = new System.Windows.Media.SolidColorBrush(originalBackground);
+    var gradient = new System.Windows.Media.LinearGradientBrush();
+    gradient.GradientStops.Add(new System.Windows.Media.GradientStop(originalGradientStart, 0));
+    gradient.GradientStops.Add(new System.Windows.Media.GradientStop(originalGradientEnd, 1));
+    var shadow = new System.Windows.Media.Effects.DropShadowEffect { Opacity = 0.4 };
+    var resources = new System.Windows.ResourceDictionary
+    {
+        ["DeepSeaTextBrush"] = textBrush,
+        ["DeepSeaBackgroundBrush"] = backgroundBrush,
+        ["DeepSeaBackgroundGradientBrush"] = gradient,
+        ["DeepSeaCardShadow"] = shadow
+    };
+    var presentation = new DeepSeaAccessibilityResources(resources);
+
+    presentation.Apply(highContrast: true);
+    Assert(textBrush.Color == System.Windows.SystemColors.WindowTextColor,
+        "High Contrast 必须让 DeepSea 正文使用系统文字色。 ");
+    Assert(backgroundBrush.Color == System.Windows.SystemColors.WindowColor,
+        "High Contrast 必须让 DeepSea 基础表面使用系统窗口色。 ");
+    Assert(gradient.GradientStops.All(stop => stop.Color == System.Windows.SystemColors.WindowColor),
+        "High Contrast 必须关闭背景渐变高光。 ");
+    Assert(shadow.Opacity == 0,
+        "High Contrast 必须禁用装饰阴影。 ");
+
+    presentation.Apply(highContrast: false);
+    Assert(textBrush.Color == originalText
+        && backgroundBrush.Color == originalBackground
+        && gradient.GradientStops[0].Color == originalGradientStart
+        && gradient.GradientStops[1].Color == originalGradientEnd
+        && Math.Abs(shadow.Opacity - 0.4) < 0.001,
+        "退出 High Contrast 后必须完整恢复原 DeepSea 资源。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestMotionPolicy()
+{
+    var standard = MotionPolicy.Evaluate(clientAreaAnimation: true, highContrast: false);
+    Assert(!standard.ReducedMotion && standard.AllowTranslation && standard.AllowScale
+        && standard.Duration > TimeSpan.Zero,
+        "系统允许客户区动画时应启用短促转场。");
+
+    var animationDisabled = MotionPolicy.Evaluate(clientAreaAnimation: false, highContrast: false);
+    Assert(animationDisabled.ReducedMotion
+        && !animationDisabled.AllowTranslation
+        && !animationDisabled.AllowScale
+        && animationDisabled.IsImmediate,
+        "ClientAreaAnimation 关闭时必须禁用位移和缩放。");
+
+    var highContrast = MotionPolicy.Evaluate(clientAreaAnimation: true, highContrast: true);
+    Assert(highContrast.ReducedMotion && highContrast.IsImmediate,
+        "高对比度模式必须使用 reduced motion。");
+
+    var forced = MotionPolicy.Evaluate(
+        clientAreaAnimation: true,
+        highContrast: false,
+        forceDisabled: true);
+    Assert(forced.ReducedMotion && forced.IsImmediate,
+        "强制关闭动画时必须立即切换。");
+    return Task.CompletedTask;
+}
+
+static Task TestPageTransitionLastRequestWins()
+{
+    using var coordinator = new PageTransitionCoordinator();
+    var first = coordinator.Begin();
+    var second = coordinator.Begin();
+    var third = coordinator.Begin();
+
+    Assert(first.IsCancellationRequested && second.IsCancellationRequested,
+        "Begin 新转场时必须取消所有旧请求。");
+    Assert(!coordinator.IsCurrent(first) && !coordinator.IsCurrent(second),
+        "旧 generation 不能在新请求开始后继续发布动画结果。");
+    Assert(coordinator.IsCurrent(third),
+        "最后一个转场请求必须保持 current。");
+    return Task.CompletedTask;
+}
+
+static Task TestPagePresentationIdentity()
+{
+    Assert(MainWindow.IsSamePagePresentation(
+            "扩展", "instance-a", false,
+            "扩展", "instance-a", false),
+        "同一实例的同一页面应视为重复 presentation。 ");
+    Assert(!MainWindow.IsSamePagePresentation(
+            "扩展", "instance-a", false,
+            "扩展", "instance-b", false),
+        "同一页面切换到不同实例时必须创建并展示新页面。 ");
+    Assert(!MainWindow.IsSamePagePresentation(
+            "扩展", null, true,
+            "扩展", null, false),
+        "缺少实例时的 dashboard 提示不能与真实嵌入页面混为同一 presentation。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestPageTransitionManyRequests()
+{
+    using var coordinator = new PageTransitionCoordinator();
+    PageTransitionRequest previous = default;
+    PageTransitionRequest last = default;
+    for (var index = 0; index < 50; index++)
+    {
+        last = coordinator.Begin();
+        if (index > 0)
+        {
+            Assert(previous.IsCancellationRequested && !coordinator.IsCurrent(previous),
+                "连续导航请求不能排队，旧请求必须立即失效。");
+        }
+
+        previous = last;
+    }
+
+    Assert(coordinator.IsCurrent(last) && last.Generation == coordinator.CurrentGeneration,
+        "连续 50 次导航后只有最后一次 generation 可以生效。");
+    return Task.CompletedTask;
+}
+
+static Task TestPageTransitionCancellation()
+{
+    using var coordinator = new PageTransitionCoordinator();
+    using var externalCancellation = new CancellationTokenSource();
+    var request = coordinator.Begin(externalCancellation.Token);
+    externalCancellation.Cancel();
+
+    Assert(request.IsCancellationRequested && !coordinator.IsCurrent(request),
+        "外部 CancellationToken 取消后，当前转场也必须失效。");
+
+    var next = coordinator.Begin();
+    coordinator.Cancel();
+    Assert(next.IsCancellationRequested && !coordinator.IsCurrent(next),
+        "Cancel 必须取消当前 token 并使 generation 失效。");
+
+    var throwingRequest = coordinator.Begin();
+    using var throwingRegistration = throwingRequest.Token.Register(
+        () => throw new InvalidOperationException("cancellation callback failure"));
+    var replacement = coordinator.Begin();
+    Assert(replacement.IsCancellationRequested == false && coordinator.IsCurrent(replacement),
+        "旧 token 回调异常不能阻断新的转场请求。 ");
+    Assert(coordinator.IsCurrent(replacement.Generation),
+        "generation overload 必须与 request overload 保持一致。 ");
+
+    var disposedCoordinator = new PageTransitionCoordinator();
+    var disposedRequest = disposedCoordinator.Begin();
+    disposedCoordinator.Dispose();
+    Assert(disposedRequest.IsCancellationRequested && !disposedCoordinator.IsCurrent(disposedRequest),
+        "Dispose 必须取消并失效当前转场。 ");
+    AssertThrows<ObjectDisposedException>(
+        () => disposedCoordinator.Begin(),
+        "Dispose 后不能再创建转场请求。 ");
+    return Task.CompletedTask;
+}
 
 static async Task TestSingleInstanceActivationChannel()
 {
@@ -1289,6 +1518,9 @@ static Task TestMainWindowCodeResourceReferences()
     var appXamlPath = FindRepositoryFile("src", "DshLauncher", "App.xaml");
     var mainWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml");
     var mainWindowCodePath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml.cs");
+    var backdropCodePath = FindRepositoryFile("src", "DshLauncher", "SystemBackdrop.cs");
+    var transitionCodePath = FindRepositoryFile("src", "DshLauncher", "PageTransitionCoordinator.cs");
+    var accessibilityCodePath = FindRepositoryFile("src", "DshLauncher", "DeepSeaAccessibilityResources.cs");
     var extensionWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ExtensionWindow.xaml");
     var extensionWindowCodePath = FindRepositoryFile("src", "DshLauncher", "ExtensionWindow.xaml.cs");
     var versionSettingsXamlPath = FindRepositoryFile("src", "DshLauncher", "VersionSettingsWindow.xaml");
@@ -1296,6 +1528,9 @@ static Task TestMainWindowCodeResourceReferences()
     var appXaml = File.ReadAllText(appXamlPath, Encoding.UTF8);
     var mainWindowXaml = File.ReadAllText(mainWindowXamlPath, Encoding.UTF8);
     var mainWindowCode = File.ReadAllText(mainWindowCodePath, Encoding.UTF8);
+    var backdropCode = File.ReadAllText(backdropCodePath, Encoding.UTF8);
+    var transitionCode = File.ReadAllText(transitionCodePath, Encoding.UTF8);
+    var accessibilityCode = File.ReadAllText(accessibilityCodePath, Encoding.UTF8);
     var extensionWindowXaml = File.ReadAllText(extensionWindowXamlPath, Encoding.UTF8);
     var extensionWindowCode = File.ReadAllText(extensionWindowCodePath, Encoding.UTF8);
     var versionSettingsXaml = File.ReadAllText(versionSettingsXamlPath, Encoding.UTF8);
@@ -1311,6 +1546,58 @@ static Task TestMainWindowCodeResourceReferences()
 
     Assert(missingKeys.Length == 0,
         $"MainWindow 代码引用了 App.xaml 中不存在的资源：{string.Join(", ", missingKeys)}");
+    Assert(mainWindowXaml.Contains("AllowsTransparency=\"False\"", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("UseLayoutRounding=\"True\"", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("SnapsToDevicePixels=\"True\"", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("<shell:WindowChrome.WindowChrome>", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("x:Name=\"WindowShell\"", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("x:Name=\"NavigationSelectionPill\"", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("x:Name=\"PageTransitionHost\"", StringComparison.Ordinal)
+        && appXaml.Contains("x:Key=\"DeepSeaGlassCard\"", StringComparison.Ordinal)
+        && appXaml.Contains("x:Key=\"DeepSeaMotionDurationMedium\"", StringComparison.Ordinal),
+        "主窗口必须使用普通 HWND、DeepSea Glass 资源、固定导航选中层和统一页面转场宿主。 ");
+    Assert(mainWindowXaml.Contains("Content=\"停止\"", StringComparison.Ordinal)
+        && !mainWindowXaml.Contains("DeepSeaDangerButton", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("Style=\"{StaticResource DeepSeaCloseButton}\"", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("AutomationProperties.Name=\"关闭\"", StringComparison.Ordinal)
+        && appXaml.Contains("x:Key=\"DeepSeaTertiaryButton\"", StringComparison.Ordinal)
+        && appXaml.Contains("x:Key=\"DeepSeaFocusVisualStyle\"", StringComparison.Ordinal)
+        && !appXaml.Contains("DeepSeaButtonShadow", StringComparison.Ordinal),
+        "启动页必须区分 Primary/Secondary/Tertiary，停止不能使用危险态，图标按钮和键盘焦点必须明确。 ");
+    Assert(accessibilityCode.Contains("SystemColors.WindowTextColor", StringComparison.Ordinal)
+        && accessibilityCode.Contains("SystemColors.HighlightTextColor", StringComparison.Ordinal)
+        && accessibilityCode.Contains("effect.Opacity = 0", StringComparison.Ordinal)
+        && mainWindowCode.Contains("ApplyAccessibilityPresentation", StringComparison.Ordinal)
+        && mainWindowCode.Contains("AmbientHighlightLayer.Visibility", StringComparison.Ordinal),
+        "High Contrast 必须使用系统色并关闭装饰渐变高光和阴影。 ");
+    Assert(backdropCode.Contains("MinimumWindowsBuild = 22621", StringComparison.Ordinal)
+        && backdropCode.Contains("DwmWindowAttributeSystemBackdropType = 38", StringComparison.Ordinal)
+        && backdropCode.Contains("DSH_LAUNCHER_DISABLE_BACKDROP", StringComparison.Ordinal)
+        && backdropCode.Contains("DSH_LAUNCHER_SIMULATE_DWM_FAILURE", StringComparison.Ordinal)
+        && mainWindowCode.Contains("SystemBackdrop.TryApply", StringComparison.Ordinal),
+        "系统材质必须通过可测试的 Windows 11 DWM 能力判断，并保留强制与故障注入回退。 ");
+    Assert(transitionCode.Contains("CancellationTokenSource.CreateLinkedTokenSource", StringComparison.Ordinal)
+        && transitionCode.Contains("_generation = unchecked(_generation + 1)", StringComparison.Ordinal)
+        && mainWindowCode.Contains("Task.Delay(duration, request.Token)", StringComparison.Ordinal)
+        && mainWindowCode.Contains("_motionDecision.ReducedMotion", StringComparison.Ordinal)
+        && mainWindowCode.Contains("IsSamePagePresentation", StringComparison.Ordinal)
+        && mainWindowCode.Contains("ReadElementVisualState", StringComparison.Ordinal)
+        && mainWindowCode.Contains("EasingMode.EaseIn", StringComparison.Ordinal)
+        && mainWindowCode.Contains("EasingMode.EaseOut", StringComparison.Ordinal),
+        "页面转场必须可取消、last-request-wins、支持 reduced motion、继承打断时视觉值，并忽略重复当前页面请求。 ");
+    Assert(!Regex.IsMatch(
+            mainWindowCode,
+            "(?:BeginAnimation|DoubleAnimation)[^\\r\\n]*(?:Width|Height|Margin)(?:Property)?",
+            RegexOptions.CultureInvariant)
+        && !mainWindowCode.Contains("ThicknessAnimation", StringComparison.Ordinal),
+        "转场不得动画化 Width、Height 或 Margin 等布局属性。 ");
+    var pageConstruction = mainWindowCode.IndexOf("object? page = null;", StringComparison.Ordinal);
+    var pageConstructionFailure = mainWindowCode.IndexOf("打开“{section}”失败", StringComparison.Ordinal);
+    var sectionCommit = mainWindowCode.IndexOf("_currentSection = section;", StringComparison.Ordinal);
+    Assert(pageConstruction >= 0
+        && pageConstructionFailure > pageConstruction
+        && sectionCommit > pageConstructionFailure,
+        "页面构造失败时必须先保持现有页面，成功构造后才能提交导航状态。 ");
     Assert(!mainWindowXaml.Contains("ProviderCards", StringComparison.Ordinal)
         && !mainWindowXaml.Contains("模型提供商", StringComparison.Ordinal)
         && !mainWindowCode.Contains("RefreshProvidersAsync", StringComparison.Ordinal),

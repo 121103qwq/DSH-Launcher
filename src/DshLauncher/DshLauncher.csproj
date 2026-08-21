@@ -10,6 +10,7 @@
     <RootNamespace>DshLauncher</RootNamespace>
     <ApplicationTitle>DSH Launcher</ApplicationTitle>
     <ApplicationIcon>Assets\DSHLauncher.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <Version>1.0.7</Version>
     <FileVersion>1.0.7.0</FileVersion>
     <AssemblyVersion>1.0.7.0</AssemblyVersion>
