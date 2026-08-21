@@ -7,9 +7,9 @@ using SystemColors = System.Windows.SystemColors;
 namespace DshLauncher;
 
 /// <summary>
-/// Mutates the shared DeepSea material resources in place so existing
-/// StaticResource consumers immediately follow Windows high-contrast colors.
-/// The original palette is retained for a reversible runtime toggle.
+/// Applies the DeepSea high-contrast palette without mutating frozen WPF
+/// Freezables. Normal startup is a no-op until high contrast was actually
+/// applied, preventing an unnecessary restore pass during MainWindow creation.
 /// </summary>
 internal sealed class DeepSeaAccessibilityResources
 {
@@ -17,6 +17,7 @@ internal sealed class DeepSeaAccessibilityResources
     private readonly Dictionary<string, WpfColor> _solidColors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, WpfColor[]> _gradientColors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _effectOpacities = new(StringComparer.Ordinal);
+    private bool _highContrastApplied;
 
     internal DeepSeaAccessibilityResources(ResourceDictionary resources)
     {
@@ -50,13 +51,25 @@ internal sealed class DeepSeaAccessibilityResources
     {
         if (!highContrast)
         {
+            if (!_highContrastApplied)
+            {
+                return;
+            }
+
             Restore();
+            _highContrastApplied = false;
             return;
         }
 
+        ApplyHighContrast();
+        _highContrastApplied = true;
+    }
+
+    private void ApplyHighContrast()
+    {
         foreach (var key in _solidColors.Keys)
         {
-            if (_resources[key] is SolidColorBrush brush)
+            if (GetMutableResource<SolidColorBrush>(key) is { } brush)
             {
                 brush.Color = ResolveHighContrastColor(key);
             }
@@ -64,7 +77,7 @@ internal sealed class DeepSeaAccessibilityResources
 
         foreach (var key in _gradientColors.Keys)
         {
-            if (_resources[key] is not GradientBrush gradient)
+            if (GetMutableResource<GradientBrush>(key) is not { } gradient)
             {
                 continue;
             }
@@ -82,7 +95,7 @@ internal sealed class DeepSeaAccessibilityResources
 
         foreach (var key in _effectOpacities.Keys)
         {
-            if (_resources[key] is DropShadowEffect effect)
+            if (GetMutableResource<DropShadowEffect>(key) is { } effect)
             {
                 effect.Opacity = 0;
             }
@@ -93,7 +106,7 @@ internal sealed class DeepSeaAccessibilityResources
     {
         foreach (var pair in _solidColors)
         {
-            if (_resources[pair.Key] is SolidColorBrush brush)
+            if (GetMutableResource<SolidColorBrush>(pair.Key) is { } brush)
             {
                 brush.Color = pair.Value;
             }
@@ -101,7 +114,7 @@ internal sealed class DeepSeaAccessibilityResources
 
         foreach (var pair in _gradientColors)
         {
-            if (_resources[pair.Key] is not GradientBrush gradient)
+            if (GetMutableResource<GradientBrush>(pair.Key) is not { } gradient)
             {
                 continue;
             }
@@ -116,11 +129,33 @@ internal sealed class DeepSeaAccessibilityResources
 
         foreach (var pair in _effectOpacities)
         {
-            if (_resources[pair.Key] is DropShadowEffect effect)
+            if (GetMutableResource<DropShadowEffect>(pair.Key) is { } effect)
             {
                 effect.Opacity = pair.Value;
             }
         }
+    }
+
+    private T? GetMutableResource<T>(string key)
+        where T : Freezable
+    {
+        if (_resources[key] is not T resource)
+        {
+            return null;
+        }
+
+        if (!resource.IsFrozen)
+        {
+            return resource;
+        }
+
+        // Shared application resources can be frozen after XAML materialization.
+        // Clone-and-replace keeps the optional accessibility path from throwing
+        // during startup. Existing shell elements that need immediate changes are
+        // also updated explicitly by MainWindow.ApplyAccessibilityPresentation().
+        var mutable = (T)resource.CloneCurrentValue();
+        _resources[key] = mutable;
+        return mutable;
     }
 
     private static WpfColor ResolveHighContrastColor(string key)

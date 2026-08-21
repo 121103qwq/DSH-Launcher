@@ -19,10 +19,41 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // 实例锁是进程级文件句柄：两个 Launcher 同时运行时，第二个只能以只读
-        // Attached 连接实例，Stop/Restart 会不可用。因此限制单实例，再次启动时
-        // 唤起已有窗口。
-        _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
+        // Register the fail-closed startup handler before WPF materializes StartupUri.
+        DispatcherUnhandledException += App_DispatcherUnhandledException;
+
+        // The instance lock is process-wide. A second Launcher must activate the
+        // existing window instead of managing the same DSH_HOME concurrently.
+        bool createdNew;
+        try
+        {
+            _singleInstanceMutex = new Mutex(
+                initiallyOwned: true,
+                SingleInstanceMutexName,
+                out createdNew);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // A higher-integrity Launcher may own the mutex. Do not request
+            // elevation and do not start a second manager; try the existing
+            // activation paths, then explain the conflict if they are blocked.
+            var activated = RequestExistingLauncherActivation()
+                == SingleInstanceActivationResult.Accepted
+                || ActivateExistingLauncherByWindowHandle();
+            if (!activated)
+            {
+                MessageBox.Show(
+                    "检测到另一个可能以管理员权限运行的 DSH Launcher。\n\n"
+                    + "请先关闭已有 Launcher，再以普通方式重新打开。",
+                    "DSH Launcher 已在运行",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+
+            ExitSecondaryInstance();
+            return;
+        }
+
         if (!createdNew)
         {
             var activation = RequestExistingLauncherActivation();
@@ -38,7 +69,6 @@ public partial class App : System.Windows.Application
 
         _ownsSingleInstanceMutex = true;
         base.OnStartup(e);
-        DispatcherUnhandledException += App_DispatcherUnhandledException;
         _activationChannel = new SingleInstanceActivationChannel(
             GetActivationPipeName(),
             ActivateLauncherFromBackgroundThread);
@@ -46,7 +76,13 @@ public partial class App : System.Windows.Application
         Dispatcher.BeginInvoke(
             () =>
             {
-                _startupWindowCreationCompleted = true;
+                _startupWindowCreationCompleted = MainWindow is DshLauncher.MainWindow;
+                if (!_startupWindowCreationCompleted)
+                {
+                    Shutdown(-1);
+                    return;
+                }
+
                 if (_activationPending)
                 {
                     TryActivateMainWindow();
@@ -55,30 +91,57 @@ public partial class App : System.Windows.Application
             DispatcherPriority.ApplicationIdle);
     }
 
-    private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+    private void App_DispatcherUnhandledException(
+        object sender,
+        DispatcherUnhandledExceptionEventArgs e)
     {
-        // UI 线程未处理异常不再直接杀死进程：写入崩溃日志后继续运行，便于
-        // 事后定位（例如窗口关闭与异步初始化竞态曾导致整个应用崩溃）。
+        WriteCrashLog(e.Exception);
+
+        if (!_startupWindowCreationCompleted)
+        {
+            // Startup must fail closed. Continuing after a MainWindow constructor
+            // or Loaded failure can expose a half-initialized visual tree whose
+            // bindings and visibility state never became valid.
+            e.Handled = true;
+            try
+            {
+                MainWindow?.Close();
+            }
+            catch
+            {
+                // The window may already be in a failed construction state.
+            }
+
+            Shutdown(-1);
+            return;
+        }
+
+        // Preserve the existing post-startup resilience for non-fatal UI races.
+        e.Handled = true;
+    }
+
+    private static void WriteCrashLog(Exception exception)
+    {
         try
         {
             var logDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DeepSeek", "launcher");
+                "DeepSeek",
+                "launcher");
             Directory.CreateDirectory(logDirectory);
             File.AppendAllText(
                 Path.Combine(logDirectory, "crash.log"),
-                $"[{DateTimeOffset.Now:O}] {e.Exception}{Environment.NewLine}");
+                $"[{DateTimeOffset.Now:O}] {exception}{Environment.NewLine}");
         }
         catch
         {
-            // 日志失败不影响兜底行为。
+            // Logging must never replace the original failure path.
         }
-
-        e.Handled = true;
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        DispatcherUnhandledException -= App_DispatcherUnhandledException;
         _activationChannel?.Dispose();
         _activationChannel = null;
         if (_ownsSingleInstanceMutex)
@@ -104,8 +167,9 @@ public partial class App : System.Windows.Application
 
     private void ExitSecondaryInstance()
     {
-        // OnStartup has not called base yet. Application.Shutdown at this point can leave
-        // a windowless WPF process behind, so end this uninitialized secondary process directly.
+        // OnStartup has not necessarily called base yet. Application.Shutdown at
+        // this point can leave a windowless WPF process behind, so end this
+        // uninitialized secondary process directly.
         _singleInstanceMutex?.Dispose();
         _singleInstanceMutex = null;
         Environment.Exit(0);
@@ -136,6 +200,10 @@ public partial class App : System.Windows.Application
         catch (AbandonedMutexException)
         {
             return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 
