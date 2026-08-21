@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-and-self-test:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,3 +30,22 @@ jobs:
 
       - name: Run SelfTest
         run: dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release
+
+      - name: Publish self-contained test build
+        run: >-
+          dotnet publish .\src\DshLauncher\DshLauncher.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o .\publish\deepsea-glass-live-fix
+
+      - name: Upload Windows test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH-Launcher-deepsea-glass-live-fix
+          path: .\publish\deepsea-glass-live-fix\**
+          if-no-files-found: error
+          retention-days: 14
