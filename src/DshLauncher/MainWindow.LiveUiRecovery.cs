@@ -8,6 +8,11 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using WpfBrush = System.Windows.Media.Brush;
+using WpfBrushes = System.Windows.Media.Brushes;
+using WpfImage = System.Windows.Controls.Image;
+using WpfPanel = System.Windows.Controls.Panel;
+using WpfTextElement = System.Windows.Documents.TextElement;
 
 namespace DshLauncher;
 
@@ -17,7 +22,7 @@ public partial class MainWindow
     private bool _liveUiRecoveryClosed;
     private DependencyPropertyDescriptor? _embeddedContentDescriptor;
     private NotifyCollectionChangedEventHandler? _liveInstanceCollectionChanged;
-    private Image? _liveTransitionOverlay;
+    private WpfImage? _liveTransitionOverlay;
     private RenderTargetBitmap? _lastEmbeddedSnapshot;
     private long _liveTransitionGeneration;
     private long _liveSnapshotGeneration;
@@ -87,17 +92,17 @@ public partial class MainWindow
         var chrome = new FrameworkElementFactory(typeof(Border));
         chrome.SetValue(
             Border.BackgroundProperty,
-            TryFindResource("PageBrush") as Brush ?? Brushes.White);
+            TryFindResource("PageBrush") as WpfBrush ?? WpfBrushes.White);
         chrome.SetValue(
             Border.BorderBrushProperty,
-            TryFindResource("LineBrush") as Brush ?? Brushes.LightGray);
+            TryFindResource("LineBrush") as WpfBrush ?? WpfBrushes.LightGray);
         chrome.SetValue(Border.BorderThicknessProperty, new Thickness(1));
         chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(16));
         chrome.SetValue(Border.ClipToBoundsProperty, true);
         chrome.SetValue(Border.SnapsToDevicePixelsProperty, true);
         chrome.SetValue(
-            TextElement.ForegroundProperty,
-            TryFindResource("TextBrush") as Brush ?? Brushes.Black);
+            WpfTextElement.ForegroundProperty,
+            TryFindResource("TextBrush") as WpfBrush ?? WpfBrushes.Black);
 
         var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
         presenter.SetValue(
@@ -114,18 +119,18 @@ public partial class MainWindow
             new TemplateBindingExtension(ContentControl.ContentStringFormatProperty));
         presenter.SetValue(
             FrameworkElement.HorizontalAlignmentProperty,
-            HorizontalAlignment.Stretch);
+            System.Windows.HorizontalAlignment.Stretch);
         presenter.SetValue(
             FrameworkElement.VerticalAlignmentProperty,
-            VerticalAlignment.Stretch);
+            System.Windows.VerticalAlignment.Stretch);
         presenter.SetValue(
-            TextElement.ForegroundProperty,
-            TryFindResource("TextBrush") as Brush ?? Brushes.Black);
+            WpfTextElement.ForegroundProperty,
+            TryFindResource("TextBrush") as WpfBrush ?? WpfBrushes.Black);
         chrome.AppendChild(presenter);
         template.VisualTree = chrome;
 
         EmbeddedPageHost.Template = template;
-        EmbeddedPageHost.Foreground = TryFindResource("TextBrush") as Brush ?? Brushes.Black;
+        EmbeddedPageHost.Foreground = TryFindResource("TextBrush") as WpfBrush ?? WpfBrushes.Black;
         EmbeddedPageHost.ApplyTemplate();
     }
 
@@ -136,7 +141,7 @@ public partial class MainWindow
             return;
         }
 
-        _liveTransitionOverlay = new Image
+        _liveTransitionOverlay = new WpfImage
         {
             IsHitTestVisible = false,
             Visibility = Visibility.Collapsed,
@@ -145,7 +150,7 @@ public partial class MainWindow
             Opacity = 1,
             RenderTransform = new TranslateTransform()
         };
-        Panel.SetZIndex(_liveTransitionOverlay, 100);
+        WpfPanel.SetZIndex(_liveTransitionOverlay, 100);
         PageTransitionHost.Children.Add(_liveTransitionOverlay);
     }
 

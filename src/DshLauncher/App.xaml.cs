@@ -42,7 +42,7 @@ public partial class App : System.Windows.Application
                 || ActivateExistingLauncherByWindowHandle();
             if (!activated)
             {
-                MessageBox.Show(
+                System.Windows.MessageBox.Show(
                     "检测到另一个可能以管理员权限运行的 DSH Launcher。\n\n"
                     + "请先关闭已有 Launcher，再以普通方式重新打开。",
                     "DSH Launcher 已在运行",
