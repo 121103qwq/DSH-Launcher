@@ -15,7 +15,9 @@ namespace DshLauncher.Services;
 /// </summary>
 public sealed class SkillMarketService
 {
-    private const string SearchUrl = "https://api.github.com/search/repositories?q=skill%20in%3Aname&sort=stars&order=desc&per_page=30";
+    private const string SearchUrl = "https://api.github.com/search/repositories?q=skill%20in%3Aname&sort=stars&order=desc&per_page=20";
+    private const int SearchPageSize = 20;
+    private const int MaxSearchPages = 2;
     private const int MaxResponseBytes = 8 * 1024 * 1024;
     private const int MaxConcurrentRepositoryScans = 6;
     private const int MaxConcurrentValidations = 12;
@@ -25,7 +27,7 @@ public sealed class SkillMarketService
     private static readonly TimeSpan RepositoryScanTimeout = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan ValidationTimeout = TimeSpan.FromSeconds(4);
 
-    public const int CurrentValidationVersion = 2;
+    public const int CurrentValidationVersion = 3;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -56,7 +58,6 @@ public sealed class SkillMarketService
     }
 
     private string CachePath => Path.Combine(_paths.RootDirectory, "skill-market-cache.json");
-
     public IReadOnlyList<SkillMarketItem> ReadCached()
     {
         try
@@ -332,10 +333,13 @@ public sealed class SkillMarketService
 
             var skillDirectory = Path.GetDirectoryName(skillFile)
                 ?? throw new InvalidDataException("无法确定 Skill 所在目录。");
+            var importSource = Path.GetFileName(skillFile).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase)
+                ? skillDirectory
+                : skillFile;
             progress?.Report(new SkillInstallProgress(0, null, null, "正在导入"));
             var entry = await _extensionService.ImportSkillAsync(
                 instance,
-                skillDirectory,
+                importSource,
                 item.Name,
                 cancellationToken);
             return entry.Name;
@@ -357,54 +361,69 @@ public sealed class SkillMarketService
 
     private async Task<List<SkillMarketItem>> SearchRepositoriesAsync(CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(SearchUrl, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        using var document = await JsonDocument.ParseAsync(
-            await response.Content.ReadAsStreamAsync(cancellationToken), options: default, cancellationToken);
-        var result = new List<SkillMarketItem>();
-        if (!document.RootElement.TryGetProperty("items", out var items)
-            || items.ValueKind != JsonValueKind.Array)
+        var repositories = new Dictionary<string, SkillMarketItem>(StringComparer.OrdinalIgnoreCase);
+        for (var page = 1; page <= MaxSearchPages; page++)
         {
-            return result;
-        }
-
-        foreach (var repository in items.EnumerateArray())
-        {
-            if (repository.ValueKind != JsonValueKind.Object
-                || !repository.TryGetProperty("full_name", out var fullName)
-                || fullName.ValueKind != JsonValueKind.String
-                || !repository.TryGetProperty("name", out var name)
-                || name.ValueKind != JsonValueKind.String)
+            using var response = await _httpClient.GetAsync(
+                new Uri($"{SearchUrl}&page={page}"),
+                cancellationToken);
+            response.EnsureSuccessStatusCode();
+            using var document = await JsonDocument.ParseAsync(
+                await response.Content.ReadAsStreamAsync(cancellationToken), options: default, cancellationToken);
+            if (!document.RootElement.TryGetProperty("items", out var items)
+                || items.ValueKind != JsonValueKind.Array)
             {
-                continue;
+                return repositories.Values.ToList();
             }
 
-            var repositoryName = name.GetString()!;
-            if (!repositoryName.Contains("skill", StringComparison.OrdinalIgnoreCase))
+            var pageItemCount = items.GetArrayLength();
+            foreach (var repository in items.EnumerateArray())
             {
-                continue;
+                if (repository.ValueKind != JsonValueKind.Object
+                    || !repository.TryGetProperty("full_name", out var fullName)
+                    || fullName.ValueKind != JsonValueKind.String
+                    || !repository.TryGetProperty("name", out var name)
+                    || name.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var repositoryName = name.GetString()!;
+                if (!repositoryName.Contains("skill", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var repositoryId = fullName.GetString()!;
+                var defaultBranch = repository.TryGetProperty("default_branch", out var branch)
+                    && branch.ValueKind == JsonValueKind.String
+                        ? branch.GetString() ?? "main"
+                        : "main";
+                if (!repositories.ContainsKey(repositoryId))
+                {
+                    repositories.Add(repositoryId, new SkillMarketItem(
+                        repositoryId,
+                        repositoryName,
+                        ReadStringProperty(repository, "description"),
+                        repository.TryGetProperty("stargazers_count", out var stars)
+                            && stars.ValueKind == JsonValueKind.Number
+                                ? stars.GetInt32()
+                                : 0,
+                        defaultBranch,
+                        DateTimeOffset.TryParse(ReadStringProperty(repository, "pushed_at"), out var pushedAt)
+                            ? pushedAt
+                            : null,
+                        Verified: false));
+                }
             }
 
-            var defaultBranch = repository.TryGetProperty("default_branch", out var branch)
-                && branch.ValueKind == JsonValueKind.String
-                    ? branch.GetString() ?? "main"
-                    : "main";
-            result.Add(new SkillMarketItem(
-                fullName.GetString()!,
-                repositoryName,
-                ReadStringProperty(repository, "description"),
-                repository.TryGetProperty("stargazers_count", out var stars)
-                    && stars.ValueKind == JsonValueKind.Number
-                        ? stars.GetInt32()
-                        : 0,
-                defaultBranch,
-                DateTimeOffset.TryParse(ReadStringProperty(repository, "pushed_at"), out var pushedAt)
-                    ? pushedAt
-                    : null,
-                Verified: false));
+            if (pageItemCount < SearchPageSize)
+            {
+                break;
+            }
         }
 
-        return result;
+        return repositories.Values.ToList();
     }
 
     private async Task<RepositoryScanResult> DiscoverSkillPathsAsync(
@@ -496,7 +515,15 @@ public sealed class SkillMarketService
                 return new SkillValidationResult(null, Cacheable: true);
             }
 
-            return new SkillValidationResult(ParseSkillFrontmatter(content), Cacheable: true);
+            var metadata = ParseSkillFrontmatter(content);
+            if (metadata is not null
+                && !Path.GetFileName(candidate.SkillPath).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase)
+                && !Path.GetFileNameWithoutExtension(candidate.SkillPath).Equals(metadata.Name, StringComparison.Ordinal))
+            {
+                metadata = null;
+            }
+
+            return new SkillValidationResult(metadata, Cacheable: true);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -516,8 +543,7 @@ public sealed class SkillMarketService
             return null;
         }
 
-        string? name = null;
-        string? description = null;
+        var frontmatter = new List<string>();
         var closed = false;
         for (var count = 0; count < 128; count++)
         {
@@ -533,6 +559,19 @@ public sealed class SkillMarketService
                 break;
             }
 
+            frontmatter.Add(line);
+        }
+
+        if (!closed)
+        {
+            return null;
+        }
+
+        string? name = null;
+        string? description = null;
+        for (var index = 0; index < frontmatter.Count; index++)
+        {
+            var line = frontmatter[index];
             var separator = line.IndexOf(':');
             if (separator <= 0)
             {
@@ -540,14 +579,100 @@ public sealed class SkillMarketService
             }
 
             var key = line[..separator].Trim();
-            var value = line[(separator + 1)..].Trim().Trim('\'', '"');
-            if (key.Equals("name", StringComparison.OrdinalIgnoreCase)) name = value;
-            if (key.Equals("description", StringComparison.OrdinalIgnoreCase)) description = value;
+            var rawValue = line[(separator + 1)..].Trim();
+            if (key.Equals("disable-model-invocation", StringComparison.OrdinalIgnoreCase)
+                || key.Equals("user-invocable", StringComparison.OrdinalIgnoreCase)
+                || key.Equals("disableModelInvocation", StringComparison.OrdinalIgnoreCase)
+                || key.Equals("userInvocable", StringComparison.OrdinalIgnoreCase))
+            {
+                if ((key != "disable-model-invocation" && key != "user-invocable")
+                    || !IsYamlBoolean(rawValue))
+                {
+                    return null;
+                }
+            }
+
+            if (key == "name")
+            {
+                name = UnquoteYamlScalar(rawValue);
+            }
+            else if (key == "description")
+            {
+                description = rawValue is "|" or ">"
+                    ? ReadYamlBlock(frontmatter, ref index, folded: rawValue == ">")
+                    : UnquoteYamlScalar(rawValue);
+            }
         }
 
-        return closed && !string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(description)
-            ? new SkillMetadata(name, description)
+        return IsKebabCaseSkillName(name) && !string.IsNullOrWhiteSpace(description)
+            ? new SkillMetadata(name!, description!)
             : null;
+    }
+
+    private static string UnquoteYamlScalar(string value) => value.Trim().Trim('\'', '"');
+
+    private static string ReadYamlBlock(IReadOnlyList<string> lines, ref int index, bool folded)
+    {
+        var values = new List<string>();
+        while (index + 1 < lines.Count)
+        {
+            var next = lines[index + 1];
+            if (next.Length > 0 && !char.IsWhiteSpace(next[0]))
+            {
+                break;
+            }
+
+            index++;
+            values.Add(next.Trim());
+        }
+
+        return string.Join(folded ? " " : Environment.NewLine, values).Trim();
+    }
+
+    private static bool IsYamlBoolean(string value)
+    {
+        var normalized = UnquoteYamlScalar(value);
+        return normalized.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("no", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("on", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("off", StringComparison.OrdinalIgnoreCase)
+            || normalized is "1" or "0";
+    }
+
+    private static bool IsKebabCaseSkillName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)
+            || name[0] == '-'
+            || name[^1] == '-')
+        {
+            return false;
+        }
+
+        var previousWasDash = false;
+        foreach (var character in name)
+        {
+            if (character == '-')
+            {
+                if (previousWasDash)
+                {
+                    return false;
+                }
+
+                previousWasDash = true;
+                continue;
+            }
+
+            if (character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9'))
+            {
+                return false;
+            }
+
+            previousWasDash = false;
+        }
+
+        return true;
     }
 
     private static IReadOnlyList<SkillMarketItem> BuildSkillSnapshot(IEnumerable<SkillMarketItem> items) =>
@@ -645,7 +770,19 @@ public sealed class SkillMarketService
             return false;
         }
 
-        return string.Equals(normalized.Split('/').LastOrDefault(), "SKILL.md", StringComparison.OrdinalIgnoreCase);
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var fileName = segments.LastOrDefault();
+        if (string.Equals(fileName, "SKILL.md", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return fileName is not null
+            && fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            && !fileName.Equals("README.md", StringComparison.OrdinalIgnoreCase)
+            && !fileName.Equals("CHANGELOG.md", StringComparison.OrdinalIgnoreCase)
+            && (segments.Length == 1
+                || segments[^2].Equals("skills", StringComparison.OrdinalIgnoreCase));
     }
 
     private static int SkillPathRank(string path)

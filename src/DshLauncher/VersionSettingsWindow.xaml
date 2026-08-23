@@ -400,7 +400,7 @@
                             Padding="20">
                         <StackPanel>
                             <TextBlock Text="导出版本整合包" FontSize="16" FontWeight="SemiBold" />
-                            <TextBlock Text="导出用于分享版本设计，导入后会重新创建一个独立版本。"
+                            <TextBlock Text="导出用于分享版本设计；可选择完整的 Launcher .dshpack，或只包含标准 DSh Profile 的 ModPack .tgz。"
                                        Foreground="{StaticResource MutedBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,6,0,14" />
@@ -408,6 +408,11 @@
                                       Content="包含当前版本的 Plugin 配置"
                                       IsChecked="True"
                                       Margin="0,0,0,10" />
+                            <TextBlock Text="导出格式" FontWeight="SemiBold" Margin="0,2,0,6" />
+                            <ComboBox x:Name="PackageFormatBox" SelectedIndex="0" Margin="0,0,0,10">
+                                <ComboBoxItem Content="DSH Launcher .dshpack（版本设计）" />
+                                <ComboBoxItem Content="DSH ModPack .tgz（标准 Profile）" />
+                            </ComboBox>
                             <CheckBox x:Name="IncludeSessionsCheckBox"
                                       Content="会话文件（禁止导出）"
                                       IsChecked="False"
@@ -439,7 +444,7 @@
                             Margin="0,16,0,0">
                         <StackPanel>
                             <TextBlock Text="整合包格式" FontSize="16" FontWeight="SemiBold" />
-                            <TextBlock Text="版本控制中的导入会识别这个扩展名；包本身仍是 ZIP 结构。"
+                            <TextBlock Text="这里设置 Launcher 原生 ZIP 包的扩展名；导入会按文件内容自动识别，也支持 DSH ModPack .tgz。"
                                        Foreground="{StaticResource MutedBrush}"
                                        FontSize="11"
                                        TextWrapping="Wrap"

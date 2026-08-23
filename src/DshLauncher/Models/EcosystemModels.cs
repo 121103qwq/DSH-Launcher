@@ -47,6 +47,20 @@ public sealed record ConversationEntry(
     string DisplayName,
     string InstanceName);
 
+public enum ConversationStorageKind
+{
+    Jsonl,
+    Sqlite,
+    Mixed
+}
+
+public sealed record ConversationStorageInfo(
+    ConversationStorageKind Kind,
+    bool HasJsonlFiles)
+{
+    public bool SupportsJsonlImport => Kind != ConversationStorageKind.Sqlite;
+}
+
 public sealed record ConversationBackupEntry(
     string FileName,
     string FullPath,

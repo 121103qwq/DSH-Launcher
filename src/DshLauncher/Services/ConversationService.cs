@@ -128,6 +128,22 @@ public sealed class ConversationService
             .ToArray();
     }
 
+    public ConversationStorageInfo GetStorageInfo(ManagerInstance instance)
+    {
+        var root = GetSessionsRoot(instance);
+        var hasJsonlFiles = Directory.Exists(root)
+            && !IsReparsePoint(root)
+            && ContainsSessionFile(root);
+        var sqliteConfigured = IsSqlitePersistenceConfigured(instance);
+        return new ConversationStorageInfo(
+            sqliteConfigured
+                ? hasJsonlFiles
+                    ? ConversationStorageKind.Mixed
+                    : ConversationStorageKind.Sqlite
+                : ConversationStorageKind.Jsonl,
+            hasJsonlFiles);
+    }
+
     public string RestoreBackup(ManagerInstance instance, ConversationBackupEntry backup)
     {
         EnsureStopped(instance);
@@ -188,6 +204,12 @@ public sealed class ConversationService
     public string Import(ManagerInstance instance, string sourcePath, string? workingDirectoryOverride = null)
     {
         EnsureStopped(instance);
+        if (!GetStorageInfo(instance).SupportsJsonlImport)
+        {
+            throw new NotSupportedException(
+                "当前版本配置了 SQLite 会话存储，不能把 JSONL 文件写入一个不会被 DSh 使用的 sessions 目录。请先在 DSh 中切换回 JSONL 存储，或直接在当前实例窗口管理对话。");
+        }
+
         if (string.IsNullOrWhiteSpace(sourcePath))
         {
             throw new ArgumentException("导入文件不能为空。", nameof(sourcePath));
@@ -469,6 +491,221 @@ public sealed class ConversationService
 
     private static string GetSessionsRoot(ManagerInstance instance) =>
         Path.GetFullPath(Path.Combine(instance.DshHome, "sessions"));
+
+    private static bool ContainsSessionFile(string root)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+        try
+        {
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                foreach (var path in Directory.EnumerateFiles(directory, "session.jsonl*", SearchOption.TopDirectoryOnly))
+                {
+                    if (!IsReparsePoint(path) && IsSessionFileName(path))
+                    {
+                        return true;
+                    }
+                }
+
+                foreach (var child in Directory.EnumerateDirectories(directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    if (!IsReparsePoint(child))
+                    {
+                        pending.Push(child);
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Backend detection is informational; the normal listing path will
+            // still surface every individually readable JSONL session.
+        }
+
+        return false;
+    }
+
+    private static bool IsSqlitePersistenceConfigured(ManagerInstance instance)
+    {
+        var profileRoot = Path.Combine(instance.DshHome, "profiles", "web");
+        var candidates = new[]
+        {
+            Path.Combine(instance.DshHome, "launcher.patch.yml"),
+            Path.Combine(profileRoot, "cordis.patch.yml"),
+            Path.Combine(profileRoot, "cordis.yml")
+        };
+        if (candidates.Any(ReferencesSqlitePersistence))
+        {
+            return true;
+        }
+
+        foreach (var patchPath in EnumerateProfileBundlePatches(profileRoot))
+        {
+            if (ReferencesSqlitePersistence(patchPath))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateProfileBundlePatches(string profileRoot)
+    {
+        var manifestPath = Path.Combine(profileRoot, "package.json");
+        if (!File.Exists(manifestPath) || IsReparsePoint(manifestPath))
+        {
+            yield break;
+        }
+
+        JsonDocument manifest;
+        try
+        {
+            using var stream = File.OpenRead(manifestPath);
+            manifest = JsonDocument.Parse(stream);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            yield break;
+        }
+
+        using (manifest)
+        {
+            if (!manifest.RootElement.TryGetProperty("dsh", out var dsh)
+                || dsh.ValueKind != JsonValueKind.Object
+                || !dsh.TryGetProperty("profile", out var profile)
+                || profile.ValueKind != JsonValueKind.Object
+                || !profile.TryGetProperty("bundles", out var bundles)
+                || bundles.ValueKind != JsonValueKind.Array)
+            {
+                yield break;
+            }
+
+            foreach (var bundle in bundles.EnumerateArray())
+            {
+                if (bundle.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(bundle.GetString()))
+                {
+                    continue;
+                }
+
+                var packageName = bundle.GetString()!;
+                foreach (var nodeModulesRoot in new[]
+                {
+                    Path.Combine(profileRoot, "node_modules"),
+                    Path.Combine(Path.GetDirectoryName(profileRoot)!, "node_modules")
+                })
+                {
+                    var packageRoot = ResolvePackageRoot(nodeModulesRoot, packageName);
+                    if (packageRoot is null)
+                    {
+                        continue;
+                    }
+
+                    var packageManifestPath = Path.Combine(packageRoot, "package.json");
+                    if (!File.Exists(packageManifestPath) || IsReparsePoint(packageManifestPath))
+                    {
+                        continue;
+                    }
+
+                    string? patchRelativePath = null;
+                    try
+                    {
+                        using var packageStream = File.OpenRead(packageManifestPath);
+                        using var packageManifest = JsonDocument.Parse(packageStream);
+                        var root = packageManifest.RootElement;
+                        if (root.TryGetProperty("dsh", out var packageDsh)
+                            && packageDsh.ValueKind == JsonValueKind.Object
+                            && packageDsh.TryGetProperty("bundle", out var packageBundle)
+                            && packageBundle.ValueKind == JsonValueKind.Object
+                            && packageBundle.TryGetProperty("patch", out var patch)
+                            && patch.ValueKind == JsonValueKind.String)
+                        {
+                            patchRelativePath = patch.GetString();
+                        }
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+                    {
+                        continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(patchRelativePath))
+                    {
+                        continue;
+                    }
+
+                    var patchPath = Path.GetFullPath(Path.Combine(packageRoot, patchRelativePath));
+                    var packagePrefix = Path.GetFullPath(packageRoot)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                        + Path.DirectorySeparatorChar;
+                    if (patchPath.StartsWith(packagePrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        yield return patchPath;
+                    }
+                }
+            }
+        }
+    }
+
+    private static string? ResolvePackageRoot(string nodeModulesRoot, string packageName)
+    {
+        if (string.IsNullOrWhiteSpace(packageName)
+            || Path.IsPathRooted(packageName)
+            || packageName.Contains('\\'))
+        {
+            return null;
+        }
+
+        var segments = packageName.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Any(segment => segment is "." or "..")
+            || (segments.Length != 1
+                && (segments.Length != 2 || !segments[0].StartsWith('@'))))
+        {
+            return null;
+        }
+
+        return Path.Combine(new[] { nodeModulesRoot }.Concat(segments).ToArray());
+    }
+
+    private static bool ReferencesSqlitePersistence(string path)
+    {
+        if (!File.Exists(path) || IsReparsePoint(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var info = new FileInfo(path);
+            if (info.Length > 4 * 1024 * 1024)
+            {
+                return false;
+            }
+
+            foreach (var line in File.ReadLines(path))
+            {
+                var value = line.TrimStart();
+                if (value.StartsWith('#'))
+                {
+                    continue;
+                }
+
+                if (value.Contains("@deepseek-ai/dsh-session-persistence-sqlite", StringComparison.OrdinalIgnoreCase)
+                    || value.Contains("session-persistence-sqlite", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        return false;
+    }
 
     private static HeaderInfo? ReadHeader(string path)
     {

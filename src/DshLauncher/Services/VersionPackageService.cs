@@ -14,10 +14,11 @@ namespace DshLauncher.Services;
 /// runtime directory may be shared; each registered version still receives a
 /// separate DSH_HOME.
 /// </summary>
-public sealed class VersionPackageService
+public sealed partial class VersionPackageService
 {
     public const int CurrentPackageFormatVersion = 1;
     public const string DefaultPackageExtension = ".dshpack";
+    public const string ModPackPackageExtension = ".tgz";
     private const int MaximumPackageEntries = 4096;
     private const long MaximumPackageEntryBytes = 32L * 1024 * 1024;
     private const long MaximumPackageUncompressedBytes = 256L * 1024 * 1024;
@@ -139,6 +140,11 @@ public sealed class VersionPackageService
         }
 
         var destination = Path.GetFullPath(packagePath);
+        if (IsModPackPath(destination))
+        {
+            return ExportModPackPackage(instance, destination, options);
+        }
+
         var directory = Path.GetDirectoryName(destination)
             ?? throw new InvalidOperationException("整合包没有父目录。");
         Directory.CreateDirectory(directory);
@@ -200,6 +206,16 @@ public sealed class VersionPackageService
                             pluginConfiguration.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                         contents.Add("dsh-home/profiles/web/package.json");
                         plugins = ReadPluginNames(pluginConfiguration);
+
+                        var pluginPatchPath = Path.Combine(instance.DshHome, "profiles", "web", "cordis.patch.yml");
+                        if (File.Exists(pluginPatchPath))
+                        {
+                            AddTextEntry(
+                                archive,
+                                "dsh-home/profiles/web/cordis.patch.yml",
+                                SanitizeSettingsText(File.ReadAllText(pluginPatchPath, Encoding.UTF8)));
+                            contents.Add("dsh-home/profiles/web/cordis.patch.yml");
+                        }
                     }
                 }
 
@@ -265,6 +281,11 @@ public sealed class VersionPackageService
             throw new FileNotFoundException("找不到整合包文件。", packagePath);
         }
 
+        if (DetectPackageKind(packagePath) == VersionPackageKind.ModPack)
+        {
+            return PreviewModPackPackage(packagePath);
+        }
+
         using var archive = ZipFile.OpenRead(packagePath);
         ValidatePackageArchive(archive);
         var manifest = ReadPackageManifest(archive);
@@ -277,7 +298,9 @@ public sealed class VersionPackageService
             manifest.Skills,
             manifest.AgentPresets,
             manifest.Providers,
-            manifest.Workflow);
+            manifest.Workflow,
+            VersionPackageKind.DshPack,
+            Array.Empty<string>());
     }
 
     public ManagerInstance ImportPackage(string packagePath, ManagerInstance template)
@@ -285,6 +308,11 @@ public sealed class VersionPackageService
         if (!File.Exists(packagePath))
         {
             throw new FileNotFoundException("找不到整合包文件。", packagePath);
+        }
+
+        if (DetectPackageKind(packagePath) == VersionPackageKind.ModPack)
+        {
+            return ImportModPackPackage(packagePath, template);
         }
 
         using var archive = ZipFile.OpenRead(packagePath);
@@ -302,12 +330,14 @@ public sealed class VersionPackageService
             ? $"{template.Name}（导入）"
             : manifest.Name.Trim();
         var runtime = ResolveImportRuntime(template);
+        var runtimeVersion = DshRuntimeDetector.TryReadPackageVersion(runtime.RootPath)
+            ?? template.DetectedVersion;
         var created = _registry.Register(
             name,
             runtime.RootPath,
             runtime.Kind,
             runtime.DshExecutablePath,
-            manifest.DshVersion ?? manifest.DetectedVersion ?? template.DetectedVersion,
+            runtimeVersion,
             manifest.PackageManager ?? runtime.PackageManager,
             dshLaunchSpec: runtime.LaunchSpec);
         try
@@ -325,6 +355,33 @@ public sealed class VersionPackageService
             TryDeleteGeneratedHome(created.DshHome);
             throw;
         }
+    }
+
+    public VersionPackageConversionResult ConvertPackage(string sourcePath, string destinationPath)
+    {
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException("找不到要转换的整合包。", sourcePath);
+        }
+
+        if (string.IsNullOrWhiteSpace(destinationPath))
+        {
+            throw new ArgumentException("转换目标路径不能为空。", nameof(destinationPath));
+        }
+
+        var sourceKind = DetectPackageKind(sourcePath);
+        var destination = Path.GetFullPath(destinationPath);
+        var destinationKind = IsModPackPath(destination)
+            ? VersionPackageKind.ModPack
+            : VersionPackageKind.DshPack;
+        if (sourceKind == destinationKind)
+        {
+            throw new InvalidOperationException("源文件和目标文件是同一种整合包格式，不需要转换。 ");
+        }
+
+        return sourceKind == VersionPackageKind.ModPack
+            ? ConvertModPackToDshPack(sourcePath, destination)
+            : ConvertDshPackToModPack(sourcePath, destination);
     }
 
     private (string RootPath, InstanceKind Kind, string? DshExecutablePath, DshRuntimeLaunchSpec? LaunchSpec, string? PackageManager)

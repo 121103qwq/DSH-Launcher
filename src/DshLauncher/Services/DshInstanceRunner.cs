@@ -15,11 +15,13 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan HealthRequestTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan CapabilityProbeTimeout = TimeSpan.FromSeconds(8);
     private const int PortStartAttempts = 3;
 
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly Dictionary<string, RunningDshProcess> _running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, AttachedDshService> _attached = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, bool> _noOpenSupportByRuntime = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<int> _portAllocator;
     private readonly DshHomeImportService _homeImporter;
     private bool _disposed;
@@ -293,6 +295,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             }
 
             RemoveExited(instance.Id);
+            var supportsNoOpen = await ProbeNoOpenSupportAsync(
+                instance,
+                nodeRuntime,
+                sourceEntrypoint,
+                cancellationToken);
 
             InstanceLock? instanceLock = null;
             try
@@ -316,7 +323,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         var webUrl = $"http://127.0.0.1:{port}/";
                         process = new Process
                         {
-                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint),
+                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint, supportsNoOpen),
                             EnableRaisingEvents = true
                         };
                         var output = new StringBuilder();
@@ -719,16 +726,10 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         ManagerInstance instance,
         int port,
         NodeRuntimeInfo? nodeRuntime,
-        string? sourceEntrypoint)
+        string? sourceEntrypoint,
+        bool supportsNoOpen)
     {
-        var spec = instance.Kind == InstanceKind.Source
-            ? new DshRuntimeLaunchSpec(
-                DshRuntimeLaunchMode.NodeScript,
-                nodeRuntime!.ExecutablePath!,
-                sourceEntrypoint,
-                NodeExecutablePath: nodeRuntime.ExecutablePath)
-            : DshRuntimeCommandFactory.Resolve(instance)
-                ?? throw new InvalidOperationException("实例没有可用的 DSh 启动描述。");
+        var spec = ResolveLaunchSpec(instance, nodeRuntime, sourceEntrypoint);
         var arguments = new List<string> { "web" };
         var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
         if (IsRegularFile(patchPath))
@@ -741,6 +742,10 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         arguments.Add("127.0.0.1");
         arguments.Add("--port");
         arguments.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (supportsNoOpen)
+        {
+            arguments.Add("--no-open");
+        }
         return DshRuntimeCommandFactory.Create(
             spec,
             arguments,
@@ -748,6 +753,145 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             instance.DshHome,
             Path.Combine(instance.DshHome, ".agents"),
             nodeRuntime?.ExecutablePath);
+    }
+
+    private async Task<bool> ProbeNoOpenSupportAsync(
+        ManagerInstance instance,
+        NodeRuntimeInfo? nodeRuntime,
+        string? sourceEntrypoint,
+        CancellationToken cancellationToken)
+    {
+        var spec = ResolveLaunchSpec(instance, nodeRuntime, sourceEntrypoint);
+        var cacheKey = BuildCapabilityCacheKey(spec);
+        lock (_noOpenSupportByRuntime)
+        {
+            if (_noOpenSupportByRuntime.TryGetValue(cacheKey, out var cached))
+            {
+                return cached;
+            }
+        }
+
+        var supportsNoOpen = false;
+        Process? process = null;
+        try
+        {
+            var startInfo = DshRuntimeCommandFactory.Create(
+                spec,
+                new[] { "web", "--help" },
+                instance.RootPath,
+                instance.DshHome,
+                Path.Combine(instance.DshHome, ".agents"),
+                nodeRuntime?.ExecutablePath);
+            process = new Process { StartInfo = startInfo };
+            if (process.Start())
+            {
+                var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+                var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(CapabilityProbeTimeout);
+                await process.WaitForExitAsync(timeout.Token);
+                var output = await outputTask;
+                var error = await errorTask;
+                supportsNoOpen = process.ExitCode == 0
+                    && HelpListsNoOpen(output + Environment.NewLine + error);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A slow or incompatible help command must not prevent the instance
+            // from starting with the conservative argument set.
+        }
+        catch (Exception ex) when (ex is IOException
+            or InvalidOperationException
+            or System.ComponentModel.Win32Exception)
+        {
+            // Capability discovery is optional. Unknown means do not pass the
+            // flag, which is safer than terminating a newer DSh at startup.
+        }
+        finally
+        {
+            if (process is not null)
+            {
+                if (!HasExited(process))
+                {
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException
+                        or NotSupportedException
+                        or System.ComponentModel.Win32Exception)
+                    {
+                        // The help probe is best effort; the process may have
+                        // exited between HasExited and Kill.
+                    }
+                }
+
+                process.Dispose();
+            }
+        }
+
+        lock (_noOpenSupportByRuntime)
+        {
+            _noOpenSupportByRuntime[cacheKey] = supportsNoOpen;
+        }
+
+        return supportsNoOpen;
+    }
+
+    private static DshRuntimeLaunchSpec ResolveLaunchSpec(
+        ManagerInstance instance,
+        NodeRuntimeInfo? nodeRuntime,
+        string? sourceEntrypoint) =>
+        instance.Kind == InstanceKind.Source
+            ? new DshRuntimeLaunchSpec(
+                DshRuntimeLaunchMode.NodeScript,
+                nodeRuntime!.ExecutablePath!,
+                sourceEntrypoint,
+                NodeExecutablePath: nodeRuntime.ExecutablePath)
+            : DshRuntimeCommandFactory.Resolve(instance)
+                ?? throw new InvalidOperationException("实例没有可用的 DSh 启动描述。");
+
+    private static string BuildCapabilityCacheKey(DshRuntimeLaunchSpec spec)
+    {
+        static long LastWriteTicks(string? path) =>
+            !string.IsNullOrWhiteSpace(path) && File.Exists(path)
+                ? File.GetLastWriteTimeUtc(path).Ticks
+                : 0;
+
+        return string.Join(
+            '|',
+            spec.Mode,
+            Path.GetFullPath(spec.HostPath),
+            LastWriteTicks(spec.HostPath),
+            spec.EntryPointPath is null ? string.Empty : Path.GetFullPath(spec.EntryPointPath),
+            LastWriteTicks(spec.EntryPointPath));
+    }
+
+    internal static bool HelpListsNoOpen(string? helpText)
+    {
+        if (string.IsNullOrWhiteSpace(helpText))
+        {
+            return false;
+        }
+
+        foreach (var line in helpText.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var option = line.TrimStart();
+            if (!option.StartsWith("--no-open", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (option.Length == "--no-open".Length
+                || char.IsWhiteSpace(option["--no-open".Length])
+                || option["--no-open".Length] == ',')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal static string BuildPathWithNodeDirectory(string? nodeExecutablePath, string currentPath)

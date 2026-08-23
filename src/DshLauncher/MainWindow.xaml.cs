@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Data;
 using System.Windows.Threading;
 using System.Text.RegularExpressions;
+using System.Net.Http;
 using WpfBrush = System.Windows.Media.Brush;
 using WpfBrushes = System.Windows.Media.Brushes;
 using WpfColor = System.Windows.Media.Color;
@@ -55,6 +56,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly ModelService _modelService;
     private readonly ModelProviderSyncService _modelProviderSyncService;
     private readonly ProviderStateService _providerStateService = new();
+    private readonly CodingModelPolicyService _codingModelPolicyService = new();
+    private readonly DshApiClient _dshApiClient = new();
     private readonly DshInstallService _dshInstaller = new();
     private readonly NodeInstallService _nodeInstaller = new();
     private readonly SourceBuildService _sourceBuilder = new();
@@ -959,7 +962,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _currentSection = section;
         SetNavigationSelection(section);
         VersionSettingsBackButton.Visibility = Visibility.Collapsed;
-        StartupBrandText.Visibility = section == "启动"
+        StartupBrandText.Visibility = section is "启动" or "Provider"
             ? Visibility.Visible
             : Visibility.Collapsed;
         ContextInstanceSelector.Visibility = section is "扩展" or "Agent" && Instances.Count > 0
@@ -972,6 +975,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             PageTitle = "启动";
             PageSubtitle = "启动实例并查看正在运行的 DeepSeek Harness";
             ShowMainDashboard();
+        }
+        else if (section == "Provider")
+        {
+            PageTitle = "Provider";
+            PageSubtitle = "全局管理 Coding Provider、默认模型与运行时在线状态";
+            ShowEmbeddedPage(new ProviderManagementWindow(
+                () => Instances.ToArray(),
+                _modelService,
+                _codingModelPolicyService,
+                _dshApiClient,
+                _versionSnapshotService,
+                _windowCancellation.Token));
         }
         else if (section is "扩展" or "Agent" or "对话")
         {
@@ -1020,7 +1035,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         () => SynchronizeConversationsAsync(instance),
                         relativePath => PropagateConversationDeletionAsync(instance, relativePath),
                         instances: Instances.ToArray(),
-                        selectInstance: candidate => SwitchContextInstance(candidate, section))
+                        selectInstance: candidate => SwitchContextInstance(candidate, section),
+                        modelPolicyService: _codingModelPolicyService,
+                        modelOptionsProvider: ReadGlobalModelOptionsAsync)
                 };
                 ShowEmbeddedPage(page);
             }
@@ -1077,6 +1094,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ScanAndRegisterRuntimeDirectoryAsync,
             _versionHealthService,
             _versionSnapshotService,
+            _extensionService,
             () => _nodeRuntime,
             () => _dshRuntime,
             id => _instanceRunner.IsRunning(id),
@@ -1231,6 +1249,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(NoInstancesVisibility));
         OnPropertyChanged(nameof(InstancesVisibility));
         RefreshRunningInstances();
+        _ = ApplyGlobalDefaultToNewVersionAsync(created);
+    }
+
+    private async Task ApplyGlobalDefaultToNewVersionAsync(ManagerInstance created)
+    {
+        try
+        {
+            var selection = _codingModelPolicyService.Read().GlobalDefault;
+            if (selection is not null)
+            {
+                await _modelService.SaveDefaultModelAsync(
+                    created,
+                    selection,
+                    _windowCancellation.Token);
+            }
+        }
+        catch (Exception ex) when (ex is IOException
+            or InvalidDataException
+            or InvalidOperationException
+            or UnauthorizedAccessException
+            or OperationCanceledException)
+        {
+            if (!_windowCancellation.IsCancellationRequested)
+            {
+                ShowNotice($"版本已创建，但应用全局默认模型失败：{ex.Message}");
+            }
+        }
     }
 
     private void RemoveDeletedVersion(ManagerInstance deleted)
@@ -2519,6 +2564,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             NavigationExtensions,
             NavigationAgent,
             NavigationConversations,
+            NavigationProviders,
             NavigationSettings
         };
         foreach (var button in buttons)
@@ -3842,6 +3888,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _windowSource?.RemoveHook(WindowProcedure);
         _windowSource = null;
         CloseAllChatWindows();
+        _dshApiClient.Dispose();
         _windowCancellation.Dispose();
         base.OnClosed(e);
     }
@@ -3999,6 +4046,87 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private async Task<IReadOnlyList<CodingModelOption>> ReadGlobalModelOptionsAsync()
+    {
+        var options = new List<CodingModelOption>();
+        foreach (var instance in Instances.Where(instance =>
+            !string.IsNullOrWhiteSpace(instance.WebUrl)
+            && (instance.RuntimeStatus == InstanceRuntimeStatus.Running
+                || instance.RuntimeOwnership != InstanceRuntimeOwnership.None)))
+        {
+            try
+            {
+                options.AddRange(await _dshApiClient.ReadModelsAsync(
+                    instance.WebUrl!,
+                    _windowCancellation.Token));
+            }
+            catch (Exception ex) when (ex is HttpRequestException
+                or InvalidDataException
+                or InvalidOperationException
+                or TaskCanceledException)
+            {
+                // A second running version or the offline settings can still supply the catalog.
+            }
+        }
+
+        foreach (var instance in Instances)
+        {
+            try
+            {
+                options.AddRange(_modelService.Read(instance)
+                    .Where(provider => provider.Configured)
+                    .SelectMany(provider => provider.Models.Select(model => new CodingModelOption(
+                        provider.Provider,
+                        provider.DisplayName,
+                        model,
+                        model))));
+                var instanceDefault = _modelService.ReadDefaultModel(instance);
+                if (instanceDefault is not null)
+                {
+                    options.Add(new CodingModelOption(
+                        instanceDefault.Provider,
+                        instanceDefault.Provider,
+                        instanceDefault.Model,
+                        instanceDefault.Model,
+                        instanceDefault.ReasoningEffort,
+                        instanceDefault.ReasoningEffort));
+                }
+            }
+            catch (Exception ex) when (ex is IOException
+                or InvalidDataException
+                or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        try
+        {
+            var policy = _codingModelPolicyService.Read();
+            options.AddRange(new[] { policy.GlobalDefault }
+                .Concat(policy.DshWorkspaces.Select(item => item.Selection))
+                .Concat(policy.Sessions.Select(item => item.Selection))
+                .Where(selection => selection is not null)
+                .Select(selection => selection!)
+                .Select(selection => new CodingModelOption(
+                    selection.Provider,
+                    selection.Provider,
+                    selection.Model,
+                    selection.Model,
+                    selection.ReasoningEffort,
+                    selection.ReasoningEffort)));
+        }
+        catch (InvalidDataException)
+        {
+        }
+
+        return options
+            .GroupBy(option => option.Key, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .OrderBy(option => option.ProviderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.ModelName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     private async Task<bool> OpenConversationAsync(ManagerInstance owner, ConversationEntry entry)
     {
         var instance = Instances.FirstOrDefault(candidate =>
@@ -4019,6 +4147,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return false;
             }
 
+            await ApplyConversationModelPolicyAsync(instance, entry, instance.WebUrl);
             OpenChatWindow(instance.Id, instance.WebUrl, entry.SessionId);
             return true;
         }
@@ -4058,6 +4187,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return false;
             }
 
+            await ApplyConversationModelPolicyAsync(instance, entry, result.WebUrl);
             OpenChatWindow(instance.Id, result.WebUrl, entry.SessionId);
             ShowNotice($"实例已启动，正在打开对话：{entry.SessionId}。 ");
             return true;
@@ -4075,6 +4205,100 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         finally
         {
             EndLifecycleOperation();
+        }
+    }
+
+    private async Task ApplyConversationModelPolicyAsync(
+        ManagerInstance instance,
+        ConversationEntry entry,
+        string webUrl)
+    {
+        if (entry.SessionId is null)
+        {
+            return;
+        }
+
+        CodingModelSelection? selection = null;
+        CodingModelSelection? globalDefault = null;
+        try
+        {
+            var policy = _codingModelPolicyService.Read();
+            selection = policy.Sessions.FirstOrDefault(item =>
+                    string.Equals(item.InstanceId, instance.Id, StringComparison.Ordinal)
+                    && string.Equals(item.SessionId, entry.SessionId, StringComparison.Ordinal))
+                ?.Selection;
+            if (selection is null && !string.IsNullOrWhiteSpace(entry.WorkingDirectory))
+            {
+                string normalizedWorkspace;
+                try
+                {
+                    normalizedWorkspace = CodingModelPolicyService.NormalizeWorkingDirectory(entry.WorkingDirectory);
+                }
+                catch (ArgumentException)
+                {
+                    normalizedWorkspace = entry.WorkingDirectory.Trim();
+                }
+
+                selection = policy.DshWorkspaces.FirstOrDefault(item =>
+                        string.Equals(
+                            item.WorkingDirectory,
+                            normalizedWorkspace,
+                            StringComparison.OrdinalIgnoreCase))
+                    ?.Selection;
+            }
+
+            globalDefault = policy.GlobalDefault;
+        }
+        catch (InvalidDataException ex)
+        {
+            ShowNotice($"无法读取对话自动模型规则：{ex.Message}");
+            return;
+        }
+
+        // No explicit session/workspace policy: DSh keeps the session's own logged
+        // selection, while blank/new sessions inherit the global default normally.
+        if (selection is null)
+        {
+            return;
+        }
+
+        if (globalDefault is null)
+        {
+            try
+            {
+                globalDefault = _modelService.ReadDefaultModel(instance);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                // The session override can still be applied; only default restoration is unavailable.
+            }
+        }
+        try
+        {
+            var appliedSelection = await _dshApiClient.SelectSessionModelAsync(
+                webUrl,
+                entry.SessionId,
+                selection,
+                _windowCancellation.Token);
+
+            // Official session.selectModel also saves the selected model as the
+            // deployment default. Restore the independent Launcher global default
+            // while retaining the process-local session selection.
+            if (globalDefault is not null && globalDefault.Key != appliedSelection.Key)
+            {
+                await _modelService.SaveDefaultModelLiveAsync(
+                    instance,
+                    globalDefault,
+                    _windowCancellation.Token);
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or InvalidDataException
+            or InvalidOperationException
+            or TaskCanceledException)
+        {
+            ShowNotice(
+                $"对话已打开，但自动模型“{selection.DisplayText}”未能应用：{ex.Message}");
         }
     }
 

@@ -222,6 +222,23 @@ public sealed class ExtensionService
             progress);
     }
 
+    public async Task<string> RestoreProfileDependenciesAsync(
+        ManagerInstance instance,
+        NodeRuntimeInfo? nodeRuntime,
+        CancellationToken cancellationToken = default,
+        IProgress<PluginCommandProgress>? progress = null)
+    {
+        return await RunPluginCommandAsync(
+            instance,
+            "install",
+            string.Empty,
+            nodeRuntime,
+            null,
+            PluginInstallMode.Fast,
+            cancellationToken,
+            progress);
+    }
+
     public Task SetPluginEnabledAsync(
         ManagerInstance instance,
         ExtensionEntry entry,
@@ -262,6 +279,13 @@ public sealed class ExtensionService
         var index = FindStringIndex(bundles, entry.Name);
         if (enabled && index < 0)
         {
+            var manifest = TryReadPackageManifest(profilePath, entry.Name);
+            if (!DeclaresBundlePatch(manifest))
+            {
+                throw new InvalidOperationException(
+                    $"Plugin {entry.Name} 已安装，但没有声明 dsh.bundle.patch，不能作为 Profile 配置层启用。 ");
+            }
+
             bundles.Add(entry.Name);
         }
         else if (!enabled && index >= 0)
@@ -714,13 +738,17 @@ public sealed class ExtensionService
             throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改它的 Plugin。");
         }
 
-        ValidatePackageSpec(packageSpec);
-        if (IsProtectedBuiltInPlugin(packageSpec))
+        var restoresProfile = action == "install";
+        if (!restoresProfile)
         {
-            throw new InvalidOperationException($"{packageSpec} 是 DSh 默认 Plugin，由运行时管理，Launcher 不执行安装、更新或删除。");
+            ValidatePackageSpec(packageSpec);
+            if (IsProtectedBuiltInPlugin(packageSpec))
+            {
+                throw new InvalidOperationException($"{packageSpec} 是 DSh 默认 Plugin，由运行时管理，Launcher 不执行安装、更新或删除。");
+            }
         }
 
-        if (action is not ("add" or "update" or "remove"))
+        if (action is not ("add" or "update" or "remove" or "install"))
         {
             throw new ArgumentOutOfRangeException(nameof(action));
         }
@@ -740,6 +768,7 @@ public sealed class ExtensionService
         {
             "add" => "安装",
             "update" => "更新",
+            "install" => "恢复",
             _ => "删除"
         };
         var running = _isRunning(instance.Id) || instance.RuntimeStatus == InstanceRuntimeStatus.Running;
@@ -751,11 +780,11 @@ public sealed class ExtensionService
         // Version snapshots intentionally reject running instances. The UI
         // keeps a lightweight web-profile backup for hot add/update and the
         // full encrypted snapshot remains available for stopped mutations.
-        if (!running)
+        if (!running && !restoresProfile)
         {
             _snapshotService?.CreateSnapshot(instance, $"{actionText} Plugin：{packageSpec}", automatic: true);
         }
-        if (action is "add" or "update")
+        if (action is "add" or "update" or "install")
         {
             ResolvePendingPnpmBuildDecisions(instance);
         }
@@ -832,7 +861,11 @@ public sealed class ExtensionService
                 ?? throw new InvalidOperationException("实例没有 DSh 启动描述。");
         }
 
-        var arguments = new List<string> { "plugin", "--profile", ProfileName, action, packageSpec };
+        var arguments = new List<string> { "plugin", "--profile", ProfileName, action };
+        if (!string.IsNullOrWhiteSpace(packageSpec))
+        {
+            arguments.Add(packageSpec);
+        }
         AddPnpmOptions(arguments, action, allowBuildPackageName, installMode);
         return DshRuntimeCommandFactory.Create(
             spec,
@@ -1290,6 +1323,12 @@ public sealed class ExtensionService
             "package.json");
         return ReadPackageManifest(packagePath);
     }
+
+    private static bool DeclaresBundlePatch(JsonObject? manifest) =>
+        manifest?["dsh"] is JsonObject dsh
+        && dsh["bundle"] is JsonObject bundle
+        && GetString(bundle, "patch") is { Length: > 0 } patch
+        && !string.IsNullOrWhiteSpace(patch);
 
     private static JsonObject GetOrCreateObject(JsonObject root, string name)
     {

@@ -33,6 +33,8 @@ public sealed class LauncherPaths
 
     public string VersionSettingsPath => Path.Combine(RootDirectory, "version-settings.json");
 
+    public string CodingModelPoliciesPath => Path.Combine(RootDirectory, "coding-model-policies.json");
+
     public string GetInstanceDshHome(string instanceId) =>
         Path.Combine(InstancesDirectory, instanceId, "dsh-home");
 

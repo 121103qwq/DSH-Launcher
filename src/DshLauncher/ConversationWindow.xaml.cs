@@ -19,6 +19,9 @@ public partial class ConversationWindow : UserControl
     private readonly Func<string, Task>? _propagateDeletion;
     private readonly IReadOnlyList<ManagerInstance>? _instances;
     private readonly Action<ManagerInstance>? _selectInstance;
+    private readonly CodingModelPolicyService? _modelPolicyService;
+    private readonly Func<Task<IReadOnlyList<CodingModelOption>>>? _modelOptionsProvider;
+    private IReadOnlyList<ModelChoice> _modelChoices = Array.Empty<ModelChoice>();
     private bool _instanceSelectorReady;
 
     public ConversationWindow(
@@ -28,7 +31,9 @@ public partial class ConversationWindow : UserControl
         Func<Task>? synchronizeConversations = null,
         Func<string, Task>? propagateDeletion = null,
         IReadOnlyList<ManagerInstance>? instances = null,
-        Action<ManagerInstance>? selectInstance = null)
+        Action<ManagerInstance>? selectInstance = null,
+        CodingModelPolicyService? modelPolicyService = null,
+        Func<Task<IReadOnlyList<CodingModelOption>>>? modelOptionsProvider = null)
     {
         _instance = instance;
         _service = service;
@@ -37,6 +42,8 @@ public partial class ConversationWindow : UserControl
         _propagateDeletion = propagateDeletion;
         _instances = instances;
         _selectInstance = selectInstance;
+        _modelPolicyService = modelPolicyService;
+        _modelOptionsProvider = modelOptionsProvider;
         InitializeComponent();
     }
 
@@ -53,6 +60,7 @@ public partial class ConversationWindow : UserControl
         await SynchronizeAsync();
         await RefreshAsync();
         await RefreshBackupsAsync(updateStatus: false);
+        await RefreshModelConfigurationAsync();
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
@@ -74,9 +82,13 @@ public partial class ConversationWindow : UserControl
         try
         {
             var selectedPath = (ConversationList.SelectedItem as ConversationEntry)?.FullPath;
-            var entries = await Task.Run(() => _service.List(_instance));
+            var result = await Task.Run(() => (
+                Storage: _service.GetStorageInfo(_instance),
+                Entries: _service.List(_instance)));
+            var entries = result.Entries;
             Entries.Clear();
             foreach (var entry in entries) Entries.Add(entry);
+            UpdateStorageNotice(result.Storage);
             ApplyConversationFilter();
             if (selectedPath is not null)
             {
@@ -84,13 +96,32 @@ public partial class ConversationWindow : UserControl
                     string.Equals(entry.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
             }
 
-            StatusText.Text = $"已读取 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。压缩 session.jsonl.zstd 可查看、打开和导入。";
+            StatusText.Text = result.Storage.Kind == ConversationStorageKind.Sqlite
+                ? "当前版本的对话由 SQLite 统一会话库管理；Launcher 没有把它误报为缺失的 JSONL 文件。"
+                : $"已读取 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。压缩 session.jsonl.zstd 可查看、打开和导入。";
             UpdateSelection();
+            if (_modelChoices.Count > 0)
+            {
+                RefreshSessionModelRows();
+            }
         }
         catch (Exception ex)
         {
             ShowError(ex);
         }
+    }
+
+    private void UpdateStorageNotice(ConversationStorageInfo storage)
+    {
+        var sqliteOnly = storage.Kind == ConversationStorageKind.Sqlite;
+        ImportButton.IsEnabled = storage.SupportsJsonlImport;
+        RestoreBackupButton.IsEnabled = storage.SupportsJsonlImport;
+        StorageNoticePanel.Visibility = storage.Kind == ConversationStorageKind.Jsonl
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        StorageNoticeText.Text = sqliteOnly
+            ? "当前版本配置了 SQLite 会话存储。所有对话共用数据库，不存在可单独复制的 session.jsonl；请在 DSh 窗口中查看和管理。Launcher 已停用会写入无效 sessions 目录的导入与恢复操作。"
+            : "当前版本同时检测到 SQLite 会话存储和旧 JSONL 文件。下方仍会列出可读取的 JSONL 文件；SQLite 中的对话请在 DSh 窗口中管理。";
     }
 
     private void VersionSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -124,6 +155,224 @@ public partial class ConversationWindow : UserControl
             _ => Entries.ToArray()
         };
     }
+
+    private async Task RefreshModelConfigurationAsync()
+    {
+        if (_modelPolicyService is null || _modelOptionsProvider is null)
+        {
+            WorkspaceModelBox.IsEnabled = false;
+            SessionModelBox.IsEnabled = false;
+            return;
+        }
+
+        try
+        {
+            var options = await _modelOptionsProvider();
+            _modelChoices = new[] { new ModelChoice("自动继承", null) }
+                .Concat(options.Select(option => new ModelChoice(option.DisplayText, option)))
+                .ToArray();
+            WorkspaceModelBox.ItemsSource = _modelChoices;
+            SessionModelBox.ItemsSource = _modelChoices;
+            var selectedWorkspace = DshWorkspaceBox.SelectedItem as string;
+            var workspaces = Entries
+                .Select(entry => entry.WorkingDirectory)
+                .Where(directory => !string.IsNullOrWhiteSpace(directory))
+                .Select(directory => directory!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(directory => directory, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            DshWorkspaceBox.ItemsSource = workspaces;
+            DshWorkspaceBox.SelectedItem = selectedWorkspace is not null
+                && workspaces.Contains(selectedWorkspace, StringComparer.OrdinalIgnoreCase)
+                    ? workspaces.First(directory =>
+                        string.Equals(directory, selectedWorkspace, StringComparison.OrdinalIgnoreCase))
+                    : workspaces.FirstOrDefault();
+            SelectWorkspacePolicy();
+            RefreshSessionModelRows();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"读取模型配置失败：{ex.Message}";
+        }
+    }
+
+    private void DshWorkspace_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        SelectWorkspacePolicy();
+
+    private void SelectWorkspacePolicy()
+    {
+        if (_modelPolicyService is null || DshWorkspaceBox.SelectedItem is not string workspace)
+        {
+            WorkspaceModelBox.SelectedItem = _modelChoices.FirstOrDefault();
+            return;
+        }
+
+        try
+        {
+            var selection = _modelPolicyService.ReadWorkspaceSelection(workspace);
+            WorkspaceModelBox.SelectedItem = FindChoice(selection);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"读取 DSh 工作区模型失败：{ex.Message}";
+        }
+    }
+
+    private void SessionModelList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_modelPolicyService is null
+            || SessionModelList.SelectedItem is not ConversationModelEntry item
+            || item.Conversation.SessionId is null)
+        {
+            SessionModelBox.SelectedItem = _modelChoices.FirstOrDefault();
+            return;
+        }
+
+        try
+        {
+            var selection = _modelPolicyService.ReadSessionSelection(
+                _instance.Id,
+                item.Conversation.SessionId);
+            SessionModelBox.SelectedItem = FindChoice(selection);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"读取单独对话模型失败：{ex.Message}";
+        }
+    }
+
+    private void SaveWorkspaceModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (_modelPolicyService is null
+            || DshWorkspaceBox.SelectedItem is not string workspace
+            || WorkspaceModelBox.SelectedItem is not ModelChoice choice)
+        {
+            StatusText.Text = "请先选择 DSh 工作区和模型。";
+            return;
+        }
+
+        try
+        {
+            _modelPolicyService.SetWorkspaceSelection(workspace, choice.Option?.Selection);
+            SelectWorkspacePolicy();
+            RefreshSessionModelRows();
+            StatusText.Text = choice.Option is null
+                ? $"DSh 工作区已改为继承全局默认：{workspace}"
+                : $"DSh 工作区默认模型已保存：{workspace} → {choice.Option.Selection.DisplayText}";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"保存 DSh 工作区模型失败：{ex.Message}";
+        }
+    }
+
+    private void SaveSessionModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (_modelPolicyService is null
+            || SessionModelList.SelectedItem is not ConversationModelEntry item
+            || item.Conversation.SessionId is null
+            || SessionModelBox.SelectedItem is not ModelChoice choice)
+        {
+            StatusText.Text = "请先选择一个有效对话和模型。";
+            return;
+        }
+
+        try
+        {
+            _modelPolicyService.SetSessionSelection(
+                _instance.Id,
+                item.Conversation.SessionId,
+                choice.Option?.Selection);
+            RefreshSessionModelRows(item.Conversation.FullPath);
+            StatusText.Text = choice.Option is null
+                ? $"对话已改为自动继承：{item.Conversation.DisplayName}"
+                : $"单独对话模型已保存：{item.Conversation.DisplayName} → {choice.Option.Selection.DisplayText}";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"保存单独对话模型失败：{ex.Message}";
+        }
+    }
+
+    private void RefreshSessionModelRows(string? selectedPath = null)
+    {
+        if (_modelPolicyService is null)
+        {
+            SessionModelList.ItemsSource = Array.Empty<ConversationModelEntry>();
+            return;
+        }
+
+        selectedPath ??= (SessionModelList.SelectedItem as ConversationModelEntry)?.Conversation.FullPath;
+        var data = _modelPolicyService.Read();
+        var rows = Entries
+            .Where(entry => entry.SessionId is not null)
+            .Select(entry => new ConversationModelEntry
+            {
+                Conversation = entry,
+                PolicyText = BuildPolicyText(data, entry)
+            })
+            .ToArray();
+        SessionModelList.ItemsSource = rows;
+        if (!string.IsNullOrWhiteSpace(selectedPath))
+        {
+            SessionModelList.SelectedItem = rows.FirstOrDefault(row =>
+                string.Equals(row.Conversation.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private string BuildPolicyText(CodingModelPolicyData data, ConversationEntry entry)
+    {
+        var session = data.Sessions.FirstOrDefault(item =>
+            string.Equals(item.InstanceId, _instance.Id, StringComparison.Ordinal)
+            && string.Equals(item.SessionId, entry.SessionId, StringComparison.Ordinal));
+        if (session is not null)
+        {
+            return $"单独对话 · {session.Selection.DisplayText}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.WorkingDirectory))
+        {
+            var workspace = data.DshWorkspaces.FirstOrDefault(item =>
+                string.Equals(
+                    item.WorkingDirectory,
+                    NormalizeWorkspaceForComparison(entry.WorkingDirectory),
+                    StringComparison.OrdinalIgnoreCase));
+            if (workspace is not null)
+            {
+                return $"DSh 工作区 · {workspace.Selection.DisplayText}";
+            }
+        }
+
+        return data.GlobalDefault is null
+            ? "自动 · DSh 当前默认"
+            : $"全局默认 · {data.GlobalDefault.DisplayText}";
+    }
+
+    private ModelChoice? FindChoice(CodingModelSelection? selection) =>
+        selection is null
+            ? _modelChoices.FirstOrDefault()
+            : _modelChoices.FirstOrDefault(choice => choice.Option?.Key == selection.Key)
+                ?? new ModelChoice(selection.DisplayText, new CodingModelOption(
+                    selection.Provider,
+                    selection.Provider,
+                    selection.Model,
+                    selection.Model,
+                    selection.ReasoningEffort,
+                    selection.ReasoningEffort));
+
+    private static string NormalizeWorkspaceForComparison(string workingDirectory)
+    {
+        try
+        {
+            return CodingModelPolicyService.NormalizeWorkingDirectory(workingDirectory);
+        }
+        catch (ArgumentException)
+        {
+            return workingDirectory.Trim();
+        }
+    }
+
+    private sealed record ModelChoice(string DisplayText, CodingModelOption? Option);
 
     private async void RefreshBackups_Click(object sender, RoutedEventArgs e) =>
         await RefreshBackupsAsync();

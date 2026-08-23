@@ -105,7 +105,8 @@
                             </Button.ContextMenu>
                         </Button>
                         <Button Content="新建干净版本" Click="CreateCleanVersion_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,0,8" />
-                        <Button Content="导入整合包" Click="ImportPackage_Click" />
+                        <Button Content="导入整合包" Click="ImportPackage_Click" Margin="0,0,0,8" />
+                        <Button Content="转换整合包" Click="ConvertPackage_Click" />
                     </StackPanel>
                 </Grid>
             </Border>
@@ -236,6 +237,19 @@
                                        Margin="0,5,0,0" />
                         </StackPanel>
                     </Border>
+                    <StackPanel x:Name="DshInstallProgressPanel"
+                                Visibility="Collapsed"
+                                Margin="0,18,0,0">
+                        <TextBlock x:Name="DshInstallProgressText"
+                                   Foreground="{StaticResource BlueBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,7" />
+                        <ProgressBar x:Name="DshInstallProgressBar"
+                                     Height="8"
+                                     Minimum="0"
+                                     Maximum="100"
+                                     Value="0" />
+                    </StackPanel>
                     <TextBlock x:Name="StatusText" Foreground="{StaticResource BlueBrush}" TextWrapping="Wrap" Margin="0,18,0,0" />
                 </StackPanel>
             </Border>

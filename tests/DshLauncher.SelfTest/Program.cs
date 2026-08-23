@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using DshLauncher;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -51,6 +52,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("First run setup decisions", TestFirstRunSetupDecisions),
     ("Node path propagation", TestNodePathPropagation),
     ("DSh install guard", TestDshInstallGuard),
+    ("DSh official package download progress", TestDshOfficialPackageDownloadProgress),
     ("DSh custom install prefix", TestDshCustomInstallPrefix),
     ("DSh official version catalog", TestDshOfficialVersionCatalog),
     ("DSh default install directory", TestDshDefaultInstallDirectory),
@@ -72,6 +74,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Version health inspection and repair", TestVersionHealthInspectionAndRepair),
     ("Encrypted version snapshot rollback", TestEncryptedVersionSnapshotRollback),
     ("Model settings round-trip", TestModelSettingsRoundTrip),
+    ("Global Coding model policies", TestGlobalCodingModelPolicies),
+    ("DSh model API client", TestDshModelApiClient),
     ("Provider state and diagnostics", TestProviderStateAndDiagnostics),
     ("Model provider synchronization", TestModelProviderSynchronization),
     ("Launcher settings and workspaces", TestLauncherSettingsAndWorkspaces),
@@ -1293,6 +1297,12 @@ static Task TestMainWindowCodeResourceReferences()
     var extensionWindowCodePath = FindRepositoryFile("src", "DshLauncher", "ExtensionWindow.xaml.cs");
     var versionSettingsXamlPath = FindRepositoryFile("src", "DshLauncher", "VersionSettingsWindow.xaml");
     var versionSettingsCodePath = FindRepositoryFile("src", "DshLauncher", "VersionSettingsWindow.xaml.cs");
+    var versionControlXamlPath = FindRepositoryFile("src", "DshLauncher", "VersionControlWindow.xaml");
+    var versionControlCodePath = FindRepositoryFile("src", "DshLauncher", "VersionControlWindow.xaml.cs");
+    var providerWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ProviderManagementWindow.xaml");
+    var providerWindowCodePath = FindRepositoryFile("src", "DshLauncher", "ProviderManagementWindow.xaml.cs");
+    var conversationWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ConversationWindow.xaml");
+    var conversationWindowCodePath = FindRepositoryFile("src", "DshLauncher", "ConversationWindow.xaml.cs");
     var appXaml = File.ReadAllText(appXamlPath, Encoding.UTF8);
     var mainWindowXaml = File.ReadAllText(mainWindowXamlPath, Encoding.UTF8);
     var mainWindowCode = File.ReadAllText(mainWindowCodePath, Encoding.UTF8);
@@ -1300,6 +1310,12 @@ static Task TestMainWindowCodeResourceReferences()
     var extensionWindowCode = File.ReadAllText(extensionWindowCodePath, Encoding.UTF8);
     var versionSettingsXaml = File.ReadAllText(versionSettingsXamlPath, Encoding.UTF8);
     var versionSettingsCode = File.ReadAllText(versionSettingsCodePath, Encoding.UTF8);
+    var versionControlXaml = File.ReadAllText(versionControlXamlPath, Encoding.UTF8);
+    var versionControlCode = File.ReadAllText(versionControlCodePath, Encoding.UTF8);
+    var providerWindowXaml = File.ReadAllText(providerWindowXamlPath, Encoding.UTF8);
+    var providerWindowCode = File.ReadAllText(providerWindowCodePath, Encoding.UTF8);
+    var conversationWindowXaml = File.ReadAllText(conversationWindowXamlPath, Encoding.UTF8);
+    var conversationWindowCode = File.ReadAllText(conversationWindowCodePath, Encoding.UTF8);
     var resourceKeys = Regex.Matches(appXaml, "x:Key=\\\"(?<key>[^\\\"]+)\\\"")
         .Select(match => match.Groups["key"].Value)
         .ToHashSet(StringComparer.Ordinal);
@@ -1350,6 +1366,31 @@ static Task TestMainWindowCodeResourceReferences()
         && versionSettingsXaml.Contains("Click=\"RollbackSnapshot_Click\"", StringComparison.Ordinal)
         && versionSettingsCode.Contains("_snapshotService.RestoreSnapshot", StringComparison.Ordinal),
         "版本设置必须提供复用现有加密快照服务的创建与回滚入口。 ");
+    Assert(versionControlXaml.Contains("x:Name=\"DshInstallProgressBar\"", StringComparison.Ordinal)
+        && versionControlXaml.Contains("x:Name=\"DshInstallProgressText\"", StringComparison.Ordinal)
+        && versionControlCode.Contains("DshInstallProgressPhase.DownloadingPackage", StringComparison.Ordinal)
+        && versionControlCode.Contains("progress.BytesText", StringComparison.Ordinal),
+        "从官方 npm 包创建 DSh 版本时必须显示真实下载字节和百分比进度条。 ");
+    Assert(mainWindowXaml.Contains("x:Name=\"NavigationProviders\"", StringComparison.Ordinal)
+        && mainWindowCode.Contains("new ProviderManagementWindow", StringComparison.Ordinal)
+        && providerWindowXaml.Contains("Text=\"全局 Coding\"", StringComparison.Ordinal)
+        && !providerWindowXaml.Contains("当前实例", StringComparison.Ordinal)
+        && !providerWindowXaml.Contains("InstanceSelector", StringComparison.Ordinal),
+        "Provider 必须是全局 Coding 专用页面，不能显示或选择具体实例。 ");
+    Assert(providerWindowXaml.Contains("Text=\"默认模型\"", StringComparison.Ordinal)
+        && providerWindowCode.Contains("Interval = TimeSpan.FromSeconds(15)", StringComparison.Ordinal)
+        && providerWindowCode.Contains("ReadProviderStatesAsync", StringComparison.Ordinal)
+        && providerWindowCode.Contains("ProviderRuntimeMonitorState.Online", StringComparison.Ordinal),
+        "Provider 页面必须提供全局默认模型和运行期间持续在线状态监控。 ");
+    Assert(conversationWindowXaml.Contains("Header=\"模型配置\"", StringComparison.Ordinal)
+        && conversationWindowXaml.Contains("DSh 工作区默认模型", StringComparison.Ordinal)
+        && conversationWindowXaml.Contains("单独对话自动模型", StringComparison.Ordinal)
+        && conversationWindowXaml.Contains("不是 Launcher 的版本同步工作区", StringComparison.Ordinal)
+        && conversationWindowCode.Contains("SetWorkspaceSelection", StringComparison.Ordinal)
+        && conversationWindowCode.Contains("SetSessionSelection", StringComparison.Ordinal)
+        && mainWindowCode.Contains("ApplyConversationModelPolicyAsync", StringComparison.Ordinal)
+        && mainWindowCode.Contains("SelectSessionModelAsync", StringComparison.Ordinal),
+        "对话页必须分别管理真实 DSh 工作区和单会话模型，并在打开会话时自动应用。 ");
     return Task.CompletedTask;
 }
 
@@ -1878,6 +1919,56 @@ static async Task TestDshInstallGuard()
         "DSh 安装只能选择官方 npm 源或国内镜像，不能接受任意 registry。");
 }
 
+static async Task TestDshOfficialPackageDownloadProgress()
+{
+    using var temporary = new TestDirectory();
+    var packageBytes = Encoding.UTF8.GetBytes(new string('d', 180_000));
+    var integrity = $"sha512-{Convert.ToBase64String(SHA512.HashData(packageBytes))}";
+    var metadataUrl = DshInstallService.BuildVersionMetadataUrl(
+        DshInstallService.OfficialRegistry,
+        "0.1.1-rc.2");
+    const string tarballUrl = "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.1-rc.2.tgz";
+    using var client = new HttpClient(new ProviderTestHandler(request =>
+    {
+        var uri = request.RequestUri?.ToString();
+        if (string.Equals(uri, metadataUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonResponse(JsonSerializer.Serialize(new
+            {
+                dist = new { tarball = tarballUrl, integrity }
+            }));
+        }
+
+        Assert(string.Equals(uri, tarballUrl, StringComparison.OrdinalIgnoreCase),
+            "DSh 安装进度测试只能请求官方 metadata 和其中的 tarball。 ");
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(packageBytes)
+        };
+    }));
+    var destination = Path.Combine(temporary.Path, "dsh-package.tgz");
+    var progress = new DshInstallProgressSink();
+    var service = new DshInstallService(client);
+
+    var completed = await service.DownloadPackageAsync(
+        "0.1.1-rc.2",
+        DshInstallService.OfficialRegistry,
+        destination,
+        progress,
+        CancellationToken.None);
+
+    Assert(File.ReadAllBytes(destination).SequenceEqual(packageBytes),
+        "官方 DSh npm 包必须按原始字节完整保存。 ");
+    Assert(progress.Updates.First().Phase == DshInstallProgressPhase.ResolvingPackage
+        && progress.Updates.Any(update => update.Phase == DshInstallProgressPhase.DownloadingPackage
+            && update.BytesDownloaded > 0)
+        && completed.Percent == 100
+        && completed.BytesDownloaded == packageBytes.Length,
+        "DSh npm 包下载必须报告解析阶段和真实字节/百分比进度。 ");
+    Assert(DshInstallService.VerifyPackageIntegrity(destination, integrity, null),
+        "下载完成后必须通过 npm metadata 的 sha512 完整性校验。 ");
+}
+
 static Task TestDshCustomInstallPrefix()
 {
     using var temporary = new TestDirectory();
@@ -1903,6 +1994,16 @@ static Task TestDshCustomInstallPrefix()
         && DshInstallService.IsSafePackageVersion("0.1.0-rc.7")
         && !DshInstallService.IsSafePackageVersion("../rc.7"),
         "新建版本应能安装指定的官方 DSh 版本，并拒绝把路径文本当版本号。 ");
+    var localArchive = Path.Combine(temporary.Path, "dsh package.tgz");
+    var localStartInfo = DshInstallService.CreateStartInfo(
+        "npm.cmd",
+        DshInstallService.OfficialRegistry,
+        normalized,
+        "0.1.0-rc.7",
+        localArchive);
+    Assert(localStartInfo.Arguments.Contains($"\"{localArchive}\"", StringComparison.Ordinal)
+        && !localStartInfo.Arguments.Contains("@deepseek-ai/dsh@0.1.0-rc.7", StringComparison.Ordinal),
+        "官方 tarball 下载完成后，npm 必须从本地包安装，不能再次联网下载同一顶层包。 ");
 
     var preferredCandidates = DshRuntimeDetector.GetCandidates(prefix).Take(3).ToArray();
     Assert(preferredCandidates.Length == 3
@@ -1954,12 +2055,12 @@ static async Task TestDshOfficialVersionCatalog()
     {
         Assert(request.RequestUri?.ToString() == DshVersionCatalogService.OfficialMetadataUrl,
             "DSh 版本列表必须读取官方 @deepseek-ai/dsh 包元数据。 ");
-        return JsonResponse("{\"dist-tags\":{\"latest\":\"0.1.0-rc.7\"},\"versions\":{\"0.1.0-rc.6\":{},\"0.1.0-rc.7\":{}}}");
+        return JsonResponse("{\"dist-tags\":{\"latest\":\"0.1.0-rc.11\"},\"versions\":{\"0.1.0-rc.6\":{},\"0.1.0-rc.8\":{},\"0.1.0-rc.11\":{}}}");
     }));
     using var service = new DshVersionCatalogService(client);
     var versions = await service.ReadOfficialVersionsAsync();
-    Assert(versions.SequenceEqual(new[] { "0.1.0-rc.7", "0.1.0-rc.6" }),
-        "新建版本选择器应按新到旧显示 rc.7 和 rc.6。 ");
+    Assert(versions.SequenceEqual(new[] { "0.1.0-rc.11", "0.1.0-rc.8", "0.1.0-rc.6" }),
+        "新建版本选择器应正确识别两位数 RC，并按新到旧显示。 ");
 }
 
 static Task TestDshDefaultInstallDirectory()
@@ -2199,6 +2300,13 @@ static async Task TestDshEarlyExitCleanup()
 
 static async Task TestDshInstanceLifecycle()
 {
+    Assert(DshInstanceRunner.HelpListsNoOpen("Options:\n  --host <host>\n  --no-open\n"),
+        "Web help 明确列出 --no-open 时才允许传入。 ");
+    Assert(!DshInstanceRunner.HelpListsNoOpen("Options:\n  --host <host>\n  --port <port>\n"),
+        "Web help 没有 --no-open 时必须使用保守参数集。 ");
+    Assert(!DshInstanceRunner.HelpListsNoOpen("unknown option: --no-open"),
+        "错误消息中出现 --no-open 不能被误判为支持。 ");
+
     var runtime = await new DshRuntimeDetector().DetectAsync();
     if (!runtime.IsAvailable || runtime.ExecutablePath is null || runtime.PackageRoot is null)
     {
@@ -2422,7 +2530,25 @@ static async Task TestExtensionEcosystemIsolation()
     Directory.CreateDirectory(profile);
     File.WriteAllText(
         Path.Combine(profile, "package.json"),
-        "{\"dependencies\":{\"@deepseek-ai/dsh-base\":\"1.0.0\",\"@deepseek-ai/dsh-web-app\":\"1.0.0\",\"demo-plugin\":\"1.2.3\",\"@deepseek-ai/dsh-mcp-client\":\"1.0.0\"},\"dsh\":{\"profile\":{\"bundles\":[\"@deepseek-ai/dsh-base\",\"@deepseek-ai/dsh-web-app\",\"demo-plugin\"]}}}",
+        "{\"dependencies\":{\"@deepseek-ai/dsh-base\":\"1.0.0\",\"@deepseek-ai/dsh-web-app\":\"1.0.0\",\"demo-plugin\":\"1.2.3\",\"plain-library\":\"1.0.0\",\"@deepseek-ai/dsh-mcp-client\":\"1.0.0\"},\"dsh\":{\"profile\":{\"bundles\":[\"@deepseek-ai/dsh-base\",\"@deepseek-ai/dsh-web-app\",\"demo-plugin\"]}}}",
+        new UTF8Encoding(false));
+    var demoManifestDirectory = Path.Combine(profile, "node_modules", "demo-plugin");
+    Directory.CreateDirectory(demoManifestDirectory);
+    File.WriteAllText(
+        Path.Combine(demoManifestDirectory, "package.json"),
+        "{\"name\":\"demo-plugin\",\"version\":\"1.2.3\",\"dsh\":{\"bundle\":{\"patch\":\"./cordis.patch.yml\"}}}",
+        new UTF8Encoding(false));
+    var plainManifestDirectory = Path.Combine(profile, "node_modules", "plain-library");
+    Directory.CreateDirectory(plainManifestDirectory);
+    File.WriteAllText(
+        Path.Combine(plainManifestDirectory, "package.json"),
+        "{\"name\":\"plain-library\",\"version\":\"1.0.0\"}",
+        new UTF8Encoding(false));
+    var mcpManifestDirectory = Path.Combine(profile, "node_modules", "@deepseek-ai", "dsh-mcp-client");
+    Directory.CreateDirectory(mcpManifestDirectory);
+    File.WriteAllText(
+        Path.Combine(mcpManifestDirectory, "package.json"),
+        "{\"name\":\"@deepseek-ai/dsh-mcp-client\",\"version\":\"1.0.0\",\"dsh\":{\"bundle\":{\"patch\":\"./cordis.patch.yml\"}}}",
         new UTF8Encoding(false));
 
     var service = new ExtensionService();
@@ -2447,6 +2573,11 @@ static async Task TestExtensionEcosystemIsolation()
     var profileAfterDisable = File.ReadAllText(Path.Combine(profile, "package.json"));
     Assert(!profileAfterDisable.Contains("\"demo-plugin\"],", StringComparison.Ordinal), "禁用 Plugin 不能继续留在 bundles 中。");
     await service.SetPluginEnabledAsync(instance, plugin, true);
+    var plainLibrary = (await service.ListAsync(instance))
+        .Single(entry => entry.Kind == ExtensionKind.Plugin && entry.Name == "plain-library");
+    await AssertThrowsAsync<InvalidOperationException>(
+        () => service.SetPluginEnabledAsync(instance, plainLibrary, true),
+        "没有声明 dsh.bundle.patch 的普通依赖不能被写入 Profile bundles。 ");
 
     var skillSource = Path.Combine(temporary.Path, "skill-source");
     Directory.CreateDirectory(skillSource);
@@ -2680,6 +2811,15 @@ static async Task TestPluginCommandSuppliesPnpmRuntime()
             new NodeRuntimeInfo(true, node, "22.19.0", null),
             "demo-plugin",
             PluginInstallMode.Fast);
+
+        await extensionService.RestoreProfileDependenciesAsync(
+            instance,
+            new NodeRuntimeInfo(true, node, "22.19.0", null));
+        var restoreArguments = File.ReadAllText(argumentMarker);
+        Assert(restoreArguments.Contains("install", StringComparison.Ordinal)
+            && restoreArguments.Contains("--reporter=append-only", StringComparison.Ordinal)
+            && !restoreArguments.Contains("\"\"", StringComparison.Ordinal),
+            "整合包导入后应调用官方 dsh plugin --profile web install，且不能附加空包名。 ");
 
         var runningExtensionService = new ExtensionService(_ => true);
         await runningExtensionService.InstallPluginAsync(
@@ -3239,6 +3379,8 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
     var goodRawRequests = 0;
     var badRawRequests = 0;
     var treeRequests = 0;
+    var searchRequestCount = 0;
+    var searchPages = new List<int>();
     using var httpClient = new HttpClient(new AsyncTestHandler(async (request, cancellationToken) =>
     {
         var uri = request.RequestUri ?? throw new InvalidOperationException("Skill 市场请求缺少 URI。");
@@ -3246,19 +3388,43 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
         {
             if (uri.AbsolutePath.Equals("/search/repositories", StringComparison.OrdinalIgnoreCase))
             {
-                return new HttpResponseMessage(HttpStatusCode.OK)
+                var pageParameter = uri.Query
+                    .Split('&')
+                    .Single(value => value.StartsWith("page=", StringComparison.Ordinal)
+                        || value.StartsWith("?page=", StringComparison.Ordinal));
+                var page = int.Parse(pageParameter.TrimStart('?')["page=".Length..]);
+                Interlocked.Increment(ref searchRequestCount);
+                lock (searchPages)
                 {
-                    Content = new StringContent(
-                        """
-                        {"items":[
-                          {"full_name":"demo/good-skill","name":"good-skill","description":"valid","stargazers_count":12,"default_branch":"develop","pushed_at":"2026-08-16T10:00:00Z"},
-                          {"full_name":"demo/bad-skill","name":"bad-skill","description":"invalid","stargazers_count":3,"default_branch":"main","pushed_at":"2026-08-15T10:00:00Z"},
-                          {"full_name":"demo/not-a-candidate","name":"toolbox","description":"ignored","stargazers_count":99,"default_branch":"main"}
-                        ]}
-                        """,
-                        Encoding.UTF8,
-                        "application/json")
-                };
+                    searchPages.Add(page);
+                }
+
+                var pageItems = Enumerable.Range(0, page == 1 ? 20 : 1)
+                    .Select(index => new Dictionary<string, object?>
+                    {
+                        ["full_name"] = page == 1 && index == 1
+                            ? "demo/bad-skill"
+                            : page == 1 && index == 2
+                                ? "demo/not-a-candidate"
+                                : "demo/good-skill",
+                        ["name"] = page == 1 && index == 1
+                            ? "bad-skill"
+                            : page == 1 && index == 2
+                                ? "toolbox"
+                                : "good-skill",
+                        ["description"] = page == 1 && index == 1
+                            ? "invalid"
+                            : page == 1 && index == 2
+                                ? "ignored"
+                                : "valid",
+                        ["stargazers_count"] = page == 1 && index == 1 ? 3 : 12,
+                        ["default_branch"] = page == 1 && index == 1 ? "main" : "develop",
+                        ["pushed_at"] = page == 1 && index == 1
+                            ? "2026-08-15T10:00:00Z"
+                            : "2026-08-16T10:00:00Z"
+                    })
+                    .ToArray();
+                return JsonResponse(JsonSerializer.Serialize(new { items = pageItems }));
             }
 
             treeRequests++;
@@ -3271,6 +3437,8 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
                         {"tree":[
                           {"path":"skills/good-skill/SKILL.md","type":"blob"},
                           {"path":"skills/good-skill/references/help.md","type":"blob"},
+                          {"path":"skills/flat-helper.md","type":"blob"},
+                          {"path":"skills/invalid-name/SKILL.md","type":"blob"},
                           {"path":"skills/ui-review/SKILL.md","type":"blob"},
                           {"path":"cli/assets/skills/ui-review/SKILL.md","type":"blob"}
                         ]}
@@ -3330,6 +3498,22 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
                 };
             }
 
+            if (uri.AbsolutePath.EndsWith("/demo/good-skill/develop/skills/flat-helper.md", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("---\nname: flat-helper\ndescription: >\n  A single file\n  productivity skill\nuser-invocable: yes\n---\n# Flat\n", Encoding.UTF8)
+                };
+            }
+
+            if (uri.AbsolutePath.EndsWith("/demo/good-skill/develop/skills/invalid-name/SKILL.md", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("---\nname: InvalidName\ndescription: rejected by DSh\ndisableModelInvocation: false\n---\n", Encoding.UTF8)
+                };
+            }
+
             if (uri.AbsolutePath.EndsWith("/demo/bad-skill/main/skills/bad-skill/SKILL.md", StringComparison.Ordinal))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -3352,16 +3536,21 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
     var service = new SkillMarketService(new ExtensionService(), launcherPaths, httpClient);
     var items = await service.SearchAsync();
 
-    Assert(items.Count == 2 && items.All(item => item.Repository == "demo/good-skill"),
-        "市场应按嵌套 SKILL.md 生成条目，并隐藏未通过格式校验的文件。 ");
+    Assert(items.Count == 3 && items.All(item => item.Repository == "demo/good-skill"),
+        "市场应显示官方支持的目录与单文件 Skill，并隐藏未通过格式校验的文件。 ");
+    Assert(searchRequestCount == 2 && searchPages.SequenceEqual(new[] { 1, 2 }),
+        $"Skill 仓库搜索应按页获取并严格限制在最多 2 页，不能只读取首批或无限翻页。 实际请求={searchRequestCount}，页码={string.Join(',', searchPages)}");
     var goodSkill = items.Single(item => item.Name == "good-skill");
     var uiSkill = items.Single(item => item.Name == "ui-review");
+    var flatSkill = items.Single(item => item.Name == "flat-helper");
     Assert(goodSkill.SkillPath == "skills/good-skill/SKILL.md" && goodSkill.Category == "开发",
         "Skill 应保留实际仓库路径并归入开发分类。 ");
     Assert(uiSkill.SkillPath == "skills/ui-review/SKILL.md" && uiSkill.Category == "设计",
         "重复 Skill 应优先保留标准 skills 目录并归入设计分类。 ");
+    Assert(flatSkill.SkillPath == "skills/flat-helper.md" && flatSkill.Category == "效率",
+        "单文件 Skill 应按官方格式被识别并分类。 ");
     Assert(maxConcurrentValidations >= 2, "Skill 文件校验应并行执行，不能逐个串行等待。 ");
-    Assert(service.ReadCached().Count == 2, "Skill 市场只应缓存校验通过的单个 Skill。 ");
+    Assert(service.ReadCached().Count == 3, "Skill 市场只应缓存校验通过的单个 Skill。 ");
 
     var root = Path.Combine(temporary.Path, "runtime");
     var home = Path.Combine(temporary.Path, "dsh-home");
@@ -3383,9 +3572,19 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
         && !ExtensionWindow.IsSkillInstalled(uiSkill, installedEntries),
         "Skill 市场应把当前实例中已安装的同名 Skill 显示为已安装，其他条目仍可安装。 ");
 
-    var refreshed = await service.SearchAsync();
-    Assert(refreshed.Count == 2 && goodRawRequests == 3 && badRawRequests == 2 && treeRequests == 3,
-        "仓库分支和更新时间未变化时应复用已发现 Skill 的缓存。 ");
+    var installedFlatName = await service.InstallAsync(instance, flatSkill, new SkillProgressSink());
+    Assert(installedFlatName == "flat-helper"
+        && File.Exists(Path.Combine(home, "skills", "flat-helper", "SKILL.md")),
+        "单文件 Skill 安装后应归一化到实例自己的 Skill 目录。 ");
+
+    var refreshed = await new SkillMarketService(new ExtensionService(), launcherPaths, httpClient).SearchAsync();
+    Assert(refreshed.Count == 3
+        && searchRequestCount == 4
+        && searchPages.SequenceEqual(new[] { 1, 2, 1, 2 })
+        && goodRawRequests == 5
+        && badRawRequests == 2
+        && treeRequests == 3,
+        "手动刷新应重新读取仓库页，但仓库分支和更新时间未变化时应复用已校验 Skill，避免重复下载。 ");
 }
 
 static byte[] CreateSkillMarketArchive()
@@ -3400,8 +3599,14 @@ static byte[] CreateSkillMarketArchive()
         }
 
         var reference = archive.CreateEntry("good-skill-develop/skills/good-skill/references/help.md");
-        using var referenceWriter = new StreamWriter(reference.Open(), new UTF8Encoding(false));
-        referenceWriter.Write("supporting file");
+        using (var referenceWriter = new StreamWriter(reference.Open(), new UTF8Encoding(false)))
+        {
+            referenceWriter.Write("supporting file");
+        }
+
+        var flatSkill = archive.CreateEntry("good-skill-develop/skills/flat-helper.md");
+        using var flatWriter = new StreamWriter(flatSkill.Open(), new UTF8Encoding(false));
+        flatWriter.Write("---\nname: flat-helper\ndescription: A single file productivity skill\nuser-invocable: yes\n---\n# Flat\n");
     }
 
     return stream.ToArray();
@@ -3699,6 +3904,14 @@ static Task TestVersionPackageOperations()
         Path.Combine(sourceProfile, "package.json"),
         "{\"dependencies\":{\"demo-plugin\":\"1.2.3\",\"remote-plugin\":\"https://share-user:plugin-secret@github.com/demo/remote-plugin.git?token=plugin-query-secret\"},\"scripts\":{\"leak\":\"secret\"},\"dsh\":{\"profile\":{\"bundles\":[\"demo-plugin\"]}}}",
         new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(sourceProfile, "cordis.patch.yml"),
+        "- name: demo-plugin\n  config:\n    enabled: true\n",
+        new UTF8Encoding(false));
+    File.WriteAllText(
+        Path.Combine(sourceProfile, "icon.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>DSH</text></svg>",
+        new UTF8Encoding(false));
     var sessions = Path.Combine(source.DshHome, "sessions");
     Directory.CreateDirectory(sessions);
     File.WriteAllText(Path.Combine(sessions, "private.jsonl"), "do not export", new UTF8Encoding(false));
@@ -3743,6 +3956,8 @@ static Task TestVersionPackageOperations()
             "导出 Provider 配置必须删除 API Key 值但保留环境变量名。 ");
         Assert(exported.GetEntry("dsh-home/profiles/web/package.json") is not null,
             "导出 Plugin 配置时应保留精简后的 profile package.json。 ");
+        Assert(exported.GetEntry("dsh-home/profiles/web/cordis.patch.yml") is not null,
+            "导出 Plugin 配置时应保留 Profile 的 cordis.patch.yml。 ");
         using var pluginReader = new StreamReader(exported.GetEntry("dsh-home/profiles/web/package.json")!.Open(), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var safePlugins = pluginReader.ReadToEnd();
         Assert(!safePlugins.Contains("plugin-secret", StringComparison.Ordinal)
@@ -3767,6 +3982,44 @@ static Task TestVersionPackageOperations()
         && preview.ProviderCount == 1
         && preview.Workflow == "standard",
         "整合包预览必须显示实际导出的 Plugin、Skill、Agent Preset、Provider 和 Workflow。 ");
+
+    var modPackPath = Path.Combine(temporary.Path, "share.tgz");
+    packages.ExportPackage(
+        source,
+        modPackPath,
+        new VersionExportOptions(IncludeProviderConfiguration: false, IncludePluginConfiguration: true));
+    Assert(VersionPackageService.DetectPackageKind(modPackPath) == VersionPackageKind.ModPack,
+        "以 .tgz 导出时必须生成真正的 gzip tar，而不是改扩展名的 ZIP。 ");
+    var modPackPreview = packages.PreviewPackage(modPackPath);
+    Assert(modPackPreview.PackageKind == VersionPackageKind.ModPack
+        && modPackPreview.PluginCount == 2
+        && modPackPreview.DshVersion == source.DetectedVersion,
+        "ModPack 预览应读取 v2 manifest 的 Profile、Plugin 和 DSh 版本。 ");
+
+    var convertedNativePath = Path.Combine(temporary.Path, "converted-from-modpack.dshpack");
+    var toNative = packages.ConvertPackage(modPackPath, convertedNativePath);
+    Assert(toNative.SourceKind == VersionPackageKind.ModPack
+        && toNative.DestinationKind == VersionPackageKind.DshPack
+        && VersionPackageService.DetectPackageKind(convertedNativePath) == VersionPackageKind.DshPack,
+        "ModPack 应可直接转换为 Launcher 原生 .dshpack。 ");
+    Assert(packages.PreviewPackage(convertedNativePath).PluginCount == 2,
+        "ModPack 转换后的 .dshpack 必须保留 Profile Plugin 摘要。 ");
+    using (var convertedNative = ZipFile.OpenRead(convertedNativePath))
+    {
+        Assert(convertedNative.GetEntry("dsh-home/profiles/web/manifest.json") is not null,
+            "ModPack 转换为 .dshpack 后应保留 Profile 内的 v2 manifest。 ");
+        Assert(convertedNative.GetEntry("dsh-home/profiles/web/icon.svg") is not null,
+            "ModPack 转换应保留官方格式允许的 SVG 图标。 ");
+    }
+
+    var convertedModPackPath = Path.Combine(temporary.Path, "converted-from-dshpack.tgz");
+    var toModPack = packages.ConvertPackage(exportPath, convertedModPackPath);
+    Assert(toModPack.SourceKind == VersionPackageKind.DshPack
+        && toModPack.DestinationKind == VersionPackageKind.ModPack
+        && toModPack.Warnings.Count > 0,
+        ".dshpack 转 ModPack 时必须明确提示 Launcher/DSH_HOME 级数据不会进入标准 Profile。 ");
+    Assert(packages.PreviewPackage(convertedModPackPath).PluginCount == 2,
+        ".dshpack 转换后的 ModPack 必须保留 Profile Plugin。 ");
     using (var exported = ZipFile.OpenRead(exportPath))
     {
         var skillEntry = exported.GetEntry("dsh-home/skills/code-review/SKILL.md");
@@ -3793,6 +4046,17 @@ static Task TestVersionPackageOperations()
         InstanceKind.Installed,
         detectedVersion: "0.1.0",
         packageManager: "npm");
+    var importedModPack = packages.ImportPackage(modPackPath, legacyTemplate);
+    Assert(File.Exists(Path.Combine(importedModPack.DshHome, "profiles", "web", "package.json"))
+        && File.Exists(Path.Combine(importedModPack.DshHome, "profiles", "web", "manifest.json"))
+        && File.ReadAllText(Path.Combine(importedModPack.DshHome, "profiles", "web", "cordis.patch.yml"))
+            .Contains("demo-plugin", StringComparison.Ordinal),
+        "ModPack 导入应把 Profile manifest 与 patch 映射到新版本的 profiles/web。 ");
+    Assert(importedModPack.DetectedVersion == "0.1.0",
+        "ModPack 的 dshVersion 是兼容范围；注册版本应使用当前实际 DSh Runtime 版本。 ");
+    var importedConvertedNative = packages.ImportPackage(convertedNativePath, legacyTemplate);
+    Assert(importedConvertedNative.DetectedVersion == "0.1.0",
+        "ModPack 转为 .dshpack 后再次导入，仍应使用当前实际 DSh Runtime 版本。 ");
     var importedDesign = packages.ImportPackage(exportPath, legacyTemplate);
     Assert(importedDesign.RootPath == packageRoot
         && !string.Equals(importedDesign.RootPath, legacyTemplate.RootPath, StringComparison.OrdinalIgnoreCase),
@@ -3847,7 +4111,8 @@ static Task TestVersionPackageOperations()
     }
 
     var imported = packages.ImportPackage(packPath, legacyTemplate);
-    Assert(imported.DetectedVersion == "0.2.0", "整合包 manifest 应能携带版本信息。 ");
+    Assert(imported.DetectedVersion == "0.1.0",
+        "整合包 manifest 只描述分享包目标版本；注册实例必须使用当前实际 DSh Runtime 版本。 ");
     Assert(imported.RootPath == packageRoot, "整合包导入的运行目录应保持在当前 DSh 安装位置。 ");
     Assert(File.ReadAllText(Path.Combine(imported.DshHome, "imported.txt")) == "imported", "整合包应解压到新版本的 DSH_HOME。 ");
     Assert(!File.Exists(Path.Combine(imported.DshHome, ".credentials.yaml"))
@@ -3933,11 +4198,14 @@ static async Task TestModelSettingsRoundTrip()
     var service = new ModelService();
     await service.SaveDeepSeekAsync(instance, "DEEPSEEK_API_KEY", "https://api.deepseek.com", new[] { "deepseek-chat", "deepseek-reasoner" });
     await service.SaveOpenAiCompatibleAsync(instance, "gateway", "GATEWAY_KEY", "http://127.0.0.1:8080/v1", new[] { "model-a" });
+    await service.SaveDefaultModelAsync(instance, new CodingModelSelection("gateway", "model-a"));
     var document = File.ReadAllText(settings);
     Assert(document.Contains("keep: true", StringComparison.Ordinal), "模型保存不能删除无关顶层设置。");
     Assert(document.Contains("existing:", StringComparison.Ordinal), "新增 Provider 不能删除已有 Provider。");
     Assert(document.Contains("gateway:", StringComparison.Ordinal), "OpenAI-compatible Provider 必须写入 providers。");
     Assert(!document.Contains("sk-", StringComparison.Ordinal), "模型设置文件不能包含 API Key 明文。");
+    Assert(service.ReadDefaultModel(instance) == new CodingModelSelection("gateway", "model-a"),
+        "全局默认模型必须写入官方 agent-default-model section 并可重新读取。 ");
     var bytes = File.ReadAllBytes(settings);
     Assert(bytes.Length < 3 || bytes[0] != 0xEF || bytes[1] != 0xBB || bytes[2] != 0xBF, "settings.yaml 不应写入 BOM。");
 
@@ -4003,6 +4271,140 @@ static async Task TestModelSettingsRoundTrip()
     await AssertThrowsAsync<InvalidOperationException>(
         () => guarded.SaveDeepSeekAsync(instance, "DEEPSEEK_API_KEY", null, Array.Empty<string>()),
         "实例运行时不能修改模型 settings。");
+    await guarded.SaveDefaultModelLiveAsync(
+        instance,
+        new CodingModelSelection("deepseek-official", "deepseek-v4-pro"));
+    Assert(guarded.ReadDefaultModel(instance) == new CodingModelSelection("deepseek-official", "deepseek-v4-pro"),
+        "运行期间全局默认只能窄写 agent-default-model，并由 DSh settings watcher 热加载。 ");
+}
+
+static Task TestGlobalCodingModelPolicies()
+{
+    using var temporary = new TestDirectory();
+    var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+    var service = new CodingModelPolicyService(paths);
+    var global = new CodingModelSelection("deepseek-official", "deepseek-v4-flash");
+    var workspace = new CodingModelSelection("gateway", "coding-model");
+    var session = new CodingModelSelection("gateway", "review-model", "high");
+    var dshWorkspace = Path.Combine(temporary.Path, "real-dsh-workspace");
+
+    service.SetGlobalDefault(global);
+    service.SetWorkspaceSelection(dshWorkspace, workspace);
+    service.SetSessionSelection("instance-a", "session-a", session);
+
+    Assert(service.Resolve("instance-a", "session-a", dshWorkspace) == session,
+        "单独对话模型必须覆盖 DSh 工作区和全局默认。 ");
+    Assert(service.Resolve("instance-b", "session-b", dshWorkspace) == workspace,
+        "DSh 工作区模型必须按真实工作目录覆盖全局默认。 ");
+    Assert(service.Resolve("instance-b", "session-b", null) == global,
+        "没有会话或 DSh 工作区规则时必须回退全局默认。 ");
+
+    service.SetSessionSelection("instance-a", "session-a", null);
+    Assert(service.Resolve("instance-a", "session-a", dshWorkspace) == workspace,
+        "把单独对话改为自动后必须重新继承 DSh 工作区。 ");
+    service.SetWorkspaceSelection(dshWorkspace, null);
+    Assert(service.Resolve("instance-a", "session-a", dshWorkspace) == global,
+        "删除 DSh 工作区规则后必须继承全局默认。 ");
+    Assert(File.Exists(paths.CodingModelPoliciesPath)
+        && new CodingModelPolicyService(paths).Read().GlobalDefault == global,
+        "全局 Coding 模型规则必须独立持久化并可重新读取。 ");
+    return Task.CompletedTask;
+}
+
+static async Task TestDshModelApiClient()
+{
+    var methods = new List<string>();
+    using var httpClient = new HttpClient(new ProviderTestHandler(request =>
+    {
+        var json = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var rpcId = root.GetProperty("rpcId").GetString();
+        var method = root.GetProperty("method").GetString()!;
+        methods.Add(method);
+        JsonElement value;
+        switch (method)
+        {
+            case "llm.models":
+                value = JsonSerializer.SerializeToElement(new
+                {
+                    groups = new[]
+                    {
+                        new
+                        {
+                            id = "deepseek-official",
+                            name = "DeepSeek 官方",
+                            models = new[] { new { id = "deepseek-v4-flash", name = "DeepSeek V4 Flash" } }
+                        }
+                    },
+                    failures = Array.Empty<object>()
+                });
+                break;
+            case "llm.providers":
+                value = JsonSerializer.SerializeToElement(new
+                {
+                    providers = new[]
+                    {
+                        new
+                        {
+                            provider = "deepseek-official",
+                            displayName = "DeepSeek 官方",
+                            settingsNs = "llm-deepseek",
+                            settingsPath = Array.Empty<string>(),
+                            active = true,
+                            declared = true
+                        }
+                    }
+                });
+                break;
+            case "session.selectModel":
+            {
+                var payload = root.GetProperty("payload");
+                value = JsonSerializer.SerializeToElement(new
+                {
+                    selected = new
+                    {
+                        provider = payload.GetProperty("provider").GetString(),
+                        model = payload.GetProperty("model").GetString()
+                    }
+                });
+                break;
+            }
+            default:
+                throw new InvalidOperationException($"未预期的 DSh API：{method}");
+        }
+
+        return JsonResponse(JsonSerializer.Serialize(new
+        {
+            type = "server-response",
+            rpcId,
+            result = new { ok = true, value }
+        }));
+    }));
+    using var client = new DshApiClient(httpClient);
+    var models = await client.ReadModelsAsync("http://127.0.0.1:19527/");
+    var providers = await client.ReadProviderStatesAsync("http://localhost:19527/");
+    var selected = await client.SelectSessionModelAsync(
+        "http://127.0.0.1:19527/",
+        "session-a",
+        new CodingModelSelection("deepseek-official", "deepseek-v4-flash"));
+
+    Assert(models.Count == 1
+        && models[0].Provider == "deepseek-official"
+        && models[0].Model == "deepseek-v4-flash",
+        "Provider 页和对话页必须从官方 llm.models 读取模型目录。 ");
+    Assert(providers.Single().Active && providers.Single().Declared,
+        "持续监控必须从官方 llm.providers 读取运行时激活状态。 ");
+    Assert(selected == new CodingModelSelection("deepseek-official", "deepseek-v4-flash"),
+        "单独会话切换必须使用官方 session.selectModel。 ");
+    Assert(methods.SequenceEqual(new[]
+        {
+            "llm.models", "llm.providers", "session.selectModel"
+        }),
+        "DSh 模型客户端不能调用未授权的额外接口。 ");
+    AssertThrows<ArgumentException>(
+        () => DshApiClient.ValidateLoopbackUrl("https://example.com/"),
+        "DSh 模型 API 客户端必须拒绝非 loopback 地址。 ");
 }
 
 static async Task TestProviderStateAndDiagnostics()
@@ -4394,6 +4796,26 @@ static Task TestConversationFileManagement()
         "指定工作区导入必须落到该工作区的 sessions 目录。");
     Assert(File.ReadAllBytes(overriddenPath).SequenceEqual(File.ReadAllBytes(exportPath)),
         "按工作区导入不能改写原始会话内容。");
+
+    var sqliteHome = Path.Combine(temporary.Path, "sqlite-home");
+    var sqliteProfile = Path.Combine(sqliteHome, "profiles", "web");
+    Directory.CreateDirectory(sqliteProfile);
+    File.WriteAllText(
+        Path.Combine(sqliteProfile, "cordis.patch.yml"),
+        "- insert:\n    - id: session-persistence-sqlite\n      name: '@deepseek-ai/dsh-session-persistence-sqlite'\n      config:\n        path: sessions.db\n",
+        new UTF8Encoding(false));
+    var sqliteInstance = CreateTestInstance("conversation-sqlite", root, sqliteHome);
+    var sqliteStorage = service.GetStorageInfo(sqliteInstance);
+    Assert(sqliteStorage.Kind == ConversationStorageKind.Sqlite && !sqliteStorage.SupportsJsonlImport,
+        "配置 SQLite persistence 时必须识别统一会话库，不能把空 JSONL 目录误报成没有对话。 ");
+    AssertThrows<NotSupportedException>(
+        () => service.Import(sqliteInstance, exportPath),
+        "SQLite-only 版本不能把导入文件写进 DSh 不使用的 sessions 目录。 ");
+    var legacySqliteSession = Path.Combine(sqliteHome, "sessions", "--legacy--", "session-old", "session.jsonl");
+    Directory.CreateDirectory(Path.GetDirectoryName(legacySqliteSession)!);
+    File.Copy(exportPath, legacySqliteSession);
+    Assert(service.GetStorageInfo(sqliteInstance).Kind == ConversationStorageKind.Mixed,
+        "SQLite 配置旁仍有历史 JSONL 时应标记为混合状态并继续列出旧文件。 ");
     return Task.CompletedTask;
 }
 
@@ -4641,6 +5063,13 @@ file sealed class NodeProgressSink : IProgress<NodeDownloadProgress>
     public NodeDownloadProgress Last { get; private set; } = new(0, null, null);
 
     public void Report(NodeDownloadProgress value) => Last = value;
+}
+
+file sealed class DshInstallProgressSink : IProgress<DshInstallProgress>
+{
+    public List<DshInstallProgress> Updates { get; } = new();
+
+    public void Report(DshInstallProgress value) => Updates.Add(value);
 }
 
 file sealed class SkillProgressSink : IProgress<SkillInstallProgress>

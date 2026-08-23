@@ -22,6 +22,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly Func<string, Task<IReadOnlyList<ManagerInstance>>> _scanAndRegisterRuntimeDirectory;
     private readonly VersionHealthService _healthService;
     private readonly VersionSnapshotService _snapshotService;
+    private readonly ExtensionService _extensionService;
     private readonly Func<NodeRuntimeInfo> _nodeRuntimeProvider;
     private readonly Func<DshRuntimeInfo> _dshRuntimeProvider;
     private readonly Func<string, bool> _isRunning;
@@ -45,6 +46,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Func<string, Task<IReadOnlyList<ManagerInstance>>> scanAndRegisterRuntimeDirectory,
         VersionHealthService healthService,
         VersionSnapshotService snapshotService,
+        ExtensionService extensionService,
         Func<NodeRuntimeInfo> nodeRuntimeProvider,
         Func<DshRuntimeInfo> dshRuntimeProvider,
         Func<string, bool> isRunning,
@@ -60,6 +62,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _scanAndRegisterRuntimeDirectory = scanAndRegisterRuntimeDirectory;
         _healthService = healthService;
         _snapshotService = snapshotService;
+        _extensionService = extensionService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _dshRuntimeProvider = dshRuntimeProvider;
         _isRunning = isRunning;
@@ -530,12 +533,25 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             }
 
             SetStatus($"本机没有 DSh {normalizedVersion}，正在从官方 npm 包下载…");
-            var install = await _dshInstallService.InstallVersionAsync(
-                nodeRuntime,
-                normalizedVersion,
-                DshInstallService.OfficialRegistry,
-                versionDirectory,
-                _lifetimeCancellation.Token);
+            var progress = new Progress<DshInstallProgress>(SetDshInstallProgress);
+            DshInstallProgressPanel.Visibility = Visibility.Visible;
+            DshInstallProgressBar.IsIndeterminate = true;
+            DshInstallProgressText.Text = "正在读取官方 npm 包信息…";
+            DshInstallResult install;
+            try
+            {
+                install = await _dshInstallService.InstallVersionAsync(
+                    nodeRuntime,
+                    normalizedVersion,
+                    DshInstallService.OfficialRegistry,
+                    versionDirectory,
+                    progress,
+                    _lifetimeCancellation.Token);
+            }
+            finally
+            {
+                HideDshInstallProgress();
+            }
             if (!install.IsSuccess)
             {
                 throw new InvalidOperationException(install.Error ?? $"DSh {normalizedVersion} 下载失败。 ");
@@ -584,8 +600,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
 
         using var dialog = new Forms.OpenFileDialog
         {
-            Title = "导入 DSH Launcher 整合包",
-            Filter = $"DSH 整合包 (*{_packageService.PackageExtension})|*{_packageService.PackageExtension}|所有文件|*.*",
+            Title = "导入 DSh 整合包",
+            Filter = $"支持的整合包 (*{_packageService.PackageExtension};*.tgz;*.tar.gz)|*{_packageService.PackageExtension};*.tgz;*.tar.gz|DSH Launcher (*{_packageService.PackageExtension})|*{_packageService.PackageExtension}|DSH ModPack (*.tgz;*.tar.gz)|*.tgz;*.tar.gz|所有文件|*.*",
             CheckFileExists = true,
             Multiselect = false
         };
@@ -600,12 +616,16 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             var preview = await Task.Run(() => _packageService.PreviewPackage(dialog.FileName));
             var previewText = $"{preview.Name}\n\n"
                 + $"{preview.Description}\n\n"
+                + $"格式：{preview.PackageKindText}\n"
                 + $"DSh：{preview.DshVersion ?? "未标记"}\n"
                 + $"Plugins：{preview.PluginCount}\n"
                 + $"Skills：{preview.SkillCount}\n"
                 + $"Agent Presets：{preview.AgentPresetCount}\n"
                 + $"Providers：{preview.ProviderCount}\n"
-                + $"Workflow：{preview.Workflow ?? "无"}\n\n"
+                + $"Workflow：{preview.Workflow ?? "无"}\n"
+                + (preview.Warnings.Count == 0
+                    ? "\n"
+                    : $"\n注意：\n- {string.Join("\n- ", preview.Warnings)}\n\n")
                 + $"将创建新的独立版本“{preview.Name}”，不会覆盖已有版本。\n\n确认导入吗？";
             if (System.Windows.MessageBox.Show(
                     Window.GetWindow(this),
@@ -621,11 +641,86 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             Versions.Add(created);
             SelectedVersion = created;
             _versionCreated(created);
-            SetStatus($"整合包已导入为新版本：{created.Name}。原版本没有被覆盖。 ");
+            if (preview.PluginCount > 0)
+            {
+                SetStatus($"整合包已导入为新版本：{created.Name}。正在通过 DSh 官方 CLI 恢复依赖…");
+                try
+                {
+                    await _extensionService.RestoreProfileDependenciesAsync(
+                        created,
+                        _nodeRuntimeProvider(),
+                        _lifetimeCancellation.Token);
+                    SetStatus($"整合包已导入为新版本：{created.Name}，依赖恢复完成。原版本没有被覆盖。 ");
+                }
+                catch (Exception dependencyException)
+                {
+                    SetStatus($"整合包已导入为新版本：{created.Name}，但依赖恢复失败：{dependencyException.Message}");
+                }
+            }
+            else
+            {
+                SetStatus($"整合包已导入为新版本：{created.Name}。原版本没有被覆盖。 ");
+            }
         }
         catch (Exception ex)
         {
             SetStatus($"导入整合包失败：{ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void ConvertPackage_Click(object sender, RoutedEventArgs e)
+    {
+        using var sourceDialog = new Forms.OpenFileDialog
+        {
+            Title = "选择要转换的整合包",
+            Filter = $"支持的整合包 (*{_packageService.PackageExtension};*.tgz;*.tar.gz)|*{_packageService.PackageExtension};*.tgz;*.tar.gz|所有文件|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (sourceDialog.ShowDialog() != Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        SetBusy(true);
+        try
+        {
+            var sourceKind = VersionPackageService.DetectPackageKind(sourceDialog.FileName);
+            var destinationExtension = sourceKind == VersionPackageKind.ModPack
+                ? _packageService.PackageExtension
+                : VersionPackageService.ModPackPackageExtension;
+            using var destinationDialog = new Forms.SaveFileDialog
+            {
+                Title = sourceKind == VersionPackageKind.ModPack
+                    ? "转换为 DSH Launcher 整合包"
+                    : "转换为 DSH ModPack",
+                Filter = sourceKind == VersionPackageKind.ModPack
+                    ? $"DSH Launcher 整合包 (*{destinationExtension})|*{destinationExtension}"
+                    : "DSH ModPack (*.tgz)|*.tgz",
+                AddExtension = true,
+                DefaultExt = destinationExtension.TrimStart('.'),
+                FileName = $"{Path.GetFileNameWithoutExtension(sourceDialog.FileName)}{destinationExtension}",
+                OverwritePrompt = true
+            };
+            if (destinationDialog.ShowDialog() != Forms.DialogResult.OK)
+            {
+                return;
+            }
+
+            var result = await Task.Run(() =>
+                _packageService.ConvertPackage(sourceDialog.FileName, destinationDialog.FileName));
+            var warnings = result.Warnings.Count == 0
+                ? string.Empty
+                : $" 注意：{string.Join("；", result.Warnings)}";
+            SetStatus($"整合包已转换：{result.OutputPath}。{warnings}");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"转换整合包失败：{ex.Message}");
         }
         finally
         {
@@ -851,6 +946,37 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanRepair));
         OnPropertyChanged(nameof(CanSnapshot));
         OnPropertyChanged(nameof(CanRollback));
+    }
+
+    private void SetDshInstallProgress(DshInstallProgress progress)
+    {
+        DshInstallProgressPanel.Visibility = Visibility.Visible;
+        switch (progress.Phase)
+        {
+            case DshInstallProgressPhase.ResolvingPackage:
+                DshInstallProgressBar.IsIndeterminate = true;
+                DshInstallProgressBar.Value = 0;
+                DshInstallProgressText.Text = "正在读取官方 npm 包信息…";
+                break;
+            case DshInstallProgressPhase.DownloadingPackage:
+                DshInstallProgressBar.IsIndeterminate = progress.Percent is null;
+                DshInstallProgressBar.Value = progress.Percent ?? 0;
+                DshInstallProgressText.Text =
+                    $"正在下载官方 DSh npm 包… {progress.BytesText}（{progress.PercentText}）";
+                break;
+            case DshInstallProgressPhase.InstallingDependencies:
+                DshInstallProgressBar.IsIndeterminate = true;
+                DshInstallProgressBar.Value = 0;
+                DshInstallProgressText.Text = "官方包下载完成，正在通过 npm 安装依赖…";
+                break;
+        }
+    }
+
+    private void HideDshInstallProgress()
+    {
+        DshInstallProgressBar.IsIndeterminate = false;
+        DshInstallProgressBar.Value = 0;
+        DshInstallProgressPanel.Visibility = Visibility.Collapsed;
     }
 
     private void SetStatus(string message) => StatusText.Text = message;

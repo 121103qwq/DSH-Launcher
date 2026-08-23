@@ -3,6 +3,9 @@ using System.Text;
 using System.IO;
 using DshLauncher.Models;
 using System.Text.RegularExpressions;
+using System.Text.Json;
+using System.Security.Cryptography;
+using System.Net.Http;
 
 namespace DshLauncher.Services;
 
@@ -13,6 +16,22 @@ public sealed class DshInstallService
 
     private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
     private static readonly SemaphoreSlim VersionInstallGate = new(1, 1);
+    private static readonly HttpClient SharedHttpClient = CreateHttpClient();
+    private readonly HttpClient _httpClient;
+
+    public DshInstallService()
+        : this(SharedHttpClient)
+    {
+    }
+
+    internal DshInstallService(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+        if (!_httpClient.DefaultRequestHeaders.UserAgent.Any())
+        {
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("DSH-Launcher/1.0");
+        }
+    }
 
     /// <summary>
     /// 全局 DSh 只在 Installed 目标（或未指定目标的设置页）缺失时安装；
@@ -57,6 +76,23 @@ public sealed class DshInstallService
         string? installDirectory,
         CancellationToken cancellationToken = default)
     {
+        return await InstallVersionAsync(
+            nodeRuntime,
+            packageVersion,
+            registry,
+            installDirectory,
+            progress: null,
+            cancellationToken);
+    }
+
+    public async Task<DshInstallResult> InstallVersionAsync(
+        NodeRuntimeInfo nodeRuntime,
+        string? packageVersion,
+        string? registry,
+        string? installDirectory,
+        IProgress<DshInstallProgress>? progress,
+        CancellationToken cancellationToken = default)
+    {
         if (!nodeRuntime.IsAvailable || string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
         {
             return DshInstallResult.Failure("未找到可用的 Node.js，不能执行 DSh 安装。");
@@ -93,6 +129,7 @@ public sealed class DshInstallService
                 packageVersion,
                 registry,
                 normalizedInstallDirectory,
+                progress,
                 cancellationToken);
         }
 
@@ -104,15 +141,17 @@ public sealed class DshInstallService
             cancellationToken);
     }
 
-    private static async Task<DshInstallResult> InstallExactVersionAsync(
+    private async Task<DshInstallResult> InstallExactVersionAsync(
         string npmPath,
         string packageVersion,
         string? registry,
         string installDirectory,
+        IProgress<DshInstallProgress>? progress,
         CancellationToken cancellationToken)
     {
         await VersionInstallGate.WaitAsync(cancellationToken);
         string? stagingDirectory = null;
+        string? packageArchive = null;
         try
         {
             if (InstalledVersionMatches(installDirectory, packageVersion))
@@ -121,12 +160,25 @@ public sealed class DshInstallService
             }
 
             stagingDirectory = CreateVersionStagingDirectory(installDirectory);
+            var parentDirectory = Path.GetDirectoryName(stagingDirectory)
+                ?? throw new InvalidOperationException("DSh 临时安装目录必须有父目录。");
+            packageArchive = Path.Combine(
+                parentDirectory,
+                $".dsh-{packageVersion}-{Guid.NewGuid():N}.tgz");
+            await DownloadPackageAsync(
+                packageVersion,
+                registry ?? OfficialRegistry,
+                packageArchive,
+                progress,
+                cancellationToken);
+            progress?.Report(new DshInstallProgress(DshInstallProgressPhase.InstallingDependencies));
             var result = await RunNpmInstallAsync(
                 npmPath,
                 packageVersion,
                 registry,
                 stagingDirectory,
-                cancellationToken);
+                cancellationToken,
+                packageArchive);
             if (!result.IsSuccess)
             {
                 return result;
@@ -158,7 +210,123 @@ public sealed class DshInstallService
                 TryDeleteDirectory(stagingDirectory);
             }
 
+            if (!string.IsNullOrWhiteSpace(packageArchive))
+            {
+                TryDeleteFile(packageArchive);
+            }
+
             VersionInstallGate.Release();
+        }
+    }
+
+    internal async Task<DshInstallProgress> DownloadPackageAsync(
+        string packageVersion,
+        string registry,
+        string destination,
+        IProgress<DshInstallProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        progress?.Report(new DshInstallProgress(DshInstallProgressPhase.ResolvingPackage));
+        var metadataUrl = BuildVersionMetadataUrl(registry, packageVersion);
+        using var metadataResponse = await _httpClient.GetAsync(metadataUrl, cancellationToken);
+        metadataResponse.EnsureSuccessStatusCode();
+        await using var metadataStream = await metadataResponse.Content.ReadAsStreamAsync(cancellationToken);
+        using var metadata = await JsonDocument.ParseAsync(metadataStream, cancellationToken: cancellationToken);
+        if (!metadata.RootElement.TryGetProperty("dist", out var dist)
+            || !dist.TryGetProperty("tarball", out var tarballElement)
+            || tarballElement.ValueKind != JsonValueKind.String
+            || !Uri.TryCreate(tarballElement.GetString(), UriKind.Absolute, out var tarballUri)
+            || !IsAllowedTarballUri(tarballUri, registry))
+        {
+            throw new InvalidDataException("官方 DSh 包元数据没有可用的安全下载地址。");
+        }
+
+        var integrity = dist.TryGetProperty("integrity", out var integrityElement)
+            && integrityElement.ValueKind == JsonValueKind.String
+                ? integrityElement.GetString()
+                : null;
+        var shasum = dist.TryGetProperty("shasum", out var shasumElement)
+            && shasumElement.ValueKind == JsonValueKind.String
+                ? shasumElement.GetString()
+                : null;
+        if (string.IsNullOrWhiteSpace(integrity) && string.IsNullOrWhiteSpace(shasum))
+        {
+            throw new InvalidDataException("官方 DSh 包元数据没有完整性校验值。");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, tarballUri);
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var total = response.Content.Headers.ContentLength;
+        var directory = Path.GetDirectoryName(destination);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var temporary = $"{destination}.{Guid.NewGuid():N}.part";
+        try
+        {
+            await using (var output = new FileStream(
+                temporary,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                useAsync: true))
+            {
+                await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
+                var buffer = new byte[81920];
+                long received = 0;
+                int read;
+                while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    received += read;
+                    progress?.Report(new DshInstallProgress(
+                        DshInstallProgressPhase.DownloadingPackage,
+                        received,
+                        total,
+                        total is > 0 ? received * 100.0 / total.Value : null));
+                }
+            }
+
+            var actual = new FileInfo(temporary).Length;
+            if (actual == 0)
+            {
+                throw new IOException("下载的 DSh npm 包为空。");
+            }
+
+            if (total is { } expected && actual != expected)
+            {
+                throw new IOException($"DSh npm 包下载不完整：预期 {expected} 字节，实际 {actual} 字节。");
+            }
+
+            if (!VerifyPackageIntegrity(temporary, integrity, shasum))
+            {
+                throw new InvalidDataException("下载的 DSh npm 包未通过官方完整性校验。");
+            }
+
+            if (File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+
+            File.Move(temporary, destination);
+            var completed = new DshInstallProgress(
+                DshInstallProgressPhase.DownloadingPackage,
+                actual,
+                total ?? actual,
+                100);
+            progress?.Report(completed);
+            return completed;
+        }
+        finally
+        {
+            TryDeleteFile(temporary);
         }
     }
 
@@ -167,9 +335,15 @@ public sealed class DshInstallService
         string? packageVersion,
         string? registry,
         string? installDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? localPackagePath = null)
     {
-        var startInfo = CreateStartInfo(npmPath, registry, installDirectory, packageVersion);
+        var startInfo = CreateStartInfo(
+            npmPath,
+            registry,
+            installDirectory,
+            packageVersion,
+            localPackagePath);
         DshRuntimeCommandFactory.ApplyProxyFallback(startInfo);
         using var process = new Process { StartInfo = startInfo };
 
@@ -300,6 +474,21 @@ public sealed class DshInstallService
         }
     }
 
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Temporary package cleanup must not mask the installation result.
+        }
+    }
+
     private static string FindNpm(string nodeExecutablePath)
     {
         var nodeDirectory = Path.GetDirectoryName(Path.GetFullPath(nodeExecutablePath));
@@ -361,12 +550,16 @@ public sealed class DshInstallService
         string npmPath,
         string? registry,
         string? installDirectory,
-        string? packageVersion = null)
+        string? packageVersion = null,
+        string? localPackagePath = null)
     {
         var packageSpec = string.IsNullOrWhiteSpace(packageVersion)
             ? "@deepseek-ai/dsh"
             : $"@deepseek-ai/dsh@{packageVersion}";
-        var commandArguments = $"install --global {packageSpec}"
+        var commandPackageSpec = string.IsNullOrWhiteSpace(localPackagePath)
+            ? packageSpec
+            : $"\"{localPackagePath.Replace("%", "%%", StringComparison.Ordinal)}\"";
+        var commandArguments = $"install --global {commandPackageSpec}"
             + (string.IsNullOrWhiteSpace(registry) ? string.Empty : $" --registry={registry}");
         var startInfo = new ProcessStartInfo
         {
@@ -399,6 +592,68 @@ public sealed class DshInstallService
         }
 
         return startInfo;
+    }
+
+    internal static string BuildVersionMetadataUrl(string registry, string packageVersion)
+    {
+        if (!IsSafePackageVersion(packageVersion))
+        {
+            throw new ArgumentException("DSh 版本号格式无效。", nameof(packageVersion));
+        }
+
+        var normalizedRegistry = registry.TrimEnd('/');
+        if (!string.Equals(normalizedRegistry, OfficialRegistry, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(normalizedRegistry, ChinaRegistry, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("DSh 安装源不受支持。", nameof(registry));
+        }
+
+        return $"{normalizedRegistry}/@deepseek-ai%2fdsh/{Uri.EscapeDataString(packageVersion)}";
+    }
+
+    internal static bool IsAllowedTarballUri(Uri uri, string registry)
+    {
+        if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(registry.TrimEnd('/'), OfficialRegistry, StringComparison.OrdinalIgnoreCase))
+        {
+            return uri.Host.Equals("registry.npmjs.org", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return uri.Host.Equals("registry.npmmirror.com", StringComparison.OrdinalIgnoreCase)
+            || uri.Host.EndsWith(".npmmirror.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool VerifyPackageIntegrity(string packagePath, string? integrity, string? shasum)
+    {
+        var sha512 = integrity?
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(static value => value.StartsWith("sha512-", StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(sha512))
+        {
+            var expected = sha512["sha512-".Length..];
+            using var stream = File.OpenRead(packagePath);
+            return Convert.ToBase64String(SHA512.HashData(stream)) == expected;
+        }
+
+        if (!string.IsNullOrWhiteSpace(shasum))
+        {
+            using var stream = File.OpenRead(packagePath);
+            return Convert.ToHexString(SHA1.HashData(stream))
+                .Equals(shasum.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static HttpClient CreateHttpClient()
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("DSH-Launcher/1.0");
+        return client;
     }
 
     private static void TryKill(Process process)

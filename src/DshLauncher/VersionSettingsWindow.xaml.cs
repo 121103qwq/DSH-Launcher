@@ -675,13 +675,19 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
+        var exportModPack = PackageFormatBox.SelectedIndex == 1;
+        var extension = exportModPack
+            ? VersionPackageService.ModPackPackageExtension
+            : _packageService.PackageExtension;
         using var dialog = new Forms.SaveFileDialog
         {
-            Title = "导出 DSH Launcher 版本整合包",
-            Filter = $"DSH 整合包 (*{_packageService.PackageExtension})|*{_packageService.PackageExtension}|所有文件|*.*",
+            Title = "导出 DSh 版本整合包",
+            Filter = exportModPack
+                ? "DSH ModPack (*.tgz)|*.tgz"
+                : $"DSH Launcher 整合包 (*{extension})|*{extension}",
             AddExtension = true,
-            DefaultExt = _packageService.PackageExtension.TrimStart('.'),
-            FileName = $"{SafeFileName(_instance.Name)}{_packageService.PackageExtension}",
+            DefaultExt = extension.TrimStart('.'),
+            FileName = $"{SafeFileName(_instance.Name)}{extension}",
             OverwritePrompt = true
         };
         if (dialog.ShowDialog() != Forms.DialogResult.OK)
@@ -696,7 +702,10 @@ public partial class VersionSettingsWindow : UserControl
         {
             ExportStatusText.Text = "正在生成整合包…";
             await Task.Run(() => _packageService.ExportPackage(_instance, dialog.FileName, options));
-            ExportStatusText.Text = $"已导出：{dialog.FileName}。未包含 API Key、隐私值和会话。";
+            var format = VersionPackageService.DetectPackageKind(dialog.FileName) == VersionPackageKind.ModPack
+                ? "DSH ModPack"
+                : "DSH Launcher 整合包";
+            ExportStatusText.Text = $"已导出 {format}：{dialog.FileName}。未包含 API Key、隐私值和会话。";
         }
         catch (Exception ex)
         {

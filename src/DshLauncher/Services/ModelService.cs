@@ -681,6 +681,64 @@ public sealed class ModelService
         return result;
     }
 
+    public CodingModelSelection? ReadDefaultModel(ManagerInstance instance)
+    {
+        var path = GetSettingsPath(instance);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        var section = ReadSection(File.ReadAllLines(path, Encoding.UTF8), "agent-default-model");
+        var provider = ReadScalar(section, "provider");
+        var model = ReadScalar(section, "model");
+        return string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model)
+            ? null
+            : new CodingModelSelection(provider, model, ReadScalar(section, "reasoningEffort"));
+    }
+
+    public Task SaveDefaultModelAsync(
+        ManagerInstance instance,
+        CodingModelSelection selection,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureStopped(instance);
+        return SaveDefaultModelCoreAsync(instance, selection, cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes only the official agent-default-model settings section. The
+    /// settings-file provider watches this document and hot-publishes external
+    /// edits, so this narrow write is also valid while Web DSh is running.
+    /// </summary>
+    public Task SaveDefaultModelLiveAsync(
+        ManagerInstance instance,
+        CodingModelSelection selection,
+        CancellationToken cancellationToken = default) =>
+        SaveDefaultModelCoreAsync(instance, selection, cancellationToken);
+
+    private Task SaveDefaultModelCoreAsync(
+        ManagerInstance instance,
+        CodingModelSelection selection,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var normalized = CodingModelPolicyService.NormalizeSelection(selection);
+        var section = new List<string>
+        {
+            "agent-default-model:",
+            $"  provider: {YamlString(normalized.Provider)}",
+            $"  model: {YamlString(normalized.Model)}"
+        };
+        if (!string.IsNullOrWhiteSpace(normalized.ReasoningEffort))
+        {
+            section.Add($"  reasoningEffort: {YamlString(normalized.ReasoningEffort)}");
+        }
+
+        UpsertSection(GetSettingsPath(instance), "agent-default-model", section);
+        return Task.CompletedTask;
+    }
+
     private static string RemoveStructuralIndent(string line, int braceDepth, bool trimTrailingComma)
     {
         var indentation = line.Length - line.TrimStart().Length;

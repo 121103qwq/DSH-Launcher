@@ -8,6 +8,7 @@
     <Grid Margin="18">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -46,7 +47,21 @@
             </ComboBox>
         </Grid>
 
-        <TabControl Grid.Row="1" MinHeight="560">
+        <Border Grid.Row="1"
+                x:Name="StorageNoticePanel"
+                Visibility="Collapsed"
+                Background="#FFF7E2"
+                BorderBrush="#F2C66D"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="12,9"
+                Margin="0,0,0,12">
+            <TextBlock x:Name="StorageNoticeText"
+                       Foreground="#74510A"
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <TabControl Grid.Row="2" MinHeight="560">
             <TabItem Header="对话文件">
                 <Grid Margin="0,12,0,0">
                     <Grid.RowDefinitions>
@@ -56,7 +71,10 @@
                     <WrapPanel Grid.Row="0" Margin="0,0,0,14">
                         <Button Content="刷新" Click="Refresh_Click" Margin="0,0,8,0" />
                         <Button Content="打开选中对话" Click="Open_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" />
-                        <Button Content="导入 session.jsonl / .zstd" Click="Import_Click" Margin="0,0,8,0" />
+                        <Button x:Name="ImportButton"
+                                Content="导入 session.jsonl / .zstd"
+                                Click="Import_Click"
+                                Margin="0,0,8,0" />
                         <Button Content="导出选中对话" Click="Export_Click" Margin="0,0,8,0" />
                         <Button Content="备份选中对话" Click="Backup_Click" Margin="0,0,8,0" />
                         <Button Content="删除选中对话" Click="Delete_Click" />
@@ -96,7 +114,8 @@
                     </Grid.RowDefinitions>
                     <WrapPanel Grid.Row="0" Margin="0,0,0,10">
                         <Button Content="刷新备份" Click="RefreshBackups_Click" Margin="0,0,8,0" />
-                        <Button Content="恢复选中备份"
+                        <Button x:Name="RestoreBackupButton"
+                                Content="恢复选中备份"
                                 Click="RestoreBackup_Click"
                                 Style="{StaticResource PrimaryButton}" />
                     </WrapPanel>
@@ -130,9 +149,110 @@
                     </Border>
                 </Grid>
             </TabItem>
+
+            <TabItem Header="模型配置">
+                <Grid Margin="0,12,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="14" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="10"
+                            Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="DSh 工作区默认模型" FontSize="15" FontWeight="SemiBold" />
+                            <TextBlock Text="这里的工作区来自 DeepSeek Harness 会话记录中的真实工作目录，不是 Launcher 的版本同步工作区。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,5,0,12" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1.1*" />
+                                    <ColumnDefinition Width="1.4*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="DshWorkspaceBox"
+                                          Height="38"
+                                          SelectionChanged="DshWorkspace_SelectionChanged"
+                                          ToolTip="DSh 会话中的工作目录" />
+                                <ComboBox Grid.Column="1"
+                                          x:Name="WorkspaceModelBox"
+                                          Height="38"
+                                          DisplayMemberPath="DisplayText"
+                                          Margin="10,0,0,0" />
+                                <Button Grid.Column="2"
+                                        Content="保存工作区模型"
+                                        Click="SaveWorkspaceModel_Click"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Margin="10,0,0,0"
+                                        Padding="15,8" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="2"
+                            Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="10"
+                            Padding="12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="单独对话自动模型" FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="自动模式按“单独对话 → DSh 工作区 → 全局默认”依次继承；从 Launcher 打开对话时应用。"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Margin="0,5,0,10" />
+                            </StackPanel>
+                            <ListView Grid.Row="1"
+                                      x:Name="SessionModelList"
+                                      MinHeight="260"
+                                      MaxHeight="470"
+                                      BorderThickness="1"
+                                      BorderBrush="{StaticResource LineBrush}"
+                                      SelectionChanged="SessionModelList_SelectionChanged"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <ListView.View>
+                                    <GridView AllowsColumnReorder="False">
+                                        <GridViewColumn Header="对话" Width="300" DisplayMemberBinding="{Binding DisplayName}" />
+                                        <GridViewColumn Header="DSh 工作区" Width="360" DisplayMemberBinding="{Binding DshWorkspace}" />
+                                        <GridViewColumn Header="自动模型规则" Width="320" DisplayMemberBinding="{Binding PolicyText}" />
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                            <Grid Grid.Row="2" Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="SessionModelBox"
+                                          Height="38"
+                                          DisplayMemberPath="DisplayText" />
+                                <Button Grid.Column="1"
+                                        Content="保存单独对话模型"
+                                        Click="SaveSessionModel_Click"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Margin="10,0,0,0"
+                                        Padding="15,8" />
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
         </TabControl>
 
-        <TextBlock Grid.Row="2"
+        <TextBlock Grid.Row="3"
                    x:Name="StatusText"
                    Foreground="{StaticResource BlueBrush}"
                    TextWrapping="Wrap"

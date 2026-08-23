@@ -22,7 +22,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 - 每个版本使用独立的 `DSH_HOME` 与 `DSH_AGENTS_HOME`。
 - 支持复制现有版本、新建干净版本、删除版本和修改版本名称。
-- 支持导入、导出 `.dshpack` 整合包；密钥、dotenv 和会话不会进入分享包，导入时创建新版本且不覆盖已有版本。
+- 支持 Launcher `.dshpack` 与 DSH-PackForge ModPack v2 `.tgz` 的导入、导出和双向转换；密钥、dotenv 和会话不会进入分享包，导入时创建新版本且不覆盖已有版本，并通过官方 DSh Plugin CLI 恢复 Profile 依赖。
 - 同一个 DSh 运行目录可供多个隔离版本使用，并可同时启动多个实例。
 - 每个版本可把“打开窗口”绑定到 DSH Desktop，或本机的 EXE、BAT/CMD、PowerShell 脚本和 LNK 快捷方式；仍可随时改用 Launcher 启动。
 - 区分 Launcher 自己启动的 **Managed** 实例与连接外部服务的 **Attached** 实例；Attached 实例不会被停止或重启操作误杀。
@@ -32,6 +32,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - 检测 Node.js 的 Missing / Compatible / Incompatible / Unknown 状态。
 - DSh 只有在命令可执行、官方安装包可解析且两边版本一致时才视为可用；残留命令或损坏安装会进入修复引导。
 - 根据当前 DSh 的 `package.json` / `engines.node` 判断 Node.js 兼容性，不长期硬编码版本要求。
+- 新建版本从官方 npm metadata 读取可用 DSh 版本，支持 `rc.11` 等两位数 RC；启动参数会按旧版与当前版本能力选择。
 - 没有版本时提供首次运行引导，可选择官方源或国内镜像，并设置 DSh 安装位置。
 - 支持 installed DSh 与 Source 项目。
 - Launcher 不内置 Node.js、npm、pnpm 或 DeepSeek Harness；发布包约 69 MiB 主要来自自包含 .NET、WPF、WebView2 和压缩依赖。
@@ -51,11 +52,13 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 ### Provider、对话与同步
 
-- Provider 启用状态、连接诊断、`/models` 模型列表和思考档位检查。
+- 独立的全局 Provider 页面汇总全部 Coding 版本和运行中 DSh 的模型目录，不显示具体实例；可以统一设置新对话使用的默认模型。
+- Provider 页面在打开期间每 15 秒读取 DSh 官方 `llm.providers` 状态，显示在线、未加载或运行异常；离开页面后停止监控。
 - Launcher 配置只保存 API Key 的环境变量名称；真实密钥继续由 DSh 官方 `.credentials.yaml` 管理。
 - Provider 自动同步只在双方都开启同步且实例已停止时生效，会原子复制官方凭据文件，但不会解析、显示、记录或打包其中的密钥；没有 llm Provider 配置时不会覆盖文件。
 - 管理 `session.jsonl` / `session.jsonl.zstd`：查看、打开、导入、导出、备份、恢复和删除。
 - 对话列表显示会话名称和所属实例，不直接暴露内部路径 ID。
+- 对话模型按“单独对话 → DSh 真实工作目录 → 全局默认”自动继承；从 Launcher 打开会话时通过 DSh 官方 `session.selectModel` 应用。
 - 对话可选择版本独立、按工作区同步或全量同步；运行中的版本不会被同步写入。
 
 ### 独立聊天窗口
@@ -66,7 +69,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/121103qwq/DSH-Launcher/releases/latest) 下载最新的 `DSH Launcher.exe`。
+1. 从 [Releases](https://github.com/121103qwq/DSH-Launcher/releases/latest) 下载最新的 `DSH.Launcher.exe`。
 2. 直接运行程序，不需要安装 .NET SDK。
 3. 如果本机没有版本，按首次运行引导选择下载源和 DSh 安装位置。
 4. 选择或创建版本，点击“启动实例”。
@@ -119,4 +122,4 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.0.7**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.0.8**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
