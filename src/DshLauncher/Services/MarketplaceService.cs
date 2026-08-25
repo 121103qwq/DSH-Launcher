@@ -28,10 +28,10 @@ public sealed class MarketplaceService
     public const string CommunitySiteZhUrl = "https://awesome-dsh-plugin.com/zh/";
 
     /// <summary>
-    /// 单个来源超时。社区目录完整数据约 1.9MB，慢网络可达 50s+；
-    /// 10s 会让它永远超时被跳过，这里放宽到 60s（刷新总预算 90s）。
+    /// 单个来源超时。社区目录完整数据约 1.9MB，本网络实测 25-60s 波动；
+    /// 预算与刷新总超时（90s）对齐，避免网络抖动导致整次刷新失败。
     /// </summary>
-    private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(90);
     private const int MaxThemePreviewBytes = 8 * 1024 * 1024;
     private static readonly Regex MarkdownImage = new(
         @"!\[[^\]]*\]\(\s*(?:<(?<url>[^>]+)>|(?<url>[^\s\)]+))(?:\s+[\""'][^\)]*)?\s*\)",
@@ -81,12 +81,13 @@ public sealed class MarketplaceService
         var warnings = new List<string>();
         var sourcesChecked = 0;
 
-        // 插件市场来源：GitHub（英文目录）+ 中文官网（同一目录的 zh 端点）；
-        // 内容同源、按 identity 合并，筛选/卡片可区分两个来源标签。
+        // 插件市场来源：GitHub（英文目录）。中文官网(plugins.json?lang=zh)与
+        // 本目录同源同内容（同一份双语 plugins.json），不重复下载 1.9MB ——
+        // 双大文件并行在本网络会互相挤带宽导致其中之一超时；这里单次下载后
+        // 为每个条目附加两个来源标记，来源筛选与卡片标签照常可用。
         var sourceTasks = new[]
         {
-            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "GitHub", cancellationToken),
-            LoadRemoteCatalogAsync(new Uri(CommunityCatalogZhUrl), MarketplaceSourceKind.ZhCatalog, "中文官网", cancellationToken)
+            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "GitHub", cancellationToken)
         };
 
         // 各来源并行拉取（各自带源级超时）：每完成一个立即上报合并结果，
@@ -159,7 +160,12 @@ public sealed class MarketplaceService
 
         cancellationToken.ThrowIfCancellationRequested();
         var cached = TryReadCache();
-        var mergedItems = MergeItems(items);
+        var mergedItems = MergeItems(items).Select(item => item with
+        {
+            // 中文官网与 GitHub 同源：统一附加双来源标记。
+            MergedSourceKinds = new[] { MarketplaceSourceKind.CommunityCatalog, MarketplaceSourceKind.ZhCatalog },
+            MergedSourceText = string.IsNullOrWhiteSpace(item.MergedSourceText) ? "GitHub / 中文官网" : item.MergedSourceText
+        }).ToArray();
         var remoteItems = mergedItems.ToArray();
         if (remoteItems.Length > 0)
         {
@@ -167,7 +173,7 @@ public sealed class MarketplaceService
         }
         else if (cached is not null)
         {
-            mergedItems = MergeItems(cached.Items);
+            mergedItems = MergeItems(cached.Items).ToArray();
             sourcesChecked = Math.Max(sourcesChecked, cached.SourcesChecked);
             warnings.Add("在线来源暂时没有返回结果，已显示上次缓存。 ");
         }
