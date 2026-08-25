@@ -18,6 +18,12 @@ public sealed class MarketplaceService
 {
     public const string CommunityCatalogUrl = "https://awesome-dsh-plugin.com/plugins.json";
 
+    /// <summary>
+    /// 中文官网对应的数据端点（与英文目录同源：同一份双语 plugins.json，
+    /// 未语言区分；作为独立来源便于筛选与展示，合并时显示为“GitHub / 中文官网”）。
+    /// </summary>
+    public const string CommunityCatalogZhUrl = "https://awesome-dsh-plugin.com/plugins.json?lang=zh";
+
     /// <summary>插件官网（中文站）地址：仅用于界面打开浏览，数据仍来自 plugins.json。</summary>
     public const string CommunitySiteZhUrl = "https://awesome-dsh-plugin.com/zh/";
 
@@ -75,11 +81,12 @@ public sealed class MarketplaceService
         var warnings = new List<string>();
         var sourcesChecked = 0;
 
-        // 插件市场以社区目录为唯一在线来源（原 GitHub 发现已移除：内容杂音大、
-        // 与社区目录零重叠，且多为编 DSH 插件无关项目）。
+        // 插件市场来源：GitHub（英文目录）+ 中文官网（同一目录的 zh 端点）；
+        // 内容同源、按 identity 合并，筛选/卡片可区分两个来源标签。
         var sourceTasks = new[]
         {
-            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "GitHub", cancellationToken)
+            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "GitHub", cancellationToken),
+            LoadRemoteCatalogAsync(new Uri(CommunityCatalogZhUrl), MarketplaceSourceKind.ZhCatalog, "中文官网", cancellationToken)
         };
 
         // 各来源并行拉取（各自带源级超时）：每完成一个立即上报合并结果，
@@ -1187,7 +1194,7 @@ public sealed class MarketplaceService
             ?? ReadString(entry, "npm");
         var repository = ReadRepositoryUrl(entry);
         var rawCatalogUrl = ReadString(entry, "url")?.Trim();
-        var dshMarketUrl = sourceKind == MarketplaceSourceKind.CommunityCatalog
+        var dshMarketUrl = sourceKind is MarketplaceSourceKind.CommunityCatalog or MarketplaceSourceKind.ZhCatalog
             && Uri.TryCreate(rawCatalogUrl, UriKind.Absolute, out var catalogUri)
             && (string.Equals(catalogUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(catalogUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
@@ -1229,8 +1236,8 @@ public sealed class MarketplaceService
             sourceKind,
             sourceName,
             MarketplaceVerificationStatus.Unverified,
-            sourceKind == MarketplaceSourceKind.CommunityCatalog
-                ? "GitHub 来源只用于发现，安装前会读取 package.json。"
+            sourceKind is MarketplaceSourceKind.CommunityCatalog or MarketplaceSourceKind.ZhCatalog
+                ? "GitHub / 中文官网来源只用于发现，安装前会读取 package.json。"
                 : "自定义目录只用于发现，安装前会读取 package.json。",
             false,
             false,
@@ -1562,6 +1569,7 @@ public sealed class MarketplaceService
     {
         MarketplaceSourceKind.Official => 5,
         MarketplaceSourceKind.CommunityCatalog => 4,
+        MarketplaceSourceKind.ZhCatalog => 4,
         MarketplaceSourceKind.Custom => 3,
         MarketplaceSourceKind.GitHubTopic => 2,
         _ => 1
@@ -1571,6 +1579,7 @@ public sealed class MarketplaceService
     {
         MarketplaceSourceKind.Official => "DSh 官方",
         MarketplaceSourceKind.CommunityCatalog => "GitHub",
+        MarketplaceSourceKind.ZhCatalog => "中文官网",
         MarketplaceSourceKind.GitHubTopic => "GitHub 发现",
         _ => item.SourceName
     });

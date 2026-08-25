@@ -304,6 +304,7 @@
                                   SelectionChanged="MarketplaceFilter_SelectionChanged">
                             <ComboBoxItem Tag="">全部来源</ComboBoxItem>
                             <ComboBoxItem Tag="CommunityCatalog">GitHub</ComboBoxItem>
+                            <ComboBoxItem Tag="ZhCatalog">中文官网</ComboBoxItem>
                         </ComboBox>
                     </WrapPanel>
                 </Grid>

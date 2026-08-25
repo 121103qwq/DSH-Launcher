@@ -6,6 +6,7 @@ public enum MarketplaceSourceKind
 {
     Official,
     CommunityCatalog,
+    ZhCatalog,
     GitHubTopic,
     Custom
 }
