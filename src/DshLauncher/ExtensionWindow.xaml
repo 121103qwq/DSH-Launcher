@@ -311,8 +311,7 @@
                 <StackPanel Grid.Row="2" Margin="0,14,0,12">
                     <Grid>
                         <TextBlock Text="插件市场" FontSize="21" FontWeight="SemiBold" />
-                        <Button Grid.Column="*"
-                                Content="中文官网 ↗"
+                        <Button Content="中文官网 ↗"
                                 Click="MarketplaceSite_Click"
                                 Padding="10,4"
                                 HorizontalAlignment="Right"
