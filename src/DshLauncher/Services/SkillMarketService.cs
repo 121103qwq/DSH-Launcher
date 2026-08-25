@@ -19,7 +19,11 @@ public sealed class SkillMarketService
     private const int MaxResponseBytes = 8 * 1024 * 1024;
     private const int MaxConcurrentRepositoryScans = 6;
     private const int MaxConcurrentValidations = 12;
-    private const int MaxSkillPathsPerRepository = 64;
+    /// <summary>
+    /// 每个仓库最多收录的 SKILL.md 数：避免 awesome 合集仓库霸榜导致内容同质
+    /// （实测大仓库可贡献 60+ 条），控制到 20 并靠总上限截断。
+    /// </summary>
+    private const int MaxSkillPathsPerRepository = 20;
     private const int MaxSkillPathsTotal = 240;
     private static readonly TimeSpan SearchTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan RepositoryScanTimeout = TimeSpan.FromSeconds(6);

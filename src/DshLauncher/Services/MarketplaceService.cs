@@ -17,7 +17,6 @@ namespace DshLauncher.Services;
 public sealed class MarketplaceService
 {
     public const string CommunityCatalogUrl = "https://awesome-dsh-plugin.com/plugins.json";
-    public const string GitHubTopicUrl = "https://api.github.com/search/repositories?q=topic%3Adsh-plugin&per_page=50";
 
     /// <summary>
     /// 单个来源超时。社区目录完整数据约 1.9MB，慢网络可达 50s+；
@@ -73,10 +72,11 @@ public sealed class MarketplaceService
         var warnings = new List<string>();
         var sourcesChecked = 0;
 
+        // 插件市场以社区目录为唯一在线来源（原 GitHub 发现已移除：内容杂音大、
+        // 与社区目录零重叠，且多为编 DSH 插件无关项目）。
         var sourceTasks = new[]
         {
-            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "社区目录", cancellationToken),
-            LoadGitHubTopicAsync(cancellationToken)
+            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "社区目录", cancellationToken)
         };
 
         // 各来源并行拉取（各自带源级超时）：每完成一个立即上报合并结果，
@@ -575,71 +575,6 @@ public sealed class MarketplaceService
         return ParseCatalog(json, sourceKind, sourceName);
     }
 
-    private async Task<IReadOnlyList<MarketplaceItem>> LoadGitHubTopicAsync(CancellationToken cancellationToken)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(GitHubTopicUrl));
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        using var response = await SendWithMirrorFirstAsync(request, cancellationToken);
-        return ParseGitHubTopicItems(response, cancellationToken);
-    }
-
-    /// <summary>
-    /// 镜像优先的 GitHub 请求（请求头保持不变）：镜像失败时直连一次。
-    /// </summary>
-    private async Task<HttpResponseMessage> SendWithMirrorFirstAsync(
-        HttpRequestMessage request,
-        CancellationToken cancellationToken)
-    {
-        return await GithubMirror.SendWithMirrorFirstAsync(_httpClient, request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-    }
-
-    private static IReadOnlyList<MarketplaceItem> ParseGitHubTopicItems(
-        HttpResponseMessage response,
-        CancellationToken cancellationToken)
-    {
-        using var document = JsonDocument.Parse(response.Content.ReadAsStream(cancellationToken));
-        if (!document.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
-        {
-            throw new InvalidDataException("GitHub 搜索结果没有 items 数组。");
-        }
-
-        return items.EnumerateArray()
-            .Where(item => item.ValueKind == JsonValueKind.Object)
-            .Select(item =>
-            {
-                var fullName = ReadString(item, "full_name");
-                var repositoryUrl = ReadString(item, "html_url");
-                if (string.IsNullOrWhiteSpace(fullName) || string.IsNullOrWhiteSpace(repositoryUrl))
-                {
-                    return null;
-                }
-
-                var topics = ReadStringArray(item, "topics");
-                var entry = new MarketplaceItem(
-                    $"github:{fullName}",
-                    ReadString(item, "name") ?? fullName,
-                    null,
-                    null,
-                    ReadString(item, "description") ?? "GitHub dsh-plugin 主题发现的候选项目。",
-                    repositoryUrl,
-                    repositoryUrl,
-                    topics.FirstOrDefault(topic => !string.Equals(topic, "dsh-plugin", StringComparison.OrdinalIgnoreCase)) ?? "未分类",
-                    MarketplaceSourceKind.GitHubTopic,
-                    "GitHub dsh-plugin 标签",
-                    MarketplaceVerificationStatus.Unverified,
-                    "GitHub 标签只用于发现，安装前会读取仓库 package.json。",
-                    false,
-                    false,
-                    false,
-                    ReadInt64(item, "stargazers_count"),
-                    ReadDateTimeOffset(item, "published_at") ?? ReadDateTimeOffset(item, "created_at"));
-                return MarkOfficialIfExplicit(entry, MarketplaceSourceKind.GitHubTopic);
-            })
-            .Where(item => item is not null)
-            .Cast<MarketplaceItem>()
-            .ToArray();
-    }
-
     private async Task<MarketplaceVerificationResult> VerifyNpmPackageAsync(
         MarketplaceItem item,
         CancellationToken cancellationToken)
@@ -896,6 +831,16 @@ public sealed class MarketplaceService
             await imageResponse.Content.ReadAsStreamAsync(cancellationToken),
             MaxThemePreviewBytes,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// 镜像优先的 GitHub 请求（请求头保持不变）：镜像失败时直连一次。
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithMirrorFirstAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        return await GithubMirror.SendWithMirrorFirstAsync(_httpClient, request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
     internal static IReadOnlyList<string> EnumerateReadmeImageUrls(string readme)
