@@ -3519,15 +3519,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        // 外层矩形 = 工作区 + 外框（透明 resize 边界）内缩量，客户端恰为工作区。
-        var insets = GetFrameInsets(windowHandle);
+        // 外层矩形 == 客户端（无边框）；直接把窗口定到工作区矩形。
         SetWindowPos(
             windowHandle,
             IntPtr.Zero,
-            info.rcWork.Left - insets.Left,
-            info.rcWork.Top - insets.Top,
-            (info.rcWork.Right - info.rcWork.Left) + insets.Left + insets.Right,
-            (info.rcWork.Bottom - info.rcWork.Top) + insets.Top + insets.Bottom,
+            info.rcWork.Left,
+            info.rcWork.Top,
+            info.rcWork.Right - info.rcWork.Left,
+            info.rcWork.Bottom - info.rcWork.Top,
             SetWindowPosNoZOrder | SetWindowPosNoActivate);
     }
 
@@ -3895,34 +3894,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var minMax = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMinMaxInfo>(wordParameter);
-        // 外层矩形 = 工作区 + 外框（透明 resize 边界）内缩量，客户端恰为工作区；
-        // ptMaxTrackSize 同步放大，否则 OS 会把 ptMaxSize 钳制回工作区尺寸。
-        var insets = GetFrameInsets(windowHandle);
-        var maxWidth = info.rcWork.Right - info.rcWork.Left + insets.Left + insets.Right;
-        var maxHeight = info.rcWork.Bottom - info.rcWork.Top + insets.Top + insets.Bottom;
-        minMax.ptMaxPosition.X = info.rcWork.Left - info.rcMonitor.Left - insets.Left;
-        minMax.ptMaxPosition.Y = info.rcWork.Top - info.rcMonitor.Top - insets.Top;
+        // 无边框分层窗口外层==客户端；但 WindowChrome 的 ResizeBorderThickness
+        // （默认 8px）会被 WPF 当作“假想非客户区”整体平移 (-8,-8)，导致右/下
+        // 各留 8px 空隙。ptMaxPosition 加回该值抵消，ptMaxSize 保持工作区尺寸。
+        var border = SystemParameters.WindowResizeBorderThickness;
+        var maxWidth = info.rcWork.Right - info.rcWork.Left;
+        var maxHeight = info.rcWork.Bottom - info.rcWork.Top;
+        minMax.ptMaxPosition.X = info.rcWork.Left - info.rcMonitor.Left + (int)border.Left;
+        minMax.ptMaxPosition.Y = info.rcWork.Top - info.rcMonitor.Top + (int)border.Top;
         minMax.ptMaxSize.X = maxWidth;
         minMax.ptMaxSize.Y = maxHeight;
         minMax.ptMaxTrackSize.X = Math.Max(minMax.ptMaxTrackSize.X, maxWidth);
         minMax.ptMaxTrackSize.Y = Math.Max(minMax.ptMaxTrackSize.Y, maxHeight);
         System.Runtime.InteropServices.Marshal.StructureToPtr(minMax, wordParameter, false);
-    }
-
-    private NativeRect GetFrameInsets(IntPtr windowHandle)
-    {
-        if (!GetWindowRect(windowHandle, out var outer) || !GetClientRect(windowHandle, out var client))
-        {
-            return default;
-        }
-
-        return new NativeRect
-        {
-            Left = client.Left - outer.Left,
-            Top = client.Top - outer.Top,
-            Right = outer.Right - client.Right,
-            Bottom = outer.Bottom - client.Bottom
-        };
     }
 
     private void ClampMaximizedWindowPos(IntPtr windowHandle, IntPtr wordParameter)
@@ -3942,25 +3926,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var insets = GetFrameInsets(windowHandle);
-        var targetLeft = info.rcWork.Left - insets.Left;
-        var targetTop = info.rcWork.Top - insets.Top;
-        var targetWidth = info.rcWork.Right - info.rcWork.Left + insets.Left + insets.Right;
-        var targetHeight = info.rcWork.Bottom - info.rcWork.Top + insets.Top + insets.Bottom;
-
         var pos = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeWindowPos>(wordParameter);
         const uint swpNoMove = 0x0002;
         const uint swpNoSize = 0x0001;
         if ((pos.Flags & swpNoMove) == 0)
         {
-            pos.X = targetLeft;
-            pos.Y = targetTop;
+            pos.X = info.rcWork.Left;
+            pos.Y = info.rcWork.Top;
         }
 
         if ((pos.Flags & swpNoSize) == 0)
         {
-            pos.Width = targetWidth;
-            pos.Height = targetHeight;
+            pos.Width = info.rcWork.Right - info.rcWork.Left;
+            pos.Height = info.rcWork.Bottom - info.rcWork.Top;
         }
 
         System.Runtime.InteropServices.Marshal.StructureToPtr(pos, wordParameter, false);
