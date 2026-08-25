@@ -398,6 +398,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             SwitchSection("启动");
             LoadCachedInstances();
+            // 首次布局完成后 ViewportHeight 才有效；先校正启动页实例面板高度。
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(UpdateWorkspacePanelHeight));
             await Dispatcher.Yield(DispatcherPriority.Background);
             await ReconcileCachedInstanceStatesAsync();
             await RefreshDshAsync();
@@ -415,6 +417,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             ShowNotice($"初始化失败：{ex.Message}");
         }
+    }
+
+    private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) =>
+        UpdateWorkspacePanelHeight();
+
+    /// <summary>
+    /// 启动页实例面板高度随视口自适应（原为固定 520，小窗口溢出、大窗口留白）。
+    /// 视口扣除 StackPanel 上下边距 34 与余量 6；仅在启动页显示时生效。
+    /// </summary>
+    private void UpdateWorkspacePanelHeight()
+    {
+        var viewport = MainScrollViewer.ViewportHeight;
+        if (viewport <= 0)
+        {
+            return;
+        }
+
+        InstanceWorkspacePanel.Height = Math.Max(380, viewport - 40);
     }
 
     private async void RefreshNode_Click(object sender, RoutedEventArgs e)
@@ -1264,7 +1284,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var panel = new StackPanel
         {
-            Margin = new Thickness(24),
+            Margin = new Thickness(18),
             VerticalAlignment = VerticalAlignment.Top,
             MaxWidth = 980
         };

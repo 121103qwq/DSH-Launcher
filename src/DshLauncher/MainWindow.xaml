@@ -11,6 +11,7 @@
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         ResizeMode="CanResize"
+        SizeChanged="MainWindow_SizeChanged"
         AllowsTransparency="True"
         Background="Transparent"
         FontFamily="{StaticResource UiFont}"
@@ -405,7 +406,6 @@
 
                             <Border x:Name="InstanceWorkspacePanel"
                                     Grid.Column="2"
-                                    Height="520"
                                     VerticalAlignment="Top"
                                     Background="{StaticResource CardBrush}"
                                     CornerRadius="13"

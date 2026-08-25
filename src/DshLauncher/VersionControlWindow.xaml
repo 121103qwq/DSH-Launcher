@@ -8,7 +8,7 @@
                   HorizontalScrollBarVisibility="Disabled"
                   CanContentScroll="False"
                   PanningMode="VerticalOnly">
-        <Grid Margin="24">
+        <Grid Margin="18">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="280" />
                 <ColumnDefinition Width="20" />

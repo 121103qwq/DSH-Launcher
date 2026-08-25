@@ -394,7 +394,7 @@ public partial class ExtensionWindow : UserControl
     /// 页面嵌在 MainWindow 的 ScrollViewer/StackPanel 中，默认按内容自适应高度；
     /// 插件数量多时内层列表会把页面撑出视口，形成内外两级滚动条。这里把页面
     /// 高度固定为视口可用高度，行内 * 区域自动收缩，滚动只发生在内层列表内部。
-    /// 视口扣除：StackPanel 上下边距 34 + 根 Grid 自身 Margin 24 + 余量 6。
+    /// 视口扣除：StackPanel 上下边距 34 + 根 Grid 自身 Margin 36 + 余量 6。
     /// </summary>
     private void UpdatePageHeight()
     {
@@ -407,27 +407,26 @@ public partial class ExtensionWindow : UserControl
         var viewer = (Window.GetWindow(this) as FrameworkElement)?.FindName("MainScrollViewer") as ScrollViewer;
         var viewport = viewer?.ViewportHeight ?? 0;
         var available = viewport > 0
-            ? viewport - 64
+            ? viewport - 76
             : _agentLayoutOwner?.ActualHeight > 0
-                ? _agentLayoutOwner.ActualHeight - 136
-                : SystemParameters.WorkArea.Height - 136;
-        RootLayout.Height = Math.Max(320, available);
+                ? _agentLayoutOwner.ActualHeight - 148
+                : SystemParameters.WorkArea.Height - 148;
+        RootLayout.Height = Math.Max(340, available);
     }
 
     private void UpdateAgentPanelHeights()
     {
-        if (!_agentOnly)
-        {
-            return;
-        }
-
-        var windowHeight = _agentLayoutOwner?.ActualHeight > 0
-            ? _agentLayoutOwner.ActualHeight
-            : SystemParameters.WorkArea.Height;
-        var rightHeight = Math.Clamp(windowHeight - 170, 500, 760);
-        var leftHeight = Math.Clamp(rightHeight - 36, 464, 700);
-        InstalledPanel.Height = leftHeight;
-        SkillMarketPanel.Height = rightHeight;
+        var viewer = (Window.GetWindow(this) as FrameworkElement)?.FindName("MainScrollViewer") as ScrollViewer;
+        var viewport = viewer?.ViewportHeight ?? 0;
+        var pageHeight = viewport > 0
+            ? viewport - 76
+            : _agentLayoutOwner?.ActualHeight > 0
+                ? _agentLayoutOwner.ActualHeight - 148
+                : SystemParameters.WorkArea.Height - 148;
+        var page = Math.Max(420, pageHeight);
+        RootLayout.Height = page;
+        SkillMarketPanel.Height = Math.Max(420, page);
+        InstalledPanel.Height = Math.Max(360, page - 40);
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
