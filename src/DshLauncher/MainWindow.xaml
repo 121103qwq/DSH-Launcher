@@ -11,7 +11,6 @@
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         ResizeMode="CanResize"
-        SizeChanged="MainWindow_SizeChanged"
         AllowsTransparency="True"
         Background="Transparent"
         FontFamily="{StaticResource UiFont}"
@@ -256,7 +255,11 @@
                               HorizontalContentAlignment="Stretch"
                               CanContentScroll="False"
                               PanningMode="VerticalOnly">
-                    <StackPanel Margin="18,10,18,24">
+                    <Grid Margin="18,10,18,24">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
                         <Border Visibility="{Binding PageNoticeVisibility}"
                                 Background="#FFF4DF"
                                 BorderBrush="#F1C26B"
@@ -283,7 +286,7 @@
                             </Grid>
                         </Border>
 
-                        <Grid x:Name="MainDashboardGrid" VerticalAlignment="Top">
+                        <Grid x:Name="MainDashboardGrid" Grid.Row="1">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="320" />
                                 <ColumnDefinition Width="18" />
@@ -406,7 +409,6 @@
 
                             <Border x:Name="InstanceWorkspacePanel"
                                     Grid.Column="2"
-                                    VerticalAlignment="Top"
                                     Background="{StaticResource CardBrush}"
                                     CornerRadius="13"
                                     Padding="18"
@@ -491,12 +493,12 @@
                             </Border>
                         </Grid>
                         <ContentControl x:Name="EmbeddedPageHost"
+                                        Grid.Row="1"
                                         Visibility="Collapsed"
                                         Margin="0"
-                                        MinHeight="480"
                                         HorizontalContentAlignment="Stretch"
                                         VerticalContentAlignment="Stretch" />
-                    </StackPanel>
+                    </Grid>
                 </ScrollViewer>
             </Grid>
 

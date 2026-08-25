@@ -21,7 +21,6 @@ public partial class ConversationWindow : UserControl
     private readonly IReadOnlyList<ManagerInstance>? _instances;
     private readonly Action<ManagerInstance>? _selectInstance;
     private bool _instanceSelectorReady;
-    private Window? _layoutOwner;
 
     public ConversationWindow(
         ManagerInstance instance,
@@ -48,24 +47,6 @@ public partial class ConversationWindow : UserControl
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
-        var owner = Window.GetWindow(this);
-        if (!ReferenceEquals(_layoutOwner, owner))
-        {
-            if (_layoutOwner is not null)
-            {
-                _layoutOwner.SizeChanged -= LayoutOwner_SizeChanged;
-            }
-
-            _layoutOwner = owner;
-            if (_layoutOwner is not null)
-            {
-                _layoutOwner.SizeChanged += LayoutOwner_SizeChanged;
-            }
-        }
-
-        UpdatePageHeight();
-        // 首次布局完成后 ViewportHeight 才有效；再校正一次页面高度。
-        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(UpdatePageHeight));
         VersionSelectorBox.ItemsSource = _instances ?? new[] { _instance };
         VersionSelectorBox.SelectedItem = (_instances ?? new[] { _instance }).FirstOrDefault(candidate =>
             string.Equals(candidate.Id, _instance.Id, StringComparison.Ordinal));
@@ -73,25 +54,6 @@ public partial class ConversationWindow : UserControl
         await SynchronizeAsync();
         await RefreshAsync();
         await RefreshBackupsAsync(updateStatus: false);
-    }
-
-    private void LayoutOwner_SizeChanged(object sender, SizeChangedEventArgs e) =>
-        UpdatePageHeight();
-
-    /// <summary>
-    /// 与扩展页一致：页面高度固定为视口可用高度（StackPanel 边距 34 +
-    /// 根 Margin 36 + 余量 6），Tab 内列表自行滚动，不撑出窗口。
-    /// </summary>
-    private void UpdatePageHeight()
-    {
-        var viewer = (Window.GetWindow(this) as FrameworkElement)?.FindName("MainScrollViewer") as ScrollViewer;
-        var viewport = viewer?.ViewportHeight ?? 0;
-        var available = viewport > 0
-            ? viewport - 76
-            : _layoutOwner?.ActualHeight > 0
-                ? _layoutOwner.ActualHeight - 148
-                : SystemParameters.WorkArea.Height - 148;
-        RootLayout.Height = Math.Max(380, available);
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
