@@ -888,12 +888,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             current = GetParentObject(current);
         }
-
-        if (CanScroll(MainScrollViewer, e.Delta))
-        {
-            ScrollMouseWheel(MainScrollViewer, e.Delta);
-            e.Handled = true;
-        }
     }
 
     private static void ScrollMouseWheel(ScrollViewer viewer, int delta)
