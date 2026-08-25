@@ -7,7 +7,7 @@
              VerticalAlignment="Stretch"
              Loaded="Window_OnLoaded"
              Unloaded="Window_OnUnloaded">
-    <Grid Margin="12">
+    <Grid Margin="12" x:Name="RootLayout">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="340" />
             <ColumnDefinition Width="16" />

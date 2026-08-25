@@ -342,6 +342,8 @@ public partial class ExtensionWindow : UserControl
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
         AttachAgentLayoutOwner();
+        // 首次布局完成后 ViewportHeight 才有效；再校正一次页面高度。
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(UpdatePageHeight));
         if (!_agentOnly)
         {
             // Show the cached catalog first; only go online when there is no
@@ -367,11 +369,6 @@ public partial class ExtensionWindow : UserControl
 
     private void AttachAgentLayoutOwner()
     {
-        if (!_agentOnly)
-        {
-            return;
-        }
-
         var owner = Window.GetWindow(this);
         if (!ReferenceEquals(_agentLayoutOwner, owner))
         {
@@ -387,11 +384,37 @@ public partial class ExtensionWindow : UserControl
             }
         }
 
-        UpdateAgentPanelHeights();
+        UpdatePageHeight();
     }
 
     private void AgentLayoutOwner_SizeChanged(object sender, SizeChangedEventArgs e) =>
-        UpdateAgentPanelHeights();
+        UpdatePageHeight();
+
+    /// <summary>
+    /// 页面嵌在 MainWindow 的 ScrollViewer/StackPanel 中，默认按内容自适应高度；
+    /// 插件数量多时内层列表会把页面撑出视口，形成内外两级滚动条。这里把页面
+    /// 高度固定为视口可用高度（去掉底部边距），行内 * 区域自动收缩，
+    /// 滚动只发生在内层列表内部。
+    /// </summary>
+    private void UpdatePageHeight()
+    {
+        if (_agentOnly)
+        {
+            UpdateAgentPanelHeights();
+            return;
+        }
+
+        var viewer = (Window.GetWindow(this) as FrameworkElement)?.FindName("MainScrollViewer") as ScrollViewer;
+        var viewport = viewer?.ViewportHeight ?? 0;
+        if (viewport <= 0)
+        {
+            viewport = _agentLayoutOwner?.ActualHeight > 0
+                ? _agentLayoutOwner.ActualHeight - 84
+                : SystemParameters.WorkArea.Height - 84;
+        }
+
+        RootLayout.Height = Math.Max(320, viewport - 34);
+    }
 
     private void UpdateAgentPanelHeights()
     {
