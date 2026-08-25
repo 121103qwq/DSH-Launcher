@@ -1349,6 +1349,72 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 6, 0, 0)
         });
 
+        var marketSourcesLabel = new TextBlock
+        {
+            Text = "插件市场自定义目录",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 18, 0, 0)
+        };
+        var marketSourcesBox = new System.Windows.Controls.TextBox
+        {
+            Height = 72,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Margin = new Thickness(0, 7, 0, 0),
+            Text = string.Join(Environment.NewLine, _versionSettingsService.ReadMarketplaceSourceList()),
+            ToolTip = "每行一个 https 目录地址；保存后可在“扩展 → 插件市场 → 来源=自定义目录”筛选"
+        };
+        var saveMarketSourcesButton = new System.Windows.Controls.Button
+        {
+            Content = "保存目录",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(0, 8, 0, 0),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            IsEnabled = false
+        };
+        saveMarketSourcesButton.Click += (_, _) =>
+        {
+            var lines = marketSourcesBox.Text
+                .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0)
+                .ToArray();
+            var valid = lines
+                .Where(line => Uri.TryCreate(line, UriKind.Absolute, out var uri)
+                    && uri.Scheme == Uri.UriSchemeHttps)
+                .ToArray();
+            var invalidCount = lines.Length - valid.Length;
+            try
+            {
+                _versionSettingsService.SaveMarketplaceSourceList(valid);
+                saveMarketSourcesButton.IsEnabled = false;
+                var message = $"已保存 {valid.Length} 个自定义目录。";
+                if (invalidCount > 0)
+                {
+                    message += $" 忽略无效行 {invalidCount} 个（仅支持 https 地址）。";
+                }
+
+                System.Windows.MessageBox.Show(this, message, "插件市场目录", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show(this, $"保存失败：{ex.Message}", "插件市场目录", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        };
+        marketSourcesBox.TextChanged += (_, _) => saveMarketSourcesButton.IsEnabled = true;
+        panel.Children.Add(marketSourcesLabel);
+        panel.Children.Add(marketSourcesBox);
+        panel.Children.Add(saveMarketSourcesButton);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "这些 https 目录会与社区目录、GitHub 发现一起聚合到插件市场，每次“刷新目录”时读取；也支持把本地 marketplace.json 目录文件放到启动器根目录。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0)
+        });
+
         var buttons = new WrapPanel { Margin = new Thickness(0, 18, 0, 0) };
         var refreshButton = new System.Windows.Controls.Button
         {

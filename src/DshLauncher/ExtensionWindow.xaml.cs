@@ -920,6 +920,20 @@ public partial class ExtensionWindow : UserControl
                         MessageBoxImage.Information);
                     return;
                 }
+
+                if (item.IsInstalled && string.IsNullOrWhiteSpace(item.DshMarketUrl))
+                {
+                    const string message = "该插件不在 dsh-market 目录中，无法在运行中热加载更新。请先停止实例，再点击“更新”进行普通更新。";
+                    MarketplaceStatusText.Text = message;
+                    progressWindow.Fail(message);
+                    System.Windows.MessageBox.Show(
+                        Window.GetWindow(this),
+                        message,
+                        "dsh-market 不支持该条目",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
             }
 
             var verification = await _marketplaceService.VerifyAsync(item, operationCancellation.Token);

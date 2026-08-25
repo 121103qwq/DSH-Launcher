@@ -275,6 +275,7 @@
                             <ListBoxItem Tag="模型">模型</ListBoxItem>
                             <ListBoxItem Tag="主题">主题</ListBoxItem>
                             <ListBoxItem Tag="开发">开发</ListBoxItem>
+                            <ListBoxItem Tag="未分类">未分类</ListBoxItem>
                         </ListBox>
                     </Grid>
                     <WrapPanel Grid.Row="1" Margin="0,8,0,0" VerticalAlignment="Center">

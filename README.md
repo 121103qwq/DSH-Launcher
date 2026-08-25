@@ -29,6 +29,10 @@ dsh-launcher-dev/
 | 10 | `ExtensionWindow.xaml` | 市场卡片强制撑满整行（`HorizontalContentAlignment=Stretch`，插件市场 + Skill 市场） |
 | 11 | `ChatWindow.xaml` | Chat（Desktop 启动）窗口图标 → `DeepSeekOpenPlatform.ico`（用户提供的"DeepSeek 开放平台.ico"） |
 | 12 | `DshLauncher.csproj` | 图标资源声明（DeepSeekOpenPlatform.ico 入 `<Resource>`）；ApplicationIcon 维持 `DSHLauncher.ico`（启动器原样） |
+| 13 | `Services/MarketplaceService.cs` | **插件市场修复**：① 明确 DeepSeek 官方（`@deepseek-ai/*` 包 / `deepseek-ai` 仓库）条目标记为 DSh 官方来源且保留原来源（“DSh 官方”筛选不再恒空；“精选”/社区目录筛选仍可见），合并以官方为主来源；② `NormalizeCategory` 未命中关键词时归一为「未分类」，不再出现无法筛选的孤儿类别 |
+| 14 | `ExtensionWindow.xaml` | 插件市场分类新增「未分类」Tab（与 13 的类别封口配套） |
+| 15 | `ExtensionWindow.xaml.cs` | 运行中 dsh-market 热加载「更新」增加与安装对称的前检：插件不在 dsh-market 目录时轻提示“停止实例后普通更新”，不再触发回档+诊断报告重流程 |
+| 16 | `MainWindow.xaml.cs` + `Services/VersionSettingsService.cs` | 设置/诊断页新增“插件市场自定义目录”编辑与保存（每行 https 目录，无效项忽略）；写入 `marketplace-sources.json`（MarketplaceService 每次刷新读取的唯一事实源），保存后无需重建服务即生效 |
 
 其余文件与上游逐字节一致。构建 0 警告 0 错误；功能全部实测通过（见 work-log 12-15）。
 

@@ -251,7 +251,7 @@ public sealed class MarketplaceService
             return "工具";
         }
 
-        return value.Trim();
+        return "未分类";
     }
 
     public static MarketplaceUpdateStatus GetUpdateStatus(string? availableVersion, string? installedVersion)
@@ -549,7 +549,7 @@ public sealed class MarketplaceService
                 }
 
                 var topics = ReadStringArray(item, "topics");
-                return new MarketplaceItem(
+                var entry = new MarketplaceItem(
                     $"github:{fullName}",
                     ReadString(item, "name") ?? fullName,
                     null,
@@ -567,6 +567,7 @@ public sealed class MarketplaceService
                     false,
                     ReadInt64(item, "stargazers_count"),
                     ReadDateTimeOffset(item, "published_at") ?? ReadDateTimeOffset(item, "created_at"));
+                return MarkOfficialIfExplicit(entry, MarketplaceSourceKind.GitHubTopic);
             })
             .Where(item => item is not null)
             .Cast<MarketplaceItem>()
@@ -1150,7 +1151,7 @@ public sealed class MarketplaceService
             ?? ReadStringArray(entry, "tags").FirstOrDefault()
             ?? "未分类";
         var idTarget = packageName ?? repository ?? installSpec;
-        return new MarketplaceItem(
+        var item = new MarketplaceItem(
             $"{sourceKind}:{idTarget}",
             name,
             IsSafePackageName(packageName) ? packageName : null,
@@ -1173,6 +1174,7 @@ public sealed class MarketplaceService
                 ?? ReadDateTimeOffset(entry, "published_at")
                 ?? ReadDateTimeOffset(entry, "releaseDate"),
             DshMarketUrl: dshMarketUrl);
+        return MarkOfficialIfExplicit(item, sourceKind);
     }
 
     private static string? ReadDescription(JsonElement entry)
@@ -1712,6 +1714,26 @@ public sealed class MarketplaceService
             && dsh.TryGetProperty("bundle", out var bundle)
             && bundle.ValueKind == JsonValueKind.Object
             && bundle.TryGetProperty("patch", out _);
+
+    /// <summary>
+    /// 目录/发现来源中明确属于 DeepSeek 官方（@deepseek-ai 包或 deepseek-ai 仓库）的
+    /// 条目标记为 DSh 官方来源：来源筛选在“DSh 官方”与原始来源中都可见，
+    /// 合并时以官方来源作为主要呈现（SourceRank 最高）。
+    /// </summary>
+    private static MarketplaceItem MarkOfficialIfExplicit(MarketplaceItem item, MarketplaceSourceKind originalSourceKind)
+    {
+        if (!IsExplicitOfficialPackage(item.PackageName, item.RepositoryUrl))
+        {
+            return item;
+        }
+
+        return item with
+        {
+            SourceKind = MarketplaceSourceKind.Official,
+            SourceName = "DSh 官方",
+            MergedSourceKinds = new[] { originalSourceKind }
+        };
+    }
 
     private static bool IsExplicitOfficialPackage(string? packageName, string? repositoryUrl)
     {

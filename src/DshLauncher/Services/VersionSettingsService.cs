@@ -122,6 +122,62 @@ public sealed class VersionSettingsService
     }
 
     /// <summary>
+    /// 读取插件市场“自定义目录”列表。marketplace-sources.json 也是
+    /// MarketplaceService 每次刷新时读取的唯一事实源，因此此处保存后
+    /// 无需重建服务即可在下次“刷新目录”生效。
+    /// </summary>
+    public IReadOnlyList<string> ReadMarketplaceSourceList()
+    {
+        try
+        {
+            if (!File.Exists(_paths.MarketplaceSourcesPath))
+            {
+                return Array.Empty<string>();
+            }
+
+            using var document = JsonDocument.Parse(
+                File.ReadAllText(_paths.MarketplaceSourcesPath, Encoding.UTF8));
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<string>();
+            }
+
+            return document.RootElement.EnumerateArray()
+                .Where(entry => entry.ValueKind == JsonValueKind.String
+                    && Uri.TryCreate(entry.GetString(), UriKind.Absolute, out var uri)
+                    && uri.Scheme == Uri.UriSchemeHttps)
+                .Select(entry => entry.GetString()!.TrimEnd('/'))
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// 保存插件市场“自定义目录”列表：只保留有效的 https URL（与
+    /// MarketplaceService 的读取规则一致），重复项合并，其余项被忽略。
+    /// </summary>
+    public void SaveMarketplaceSourceList(IEnumerable<string> values)
+    {
+        var urls = values
+            .Select(value => value.Trim())
+            .Where(value => value.Length > 0)
+            .Select(value => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                && uri.Scheme == Uri.UriSchemeHttps
+                    ? uri.ToString().TrimEnd('/')
+                    : null)
+            .Where(value => value is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        WriteSettingsFile(
+            _paths.MarketplaceSourcesPath,
+            JsonSerializer.Serialize(urls, JsonOptions));
+    }
+
+    /// <summary>
     /// 添加一个 Launcher 级工作区名称：出现在所有版本“按工作区同步”的下拉中，
     /// 不依赖某个版本先使用它。
     /// </summary>
