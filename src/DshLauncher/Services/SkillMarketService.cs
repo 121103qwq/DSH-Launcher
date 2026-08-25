@@ -418,19 +418,9 @@ public sealed class SkillMarketService
 
     private async Task<List<SkillMarketItem>> SearchRepositoriesAsync(CancellationToken cancellationToken)
     {
-        try
-        {
-            using var response = await _httpClient.GetAsync(SearchUrl, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            return await ReadSearchItemsAsync(response, cancellationToken);
-        }
-        catch (HttpRequestException) when (GithubMirror.TryMirror(new Uri(SearchUrl)) is { } mirror)
-        {
-            // 直连失败（未认证 10 次/分钟限流等）：回退国内镜像（认证配额）。
-            using var response = await _httpClient.GetAsync(mirror, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            return await ReadSearchItemsAsync(response, cancellationToken);
-        }
+        using var response = await SendWithRetryAsync(new Uri(SearchUrl), cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await ReadSearchItemsAsync(response, cancellationToken);
     }
 
     private static async Task<List<SkillMarketItem>> ReadSearchItemsAsync(
@@ -493,50 +483,14 @@ public sealed class SkillMarketService
         scanCancellation.CancelAfter(RepositoryScanTimeout);
         try
         {
-            var uri = BuildTreesUri(repository);
-            var result = await LoadSkillPathsAsync(uri, scanCancellation.Token);
-            if (result.Succeeded)
-            {
-                return result;
-            }
-
-            // 直连 403（60 次/小时）等失败：回退国内镜像（认证配额）。
-            if (GithubMirror.TryMirror(uri) is { } mirror)
-            {
-                return await LoadSkillPathsAsync(mirror, scanCancellation.Token);
-            }
-
-            return result;
+            return await LoadSkillPathsAsync(BuildTreesUri(repository), scanCancellation.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            // 直连超时（api 直连在本网络可能超时）：先回退镜像再判定。
-            return await TryScanViaMirrorAsync(repository, BuildTreesUri(repository), scanCancellation.Token, cancellationToken);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException)
-        {
-            return await TryScanViaMirrorAsync(repository, BuildTreesUri(repository), scanCancellation.Token, cancellationToken);
-        }
-    }
-
-    private async Task<RepositoryScanResult> TryScanViaMirrorAsync(
-        SkillMarketItem repository,
-        Uri uri,
-        CancellationToken scanToken,
-        CancellationToken cancellationToken)
-    {
-        if (GithubMirror.TryMirror(uri) is not { } mirror)
-        {
+            // 镜像与直连均超时：判定扫描失败（计数会在上层汇总提示）。
             return new RepositoryScanResult(Array.Empty<string>(), Succeeded: false);
         }
-
-        try
-        {
-            using var mirrorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            mirrorCancellation.CancelAfter(RepositoryScanTimeout);
-            return await LoadSkillPathsAsync(mirror, mirrorCancellation.Token);
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException or JsonException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
             return new RepositoryScanResult(Array.Empty<string>(), Succeeded: false);
         }
@@ -553,10 +507,7 @@ public sealed class SkillMarketService
 
     private async Task<RepositoryScanResult> LoadSkillPathsAsync(Uri uri, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(
-            uri,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+        using var response = await SendWithRetryAsync(uri, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             return new RepositoryScanResult(Array.Empty<string>(), Succeeded: response.StatusCode == System.Net.HttpStatusCode.NotFound);
@@ -597,41 +548,12 @@ public sealed class SkillMarketService
         validationCancellation.CancelAfter(ValidationTimeout);
         try
         {
-            var uri = BuildRawSkillUri(candidate);
-            var content = await ReadContentAsync(uri, validationCancellation.Token);
-            return new SkillValidationResult(ParseSkillFrontmatter(content), Cacheable: true);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // 直连超时（raw 直连在本网络常超时）：先回退镜像（新超时预算）再判定。
-            return await TryValidateViaMirrorAsync(candidate, cancellationToken, cacheableOnFailure: false);
-        }
-        catch (HttpRequestException)
-        {
-            return await TryValidateViaMirrorAsync(candidate, cancellationToken, cacheableOnFailure: false);
-        }
-    }
-
-    private async Task<SkillValidationResult> TryValidateViaMirrorAsync(
-        SkillPathCandidate candidate,
-        CancellationToken cancellationToken,
-        bool cacheableOnFailure)
-    {
-        if (GithubMirror.TryMirror(BuildRawSkillUri(candidate)) is not { } mirror)
-        {
-            return new SkillValidationResult(null, Cacheable: cacheableOnFailure);
-        }
-
-        try
-        {
-            using var mirrorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            mirrorCancellation.CancelAfter(ValidationTimeout);
-            var content = await ReadContentAsync(mirror, mirrorCancellation.Token);
+            var content = await ReadContentAsync(BuildRawSkillUri(candidate), validationCancellation.Token);
             return new SkillValidationResult(ParseSkillFrontmatter(content), Cacheable: true);
         }
         catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException or InvalidDataException)
         {
-            return new SkillValidationResult(null, Cacheable: cacheableOnFailure);
+            return new SkillValidationResult(null, Cacheable: false);
         }
     }
 
@@ -646,10 +568,7 @@ public sealed class SkillMarketService
 
     private async Task<string> ReadContentAsync(Uri uri, CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(
-            uri,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+        using var response = await SendWithRetryAsync(uri, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException($"HTTP {(int)response.StatusCode}", null, response.StatusCode);
@@ -819,21 +738,41 @@ public sealed class SkillMarketService
         return 4;
     }
 
+    /// <summary>
+    /// 镜像优先、失败回退直连的 GitHub 请求；非镜像主机直接请求。
+    /// 镜像返回非 2xx 或抛错时，释放后改直连。
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithRetryAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        var mirror = GithubMirror.TryMirror(uri);
+        if (mirror is not null)
+        {
+            try
+            {
+                var response = await _httpClient.GetAsync(mirror, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    return response;
+                }
+
+                response.Dispose();
+            }
+            catch (HttpRequestException)
+            {
+                // 镜像失败：回退直连。
+            }
+        }
+
+        return await _httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+    }
+
     private async Task DownloadFileAsync(
         Uri uri,
         string destinationPath,
         IProgress<SkillInstallProgress>? progress,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            await DownloadFileCoreAsync(uri, destinationPath, progress, cancellationToken);
-        }
-        catch (HttpRequestException) when (GithubMirror.TryMirror(uri) is { } mirror)
-        {
-            // codeload 直连失败：回退国内镜像下载。
-            await DownloadFileCoreAsync(mirror, destinationPath, progress, cancellationToken);
-        }
+        await DownloadFileCoreAsync(uri, destinationPath, progress, cancellationToken);
     }
 
     private async Task DownloadFileCoreAsync(
@@ -842,10 +781,7 @@ public sealed class SkillMarketService
         IProgress<SkillInstallProgress>? progress,
         CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(
-            uri,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+        using var response = await SendWithRetryAsync(uri, cancellationToken);
         response.EnsureSuccessStatusCode();
         var total = response.Content.Headers.ContentLength;
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);

@@ -502,10 +502,24 @@ public partial class ExtensionWindow : UserControl
 
         try
         {
+            // 分批到达：每个来源完成即把合并结果先显示出来（保留滚动位置），
+            // 剩余来源继续在后台更新；完成后走完整刷新（重扫已安装/主题状态）。
+            var progress = new Progress<MarketplaceRefreshProgress>(state =>
+            {
+                if (state.Items.Count == _marketplaceSnapshot.Count)
+                {
+                    return;
+                }
+
+                _marketplaceSnapshot = state.Items;
+                MarketplaceStatusText.Text = $"后台更新中：已合并 {state.Items.Count} 条候选插件…";
+                RenderMarketplaceItems();
+            });
             var result = await _marketplaceService.SearchAsync(
                 _instance,
                 query: null,
-                _marketplaceCancellation.Token);
+                _marketplaceCancellation.Token,
+                progress: progress);
             await SetMarketplaceSnapshotAsync(result, fromCache: false, _marketplaceCancellation.Token);
             MarketplaceStatusText.Text = result.Warnings.Count == 0
                 ? "目录已更新。列表中的插件在真正安装前还会再次检查。"
@@ -648,14 +662,15 @@ public partial class ExtensionWindow : UserControl
 
     private void MarketplaceList_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        // 到达底部附近时加载下一批（用户要求的增量加载）。
+        // 到达底部附近时加载下一批（增量加载，CanContentScroll 下单位为“条目”）。
         var viewer = FindScrollViewer(MarketplaceList);
         if (viewer is null || viewer.ExtentHeight <= viewer.ViewportHeight)
         {
             return;
         }
 
-        if (viewer.VerticalOffset + viewer.ViewportHeight >= viewer.ExtentHeight - 160
+        var remaining = viewer.ExtentHeight - (viewer.VerticalOffset + viewer.ViewportHeight);
+        if (remaining <= Math.Max(6, viewer.ViewportHeight * 1.5)
             && _marketplaceVisibleCount < _marketplaceSnapshot.Count)
         {
             _marketplaceVisibleCount = Math.Min(
@@ -1199,65 +1214,6 @@ public partial class ExtensionWindow : UserControl
         catch (OperationCanceledException)
         {
             // Closing the preview cancels its network request.
-        }
-    }
-
-    private async void MarketplaceThemeApply_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isMarketplaceMutating
-            || (sender as FrameworkElement)?.DataContext is not MarketplaceItem item
-            || !item.IsTheme
-            || !item.ThemeCanApply
-            || string.IsNullOrWhiteSpace(item.ThemePackageName))
-        {
-            return;
-        }
-
-        if (System.Windows.MessageBox.Show(
-                Window.GetWindow(this),
-                $"应用主题“{item.Name}”？dsh-market 会停用当前其它主题并即时切换。",
-                "应用主题",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question) != MessageBoxResult.Yes)
-        {
-            return;
-        }
-
-        try
-        {
-            if (_instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
-            {
-                throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改外部实例主题。 ");
-            }
-
-            if (!_useDshMarketHotReload)
-            {
-                throw new InvalidOperationException("当前实例已关闭 dsh-market 热加载，请先在扩展页左侧开启。 ");
-            }
-
-            BeginMarketplaceMutation("正在通过 dsh-market 应用主题…");
-            var snapshot = _versionSnapshotService?.CreateLivePluginSnapshot(
-                _instance,
-                $"dsh-market 应用主题：{item.Name}");
-            var result = await _themeService.ApplyAsync(_instance, item.ThemePackageName);
-            if (!result.IsSuccess)
-            {
-                throw new InvalidOperationException(result.Error ?? "dsh-market 应用主题失败。 ");
-            }
-
-            _themeState = _themeState with { LiveNames = result.LiveNames };
-            MarketplaceStatusText.Text = snapshot is null
-                ? $"主题已交给 dsh-market 应用：{item.Name}。"
-                : $"主题已交给 dsh-market 应用：{item.Name}；已创建自动存档。";
-            RenderMarketplaceItems();
-        }
-        catch (Exception ex)
-        {
-            ShowError(ex);
-        }
-        finally
-        {
-            EndMarketplaceMutation();
         }
     }
 

@@ -66,7 +66,8 @@ public sealed class MarketplaceService
         string? query = null,
         CancellationToken cancellationToken = default,
         MarketplaceSourceKind? sourceKind = null,
-        MarketplaceSortOrder sortOrder = MarketplaceSortOrder.Relevance)
+        MarketplaceSortOrder sortOrder = MarketplaceSortOrder.Relevance,
+        IProgress<MarketplaceRefreshProgress>? progress = null)
     {
         var items = new List<MarketplaceItem>();
         var warnings = new List<string>();
@@ -78,8 +79,9 @@ public sealed class MarketplaceService
             LoadGitHubTopicAsync(cancellationToken)
         };
 
-        // 各来源并行拉取（各自带源级超时）；避免串行等待拖长刷新时间。
-        var sourceResults = await Task.WhenAll(sourceTasks.Select(async task =>
+        // 各来源并行拉取（各自带源级超时）：每完成一个立即上报合并结果，
+        // UI 先把已到达的部分分批显示，其余继续在后台更新。
+        var wrapped = sourceTasks.Select(async task =>
         {
             try
             {
@@ -93,10 +95,12 @@ public sealed class MarketplaceService
             {
                 return (Ok: false, Items: (IReadOnlyList<MarketplaceItem>?)null, Error: $"一个插件来源暂时无法读取：{ex.Message}");
             }
-        }));
-        sourcesChecked += sourceResults.Length;
-        foreach (var sourceResult in sourceResults)
+        }).ToArray();
+        while (wrapped.Length > 0)
         {
+            var done = await Task.WhenAny(wrapped);
+            var sourceResult = await done;
+            sourcesChecked++;
             if (sourceResult.Ok)
             {
                 items.AddRange(sourceResult.Items!);
@@ -105,6 +109,12 @@ public sealed class MarketplaceService
             {
                 warnings.Add(sourceResult.Error!);
             }
+
+            progress?.Report(new MarketplaceRefreshProgress(
+                MergeItems(items),
+                warnings.ToArray(),
+                sourcesChecked));
+            wrapped = wrapped.Where(item => !ReferenceEquals(item, done)).ToArray();
         }
 
         IReadOnlyList<(bool IsFile, string Value)> customSources;
@@ -567,22 +577,20 @@ public sealed class MarketplaceService
 
     private async Task<IReadOnlyList<MarketplaceItem>> LoadGitHubTopicAsync(CancellationToken cancellationToken)
     {
-        var uri = new Uri(GitHubTopicUrl);
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-            using var response = await SendAsync(request, cancellationToken);
-            return ParseGitHubTopicItems(response, cancellationToken);
-        }
-        catch (HttpRequestException) when (GithubMirror.TryMirror(uri) is { } mirror)
-        {
-            // 直连失败/限流：回退国内镜像（认证配额，search 限额 30/分钟）。
-            using var request = new HttpRequestMessage(HttpMethod.Get, mirror);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-            using var response = await SendAsync(request, cancellationToken);
-            return ParseGitHubTopicItems(response, cancellationToken);
-        }
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(GitHubTopicUrl));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        using var response = await SendWithMirrorFirstAsync(request, cancellationToken);
+        return ParseGitHubTopicItems(response, cancellationToken);
+    }
+
+    /// <summary>
+    /// 镜像优先的 GitHub 请求（请求头保持不变）：镜像失败时直连一次。
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithMirrorFirstAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        return await GithubMirror.SendWithMirrorFirstAsync(_httpClient, request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
     private static IReadOnlyList<MarketplaceItem> ParseGitHubTopicItems(
@@ -790,39 +798,11 @@ public sealed class MarketplaceService
         var rawUri = new Uri($"https://raw.githubusercontent.com/{repository.Owner}/{repository.Name}/HEAD/README.md");
         try
         {
-            return await GetStringAsync(rawUri, cancellationToken);
+            return await GetStringWithMirrorAsync(rawUri, cancellationToken);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
         {
-            // 直连超时：先回退镜像（新超时预算），镜像也失败再走 api /readme。
-            if (GithubMirror.TryMirror(rawUri) is { } mirror)
-            {
-                try
-                {
-                    using var mirrorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    mirrorCancellation.CancelAfter(SourceTimeout);
-                    return await GetStringAsync(mirror, mirrorCancellation.Token);
-                }
-                catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
-                {
-                    // 镜像也失败：回退 api /readme 端点。
-                }
-            }
-        }
-        catch (HttpRequestException) when (GithubMirror.TryMirror(rawUri) is { } mirror)
-        {
-            try
-            {
-                return await GetStringAsync(mirror, cancellationToken);
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-            {
-                // 镜像也失败：回退 api /readme 端点。
-            }
-        }
-        catch (HttpRequestException)
-        {
-            // 直连与镜像均不可用：回退 api /readme 端点。
+            // raw 直连与镜像均不可用：回退 api /readme 端点。
         }
 
         try
@@ -904,37 +884,18 @@ public sealed class MarketplaceService
 
     private async Task<byte[]> TryDownloadImageAsync(Uri candidate, CancellationToken cancellationToken)
     {
-        try
+        using var imageRequest = new HttpRequestMessage(HttpMethod.Get, candidate);
+        imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
+        using var imageResponse = await SendWithMirrorFirstAsync(imageRequest, cancellationToken);
+        if (imageResponse.Content.Headers.ContentLength is > MaxThemePreviewBytes)
         {
-            using var imageRequest = new HttpRequestMessage(HttpMethod.Get, candidate);
-            imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
-            using var imageResponse = await SendAsync(imageRequest, cancellationToken);
-            if (imageResponse.Content.Headers.ContentLength is > MaxThemePreviewBytes)
-            {
-                throw new InvalidDataException("README 预览图过大。");
-            }
-
-            return await ReadBoundedBytesAsync(
-                await imageResponse.Content.ReadAsStreamAsync(cancellationToken),
-                MaxThemePreviewBytes,
-                cancellationToken);
+            throw new InvalidDataException("README 预览图过大。");
         }
-        catch (HttpRequestException) when (GithubMirror.TryMirror(candidate) is { } mirror)
-        {
-            // 图片直连失败：回退国内镜像一次。
-            using var imageRequest = new HttpRequestMessage(HttpMethod.Get, mirror);
-            imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
-            using var imageResponse = await SendAsync(imageRequest, cancellationToken);
-            if (imageResponse.Content.Headers.ContentLength is > MaxThemePreviewBytes)
-            {
-                throw new InvalidDataException("README 预览图过大。");
-            }
 
-            return await ReadBoundedBytesAsync(
-                await imageResponse.Content.ReadAsStreamAsync(cancellationToken),
-                MaxThemePreviewBytes,
-                cancellationToken);
-        }
+        return await ReadBoundedBytesAsync(
+            await imageResponse.Content.ReadAsStreamAsync(cancellationToken),
+            MaxThemePreviewBytes,
+            cancellationToken);
     }
 
     internal static IReadOnlyList<string> EnumerateReadmeImageUrls(string readme)
@@ -1043,9 +1004,8 @@ public sealed class MarketplaceService
         {
             var treeUri = new Uri(
                 $"https://api.github.com/repos/{repository.Owner}/{repository.Name}/git/trees/{Uri.EscapeDataString(branch)}?recursive=1");
-            using var request = new HttpRequestMessage(HttpMethod.Get, treeUri);
-            using var response = await SendAsync(request, cancellationToken);
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            var treeJson = await GetStringWithMirrorAsync(treeUri, cancellationToken);
+            using var document = JsonDocument.Parse(treeJson);
             if (!document.RootElement.TryGetProperty("tree", out var tree)
                 || tree.ValueKind != JsonValueKind.Array)
             {
@@ -1227,20 +1187,25 @@ public sealed class MarketplaceService
     }
 
     /// <summary>
-    /// GitHub 主机（api/raw/codeload）的抓取：直连失败/限流/超时时回退国内镜像一次。
-    /// 注意读取超时抛 OperationCanceledException，必须与 HttpRequestException 一并回退。
+    /// GitHub 主机（api/raw/codeload）的抓取：镜像优先，失败回退直连一次。
+    /// 注意读取超时抛 OperationCanceledException，与 HttpRequestException 一并回退。
     /// </summary>
     private async Task<string> GetStringWithMirrorAsync(Uri uri, CancellationToken cancellationToken)
     {
-        try
+        var mirror = GithubMirror.TryMirror(uri);
+        if (mirror is not null)
         {
-            return await GetStringAsync(uri, cancellationToken);
+            try
+            {
+                return await GetStringAsync(mirror, cancellationToken);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+            {
+                // 镜像失败/超时：回退直连。
+            }
         }
-        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException
-            && GithubMirror.TryMirror(uri) is { } mirror)
-        {
-            return await GetStringAsync(mirror, cancellationToken);
-        }
+
+        return await GetStringAsync(uri, cancellationToken);
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

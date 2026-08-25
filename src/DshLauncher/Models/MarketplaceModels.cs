@@ -145,6 +145,15 @@ public sealed record MarketplaceSearchResult(
     int SourcesChecked,
     DateTimeOffset RetrievedAt);
 
+/// <summary>
+/// 插件市场刷新过程中的分批进度：每个来源完成即上报已合并的条目，
+/// UI 可先把这部分显示出来，剩余来源继续在后台更新。
+/// </summary>
+public sealed record MarketplaceRefreshProgress(
+    IReadOnlyList<MarketplaceItem> Items,
+    IReadOnlyList<string> Warnings,
+    int SourcesChecked);
+
 public sealed record MarketplaceVerificationResult(
     MarketplaceVerificationStatus Status,
     string Message,

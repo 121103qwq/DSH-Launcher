@@ -421,22 +421,6 @@
                                                     </Style>
                                                 </Button.Style>
                                             </Button>
-                                            <Button Content="{Binding ThemeActionText}"
-                                                    Click="MarketplaceThemeApply_Click"
-                                                    IsEnabled="{Binding ThemeCanApply}"
-                                                    Padding="12,6"
-                                                    Margin="0,0,0,7">
-                                                <Button.Style>
-                                                    <Style TargetType="Button">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsTheme}" Value="True">
-                                                                <Setter Property="Visibility" Value="Visible" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
                                             <Button Content="{Binding ActionText}"
                                                     Click="MarketplaceAction_Click"
                                                     IsEnabled="{Binding CanAction}"
