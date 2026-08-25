@@ -3802,6 +3802,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private const int WmGetMinMaxInfo = 0x0024;
     private const int WmWindowPosChanging = 0x0046;
+    private const int WmSettingChange = 0x001A;
     private const uint MonitorDefaultToNearest = 2;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -3987,6 +3988,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             ClampMaximizedWindowPos(windowHandle, wordParameter);
             return IntPtr.Zero;
+        }
+
+        // 任务栏显隐/显示器变化会广播 SPI_SETWORKAREA：已最大化的窗口不会自动
+        // 重算尺寸，这里重新钳制，避免隐藏任务栏后底部留下工作区空隙("收过了")。
+        if (message == WmSettingChange && WindowState == WindowState.Maximized)
+        {
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(ApplyMaximizedWorkArea));
         }
 
         if (message != WindowMessageNonClientHitTest
