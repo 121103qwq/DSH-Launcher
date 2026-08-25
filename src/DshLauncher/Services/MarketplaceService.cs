@@ -567,10 +567,29 @@ public sealed class MarketplaceService
 
     private async Task<IReadOnlyList<MarketplaceItem>> LoadGitHubTopicAsync(CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, GitHubTopicUrl);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        using var response = await SendAsync(request, cancellationToken);
-        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var uri = new Uri(GitHubTopicUrl);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            using var response = await SendAsync(request, cancellationToken);
+            return ParseGitHubTopicItems(response, cancellationToken);
+        }
+        catch (HttpRequestException) when (GithubMirror.TryMirror(uri) is { } mirror)
+        {
+            // 直连失败/限流：回退国内镜像（认证配额，search 限额 30/分钟）。
+            using var request = new HttpRequestMessage(HttpMethod.Get, mirror);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            using var response = await SendAsync(request, cancellationToken);
+            return ParseGitHubTopicItems(response, cancellationToken);
+        }
+    }
+
+    private static IReadOnlyList<MarketplaceItem> ParseGitHubTopicItems(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        using var document = JsonDocument.Parse(response.Content.ReadAsStream(cancellationToken));
         if (!document.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidDataException("GitHub 搜索结果没有 items 数组。");
@@ -714,7 +733,7 @@ public sealed class MarketplaceService
             var uri = new Uri($"https://raw.githubusercontent.com/{repository.Owner}/{repository.Name}/{encodedBranch}/{encodedPath}");
             try
             {
-                var json = await GetStringAsync(uri, cancellationToken);
+                var json = await GetStringWithMirrorAsync(uri, cancellationToken);
                 using var document = JsonDocument.Parse(json);
                 var root = document.RootElement;
                 var packageName = ReadString(root, "name");
@@ -764,29 +783,83 @@ public sealed class MarketplaceService
         return Rejected(item, $"{location}没有找到 package.json。", item.InstallSpec);
     }
 
+    private async Task<string?> ReadReadmeTextAsync(
+        GitHubRepository repository,
+        CancellationToken cancellationToken)
+    {
+        var rawUri = new Uri($"https://raw.githubusercontent.com/{repository.Owner}/{repository.Name}/HEAD/README.md");
+        try
+        {
+            return await GetStringAsync(rawUri, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // 直连超时：先回退镜像（新超时预算），镜像也失败再走 api /readme。
+            if (GithubMirror.TryMirror(rawUri) is { } mirror)
+            {
+                try
+                {
+                    using var mirrorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    mirrorCancellation.CancelAfter(SourceTimeout);
+                    return await GetStringAsync(mirror, mirrorCancellation.Token);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+                {
+                    // 镜像也失败：回退 api /readme 端点。
+                }
+            }
+        }
+        catch (HttpRequestException) when (GithubMirror.TryMirror(rawUri) is { } mirror)
+        {
+            try
+            {
+                return await GetStringAsync(mirror, cancellationToken);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                // 镜像也失败：回退 api /readme 端点。
+            }
+        }
+        catch (HttpRequestException)
+        {
+            // 直连与镜像均不可用：回退 api /readme 端点。
+        }
+
+        try
+        {
+            var readmeUri = new Uri($"https://api.github.com/repos/{repository.Owner}/{repository.Name}/readme");
+            using var readmeRequest = new HttpRequestMessage(HttpMethod.Get, readmeUri);
+            using var readmeResponse = await SendAsync(readmeRequest, cancellationToken);
+            using var document = JsonDocument.Parse(await readmeResponse.Content.ReadAsStringAsync(cancellationToken));
+            var root = document.RootElement;
+            var encodedContent = ReadString(root, "content");
+            return string.IsNullOrWhiteSpace(encodedContent)
+                ? null
+                : Encoding.UTF8.GetString(Convert.FromBase64String(
+                    encodedContent.Replace("\r", string.Empty, StringComparison.Ordinal)
+                        .Replace("\n", string.Empty, StringComparison.Ordinal)));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or FormatException)
+        {
+            return null;
+        }
+    }
+
     private async Task<ThemeReadmePreview> ReadThemePreviewAsync(
         GitHubRepository repository,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(SourceTimeout);
-        var readmeUri = new Uri($"https://api.github.com/repos/{repository.Owner}/{repository.Name}/readme");
-        using var readmeRequest = new HttpRequestMessage(HttpMethod.Get, readmeUri);
-        using var readmeResponse = await SendAsync(readmeRequest, timeout.Token);
-        using var document = JsonDocument.Parse(await readmeResponse.Content.ReadAsStringAsync(timeout.Token));
-        var root = document.RootElement;
-        var encodedContent = ReadString(root, "content");
-        var downloadUrl = ReadString(root, "download_url");
-        if (string.IsNullOrWhiteSpace(encodedContent))
+        // 优先 raw README（不走 api 核心配额、可走国内镜像），失败再回退 api /readme。
+        var readme = await ReadReadmeTextAsync(repository, timeout.Token);
+        if (readme is null)
         {
             return new ThemeReadmePreview(null, null, "仓库 README 中没有可读取的内容，因此没有主题预览图。");
         }
 
-        var readme = Encoding.UTF8.GetString(Convert.FromBase64String(
-            encodedContent.Replace("\r", string.Empty, StringComparison.Ordinal)
-                .Replace("\n", string.Empty, StringComparison.Ordinal)));
         var candidates = EnumerateReadmeImageUrls(readme)
-            .Select(url => ResolveReadmeImageUrl(url, downloadUrl))
+            .Select(url => ResolveReadmeImageUrl(url, $"https://raw.githubusercontent.com/{repository.Owner}/{repository.Name}/HEAD/README.md"))
             .Where(static url => url is not null)
             .Cast<Uri>()
             .DistinctBy(static uri => uri.AbsoluteUri, StringComparer.OrdinalIgnoreCase)
@@ -807,18 +880,7 @@ public sealed class MarketplaceService
 
             try
             {
-                using var imageRequest = new HttpRequestMessage(HttpMethod.Get, candidate);
-                imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
-                using var imageResponse = await SendAsync(imageRequest, timeout.Token);
-                if (imageResponse.Content.Headers.ContentLength is > MaxThemePreviewBytes)
-                {
-                    continue;
-                }
-
-                var bytes = await ReadBoundedBytesAsync(
-                    await imageResponse.Content.ReadAsStreamAsync(timeout.Token),
-                    MaxThemePreviewBytes,
-                    timeout.Token);
+                var bytes = await TryDownloadImageAsync(candidate, timeout.Token);
                 if (bytes.Length > 0)
                 {
                     return new ThemeReadmePreview(bytes, candidate.AbsoluteUri, "预览图来自该主题仓库的 README。");
@@ -838,6 +900,41 @@ public sealed class MarketplaceService
             null,
             null,
             "README 中找到了图片，但没有可显示的 PNG/JPG/WebP 预览图（SVG 或超大图片不会载入）。");
+    }
+
+    private async Task<byte[]> TryDownloadImageAsync(Uri candidate, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var imageRequest = new HttpRequestMessage(HttpMethod.Get, candidate);
+            imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
+            using var imageResponse = await SendAsync(imageRequest, cancellationToken);
+            if (imageResponse.Content.Headers.ContentLength is > MaxThemePreviewBytes)
+            {
+                throw new InvalidDataException("README 预览图过大。");
+            }
+
+            return await ReadBoundedBytesAsync(
+                await imageResponse.Content.ReadAsStreamAsync(cancellationToken),
+                MaxThemePreviewBytes,
+                cancellationToken);
+        }
+        catch (HttpRequestException) when (GithubMirror.TryMirror(candidate) is { } mirror)
+        {
+            // 图片直连失败：回退国内镜像一次。
+            using var imageRequest = new HttpRequestMessage(HttpMethod.Get, mirror);
+            imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
+            using var imageResponse = await SendAsync(imageRequest, cancellationToken);
+            if (imageResponse.Content.Headers.ContentLength is > MaxThemePreviewBytes)
+            {
+                throw new InvalidDataException("README 预览图过大。");
+            }
+
+            return await ReadBoundedBytesAsync(
+                await imageResponse.Content.ReadAsStreamAsync(cancellationToken),
+                MaxThemePreviewBytes,
+                cancellationToken);
+        }
     }
 
     internal static IReadOnlyList<string> EnumerateReadmeImageUrls(string readme)
@@ -1127,6 +1224,23 @@ public sealed class MarketplaceService
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         using var response = await SendAsync(request, timeout.Token);
         return await response.Content.ReadAsStringAsync(timeout.Token);
+    }
+
+    /// <summary>
+    /// GitHub 主机（api/raw/codeload）的抓取：直连失败/限流/超时时回退国内镜像一次。
+    /// 注意读取超时抛 OperationCanceledException，必须与 HttpRequestException 一并回退。
+    /// </summary>
+    private async Task<string> GetStringWithMirrorAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await GetStringAsync(uri, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException
+            && GithubMirror.TryMirror(uri) is { } mirror)
+        {
+            return await GetStringAsync(mirror, cancellationToken);
+        }
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

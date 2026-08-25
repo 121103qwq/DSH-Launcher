@@ -325,9 +325,22 @@ public sealed class SkillMarketService
             && (transientScanFailures > 0 || transientValidationFailures > 0))
         {
             AddWarning("本次刷新没有可用结果，已改显示上次缓存。");
+            progress?.Report(new SkillMarketRefreshProgress(
+                cached,
+                validationCandidates.Length,
+                validationCandidates.Length,
+                "校验完成",
+                WarningsSnapshot()));
             return cached;
         }
 
+        // 最后一条进度带上累积警告，UI 结束状态保留提示。
+        progress?.Report(new SkillMarketRefreshProgress(
+            BuildSkillSnapshot(validItems),
+            validationCandidates.Length,
+            validationCandidates.Length,
+            "校验完成",
+            WarningsSnapshot()));
         TryWriteCache(result);
         return result;
     }
@@ -405,8 +418,25 @@ public sealed class SkillMarketService
 
     private async Task<List<SkillMarketItem>> SearchRepositoriesAsync(CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(SearchUrl, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        try
+        {
+            using var response = await _httpClient.GetAsync(SearchUrl, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            return await ReadSearchItemsAsync(response, cancellationToken);
+        }
+        catch (HttpRequestException) when (GithubMirror.TryMirror(new Uri(SearchUrl)) is { } mirror)
+        {
+            // 直连失败（未认证 10 次/分钟限流等）：回退国内镜像（认证配额）。
+            using var response = await _httpClient.GetAsync(mirror, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            return await ReadSearchItemsAsync(response, cancellationToken);
+        }
+    }
+
+    private static async Task<List<SkillMarketItem>> ReadSearchItemsAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
         using var document = await JsonDocument.ParseAsync(
             await response.Content.ReadAsStreamAsync(cancellationToken), options: default, cancellationToken);
         var result = new List<SkillMarketItem>();
@@ -463,52 +493,100 @@ public sealed class SkillMarketService
         scanCancellation.CancelAfter(RepositoryScanTimeout);
         try
         {
-            var escapedRepository = string.Join('/', repository.Repository
-                .Split('/', StringSplitOptions.RemoveEmptyEntries)
-                .Select(Uri.EscapeDataString));
-            using var response = await _httpClient.GetAsync(
-                new Uri($"https://api.github.com/repos/{escapedRepository}/git/trees/{Uri.EscapeDataString(repository.DefaultBranch)}?recursive=1"),
-                HttpCompletionOption.ResponseHeadersRead,
-                scanCancellation.Token);
-            if (!response.IsSuccessStatusCode)
+            var uri = BuildTreesUri(repository);
+            var result = await LoadSkillPathsAsync(uri, scanCancellation.Token);
+            if (result.Succeeded)
             {
-                return new RepositoryScanResult(Array.Empty<string>(), Succeeded: response.StatusCode == System.Net.HttpStatusCode.NotFound);
+                return result;
             }
 
-            if (response.Content.Headers.ContentLength is > MaxResponseBytes)
+            // 直连 403（60 次/小时）等失败：回退国内镜像（认证配额）。
+            if (GithubMirror.TryMirror(uri) is { } mirror)
             {
-                return new RepositoryScanResult(Array.Empty<string>(), Succeeded: true);
+                return await LoadSkillPathsAsync(mirror, scanCancellation.Token);
             }
 
-            using var document = await JsonDocument.ParseAsync(
-                await response.Content.ReadAsStreamAsync(scanCancellation.Token), options: default, scanCancellation.Token);
-            if (!document.RootElement.TryGetProperty("tree", out var tree)
-                || tree.ValueKind != JsonValueKind.Array)
-            {
-                return new RepositoryScanResult(Array.Empty<string>(), Succeeded: true);
-            }
-
-            var paths = tree.EnumerateArray()
-                .Where(entry => entry.ValueKind == JsonValueKind.Object
-                    && string.Equals(ReadStringProperty(entry, "type"), "blob", StringComparison.OrdinalIgnoreCase))
-                .Select(entry => ReadStringProperty(entry, "path"))
-                .Where(path => path is not null && IsSkillMarkdownPath(path))
-                .Select(path => path!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(SkillPathRank)
-                .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
-                .Take(MaxSkillPathsPerRepository)
-                .ToArray();
-            return new RepositoryScanResult(paths, Succeeded: true);
+            return result;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new RepositoryScanResult(Array.Empty<string>(), Succeeded: false);
+            // 直连超时（api 直连在本网络可能超时）：先回退镜像再判定。
+            return await TryScanViaMirrorAsync(repository, BuildTreesUri(repository), scanCancellation.Token, cancellationToken);
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
+            return await TryScanViaMirrorAsync(repository, BuildTreesUri(repository), scanCancellation.Token, cancellationToken);
+        }
+    }
+
+    private async Task<RepositoryScanResult> TryScanViaMirrorAsync(
+        SkillMarketItem repository,
+        Uri uri,
+        CancellationToken scanToken,
+        CancellationToken cancellationToken)
+    {
+        if (GithubMirror.TryMirror(uri) is not { } mirror)
+        {
             return new RepositoryScanResult(Array.Empty<string>(), Succeeded: false);
         }
+
+        try
+        {
+            using var mirrorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            mirrorCancellation.CancelAfter(RepositoryScanTimeout);
+            return await LoadSkillPathsAsync(mirror, mirrorCancellation.Token);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException or JsonException)
+        {
+            return new RepositoryScanResult(Array.Empty<string>(), Succeeded: false);
+        }
+    }
+
+    private static Uri BuildTreesUri(SkillMarketItem repository)
+    {
+        var escapedRepository = string.Join('/', repository.Repository
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Uri.EscapeDataString));
+        return new Uri(
+            $"https://api.github.com/repos/{escapedRepository}/git/trees/{Uri.EscapeDataString(repository.DefaultBranch)}?recursive=1");
+    }
+
+    private async Task<RepositoryScanResult> LoadSkillPathsAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        using var response = await _httpClient.GetAsync(
+            uri,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return new RepositoryScanResult(Array.Empty<string>(), Succeeded: response.StatusCode == System.Net.HttpStatusCode.NotFound);
+        }
+
+        if (response.Content.Headers.ContentLength is > MaxResponseBytes)
+        {
+            return new RepositoryScanResult(Array.Empty<string>(), Succeeded: true);
+        }
+
+        using var document = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(cancellationToken), options: default, cancellationToken);
+        if (!document.RootElement.TryGetProperty("tree", out var tree)
+            || tree.ValueKind != JsonValueKind.Array)
+        {
+            return new RepositoryScanResult(Array.Empty<string>(), Succeeded: true);
+        }
+
+        var paths = tree.EnumerateArray()
+            .Where(entry => entry.ValueKind == JsonValueKind.Object
+                && string.Equals(ReadStringProperty(entry, "type"), "blob", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => ReadStringProperty(entry, "path"))
+            .Where(path => path is not null && IsSkillMarkdownPath(path))
+            .Select(path => path!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(SkillPathRank)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Take(MaxSkillPathsPerRepository)
+            .ToArray();
+        return new RepositoryScanResult(paths, Succeeded: true);
     }
 
     private async Task<SkillValidationResult> ValidateSkillAsync(
@@ -519,41 +597,76 @@ public sealed class SkillMarketService
         validationCancellation.CancelAfter(ValidationTimeout);
         try
         {
-            var escapedPath = string.Join('/', candidate.SkillPath
-                .Split('/', StringSplitOptions.RemoveEmptyEntries)
-                .Select(Uri.EscapeDataString));
-            using var response = await _httpClient.GetAsync(
-                new Uri($"https://raw.githubusercontent.com/{candidate.Repository.Repository}/{Uri.EscapeDataString(candidate.Repository.DefaultBranch)}/{escapedPath}"),
-                HttpCompletionOption.ResponseHeadersRead,
-                validationCancellation.Token);
-            if (!response.IsSuccessStatusCode)
-            {
-                return new SkillValidationResult(
-                    Metadata: null,
-                    Cacheable: response.StatusCode == System.Net.HttpStatusCode.NotFound);
-            }
-
-            if (response.Content.Headers.ContentLength is > MaxResponseBytes)
-            {
-                return new SkillValidationResult(null, Cacheable: true);
-            }
-
-            var content = await response.Content.ReadAsStringAsync(validationCancellation.Token);
-            if (Encoding.UTF8.GetByteCount(content) > MaxResponseBytes)
-            {
-                return new SkillValidationResult(null, Cacheable: true);
-            }
-
+            var uri = BuildRawSkillUri(candidate);
+            var content = await ReadContentAsync(uri, validationCancellation.Token);
             return new SkillValidationResult(ParseSkillFrontmatter(content), Cacheable: true);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new SkillValidationResult(null, Cacheable: false);
+            // 直连超时（raw 直连在本网络常超时）：先回退镜像（新超时预算）再判定。
+            return await TryValidateViaMirrorAsync(candidate, cancellationToken, cacheableOnFailure: false);
         }
         catch (HttpRequestException)
         {
-            return new SkillValidationResult(null, Cacheable: false);
+            return await TryValidateViaMirrorAsync(candidate, cancellationToken, cacheableOnFailure: false);
         }
+    }
+
+    private async Task<SkillValidationResult> TryValidateViaMirrorAsync(
+        SkillPathCandidate candidate,
+        CancellationToken cancellationToken,
+        bool cacheableOnFailure)
+    {
+        if (GithubMirror.TryMirror(BuildRawSkillUri(candidate)) is not { } mirror)
+        {
+            return new SkillValidationResult(null, Cacheable: cacheableOnFailure);
+        }
+
+        try
+        {
+            using var mirrorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            mirrorCancellation.CancelAfter(ValidationTimeout);
+            var content = await ReadContentAsync(mirror, mirrorCancellation.Token);
+            return new SkillValidationResult(ParseSkillFrontmatter(content), Cacheable: true);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException or InvalidDataException)
+        {
+            return new SkillValidationResult(null, Cacheable: cacheableOnFailure);
+        }
+    }
+
+    private static Uri BuildRawSkillUri(SkillPathCandidate candidate)
+    {
+        var escapedPath = string.Join('/', candidate.SkillPath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Uri.EscapeDataString));
+        return new Uri(
+            $"https://raw.githubusercontent.com/{candidate.Repository.Repository}/{Uri.EscapeDataString(candidate.Repository.DefaultBranch)}/{escapedPath}");
+    }
+
+    private async Task<string> ReadContentAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        using var response = await _httpClient.GetAsync(
+            uri,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"HTTP {(int)response.StatusCode}", null, response.StatusCode);
+        }
+
+        if (response.Content.Headers.ContentLength is > MaxResponseBytes)
+        {
+            throw new InvalidDataException("内容过大。");
+        }
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (Encoding.UTF8.GetByteCount(content) > MaxResponseBytes)
+        {
+            throw new InvalidDataException("内容过大。");
+        }
+
+        return content;
     }
 
     private static SkillMetadata? ParseSkillFrontmatter(string content)
@@ -707,6 +820,23 @@ public sealed class SkillMarketService
     }
 
     private async Task DownloadFileAsync(
+        Uri uri,
+        string destinationPath,
+        IProgress<SkillInstallProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await DownloadFileCoreAsync(uri, destinationPath, progress, cancellationToken);
+        }
+        catch (HttpRequestException) when (GithubMirror.TryMirror(uri) is { } mirror)
+        {
+            // codeload 直连失败：回退国内镜像下载。
+            await DownloadFileCoreAsync(mirror, destinationPath, progress, cancellationToken);
+        }
+    }
+
+    private async Task DownloadFileCoreAsync(
         Uri uri,
         string destinationPath,
         IProgress<SkillInstallProgress>? progress,

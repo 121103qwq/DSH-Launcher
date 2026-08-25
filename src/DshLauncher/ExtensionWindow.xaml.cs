@@ -351,6 +351,7 @@ public partial class ExtensionWindow : UserControl
         _controlLoaded = true;
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
+        MarketplaceList.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(MarketplaceList_ScrollChanged));
         if (!_agentOnly)
         {
             // Show the cached catalog first; only go online when there is no
@@ -556,6 +557,9 @@ public partial class ExtensionWindow : UserControl
     }
 
     private int _marketplaceRenderVersion;
+    private const int MarketplacePageSize = 150;
+    private int _marketplaceVisibleCount = MarketplacePageSize;
+    private string _marketplaceFilterKey = string.Empty;
 
     private void RenderMarketplaceItems(string? restoreCategoryKey = null)
     {
@@ -578,6 +582,17 @@ public partial class ExtensionWindow : UserControl
         {
             category = null;
         }
+        var filterKey = $"{query}|{sourceKind}|{sortOrder}|{category}|{featuredOnly}";
+        if (!string.Equals(filterKey, _marketplaceFilterKey, StringComparison.Ordinal))
+        {
+            // 筛选条件变化：批量加载回到底部一次；否则保留已展开的条数。
+            _marketplaceFilterKey = filterKey;
+            _marketplaceVisibleCount = MarketplacePageSize;
+        }
+
+        var visibleCount = _marketplaceVisibleCount;
+        // 记录当前位置：ItemSource 替换会重置滚动偏移，保证任何重渲染“原地”。
+        var currentOffset = FindScrollViewer(MarketplaceList)?.VerticalOffset ?? 0;
         var installedPlugins = _installedPlugins;
         var canMutate = _marketplaceCanMutate;
         var themeState = _themeState;
@@ -600,6 +615,10 @@ public partial class ExtensionWindow : UserControl
                 instanceRunning,
                 instanceAttached,
                 mutating);
+            // 批量加载：只暴露前 N 条，滚动到底部附近时再扩大。
+            var visible = visibleCount < rendered.Count
+                ? rendered.Take(visibleCount).ToList()
+                : rendered;
             Dispatcher.BeginInvoke(() =>
             {
                 if (renderVersion != _marketplaceRenderVersion)
@@ -607,10 +626,10 @@ public partial class ExtensionWindow : UserControl
                     return;
                 }
 
-                MarketplaceList.ItemsSource = rendered;
-                MarketplaceSummaryText.Text = rendered.Count == snapshot.Count
+                MarketplaceList.ItemsSource = visible;
+                MarketplaceSummaryText.Text = visible.Count == snapshot.Count
                     ? $"找到 {snapshot.Count} 个候选插件"
-                    : $"显示 {rendered.Count} / {snapshot.Count} 个候选插件";
+                    : $"显示 {visible.Count} / {snapshot.Count} 个候选插件（滚动到底部加载更多）";
                 if (restoreCategoryKey is not null)
                 {
                     Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => RestoreScrollOffset(
@@ -618,8 +637,32 @@ public partial class ExtensionWindow : UserControl
                         _marketplaceScrollOffsets,
                         restoreCategoryKey)));
                 }
+                else
+                {
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+                        FindScrollViewer(MarketplaceList)?.ScrollToVerticalOffset(currentOffset)));
+                }
             });
         });
+    }
+
+    private void MarketplaceList_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        // 到达底部附近时加载下一批（用户要求的增量加载）。
+        var viewer = FindScrollViewer(MarketplaceList);
+        if (viewer is null || viewer.ExtentHeight <= viewer.ViewportHeight)
+        {
+            return;
+        }
+
+        if (viewer.VerticalOffset + viewer.ViewportHeight >= viewer.ExtentHeight - 160
+            && _marketplaceVisibleCount < _marketplaceSnapshot.Count)
+        {
+            _marketplaceVisibleCount = Math.Min(
+                _marketplaceSnapshot.Count,
+                _marketplaceVisibleCount + MarketplacePageSize);
+            RenderMarketplaceItems();
+        }
     }
 
     internal static List<MarketplaceItem> BuildMarketplaceItems(
