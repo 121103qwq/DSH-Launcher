@@ -307,7 +307,6 @@
                             <ComboBoxItem Tag="Official">DSh 官方</ComboBoxItem>
                             <ComboBoxItem Tag="CommunityCatalog">社区目录</ComboBoxItem>
                             <ComboBoxItem Tag="GitHubTopic">GitHub 发现</ComboBoxItem>
-                            <ComboBoxItem Tag="Custom">自定义目录</ComboBoxItem>
                         </ComboBox>
                     </WrapPanel>
                 </Grid>

@@ -493,7 +493,7 @@
                         <ContentControl x:Name="EmbeddedPageHost"
                                         Visibility="Collapsed"
                                         Margin="0"
-                                        MinHeight="620"
+                                        MinHeight="480"
                                         HorizontalContentAlignment="Stretch"
                                         VerticalContentAlignment="Stretch" />
                     </StackPanel>

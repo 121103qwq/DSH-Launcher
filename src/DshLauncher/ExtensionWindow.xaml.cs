@@ -393,8 +393,8 @@ public partial class ExtensionWindow : UserControl
     /// <summary>
     /// 页面嵌在 MainWindow 的 ScrollViewer/StackPanel 中，默认按内容自适应高度；
     /// 插件数量多时内层列表会把页面撑出视口，形成内外两级滚动条。这里把页面
-    /// 高度固定为视口可用高度（去掉底部边距），行内 * 区域自动收缩，
-    /// 滚动只发生在内层列表内部。
+    /// 高度固定为视口可用高度，行内 * 区域自动收缩，滚动只发生在内层列表内部。
+    /// 视口扣除：StackPanel 上下边距 34 + 根 Grid 自身 Margin 24 + 余量 6。
     /// </summary>
     private void UpdatePageHeight()
     {
@@ -406,14 +406,12 @@ public partial class ExtensionWindow : UserControl
 
         var viewer = (Window.GetWindow(this) as FrameworkElement)?.FindName("MainScrollViewer") as ScrollViewer;
         var viewport = viewer?.ViewportHeight ?? 0;
-        if (viewport <= 0)
-        {
-            viewport = _agentLayoutOwner?.ActualHeight > 0
-                ? _agentLayoutOwner.ActualHeight - 84
-                : SystemParameters.WorkArea.Height - 84;
-        }
-
-        RootLayout.Height = Math.Max(320, viewport - 34);
+        var available = viewport > 0
+            ? viewport - 64
+            : _agentLayoutOwner?.ActualHeight > 0
+                ? _agentLayoutOwner.ActualHeight - 136
+                : SystemParameters.WorkArea.Height - 136;
+        RootLayout.Height = Math.Max(320, available);
     }
 
     private void UpdateAgentPanelHeights()
