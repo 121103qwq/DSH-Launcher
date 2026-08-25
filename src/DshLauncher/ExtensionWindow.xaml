@@ -303,14 +303,21 @@
                                   ToolTip="次级来源筛选"
                                   SelectionChanged="MarketplaceFilter_SelectionChanged">
                             <ComboBoxItem Tag="">全部来源</ComboBoxItem>
-                            <ComboBoxItem Tag="Official">DSh 官方</ComboBoxItem>
-                            <ComboBoxItem Tag="CommunityCatalog">社区目录</ComboBoxItem>
+                            <ComboBoxItem Tag="CommunityCatalog">GitHub</ComboBoxItem>
                         </ComboBox>
                     </WrapPanel>
                 </Grid>
 
                 <StackPanel Grid.Row="2" Margin="0,14,0,12">
-                    <TextBlock Text="插件市场" FontSize="21" FontWeight="SemiBold" />
+                    <Grid>
+                        <TextBlock Text="插件市场" FontSize="21" FontWeight="SemiBold" />
+                        <Button Grid.Column="*"
+                                Content="中文官网 ↗"
+                                Click="MarketplaceSite_Click"
+                                Padding="10,4"
+                                HorizontalAlignment="Right"
+                                ToolTip="打开插件官方（中文）网站" />
+                    </Grid>
                     <TextBlock Text="输入时直接在本地目录中筛选；只有点击“刷新目录”才会联网。安装前会再次检查 package.json 和 DSh bundle。"
                                Foreground="{StaticResource MutedBrush}"
                                FontSize="11"

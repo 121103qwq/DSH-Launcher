@@ -18,6 +18,9 @@ public sealed class MarketplaceService
 {
     public const string CommunityCatalogUrl = "https://awesome-dsh-plugin.com/plugins.json";
 
+    /// <summary>插件官网（中文站）地址：仅用于界面打开浏览，数据仍来自 plugins.json。</summary>
+    public const string CommunitySiteZhUrl = "https://awesome-dsh-plugin.com/zh/";
+
     /// <summary>
     /// 单个来源超时。社区目录完整数据约 1.9MB，慢网络可达 50s+；
     /// 10s 会让它永远超时被跳过，这里放宽到 60s（刷新总预算 90s）。
@@ -76,7 +79,7 @@ public sealed class MarketplaceService
         // 与社区目录零重叠，且多为编 DSH 插件无关项目）。
         var sourceTasks = new[]
         {
-            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "社区目录", cancellationToken)
+            LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "GitHub", cancellationToken)
         };
 
         // 各来源并行拉取（各自带源级超时）：每完成一个立即上报合并结果，
@@ -1227,7 +1230,7 @@ public sealed class MarketplaceService
             sourceName,
             MarketplaceVerificationStatus.Unverified,
             sourceKind == MarketplaceSourceKind.CommunityCatalog
-                ? "社区目录只用于发现，安装前会读取 package.json。"
+                ? "GitHub 来源只用于发现，安装前会读取 package.json。"
                 : "自定义目录只用于发现，安装前会读取 package.json。",
             false,
             false,
@@ -1237,7 +1240,7 @@ public sealed class MarketplaceService
                 ?? ReadDateTimeOffset(entry, "published_at")
                 ?? ReadDateTimeOffset(entry, "releaseDate"),
             DshMarketUrl: dshMarketUrl);
-        return MarkOfficialIfExplicit(item, sourceKind);
+        return item;
     }
 
     private static string? ReadDescription(JsonElement entry)
@@ -1567,7 +1570,7 @@ public sealed class MarketplaceService
     private static string SourceTextFor(MarketplaceItem item) => item.MergedSourceText ?? (item.SourceKind switch
     {
         MarketplaceSourceKind.Official => "DSh 官方",
-        MarketplaceSourceKind.CommunityCatalog => "社区目录",
+        MarketplaceSourceKind.CommunityCatalog => "GitHub",
         MarketplaceSourceKind.GitHubTopic => "GitHub 发现",
         _ => item.SourceName
     });
@@ -1777,26 +1780,6 @@ public sealed class MarketplaceService
             && dsh.TryGetProperty("bundle", out var bundle)
             && bundle.ValueKind == JsonValueKind.Object
             && bundle.TryGetProperty("patch", out _);
-
-    /// <summary>
-    /// 目录/发现来源中明确属于 DeepSeek 官方（@deepseek-ai 包或 deepseek-ai 仓库）的
-    /// 条目标记为 DSh 官方来源：来源筛选在“DSh 官方”与原始来源中都可见，
-    /// 合并时以官方来源作为主要呈现（SourceRank 最高）。
-    /// </summary>
-    private static MarketplaceItem MarkOfficialIfExplicit(MarketplaceItem item, MarketplaceSourceKind originalSourceKind)
-    {
-        if (!IsExplicitOfficialPackage(item.PackageName, item.RepositoryUrl))
-        {
-            return item;
-        }
-
-        return item with
-        {
-            SourceKind = MarketplaceSourceKind.Official,
-            SourceName = "DSh 官方",
-            MergedSourceKinds = new[] { originalSourceKind }
-        };
-    }
 
     private static bool IsExplicitOfficialPackage(string? packageName, string? repositoryUrl)
     {

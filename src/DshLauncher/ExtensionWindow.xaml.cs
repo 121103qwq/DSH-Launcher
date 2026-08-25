@@ -1190,6 +1190,21 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
+    private void MarketplaceSite_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(MarketplaceService.CommunitySiteZhUrl)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MarketplaceStatusText.Text = $"无法打开中文官网：{ex.Message}";
+        }
+    }
+
     private async void MarketplaceThemePreview_Click(object sender, RoutedEventArgs e)
     {
         if (_marketplaceService is null
