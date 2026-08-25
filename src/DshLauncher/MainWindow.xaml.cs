@@ -3482,6 +3482,53 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         base.OnStateChanged(e);
         UpdateMaximizeGlyph();
         UpdateMaximizeVisuals();
+        if (WindowState == WindowState.Maximized)
+        {
+            // AllowsTransparency 的分层窗口不走系统最大化路径，WM_GETMINMAXINFO
+            // 的工作区限制会被 WPF 忽略（实测按“显示器+外框”铺满，底边越过任务栏）。
+            // 在布局完成后把窗口显式对齐到当前显示器的工作区。
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(ApplyMaximizedWorkArea));
+        }
+    }
+
+    private void ApplyMaximizedWorkArea()
+    {
+        if (WindowState != WindowState.Maximized)
+        {
+            return;
+        }
+
+        var windowHandle = new WindowInteropHelper(this).Handle;
+        if (windowHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var monitor = MonitorFromWindow(windowHandle, MonitorDefaultToNearest);
+        if (monitor == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var info = new NativeMonitorInfo
+        {
+            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMonitorInfo>()
+        };
+        if (!GetMonitorInfo(monitor, ref info))
+        {
+            return;
+        }
+
+        // 外层矩形 = 工作区 + 外框（透明 resize 边界）内缩量，客户端恰为工作区。
+        var insets = GetFrameInsets(windowHandle);
+        SetWindowPos(
+            windowHandle,
+            IntPtr.Zero,
+            info.rcWork.Left - insets.Left,
+            info.rcWork.Top - insets.Top,
+            (info.rcWork.Right - info.rcWork.Left) + insets.Left + insets.Right,
+            (info.rcWork.Bottom - info.rcWork.Top) + insets.Top + insets.Bottom,
+            SetWindowPosNoZOrder | SetWindowPosNoActivate);
     }
 
     private void UpdateMaximizeGlyph()
@@ -3754,6 +3801,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private const int WmGetMinMaxInfo = 0x0024;
+    private const int WmWindowPosChanging = 0x0046;
     private const uint MonitorDefaultToNearest = 2;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -3797,6 +3845,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref NativeMonitorInfo info);
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr windowHandle, out NativeRect rect);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr windowHandle, out NativeRect rect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeWindowPos
+    {
+        public IntPtr Window;
+        public IntPtr InsertAfter;
+        public int X;
+        public int Y;
+        public int Width;
+        public int Height;
+        public uint Flags;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(
+        IntPtr windowHandle,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
+
+    private const uint SetWindowPosNoZOrder = 0x0004;
+    private const uint SetWindowPosNoActivate = 0x0010;
+
     private void HandleWmGetMinMaxInfo(IntPtr windowHandle, IntPtr wordParameter)
     {
         var monitor = MonitorFromWindow(windowHandle, MonitorDefaultToNearest);
@@ -3815,11 +3894,75 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var minMax = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMinMaxInfo>(wordParameter);
-        minMax.ptMaxPosition.X = info.rcWork.Left - info.rcMonitor.Left;
-        minMax.ptMaxPosition.Y = info.rcWork.Top - info.rcMonitor.Top;
-        minMax.ptMaxSize.X = info.rcWork.Right - info.rcWork.Left;
-        minMax.ptMaxSize.Y = info.rcWork.Bottom - info.rcWork.Top;
+        // 外层矩形 = 工作区 + 外框（透明 resize 边界）内缩量，客户端恰为工作区；
+        // ptMaxTrackSize 同步放大，否则 OS 会把 ptMaxSize 钳制回工作区尺寸。
+        var insets = GetFrameInsets(windowHandle);
+        var maxWidth = info.rcWork.Right - info.rcWork.Left + insets.Left + insets.Right;
+        var maxHeight = info.rcWork.Bottom - info.rcWork.Top + insets.Top + insets.Bottom;
+        minMax.ptMaxPosition.X = info.rcWork.Left - info.rcMonitor.Left - insets.Left;
+        minMax.ptMaxPosition.Y = info.rcWork.Top - info.rcMonitor.Top - insets.Top;
+        minMax.ptMaxSize.X = maxWidth;
+        minMax.ptMaxSize.Y = maxHeight;
+        minMax.ptMaxTrackSize.X = Math.Max(minMax.ptMaxTrackSize.X, maxWidth);
+        minMax.ptMaxTrackSize.Y = Math.Max(minMax.ptMaxTrackSize.Y, maxHeight);
         System.Runtime.InteropServices.Marshal.StructureToPtr(minMax, wordParameter, false);
+    }
+
+    private NativeRect GetFrameInsets(IntPtr windowHandle)
+    {
+        if (!GetWindowRect(windowHandle, out var outer) || !GetClientRect(windowHandle, out var client))
+        {
+            return default;
+        }
+
+        return new NativeRect
+        {
+            Left = client.Left - outer.Left,
+            Top = client.Top - outer.Top,
+            Right = outer.Right - client.Right,
+            Bottom = outer.Bottom - client.Bottom
+        };
+    }
+
+    private void ClampMaximizedWindowPos(IntPtr windowHandle, IntPtr wordParameter)
+    {
+        var monitor = MonitorFromWindow(windowHandle, MonitorDefaultToNearest);
+        if (monitor == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var info = new NativeMonitorInfo
+        {
+            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMonitorInfo>()
+        };
+        if (!GetMonitorInfo(monitor, ref info))
+        {
+            return;
+        }
+
+        var insets = GetFrameInsets(windowHandle);
+        var targetLeft = info.rcWork.Left - insets.Left;
+        var targetTop = info.rcWork.Top - insets.Top;
+        var targetWidth = info.rcWork.Right - info.rcWork.Left + insets.Left + insets.Right;
+        var targetHeight = info.rcWork.Bottom - info.rcWork.Top + insets.Top + insets.Bottom;
+
+        var pos = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeWindowPos>(wordParameter);
+        const uint swpNoMove = 0x0002;
+        const uint swpNoSize = 0x0001;
+        if ((pos.Flags & swpNoMove) == 0)
+        {
+            pos.X = targetLeft;
+            pos.Y = targetTop;
+        }
+
+        if ((pos.Flags & swpNoSize) == 0)
+        {
+            pos.Width = targetWidth;
+            pos.Height = targetHeight;
+        }
+
+        System.Runtime.InteropServices.Marshal.StructureToPtr(pos, wordParameter, false);
     }
 
     private IntPtr WindowProcedure(
@@ -3835,6 +3978,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             HandleWmGetMinMaxInfo(windowHandle, wordParameter);
             handled = true;
+            return IntPtr.Zero;
+        }
+
+        // 分层窗口（AllowsTransparency）的两条最大化路径最终都经 WM_WINDOWPOSCHANGING
+        // 定位；在此同步钳制到工作区，WPF 自身的布局无法覆盖。
+        if (message == WmWindowPosChanging && WindowState == WindowState.Maximized)
+        {
+            ClampMaximizedWindowPos(windowHandle, wordParameter);
             return IntPtr.Zero;
         }
 
