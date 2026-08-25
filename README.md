@@ -36,6 +36,14 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - 没有版本时提供首次运行引导，可选择官方源或国内镜像，并设置 DSh 安装位置。
 - 支持 installed DSh 与 Source 项目。
 - Launcher 不内置 Node.js、npm、pnpm 或 DeepSeek Harness；发布包约 69 MiB 主要来自自包含 .NET、WPF、WebView2 和压缩依赖。
+- 顶栏“下载”把 Launcher 更新与官方 DSh 版本选择集中到一个页面；选择 DSh 后进入独立版本创建流程。
+
+### Launcher 更新与回退
+
+- 启动后在后台检查 GitHub 稳定版 Release；发现新版本时由用户决定是否下载，不会静默更新。
+- “设置 / 诊断”可刷新版本目录，选择较新版本更新，也可选择历史稳定版回退。
+- 只下载本仓库 Release 中固定命名的 `DSH.Launcher.exe`，并校验附件大小、文件版本和 GitHub SHA-256 后才替换。
+- 替换过程不请求管理员权限，也不会改动实例、`DSH_HOME` 或配置快照；Launcher 所在目录需要当前用户可写。
 
 ### Plugin 与 Skill 市场
 
@@ -47,7 +55,9 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - 安装、更新、卸载显示 pnpm 实际解析、复用、下载和添加数量；Skill 下载显示真实字节进度，完成后自动刷新当前实例状态。
 - Plugin CLI 会继承当前环境或 Git 全局代理，避免 Launcher 从资源管理器启动后 GitHub codeload 下载绕过已有代理。
 - 默认 Plugin `@deepseek-ai/dsh-base` 与 `@deepseek-ai/dsh-web-app` 只读保护，不能禁用或删除。
+- 同一版本存在多个 DSh Profile 时，可在扩展页切换当前 Profile；Plugin 列表、CLI 安装和回档随选择切换。包含 Web App 的 Profile 也可由 Launcher 启动，非 Web Profile 会给出明确提示。
 - Skill 市场发现并校验仓库中的单个 `SKILL.md`，支持分类、搜索和按 Skill 目录安装。
+- 新电脑没有缓存或 GitHub 暂时不可用时先显示内置待校验条目，不再出现整页空白；联网成功后自动替换为最新目录。
 - 支持导入本地 Skill 与 Agent Preset，并按当前版本隔离保存。
 
 ### Provider、对话与同步
@@ -122,4 +132,4 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.0.8**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.0.9**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。

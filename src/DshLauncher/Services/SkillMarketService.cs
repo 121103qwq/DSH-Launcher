@@ -64,12 +64,12 @@ public sealed class SkillMarketService
         {
             if (!File.Exists(CachePath))
             {
-                return Array.Empty<SkillMarketItem>();
+                return BuildBundledFallback();
             }
 
             var cached = JsonSerializer.Deserialize<List<SkillMarketItem>>(
                 File.ReadAllText(CachePath, Encoding.UTF8), JsonOptions);
-            return cached?
+            var normalized = cached?
                 .Select(item => item with
                 {
                     Verified = item.ValidationVersion == CurrentValidationVersion && item.Verified,
@@ -77,10 +77,11 @@ public sealed class SkillMarketService
                 })
                 .ToArray()
                 ?? Array.Empty<SkillMarketItem>();
+            return normalized.Length == 0 ? BuildBundledFallback() : normalized;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            return Array.Empty<SkillMarketItem>();
+            return BuildBundledFallback();
         }
     }
 
@@ -107,6 +108,14 @@ public sealed class SkillMarketService
                 throw new TimeoutException("GitHub Skill 仓库搜索超时，请检查网络后重试。");
             }
             catch (HttpRequestException) when (cached.Count > 0)
+            {
+                return cached;
+            }
+            catch (JsonException) when (cached.Count > 0)
+            {
+                return cached;
+            }
+            catch (InvalidDataException) when (cached.Count > 0)
             {
                 return cached;
             }
@@ -275,10 +284,14 @@ public sealed class SkillMarketService
 
         var result = BuildSkillSnapshot(validItems);
         if (result.Count == 0
-            && cached.Count > 0
             && (transientScanFailures > 0 || transientValidationFailures > 0))
         {
-            return cached;
+            if (cached.Count > 0)
+            {
+                return cached;
+            }
+
+            throw new HttpRequestException("GitHub Skill 目录暂时不可用，未写入空缓存，请稍后重试。 ");
         }
 
         TryWriteCache(result);
@@ -598,8 +611,8 @@ public sealed class SkillMarketService
             }
             else if (key == "description")
             {
-                description = rawValue is "|" or ">"
-                    ? ReadYamlBlock(frontmatter, ref index, folded: rawValue == ">")
+                description = TryReadYamlBlockStyle(rawValue, out var folded)
+                    ? ReadYamlBlock(frontmatter, ref index, folded)
                     : UnquoteYamlScalar(rawValue);
             }
         }
@@ -610,6 +623,15 @@ public sealed class SkillMarketService
     }
 
     private static string UnquoteYamlScalar(string value) => value.Trim().Trim('\'', '"');
+
+    private static bool TryReadYamlBlockStyle(string value, out bool folded)
+    {
+        var normalized = value.Trim();
+        folded = normalized.StartsWith('>');
+        return normalized.Length >= 1
+            && normalized[0] is '|' or '>'
+            && normalized[1..].All(character => character is '+' or '-' || char.IsAsciiDigit(character));
+    }
 
     private static string ReadYamlBlock(IReadOnlyList<string> lines, ref int index, bool folded)
     {
@@ -628,6 +650,55 @@ public sealed class SkillMarketService
 
         return string.Join(folded ? " " : Environment.NewLine, values).Trim();
     }
+
+    private static IReadOnlyList<SkillMarketItem> BuildBundledFallback() =>
+        new[]
+        {
+            new SkillMarketItem(
+                "mattpocock/skills",
+                "ask-matt",
+                "Ask which skill or flow fits your situation.",
+                0,
+                "main",
+                null,
+                Verified: false,
+                ValidationVersion: CurrentValidationVersion - 1,
+                SkillPath: "skills/engineering/ask-matt/SKILL.md",
+                Category: "开发"),
+            new SkillMarketItem(
+                "mattpocock/skills",
+                "code-review",
+                "Review code changes against project standards and the requested specification.",
+                0,
+                "main",
+                null,
+                Verified: false,
+                ValidationVersion: CurrentValidationVersion - 1,
+                SkillPath: "skills/engineering/code-review/SKILL.md",
+                Category: "文档"),
+            new SkillMarketItem(
+                "mattpocock/skills",
+                "diagnosing-bugs",
+                "A diagnosis loop for bugs and performance regressions.",
+                0,
+                "main",
+                null,
+                Verified: false,
+                ValidationVersion: CurrentValidationVersion - 1,
+                SkillPath: "skills/engineering/diagnosing-bugs/SKILL.md",
+                Category: "开发"),
+            new SkillMarketItem(
+                "mattpocock/skills",
+                "grill-me",
+                "A relentless interview to sharpen a plan or design.",
+                0,
+                "main",
+                null,
+                Verified: false,
+                ValidationVersion: CurrentValidationVersion - 1,
+                SkillPath: "skills/productivity/grill-me/SKILL.md",
+                Category: "设计")
+        };
 
     private static bool IsYamlBoolean(string value)
     {

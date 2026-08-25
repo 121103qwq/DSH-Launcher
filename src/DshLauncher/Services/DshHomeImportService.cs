@@ -487,55 +487,76 @@ public sealed class DshHomeImportService
             return 0;
         }
 
-        var destinationProfile = Path.Combine(destination, "profiles", "web");
-        var manifest = Path.Combine(destinationProfile, "package.json");
-        if (!File.Exists(manifest))
+        var destinationProfilesRoot = Path.Combine(destination, "profiles");
+        if (!Directory.Exists(destinationProfilesRoot) || IsReparsePoint(destinationProfilesRoot))
         {
             return 0;
         }
 
-        var packageNames = ReadProfilePackageNames(manifest);
-        ReadCordisPackageNames(Path.Combine(destinationProfile, "cordis.patch.yml"), packageNames);
         var restored = 0;
-        foreach (var packageName in packageNames.OrderBy(static name => name, StringComparer.OrdinalIgnoreCase))
+        foreach (var destinationProfile in Directory.EnumerateDirectories(
+                     destinationProfilesRoot,
+                     "*",
+                     SearchOption.TopDirectoryOnly))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sourceWebPackage = BuildPackagePath(
-                Path.Combine(source, "profiles", "web", "node_modules"),
-                packageName);
-            var sourceSharedPackage = BuildPackagePath(
-                Path.Combine(source, "profiles", "node_modules"),
-                packageName);
-            var sourcePackage = Directory.Exists(sourceWebPackage) && !IsReparsePoint(sourceWebPackage)
-                ? sourceWebPackage
-                : Directory.Exists(sourceSharedPackage) && !IsReparsePoint(sourceSharedPackage)
-                    ? sourceSharedPackage
-                    : null;
-            if (sourcePackage is null)
+            if (IsReparsePoint(destinationProfile)
+                || !DshProfileService.TryNormalizeName(Path.GetFileName(destinationProfile), out var profileName))
             {
                 continue;
             }
 
-            var destinationModules = string.Equals(sourcePackage, sourceWebPackage, StringComparison.OrdinalIgnoreCase)
-                ? Path.Combine(destinationProfile, "node_modules")
-                : Path.Combine(destination, "profiles", "node_modules");
-            if (Directory.Exists(destinationModules) && IsReparsePoint(destinationModules))
+            var manifest = Path.Combine(destinationProfile, "package.json");
+            if (!File.Exists(manifest))
             {
                 continue;
             }
 
-            var destinationPackage = BuildPackagePath(destinationModules, packageName);
-            if (Directory.Exists(destinationPackage) && !overwriteExisting)
+            var packageNames = ReadProfilePackageNames(manifest);
+            ReadCordisPackageNames(Path.Combine(destinationProfile, "cordis.patch.yml"), packageNames);
+            foreach (var packageName in packageNames.OrderBy(static name => name, StringComparer.OrdinalIgnoreCase))
             {
-                continue;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                var sourceProfilePackage = BuildPackagePath(
+                    Path.Combine(source, "profiles", profileName, "node_modules"),
+                    packageName);
+                var sourceSharedPackage = BuildPackagePath(
+                    Path.Combine(source, "profiles", "node_modules"),
+                    packageName);
+                var sourcePackage = Directory.Exists(sourceProfilePackage) && !IsReparsePoint(sourceProfilePackage)
+                    ? sourceProfilePackage
+                    : Directory.Exists(sourceSharedPackage) && !IsReparsePoint(sourceSharedPackage)
+                        ? sourceSharedPackage
+                        : null;
+                if (sourcePackage is null)
+                {
+                    continue;
+                }
 
-            CopyPackageDirectoryAtomically(
-                sourcePackage,
-                destinationPackage,
-                cancellationToken,
-                overwriteExisting);
-            restored++;
+                var destinationModules = string.Equals(
+                    sourcePackage,
+                    sourceProfilePackage,
+                    StringComparison.OrdinalIgnoreCase)
+                        ? Path.Combine(destinationProfile, "node_modules")
+                        : Path.Combine(destination, "profiles", "node_modules");
+                if (Directory.Exists(destinationModules) && IsReparsePoint(destinationModules))
+                {
+                    continue;
+                }
+
+                var destinationPackage = BuildPackagePath(destinationModules, packageName);
+                if (Directory.Exists(destinationPackage) && !overwriteExisting)
+                {
+                    continue;
+                }
+
+                CopyPackageDirectoryAtomically(
+                    sourcePackage,
+                    destinationPackage,
+                    cancellationToken,
+                    overwriteExisting);
+                restored++;
+            }
         }
 
         return restored;

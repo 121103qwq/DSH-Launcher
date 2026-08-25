@@ -102,6 +102,7 @@ public partial class ConversationWindow : UserControl
             UpdateSelection();
             if (_modelChoices.Count > 0)
             {
+                RefreshWorkspaceChoices();
                 RefreshSessionModelRows();
             }
         }
@@ -173,20 +174,7 @@ public partial class ConversationWindow : UserControl
                 .ToArray();
             WorkspaceModelBox.ItemsSource = _modelChoices;
             SessionModelBox.ItemsSource = _modelChoices;
-            var selectedWorkspace = DshWorkspaceBox.SelectedItem as string;
-            var workspaces = Entries
-                .Select(entry => entry.WorkingDirectory)
-                .Where(directory => !string.IsNullOrWhiteSpace(directory))
-                .Select(directory => directory!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(directory => directory, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            DshWorkspaceBox.ItemsSource = workspaces;
-            DshWorkspaceBox.SelectedItem = selectedWorkspace is not null
-                && workspaces.Contains(selectedWorkspace, StringComparer.OrdinalIgnoreCase)
-                    ? workspaces.First(directory =>
-                        string.Equals(directory, selectedWorkspace, StringComparison.OrdinalIgnoreCase))
-                    : workspaces.FirstOrDefault();
+            RefreshWorkspaceChoices();
             SelectWorkspacePolicy();
             RefreshSessionModelRows();
         }
@@ -194,6 +182,24 @@ public partial class ConversationWindow : UserControl
         {
             StatusText.Text = $"读取模型配置失败：{ex.Message}";
         }
+    }
+
+    private void RefreshWorkspaceChoices()
+    {
+        var selectedWorkspace = DshWorkspaceBox.SelectedItem as string;
+        var workspaces = Entries
+            .Select(entry => entry.WorkingDirectory)
+            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+            .Select(directory => directory!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(directory => directory, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        DshWorkspaceBox.ItemsSource = workspaces;
+        DshWorkspaceBox.SelectedItem = selectedWorkspace is not null
+            && workspaces.Contains(selectedWorkspace, StringComparer.OrdinalIgnoreCase)
+                ? workspaces.First(directory =>
+                    string.Equals(directory, selectedWorkspace, StringComparison.OrdinalIgnoreCase))
+                : workspaces.FirstOrDefault();
     }
 
     private void DshWorkspace_SelectionChanged(object sender, SelectionChangedEventArgs e) =>

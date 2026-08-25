@@ -414,16 +414,20 @@ public sealed class MarketplaceService
         return true;
     }
 
-    public string CreatePluginSnapshot(ManagerInstance instance)
+    public string CreatePluginSnapshot(ManagerInstance instance) =>
+        CreatePluginSnapshot(instance, "web");
+
+    public string CreatePluginSnapshot(ManagerInstance instance, string profileName)
     {
-        var profileDirectory = Path.Combine(instance.DshHome, "profiles", "web");
+        var profile = DshProfileService.NormalizeName(profileName);
+        var profileDirectory = Path.Combine(instance.DshHome, "profiles", profile);
         var existing = PluginProfileFiles
             .Select(file => Path.Combine(profileDirectory, file))
             .Where(File.Exists)
             .ToArray();
         if (existing.Length == 0)
         {
-            return "当前实例还没有可备份的 web profile 配置";
+            return $"当前实例还没有可备份的 {profile} profile 配置";
         }
 
         var directory = Path.Combine(
@@ -439,7 +443,13 @@ public sealed class MarketplaceService
         return directory;
     }
 
-    public bool RestorePluginSnapshot(ManagerInstance instance, string snapshotPath)
+    public bool RestorePluginSnapshot(ManagerInstance instance, string snapshotPath) =>
+        RestorePluginSnapshot(instance, snapshotPath, "web");
+
+    public bool RestorePluginSnapshot(
+        ManagerInstance instance,
+        string snapshotPath,
+        string profileName)
     {
         if (string.IsNullOrWhiteSpace(snapshotPath))
         {
@@ -456,10 +466,11 @@ public sealed class MarketplaceService
             return false;
         }
 
-        var profileDirectory = Path.Combine(instance.DshHome, "profiles", "web");
+        var profile = DshProfileService.NormalizeName(profileName);
+        var profileDirectory = Path.Combine(instance.DshHome, "profiles", profile);
         if (Directory.Exists(profileDirectory) && IsReparsePoint(profileDirectory))
         {
-            throw new IOException("当前实例的 web profile 目录不能是重解析点。");
+            throw new IOException($"当前实例的 {profile} profile 目录不能是重解析点。");
         }
 
         Directory.CreateDirectory(profileDirectory);
@@ -1836,6 +1847,7 @@ public sealed class MarketplaceService
             subpath);
         return true;
     }
+
 
     private static bool IsGitHubOwner(string? value)
     {

@@ -697,6 +697,22 @@ public sealed class ModelService
             : new CodingModelSelection(provider, model, ReadScalar(section, "reasoningEffort"));
     }
 
+    public bool HasDefaultModelSection(ManagerInstance instance)
+    {
+        var path = GetSettingsPath(instance);
+        return File.Exists(path)
+            && FindTopLevelStart(File.ReadAllLines(path, Encoding.UTF8), "agent-default-model") >= 0;
+    }
+
+    public Task ClearDefaultModelLiveAsync(
+        ManagerInstance instance,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RemoveTopLevelSection(GetSettingsPath(instance), "agent-default-model");
+        return Task.CompletedTask;
+    }
+
     public Task SaveDefaultModelAsync(
         ManagerInstance instance,
         CodingModelSelection selection,

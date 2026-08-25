@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using DshLauncher.Services;
 
 namespace DshLauncher;
 
@@ -19,6 +20,18 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.FirstOrDefault() == LauncherUpdateService.ApplyModeArgument)
+        {
+            var source = Environment.ProcessPath;
+            var exitCode = source is not null
+                && LauncherUpdateService.TryParseApplyArguments(e.Args, out var request)
+                && request is not null
+                    ? LauncherUpdateService.ApplyUpdateAndRestart(request, source)
+                    : 2;
+            Environment.Exit(exitCode);
+            return;
+        }
+
         // 实例锁是进程级文件句柄：两个 Launcher 同时运行时，第二个只能以只读
         // Attached 连接实例，Stop/Restart 会不可用。因此限制单实例，再次启动时
         // 唤起已有窗口。

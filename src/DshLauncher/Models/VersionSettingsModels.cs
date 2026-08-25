@@ -22,6 +22,8 @@ public enum VersionOpenMode
 
 public sealed class VersionSettingsData
 {
+    public string ActiveProfileName { get; set; } = "web";
+
     public bool SyncAllConfiguration { get; set; }
 
     public ConversationSyncMode ConversationSyncMode { get; set; } = ConversationSyncMode.Independent;

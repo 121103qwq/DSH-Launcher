@@ -57,6 +57,11 @@ public partial class ProviderManagementWindow : UserControl
     {
         AllProvidersFilter.Background = SelectedFilterBrush();
         await RefreshAsync();
+        if (_cancellation.IsCancellationRequested || !IsLoaded)
+        {
+            return;
+        }
+
         _monitorTimer.Start();
         await RefreshRuntimeStatusAsync();
     }
@@ -255,11 +260,46 @@ public partial class ProviderManagementWindow : UserControl
         }
 
         var selection = option.Selection;
+        var codingVersions = _instancesProvider()
+            .Select(instance =>
+            {
+                try
+                {
+                    return (Instance: instance, Providers: _modelService.Read(instance)
+                        .Where(provider => provider.Configured)
+                        .ToArray());
+                }
+                catch
+                {
+                    return (Instance: instance, Providers: Array.Empty<ModelProviderInfo>());
+                }
+            })
+            .Where(item => item.Providers.Length > 0)
+            .ToArray();
+        var incompatible = codingVersions
+            .Where(item => !SupportsSelection(item.Providers, selection))
+            .Select(item => item.Instance.Name)
+            .ToArray();
+        if (incompatible.Length > 0)
+        {
+            StatusText.Text = $"不能设为全局默认：{selection.DisplayText} 未在 {string.Join("、", incompatible.Take(3))}"
+                + (incompatible.Length > 3 ? $" 等 {incompatible.Length} 个版本" : string.Empty)
+                + " 的 Provider 目录中提供。";
+            return;
+        }
+
+        if (codingVersions.Length == 0)
+        {
+            StatusText.Text = "没有检测到已配置 Provider 的 Coding 版本。";
+            return;
+        }
+
         _policyService.SetGlobalDefault(selection);
         var errors = new List<string>();
         var applied = 0;
-        foreach (var instance in _instancesProvider())
+        foreach (var item in codingVersions)
         {
+            var instance = item.Instance;
             try
             {
                 if (!IsRunningWithEndpoint(instance))
@@ -298,6 +338,13 @@ public partial class ProviderManagementWindow : UserControl
     }
 
     private async void MonitorTimer_Tick(object? sender, EventArgs e) => await RefreshRuntimeStatusAsync();
+
+    internal static bool SupportsSelection(
+        IEnumerable<ModelProviderInfo> providers,
+        CodingModelSelection selection) =>
+        providers.Any(provider => provider.Configured
+            && string.Equals(provider.Provider, selection.Provider, StringComparison.OrdinalIgnoreCase)
+            && provider.Models.Contains(selection.Model, StringComparer.OrdinalIgnoreCase));
 
     private async Task RefreshRuntimeStatusAsync()
     {

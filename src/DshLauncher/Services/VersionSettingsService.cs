@@ -310,6 +310,17 @@ public sealed class VersionSettingsService
 
     private static void Normalize(VersionSettingsData settings)
     {
+        settings.ActiveProfileName = string.IsNullOrWhiteSpace(settings.ActiveProfileName)
+            ? "web"
+            : settings.ActiveProfileName.Trim();
+        if (settings.ActiveProfileName.Length > 64
+            || settings.ActiveProfileName is "." or ".."
+            || settings.ActiveProfileName.Any(character => !(char.IsLetterOrDigit(character)
+                || character is '.' or '_' or '-')))
+        {
+            throw new ArgumentException("Profile 名称格式无效。", nameof(settings));
+        }
+
         if (!Enum.IsDefined(settings.ConversationSyncMode))
         {
             settings.ConversationSyncMode = ConversationSyncMode.Independent;

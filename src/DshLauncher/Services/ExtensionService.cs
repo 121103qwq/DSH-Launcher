@@ -16,7 +16,6 @@ namespace DshLauncher.Services;
 /// </summary>
 public sealed class ExtensionService
 {
-    private const string ProfileName = "web";
     private const string McpPackage = "@deepseek-ai/dsh-mcp-client";
     private const string BuiltInBase = "@deepseek-ai/dsh-base";
     private const string BuiltInWeb = "@deepseek-ai/dsh-web-app";
@@ -36,15 +35,26 @@ public sealed class ExtensionService
     private readonly Func<string, bool> _isRunning;
     private readonly SourceProjectInspector _sourceInspector;
     private readonly VersionSnapshotService? _snapshotService;
+    private readonly Func<ManagerInstance, string> _profileProvider;
 
     public ExtensionService(
         Func<string, bool>? isRunning = null,
         SourceProjectInspector? sourceInspector = null,
-        VersionSnapshotService? snapshotService = null)
+        VersionSnapshotService? snapshotService = null,
+        Func<ManagerInstance, string>? profileProvider = null)
     {
         _isRunning = isRunning ?? (_ => false);
         _sourceInspector = sourceInspector ?? new SourceProjectInspector();
         _snapshotService = snapshotService;
+        _profileProvider = profileProvider ?? (_ => DshProfileService.DefaultProfileName);
+    }
+
+    public string GetActiveProfileName(ManagerInstance instance) =>
+        DshProfileService.NormalizeName(_profileProvider(instance));
+
+    public IReadOnlyList<string> ListProfiles(ManagerInstance instance)
+    {
+        return DshProfileService.ListProfiles(instance);
     }
 
     public string GetMcpMetadataPath(ManagerInstance instance) =>
@@ -265,7 +275,7 @@ public sealed class ExtensionService
         var profilePath = GetProfileManifestPath(instance);
         if (!File.Exists(profilePath))
         {
-            throw new FileNotFoundException("实例的 web profile 尚未初始化。", profilePath);
+            throw new FileNotFoundException($"实例的 {GetActiveProfileName(instance)} profile 尚未初始化。", profilePath);
         }
 
         var root = ReadJsonObject(profilePath);
@@ -771,6 +781,7 @@ public sealed class ExtensionService
             "install" => "恢复",
             _ => "删除"
         };
+        var profileName = GetActiveProfileName(instance);
         var running = _isRunning(instance.Id) || instance.RuntimeStatus == InstanceRuntimeStatus.Running;
         if (action == "remove")
         {
@@ -786,7 +797,7 @@ public sealed class ExtensionService
         }
         if (action is "add" or "update" or "install")
         {
-            ResolvePendingPnpmBuildDecisions(instance);
+            ResolvePendingPnpmBuildDecisions(instance, profileName);
         }
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
         var startInfo = CreatePluginStartInfo(
@@ -795,7 +806,8 @@ public sealed class ExtensionService
             packageSpec,
             nodeRuntime,
             allowBuildPackageName,
-            installMode);
+            installMode,
+            profileName);
         pnpmEnvironment.Apply(startInfo);
         var output = await RunProcessAsync(
             startInfo,
@@ -833,7 +845,8 @@ public sealed class ExtensionService
         string packageSpec,
         NodeRuntimeInfo? nodeRuntime,
         string? allowBuildPackageName,
-        PluginInstallMode installMode)
+        PluginInstallMode installMode,
+        string profileName)
     {
         DshRuntimeLaunchSpec spec;
         if (instance.Kind == InstanceKind.Source)
@@ -861,7 +874,7 @@ public sealed class ExtensionService
                 ?? throw new InvalidOperationException("实例没有 DSh 启动描述。");
         }
 
-        var arguments = new List<string> { "plugin", "--profile", ProfileName, action };
+        var arguments = new List<string> { "plugin", "--profile", profileName, action };
         if (!string.IsNullOrWhiteSpace(packageSpec))
         {
             arguments.Add(packageSpec);
@@ -902,9 +915,16 @@ public sealed class ExtensionService
         }
     }
 
-    internal static bool ResolvePendingPnpmBuildDecisions(ManagerInstance instance)
+    internal static bool ResolvePendingPnpmBuildDecisions(ManagerInstance instance) =>
+        ResolvePendingPnpmBuildDecisions(instance, DshProfileService.DefaultProfileName);
+
+    internal static bool ResolvePendingPnpmBuildDecisions(ManagerInstance instance, string profileName)
     {
-        var workspacePath = Path.Combine(instance.DshHome, "profiles", ProfileName, "pnpm-workspace.yaml");
+        var workspacePath = Path.Combine(
+            instance.DshHome,
+            "profiles",
+            DshProfileService.NormalizeName(profileName),
+            "pnpm-workspace.yaml");
         if (!File.Exists(workspacePath))
         {
             return false;
@@ -1283,8 +1303,8 @@ public sealed class ExtensionService
         }
     }
 
-    private static string GetProfileManifestPath(ManagerInstance instance) =>
-        Path.Combine(instance.DshHome, "profiles", ProfileName, "package.json");
+    private string GetProfileManifestPath(ManagerInstance instance) =>
+        DshProfileService.GetManifestPath(instance, GetActiveProfileName(instance));
 
     private static JsonObject ReadJsonObject(string path)
     {
@@ -1723,16 +1743,28 @@ public sealed class ExtensionService
                 return null;
             }
 
-            string? name = null;
-            string? description = null;
+            var frontmatter = new List<string>();
             for (var count = 0; count < 128; count++)
             {
                 var line = reader.ReadLine();
-                if (line is null || line.Trim() == "---")
+                if (line is null)
+                {
+                    return null;
+                }
+
+                if (line.Trim() == "---")
                 {
                     break;
                 }
 
+                frontmatter.Add(line);
+            }
+
+            string? name = null;
+            string? description = null;
+            for (var index = 0; index < frontmatter.Count; index++)
+            {
+                var line = frontmatter[index];
                 var separator = line.IndexOf(':');
                 if (separator <= 0)
                 {
@@ -1740,9 +1772,17 @@ public sealed class ExtensionService
                 }
 
                 var key = line[..separator].Trim();
-                var value = line[(separator + 1)..].Trim().Trim('\'', '"');
-                if (key.Equals("name", StringComparison.OrdinalIgnoreCase)) name = value;
-                if (key.Equals("description", StringComparison.OrdinalIgnoreCase)) description = value;
+                var rawValue = line[(separator + 1)..].Trim();
+                if (key.Equals("name", StringComparison.OrdinalIgnoreCase))
+                {
+                    name = rawValue.Trim('\'', '"');
+                }
+                else if (key.Equals("description", StringComparison.OrdinalIgnoreCase))
+                {
+                    description = TryReadYamlBlockStyle(rawValue, out var folded)
+                        ? ReadYamlBlock(frontmatter, ref index, folded)
+                        : rawValue.Trim('\'', '"');
+                }
             }
 
             return string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(description)
@@ -1883,6 +1923,33 @@ public sealed class ExtensionService
                 TryDeleteDirectory(DirectoryPath);
             }
         }
+    }
+
+    private static bool TryReadYamlBlockStyle(string value, out bool folded)
+    {
+        var normalized = value.Trim();
+        folded = normalized.StartsWith('>');
+        return normalized.Length >= 1
+            && normalized[0] is '|' or '>'
+            && normalized[1..].All(character => character is '+' or '-' || char.IsAsciiDigit(character));
+    }
+
+    private static string ReadYamlBlock(IReadOnlyList<string> lines, ref int index, bool folded)
+    {
+        var values = new List<string>();
+        while (index + 1 < lines.Count)
+        {
+            var next = lines[index + 1];
+            if (next.Length > 0 && !char.IsWhiteSpace(next[0]))
+            {
+                break;
+            }
+
+            index++;
+            values.Add(next.Trim());
+        }
+
+        return string.Join(folded ? " " : Environment.NewLine, values).Trim();
     }
 
     private static void ApplyPnpmProxy(ProcessStartInfo startInfo)

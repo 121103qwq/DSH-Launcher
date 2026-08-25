@@ -2,10 +2,13 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.8`。本轮目标是确认新版 DSh/两位数 RC 的兼容边界，加入 Launcher `.dshpack` 与 DSH-PackForge ModPack v2 `.tgz` 的导入、导出和双向转换，吸收当前官方 DSh 在 Web CLI、会话后端与 Skill 格式上的兼容变化，补齐 Skill 市场受控分页、官方 npm 下载进度，以及全局 Coding Provider/默认模型和对话自动模型规则。
+当前源码版本为 `v1.0.9`。本轮目标是修复多 Profile 无法切换、干净版本创建跨线程异常和 Skill 市场空白，并增加 PCL2 信息层级的下载页；同时保留已完成的 Launcher 更新/回退功能。
 
 ## 已完成内容
 
+- 本轮修复与新增：版本设置持久化当前 Profile，扩展页可在 `web`、`desktop` 等实际 Profile 间切换；Plugin 列表、官方 CLI、失败快照/回档、健康检查、导入依赖恢复和版本加密快照不再固定 `profiles\web`。含 `@deepseek-ai/dsh-web-app` 的 Profile 使用官方 `dsh --profile` 启动，非 Web Profile 明确拒绝浏览器启动。新建干净版本先在 UI 线程读取对话框字符串，消除 `Task.Run` 读取 WPF TextBox 的跨线程异常。Skill 市场无/空/坏缓存时显示 4 个待校验种子，在线扫描失败不写空缓存、异常 JSON 回退有效缓存、页面卸载取消搜索，并支持 `|-` / `>-` frontmatter。顶栏新增“下载”，左侧按 Launcher / DSh 版本分组，右侧复用更新回退和官方版本创建流程。
+- 发布前吸收 PR #12 Codex Review：Provider 监控卸载后不再重启；对话刷新同时刷新 DSh 工作区选项；`.tgz` 保留给 ModPack；Windows 盘符根路径保持 `C:\`；会话临时模型覆盖在原先没有 deployment default 时会删除被官方 API 临时创建的默认段；全局默认模型只有在所有已配置 Coding 版本都实际提供时才允许保存。
+- 本轮新增：启动完成后后台读取 GitHub 稳定版 Release，发现高于当前版本的可验证附件时由用户选择是否更新；设置页可刷新版本目录并选择较新版本更新或较旧版本回退。只接受仓库固定的 `DSH.Launcher.exe`，下载显示真实字节进度并核对大小、文件版本和 GitHub SHA-256；通过后由独立 helper 等待旧进程正常退出、原子替换并重启。目标目录不可写时在下载前拒绝，不请求 UAC，helper 失败会重新打开原 Launcher。
 - 本轮新增：顶栏增加不显示具体实例的全局 `Provider` 页面，汇总所有 Coding 版本与运行中 DSh 的 Provider/模型目录，提供全局默认模型并写入每个版本官方 `agent-default-model` section。页面存在时每 15 秒调用官方 `llm.providers` 监控运行时激活状态；离开页面立即取消，外部 `/models` 不做高频轮询。对话页增加“模型配置”，可按真实 DSh `WorkingDirectory` 设置工作区默认，也可为单个 session 设置覆盖；自动继承顺序为单会话、DSh 工作区、全局默认。从 Launcher 打开会话时通过官方 `session.selectModel` 应用覆盖，并恢复独立的全局默认。规则保存在 Launcher 根 `coding-model-policies.json`，不包含凭据。
 - 本轮新增：整合包导入按 ZIP/gzip 文件签名自动识别 `.dshpack` 与 ModPack v2 `.tgz`；版本设置可选择导出格式，版本控制可直接双向转换。`.dshpack` 现在补齐脱敏后的 `profiles/web/cordis.patch.yml`；ModPack 映射为隔离版本的 web Profile，保留 v2 manifest、patch、README/工作区配置及 PNG/JPEG/WebP/ICO/SVG 资源，导入后调用官方 `dsh plugin --profile web install` 恢复依赖。转换时对无法表达的 DSH_HOME 级数据给出提示；包内 DSh 版本只作兼容提示，注册实例改为读取当前实际 Runtime 版本。
 - 本轮兼容：官方版本目录继续来自 npm metadata，排序和精确安装支持 `rc.11` 等两位数 RC。2026-08-22 实查公共 npm 尚无 `0.1.0-rc.11`，`0.1.0` 标签止于 rc.8，当前 latest 为 `0.1.1-rc.2`；因此实现按实际能力而非写死“RC11”。DSh Web 启动前用所选 Runtime 执行 `web --help` 并按运行时文件指纹缓存，只有帮助列表明确声明时才传 `--no-open`。Plugin 手动启用前确认已安装包实际声明 `dsh.bundle.patch`，避免新版 DSh Profile 写入普通依赖。
@@ -85,6 +88,9 @@
 
 ## 已执行测试及结果
 
+- `v1.0.9` 正式候选：Windows x64 自包含压缩单文件发布成功，文件版本 `1.0.9.0`，`DSH.Launcher.exe` 为 72,546,598 字节，SHA-256 `06F3D25D088B8C618CCD7DF3EAB25D5B98536A16A62BD303F6DA34F90071D11F`。完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.9-profile-download-20260825-165807`，桌面同名文件夹顶层 `DSH Launcher.exe` 已同步；GitHub Release 附件继续固定命名为 `DSH.Launcher.exe`。
+- `v1.0.9` 候选代码：Release 构建 0 warnings、0 errors，完整自检 73/73 通过。Computer Use 使用隔离 `DSH_LAUNCHER_TEST_ROOT` 实测：下载页读取 10 个官方 DSh 版本；从下载页创建本机已有 `0.1.0-rc.6` 干净版本成功且不再跨线程失败；Skill 首屏先显示 4 张种子卡，约 9 秒后更新为 197 个已校验 Skill；DSH Desktop 版本的 Profile 下拉显示 `web/desktop`，切到 `desktop` 后 Plugin 路径改为 `profiles\desktop`，Launcher 启动到随机端口 1482 并通过健康检查。Computer Use 发现并促成修复了市场后台任务读取 Profile ComboBox 的二次跨线程问题；重构后复测缓存 2081 项正常加载。测试实例已停止，DeepSeek 与 Launcher 测试窗口均已关闭。隔离测试构建位于 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\feedback-fixes-20260825-162449`。
+- 本轮 Launcher 更新/回退：Release 构建 0 warnings、0 errors，完整自检 72/72 通过。新增覆盖稳定版目录过滤、固定附件名和 GitHub SHA-256 读取、历史版本回退目标、真实下载字节与 100% 进度、大小/哈希/非官方 URL 拒绝、helper 参数、helper 先于单实例逻辑，以及使用真实构建 EXE 在临时目录完成原子替换且无残留事务文件。2026-08-23 实查 v1.0.8/v1.0.7/v1.0.6 Release 均有 `DSH.Launcher.exe` 和 GitHub digest。Windows x64 自包含测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\launcher-update-20260823-211640`；EXE 为 72,537,640 字节，文件版本 `1.0.8.0`，SHA-256 `2864484490CECDDE5C9DF6BC063B2CF3342203C0CCA9004FD93A0AD2CC141C8F`。本轮未使用 Computer Use，也没有覆盖当前正在使用的 Launcher。
 - 本轮全局 Provider/对话模型：Release 完整自测 68/68 通过，WPF Release 构建 0 warnings、0 errors。覆盖模型规则的“单会话 → DSh 工作区 → 全局”优先级、自动继承删除、官方 `agent-default-model` YAML 往返、loopback 限制、`llm.models`、`llm.providers` 和 `session.selectModel` 请求，以及 Provider 无实例 UI、15 秒监控和对话模型页面静态接线。另以隔离临时 `DSH_HOME` 启动真实 DSh 0.1.0-rc.6：`llm.providers` 返回 37 项、`llm.models` 返回 1 个分组，创建空白 session 后 `session.selectModel` 成功选择 `deepseek-official/deepseek-v4-pro` 并由 DSh 写入官方 `settings.yaml`；临时服务已停止，端口 14179 已释放。实测同时确认 rc.6 外部 `settings.replace(agent-default-model)` 会被拒绝，因此实现没有使用该不兼容入口。Windows x64 自包含单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\global-provider-model-policy-20260823-202006\DSH Launcher.exe`，文件大小 72,527,191 字节，SHA-256 `3BF7B1C43C60DD95AB5514F00BDC415DFF8F84919D669BD20E8F5A92812C6EA4`。
 - 本轮官方 DSh npm 下载进度：Release 完整自测 66/66 通过，新增覆盖官方版本 metadata/tarball 两段请求、真实字节与 100% 进度、SHA-512 完整性校验，以及版本控制进度条静态接线；WPF Release 构建 0 warnings、0 errors。2026-08-23 实查 `@deepseek-ai/dsh@0.1.1-rc.2` 官方 metadata 可返回 HTTPS tarball 与 SHA-512 integrity。Windows x64 自包含单文件已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\dsh-npm-progress-20260823-133916\DSH Launcher.exe`，文件大小 72,500,391 字节，SHA-256 `9F34286F911109B851389DA76C584C101E22CB93F9176CC58AA491654F79765B`。
 - 本轮 RC/整合包基础自测：Release 完整自测 65/65 通过，WPF Release 构建 0 warnings、0 errors。覆盖两位数 RC 排序、Plugin bundle 声明校验、原生 `.dshpack` 的 patch 保留、真实 gzip tar ModPack 预览/导入/导出、SVG 资源保留、导入后官方 Profile 依赖恢复，以及 `.dshpack ↔ .tgz` 双向转换。测试构建已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\rc-current-modpack-final-20260822-181648`。
@@ -158,6 +164,7 @@
 
 ## 已知问题
 
+- Launcher Release 目录、下载校验、helper 参数和临时 EXE 原子替换已完成自动测试；真实从已发布版本更新或回退并重启仍需在独立测试副本上做一次 Windows UI 验收，不能用当前开发工作区进程直接覆盖验证。
 - DeepSeek 独立任务栏分组已通过代码和回归测试，仍需在 Windows Shell 中实际打开一次 Chat 窗口确认视觉分组；本轮按默认规则未使用 Computer Use。
 - Source 项目的 `.dsh/skills` 和 `.agents/skills` 是 DSh 项目级共享只读资源；实例 `DSH_HOME` 内的 Skill 才是版本私有。
 - Provider 自动同步按停止版本中 `settings.yaml` 的最新写入时间选择单一来源，没有三方合并；运行中的版本会等停止后参与同步。
@@ -203,4 +210,4 @@
 
 ## 下一步最直接的任务
 
-在获得 Computer Use 授权后实机检查全局 Provider 页的窄屏布局、15 秒状态变化，以及对话页保存 DSh 工作区/单会话规则后的自动模型切换提示。
+发布 `v1.0.9` 后，在公开 Release 副本上实际执行一次 `v1.0.8 → v1.0.9 → 历史版本`，确认自更新和回退两个方向的替换重启完整生效。

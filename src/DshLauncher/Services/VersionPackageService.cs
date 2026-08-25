@@ -464,6 +464,11 @@ public sealed partial class VersionPackageService
             throw new ArgumentException("整合包扩展名只能包含字母、数字和短横线，例如 .dshpack。", nameof(extension));
         }
 
+        if (string.Equals(normalized, ModPackPackageExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(".tgz 保留给 DSH ModPack，Launcher 原生整合包请使用 .dshpack 或其它非保留扩展名。", nameof(extension));
+        }
+
         return normalized.ToLowerInvariant();
     }
 

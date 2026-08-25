@@ -43,6 +43,23 @@
                                FontSize="11"
                                TextWrapping="Wrap"
                                Margin="0,4,0,0" />
+                    <Grid x:Name="ProfileSelectorPanel"
+                          Visibility="Collapsed"
+                          Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Profile"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   Margin="0,0,8,0" />
+                        <ComboBox x:Name="ProfileSelectorBox"
+                                  Grid.Column="1"
+                                  Height="32"
+                                  VerticalContentAlignment="Center"
+                                  SelectionChanged="ProfileSelectorBox_SelectionChanged" />
+                    </Grid>
                 </StackPanel>
 
                 <WrapPanel Grid.Row="1" Margin="0,16,0,10">

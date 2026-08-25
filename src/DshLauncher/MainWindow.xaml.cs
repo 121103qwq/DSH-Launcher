@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Data;
 using System.Windows.Threading;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Net.Http;
 using WpfBrush = System.Windows.Media.Brush;
 using WpfBrushes = System.Windows.Media.Brushes;
@@ -43,7 +44,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SourceProjectInspector _sourceInspector = new();
     private readonly InstanceRegistry _instanceRegistry = new();
     private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
-    private readonly DshInstanceRunner _instanceRunner = new();
+    private readonly DshInstanceRunner _instanceRunner;
     private readonly ExtensionService _extensionService;
     private readonly MarketplaceService _marketplaceService;
     private readonly SkillMarketService _skillMarketService;
@@ -60,6 +61,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DshApiClient _dshApiClient = new();
     private readonly DshInstallService _dshInstaller = new();
     private readonly NodeInstallService _nodeInstaller = new();
+    private readonly LauncherUpdateService _launcherUpdateService = new();
+    private readonly DshVersionCatalogService _dshVersionCatalogService = new();
     private readonly SourceBuildService _sourceBuilder = new();
     private readonly CancellationTokenSource _windowCancellation = new();
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
@@ -73,6 +76,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly Services.LifecycleBusyGuard _lifecycleGuard = new();
     private bool _isLifecycleInProgress => _lifecycleGuard.IsBusy;
     private bool _isDshInstallInProgress;
+    private bool _launcherUpdateCheckStarted;
+    private bool _launcherUpdateOperationInProgress;
     private bool _isRuntimePrepareInProgress;
     private bool _isLoadingCachedInstances;
     private bool _blockWindowCloseForMsi;
@@ -87,6 +92,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public MainWindow()
     {
+        _instanceRunner = new DshInstanceRunner(
+            profileProvider: instance => _versionSettingsService.Read(instance).ActiveProfileName);
         RecentInstancesView = new ListCollectionView(Instances)
         {
             Filter = item => item is ManagerInstance instance && _recentInstanceIds.Contains(instance.Id)
@@ -97,7 +104,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _versionSnapshotService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _extensionService = new(
             id => _instanceRunner.IsRunning(id),
-            snapshotService: _versionSnapshotService);
+            snapshotService: _versionSnapshotService,
+            profileProvider: instance => _versionSettingsService.Read(instance).ActiveProfileName);
         _marketplaceService = new();
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
@@ -410,6 +418,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 _ = RefreshDshInBackgroundAsync();
             }
+
+            _ = CheckForLauncherUpdateOnStartupAsync();
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -962,7 +972,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _currentSection = section;
         SetNavigationSelection(section);
         VersionSettingsBackButton.Visibility = Visibility.Collapsed;
-        StartupBrandText.Visibility = section is "启动" or "Provider"
+        StartupBrandText.Visibility = section is "启动" or "下载" or "Provider"
             ? Visibility.Visible
             : Visibility.Collapsed;
         ContextInstanceSelector.Visibility = section is "扩展" or "Agent" && Instances.Count > 0
@@ -975,6 +985,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             PageTitle = "启动";
             PageSubtitle = "启动实例并查看正在运行的 DeepSeek Harness";
             ShowMainDashboard();
+        }
+        else if (section == "下载")
+        {
+            PageTitle = "下载";
+            PageSubtitle = "获取 Launcher 更新和官方 DSh 版本";
+            ShowEmbeddedPage(CreateDownloadsPage());
         }
         else if (section == "Provider")
         {
@@ -1072,7 +1088,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void VersionSettings_Click(object sender, RoutedEventArgs e) => ShowVersionSettings();
 
-    private void ShowVersionControl()
+    private void ShowVersionControl(string? initialDshVersion = null)
     {
         VersionSettingsBackButton.Visibility = Visibility.Collapsed;
         StartupBrandText.Visibility = Visibility.Collapsed;
@@ -1108,7 +1124,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 ApplySelectedVersionSettings(SelectedInstance);
             },
-            _windowCancellation.Token));
+            _windowCancellation.Token,
+            initialDshVersion));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -1305,6 +1322,208 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshRunningInstances();
     }
 
+    private FrameworkElement CreateDownloadsPage()
+    {
+        var root = new Grid { Margin = new Thickness(12) };
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var categoryList = new System.Windows.Controls.ListBox
+        {
+            BorderThickness = new Thickness(0),
+            Background = WpfBrushes.Transparent,
+            SelectedIndex = 0
+        };
+        categoryList.Items.Add(new ListBoxItem { Content = "Launcher", Tag = "launcher" });
+        categoryList.Items.Add(new ListBoxItem { Content = "DSh 版本", Tag = "dsh" });
+        var categoryStyle = new Style(typeof(ListBoxItem));
+        categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.PaddingProperty, new Thickness(16, 12, 16, 12)));
+        categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.MarginProperty, new Thickness(0, 0, 0, 6)));
+        categoryStyle.Setters.Add(new Setter(
+            System.Windows.Controls.Control.HorizontalContentAlignmentProperty,
+            System.Windows.HorizontalAlignment.Left));
+        var selectedTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+        selectedTrigger.Setters.Add(new Setter(
+            System.Windows.Controls.Control.BackgroundProperty,
+            new SolidColorBrush(WpfColor.FromRgb(227, 240, 253))));
+        selectedTrigger.Setters.Add(new Setter(
+            System.Windows.Controls.Control.ForegroundProperty,
+            (WpfBrush)FindResource("BlueBrush")));
+        categoryStyle.Triggers.Add(selectedTrigger);
+        categoryList.ItemContainerStyle = categoryStyle;
+        root.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(14),
+            VerticalAlignment = VerticalAlignment.Top,
+            Child = categoryList
+        });
+
+        var contentHost = new ContentControl
+        {
+            HorizontalContentAlignment = System.Windows.HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Top
+        };
+        Grid.SetColumn(contentHost, 2);
+        root.Children.Add(contentHost);
+
+        void ShowCategory()
+        {
+            var key = (categoryList.SelectedItem as ListBoxItem)?.Tag?.ToString();
+            if (string.Equals(key, "dsh", StringComparison.Ordinal))
+            {
+                contentHost.Content = CreateDshDownloadsPanel();
+                return;
+            }
+
+            var panel = new StackPanel
+            {
+                MaxWidth = 980,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+            };
+            AddLauncherUpdateSection(panel);
+            contentHost.Content = panel;
+        }
+
+        categoryList.SelectionChanged += (_, _) => ShowCategory();
+        ShowCategory();
+        return root;
+    }
+
+    private FrameworkElement CreateDshDownloadsPanel()
+    {
+        var panel = new StackPanel
+        {
+            MaxWidth = 980,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "DSh 版本",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "从 @deepseek-ai/dsh 官方 npm metadata 选择版本。确认名称后进入创建流程；本机缺少该版本时才下载。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+
+        var content = new StackPanel();
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+        var selector = new System.Windows.Controls.ComboBox
+        {
+            Height = 38,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            IsTextSearchEnabled = true
+        };
+        content.Children.Add(selector);
+        var actions = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var refreshButton = new System.Windows.Controls.Button
+        {
+            Content = "刷新版本列表",
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var createButton = new System.Windows.Controls.Button
+        {
+            Content = "新建此版本",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 8, 14, 8),
+            IsEnabled = false
+        };
+        actions.Children.Add(refreshButton);
+        actions.Children.Add(createButton);
+        content.Children.Add(actions);
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        content.Children.Add(status);
+        var installedVersions = _detectedDshRuntimes
+            .Where(runtime => runtime.IsAvailable && !string.IsNullOrWhiteSpace(runtime.Version))
+            .Select(runtime => runtime.Version!.TrimStart('v', 'V'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(version => version, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        content.Children.Add(new TextBlock
+        {
+            Text = installedVersions.Length == 0
+                ? "本机尚未检测到可用的 DSh 版本。"
+                : $"本机已检测：{string.Join("、", installedVersions)}",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        });
+
+        async Task RefreshVersionsAsync()
+        {
+            refreshButton.IsEnabled = false;
+            createButton.IsEnabled = false;
+            status.Text = "正在获取官方版本列表…";
+            try
+            {
+                var versions = await _dshVersionCatalogService.ReadOfficialVersionsAsync(
+                    _windowCancellation.Token);
+                if (_currentSection != "下载")
+                {
+                    return;
+                }
+
+                selector.ItemsSource = versions;
+                selector.SelectedIndex = versions.Count > 0 ? 0 : -1;
+                createButton.IsEnabled = selector.SelectedItem is string;
+                status.Text = versions.Count == 0
+                    ? "官方 metadata 没有可用版本。"
+                    : $"已读取 {versions.Count} 个官方版本；选择后进入独立 DSH_HOME 创建流程。";
+            }
+            catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidDataException)
+            {
+                status.Text = $"读取官方版本失败：{ex.Message}";
+            }
+            finally
+            {
+                refreshButton.IsEnabled = true;
+            }
+        }
+
+        selector.SelectionChanged += (_, _) =>
+            createButton.IsEnabled = selector.SelectedItem is string;
+        refreshButton.Click += async (_, _) => await RefreshVersionsAsync();
+        createButton.Click += (_, _) =>
+        {
+            if (selector.SelectedItem is string version)
+            {
+                ShowVersionControl(version);
+            }
+        };
+        _ = RefreshVersionsAsync();
+        return panel;
+    }
+
     private FrameworkElement CreateSettingsPage()
     {
         var panel = new StackPanel
@@ -1313,11 +1532,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             VerticalAlignment = VerticalAlignment.Top,
             MaxWidth = 980
         };
+        AddLauncherUpdateSection(panel);
         panel.Children.Add(new TextBlock
         {
             Text = "运行环境检测",
             FontSize = 20,
-            FontWeight = FontWeights.SemiBold
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
         });
 
         var nodeStatus = new TextBlock
@@ -1545,6 +1766,345 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         AddPluginInstallModeSection(panel);
         AddVersionSyncSection(panel);
         return panel;
+    }
+
+    private void AddLauncherUpdateSection(StackPanel panel)
+    {
+        var currentVersion = LauncherUpdateService.CurrentVersion;
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Launcher 更新",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold
+        });
+
+        var content = new StackPanel();
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = $"当前版本：v{currentVersion}",
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 15
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "从 GitHub 稳定版 Release 选择版本。高于当前版本为更新，低于当前版本为回退。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+
+        var releaseSelector = new System.Windows.Controls.ComboBox
+        {
+            Height = 38,
+            Margin = new Thickness(0, 14, 0, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            DisplayMemberPath = nameof(LauncherReleaseInfo.DisplayText),
+            IsTextSearchEnabled = false
+        };
+        content.Children.Add(releaseSelector);
+
+        var buttons = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var refreshButton = new System.Windows.Controls.Button
+        {
+            Content = "检查更新",
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var installButton = new System.Windows.Controls.Button
+        {
+            Content = "选择版本",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 8, 14, 8),
+            IsEnabled = false
+        };
+        buttons.Children.Add(refreshButton);
+        buttons.Children.Add(installButton);
+        content.Children.Add(buttons);
+
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        var notes = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 7, 0, 0)
+        };
+        content.Children.Add(status);
+        content.Children.Add(notes);
+        content.Children.Add(new TextBlock
+        {
+            Text = "安装会替换当前 Launcher EXE 并正常重启；不会修改任何实例、DSH_HOME 或配置快照。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 7, 0, 0)
+        });
+
+        void UpdateSelection()
+        {
+            if (releaseSelector.SelectedItem is not LauncherReleaseInfo release)
+            {
+                installButton.Content = "选择版本";
+                installButton.IsEnabled = false;
+                notes.Text = string.Empty;
+                return;
+            }
+
+            notes.Text = FormatReleaseNotesPreview(release.Notes);
+            if (!release.CanInstall)
+            {
+                installButton.Content = "附件不可验证";
+                installButton.IsEnabled = false;
+                return;
+            }
+
+            if (release.Version == currentVersion)
+            {
+                installButton.Content = "当前版本";
+                installButton.IsEnabled = false;
+                return;
+            }
+
+            installButton.Content = release.Version > currentVersion
+                ? $"更新到 {release.TagName}"
+                : $"回退到 {release.TagName}";
+            installButton.IsEnabled = !_launcherUpdateOperationInProgress;
+        }
+
+        async Task RefreshReleasesAsync(bool showResultNotice)
+        {
+            var previousVersion = (releaseSelector.SelectedItem as LauncherReleaseInfo)?.Version;
+            refreshButton.IsEnabled = false;
+            installButton.IsEnabled = false;
+            status.Text = "正在读取 GitHub Release…";
+            try
+            {
+                var releases = await _launcherUpdateService.ReadReleasesAsync(_windowCancellation.Token);
+                releaseSelector.ItemsSource = releases;
+                releaseSelector.SelectedItem = previousVersion is not null
+                    ? releases.FirstOrDefault(release => release.Version == previousVersion)
+                    : releases.FirstOrDefault(release => release.CanInstall && release.Version > currentVersion)
+                        ?? releases.FirstOrDefault(release => release.Version == currentVersion)
+                        ?? releases.FirstOrDefault();
+
+                var latest = releases.FirstOrDefault(release => release.CanInstall);
+                status.Text = latest is null
+                    ? "没有找到带可验证 DSH.Launcher.exe 的稳定版 Release。"
+                    : latest.Version > currentVersion
+                        ? $"发现新版本 {latest.TagName}。也可以从列表选择历史版本回退。"
+                        : $"当前已是最新稳定版；可选择 {releases.Count(release => release.CanInstall && release.Version < currentVersion)} 个历史版本回退。";
+                if (showResultNotice)
+                {
+                    ShowNotice(status.Text);
+                }
+            }
+            catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex) when (ex is HttpRequestException
+                or JsonException
+                or IOException
+                or InvalidDataException)
+            {
+                status.Text = $"检查更新失败：{ex.Message}";
+            }
+            finally
+            {
+                refreshButton.IsEnabled = !_launcherUpdateOperationInProgress;
+                UpdateSelection();
+            }
+        }
+
+        releaseSelector.SelectionChanged += (_, _) => UpdateSelection();
+        refreshButton.Click += async (_, _) => await RefreshReleasesAsync(showResultNotice: true);
+        installButton.Click += async (_, _) =>
+        {
+            if (releaseSelector.SelectedItem is LauncherReleaseInfo release)
+            {
+                await InstallLauncherReleaseAsync(release);
+                UpdateSelection();
+            }
+        };
+        _ = RefreshReleasesAsync(showResultNotice: false);
+    }
+
+    private async Task CheckForLauncherUpdateOnStartupAsync()
+    {
+        if (_launcherUpdateCheckStarted)
+        {
+            return;
+        }
+
+        _launcherUpdateCheckStarted = true;
+        try
+        {
+            var release = await _launcherUpdateService.CheckForUpdateAsync(_windowCancellation.Token);
+            if (release is null || _shutdownCleanupStarted)
+            {
+                return;
+            }
+
+            var answer = System.Windows.MessageBox.Show(
+                this,
+                $"发现 DSH Launcher {release.TagName}。\n\n{FormatReleaseNotesPreview(release.Notes)}\n\n是否现在下载并更新？",
+                "发现 Launcher 更新",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+            if (answer == MessageBoxResult.Yes)
+            {
+                await InstallLauncherReleaseAsync(release, askConfirmation: false);
+            }
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or JsonException
+            or IOException
+            or InvalidDataException)
+        {
+            // 启动时断网不影响 Launcher；设置页仍可手动检查并显示错误。
+        }
+    }
+
+    private async Task InstallLauncherReleaseAsync(
+        LauncherReleaseInfo release,
+        bool askConfirmation = true)
+    {
+        if (_launcherUpdateOperationInProgress)
+        {
+            ShowNotice("Launcher 版本操作正在进行，请稍候。");
+            return;
+        }
+
+        var currentVersion = LauncherUpdateService.CurrentVersion;
+        if (!release.CanInstall || release.Version == currentVersion)
+        {
+            ShowNotice(release.Version == currentVersion
+                ? "所选版本就是当前版本。"
+                : "所选 Release 没有可验证的 DSH.Launcher.exe。");
+            return;
+        }
+
+        if (_blockWindowCloseForMsi)
+        {
+            ShowNotice("Node.js 系统安装仍在进行，暂时不能替换 Launcher。");
+            return;
+        }
+
+        var targetExecutable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(targetExecutable) || !File.Exists(targetExecutable))
+        {
+            ShowNotice("无法确定当前 Launcher EXE 路径，已取消版本操作。");
+            return;
+        }
+
+        if (!LauncherUpdateService.TryValidateUpdateTarget(targetExecutable, out var targetError))
+        {
+            ShowNotice($"当前 Launcher 所在目录不能直接更新：{targetError}");
+            return;
+        }
+
+        var action = release.Version > currentVersion ? "更新" : "回退";
+        if (askConfirmation
+            && System.Windows.MessageBox.Show(
+                this,
+                $"将 DSH Launcher 从 v{currentVersion} {action}到 {release.TagName}。\n\n实例、DSH_HOME 和配置不会改变。完成下载并校验后，Launcher 会正常关闭并重新打开。是否继续？",
+                $"确认{action}",
+                MessageBoxButton.YesNo,
+                release.Version > currentVersion ? MessageBoxImage.Information : MessageBoxImage.Warning)
+                != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        _launcherUpdateOperationInProgress = true;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        var progressWindow = new RuntimeProgressWindow(
+            this,
+            cancellation,
+            $"{action} DSH Launcher",
+            "下载来自官方 GitHub Release；完成后会校验附件大小、版本号和 SHA-256。不会请求管理员权限。");
+        progressWindow.SetStatus($"正在准备下载 {release.TagName}…");
+        progressWindow.Show();
+        try
+        {
+            var progress = new Progress<NodeDownloadProgress>(item =>
+                progressWindow.SetDownloadProgress(item, $"DSH Launcher {release.TagName}"));
+            var downloaded = await _launcherUpdateService.DownloadReleaseAsync(
+                release,
+                progress,
+                cancellation.Token);
+            progressWindow.SetIndeterminate(true);
+            progressWindow.SetStatus("下载和校验完成，正在启动更新辅助程序…");
+            if (!LauncherUpdateService.TryLaunchApplyHelper(
+                    downloaded,
+                    targetExecutable,
+                    Environment.ProcessId,
+                    release.Sha256!,
+                    out var error))
+            {
+                throw new InvalidOperationException(error ?? "无法启动 Launcher 更新辅助程序。");
+            }
+
+            progressWindow.SetStatus("正在正常关闭 Launcher；辅助程序会在退出后完成替换并重新打开。");
+            progressWindow.Close();
+            Close();
+        }
+        catch (OperationCanceledException)
+        {
+            ShowNotice("Launcher 版本操作已取消。");
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or JsonException
+            or IOException
+            or InvalidDataException
+            or InvalidOperationException
+            or UnauthorizedAccessException)
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                $"Launcher {action}失败：{ex.Message}",
+                $"{action}失败",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _launcherUpdateOperationInProgress = false;
+            if (progressWindow.IsVisible)
+            {
+                progressWindow.Close();
+            }
+        }
+    }
+
+    private static string FormatReleaseNotesPreview(string? value)
+    {
+        var text = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return "该 Release 没有附加更新说明。";
+        }
+
+        return text.Length <= 360 ? text : $"{text[..360]}…";
     }
 
     private void AddPluginInstallModeSection(StackPanel panel)
@@ -2561,6 +3121,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var buttons = new[]
         {
             NavigationHome,
+            NavigationDownloads,
             NavigationExtensions,
             NavigationAgent,
             NavigationConversations,
@@ -3889,6 +4450,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _windowSource = null;
         CloseAllChatWindows();
         _dshApiClient.Dispose();
+        _launcherUpdateService.Dispose();
+        _dshVersionCatalogService.Dispose();
         _windowCancellation.Dispose();
         base.OnClosed(e);
     }
@@ -4220,6 +4783,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         CodingModelSelection? selection = null;
         CodingModelSelection? globalDefault = null;
+        var hadDeploymentDefaultSection = false;
         try
         {
             var policy = _codingModelPolicyService.Read();
@@ -4266,6 +4830,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             try
             {
+                hadDeploymentDefaultSection = _modelService.HasDefaultModelSection(instance);
                 globalDefault = _modelService.ReadDefaultModel(instance);
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
@@ -4289,6 +4854,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 await _modelService.SaveDefaultModelLiveAsync(
                     instance,
                     globalDefault,
+                    _windowCancellation.Token);
+            }
+            else if (globalDefault is null && !hadDeploymentDefaultSection)
+            {
+                await _modelService.ClearDefaultModelLiveAsync(
+                    instance,
                     _windowCancellation.Token);
             }
         }

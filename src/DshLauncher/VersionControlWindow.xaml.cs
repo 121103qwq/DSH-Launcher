@@ -34,6 +34,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly CancellationTokenSource _lifetimeCancellation;
     private VersionHealthReport? _healthReport;
     private bool _isBusy;
+    private string? _initialDshVersion;
 
     public VersionControlWindow(
         IEnumerable<ManagerInstance> versions,
@@ -52,7 +53,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Func<string, bool> isRunning,
         Func<ManagerInstance, ManagerInstance> versionUpdated,
         Action versionContentChanged,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? initialDshVersion = null)
     {
         _packageService = packageService;
         _templateProvider = templateProvider;
@@ -68,6 +70,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _isRunning = isRunning;
         _versionUpdated = versionUpdated;
         _versionContentChanged = versionContentChanged;
+        _initialDshVersion = initialDshVersion;
         _lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         foreach (var version in versions)
         {
@@ -216,6 +219,12 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanRollback));
         OnPropertyChanged(nameof(HealthSummary));
         RefreshSnapshots();
+        if (!string.IsNullOrWhiteSpace(_initialDshVersion))
+        {
+            var requestedVersion = _initialDshVersion;
+            _initialDshVersion = null;
+            _ = Dispatcher.BeginInvoke(new Action(() => _ = CreateCleanVersionAsync(requestedVersion)));
+        }
     }
 
     private void Window_OnUnloaded(object sender, RoutedEventArgs e)
@@ -429,7 +438,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
     }
 
-    private async Task CreateCleanVersionAsync()
+    private async Task CreateCleanVersionAsync(string? requestedVersion = null)
     {
         var template = SelectedVersion ?? _templateProvider();
         if (template is null)
@@ -470,18 +479,28 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         var dialog = new NewVersionWindow(
             Window.GetWindow(this),
             versions,
-            template.DetectedVersion ?? versions[0]);
+            versions.FirstOrDefault(version => string.Equals(
+                version,
+                requestedVersion,
+                StringComparison.OrdinalIgnoreCase))
+                ?? template.DetectedVersion
+                ?? versions[0]);
         if (dialog.ShowDialog() != true)
         {
             return;
         }
 
+        // NewVersionWindow 的属性会读取 WPF TextBox。先在 UI 线程复制为普通
+        // 字符串，不能把 dialog.VersionName 留到 Task.Run 的后台线程再求值。
+        var versionName = dialog.VersionName;
+        var dshVersion = dialog.DshVersion;
+
         SetBusy(true);
         try
         {
-            var runtimeTemplate = await PrepareRuntimeTemplateAsync(template, dialog.DshVersion);
+            var runtimeTemplate = await PrepareRuntimeTemplateAsync(template, dshVersion);
             var created = await Task.Run(
-                () => _packageService.CreateCleanVersion(runtimeTemplate, dialog.VersionName),
+                () => _packageService.CreateCleanVersion(runtimeTemplate, versionName),
                 _lifetimeCancellation.Token);
             Versions.Add(created);
             SelectedVersion = created;

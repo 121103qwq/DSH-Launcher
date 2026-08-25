@@ -77,10 +77,13 @@ internal sealed class RuntimeProgressWindow : Window
     }
 
     public void SetDownloadProgress(NodeDownloadProgress progress)
+        => SetDownloadProgress(progress, "Node.js 安装程序");
+
+    public void SetDownloadProgress(NodeDownloadProgress progress, string itemName)
     {
         _progressBar.IsIndeterminate = false;
         _progressBar.Value = progress.Percent ?? 0;
-        _statusText.Text = $"正在下载 Node.js 安装程序… {progress.BytesText}（{progress.PercentText}）";
+        _statusText.Text = $"正在下载 {itemName}… {progress.BytesText}（{progress.PercentText}）";
     }
 
     public void SetProgress(int completed, int total, string text)

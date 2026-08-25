@@ -215,8 +215,18 @@ public sealed class CodingModelPolicyService
 
         try
         {
-            return Path.GetFullPath(workingDirectory.Trim())
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fullPath = Path.GetFullPath(workingDirectory.Trim());
+            var root = Path.GetPathRoot(fullPath);
+            if (!string.IsNullOrWhiteSpace(root)
+                && string.Equals(
+                    fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return root;
+            }
+
+            return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {

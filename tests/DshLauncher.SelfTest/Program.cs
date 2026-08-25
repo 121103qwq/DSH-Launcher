@@ -33,6 +33,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node runtime compatibility", TestNodeRuntimeCompatibility),
     ("Node install version resolution", TestNodeInstallVersionResolution),
     ("Node installer download progress", TestNodeInstallerDownloadProgress),
+    ("Launcher release update catalog", TestLauncherReleaseUpdateCatalog),
+    ("Launcher release download verification", TestLauncherReleaseDownloadVerification),
+    ("Launcher update helper arguments", TestLauncherUpdateHelperArguments),
+    ("Launcher executable atomic replacement", TestLauncherExecutableAtomicReplacement),
     ("Node install result states", TestNodeInstallResultStates),
     ("Node download cancel cleans part", TestNodeDownloadCancelCleansPart),
     ("Node MSI verification and deferred cleanup", TestNodeMsiVerificationAndDeferredCleanup),
@@ -65,6 +69,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Attached runtime lifecycle", TestAttachedRuntimeLifecycle),
     ("Instance adoption after abnormal exit", TestInstanceAdoptionAfterAbnormalExit),
     ("Extension ecosystem isolation", TestExtensionEcosystemIsolation),
+    ("DSh profile selection", TestDshProfileSelection),
     ("dsh-market theme bridge", TestDshMarketThemeBridge),
     ("Plugin command supplies pnpm runtime", TestPluginCommandSuppliesPnpmRuntime),
     ("Marketplace discovery and verification", TestMarketplaceDiscoveryAndVerification),
@@ -1261,6 +1266,194 @@ static Task TestWindowResizeHitTesting()
     return Task.CompletedTask;
 }
 
+static async Task TestLauncherReleaseUpdateCatalog()
+{
+    const string hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    var json = $$"""
+        [
+          {
+            "tag_name":"v99.0.0",
+            "name":"未来稳定版",
+            "body":"更新说明",
+            "draft":false,
+            "prerelease":false,
+            "published_at":"2026-08-23T12:00:00Z",
+            "assets":[{
+              "name":"DSH.Launcher.exe",
+              "state":"uploaded",
+              "size":1200000,
+              "digest":"sha256:{{hash}}",
+              "browser_download_url":"https://github.com/121103qwq/DSH-Launcher/releases/download/v99.0.0/DSH.Launcher.exe"
+            }]
+          },
+          {
+            "tag_name":"v100.0.0",
+            "name":"预发布版",
+            "body":"不应展示",
+            "draft":false,
+            "prerelease":true,
+            "published_at":"2026-08-24T12:00:00Z",
+            "assets":[]
+          },
+          {
+            "tag_name":"v0.0.2",
+            "name":"可回退历史版",
+            "body":"历史版本",
+            "draft":false,
+            "prerelease":false,
+            "published_at":"2025-02-01T00:00:00Z",
+            "assets":[{
+              "name":"DSH.Launcher.exe",
+              "state":"uploaded",
+              "size":1200000,
+              "digest":"sha256:{{hash}}",
+              "browser_download_url":"https://github.com/121103qwq/DSH-Launcher/releases/download/v0.0.2/DSH.Launcher.exe"
+            }]
+          },
+          {
+            "tag_name":"v0.0.1",
+            "name":"历史版",
+            "body":"用于回退",
+            "draft":false,
+            "prerelease":false,
+            "published_at":"2025-01-01T00:00:00Z",
+            "assets":[{
+              "name":"错误名称.exe",
+              "state":"uploaded",
+              "size":1200000,
+              "digest":"sha256:{{hash}}",
+              "browser_download_url":"https://github.com/121103qwq/DSH-Launcher/releases/download/v0.0.1/错误名称.exe"
+            }]
+          }
+        ]
+        """;
+    using var client = new HttpClient(new ProviderTestHandler(_ => JsonResponse(json)));
+    using var service = new LauncherUpdateService(client);
+    var releases = await service.ReadReleasesAsync();
+    var update = await service.CheckForUpdateAsync();
+
+    Assert(releases.Count == 3 && releases[0].TagName == "v99.0.0",
+        "更新目录必须过滤草稿和预发布版本，并按稳定版版本号从新到旧排序。 ");
+    Assert(releases[0].CanInstall && releases[0].Sha256 == hash.ToUpperInvariant(),
+        "稳定版必须读取固定附件名和 GitHub SHA-256。 ");
+    Assert(releases[1].CanInstall && releases[1].Version < LauncherUpdateService.CurrentVersion,
+        "设置页必须保留可验证的历史稳定版作为回退目标。 ");
+    Assert(!releases[2].CanInstall,
+        "历史 Release 的附件名称不正确时必须显示但禁止安装。 ");
+    Assert(update?.TagName == "v99.0.0",
+        "启动检查必须只返回高于当前版本且可验证的稳定版。 ");
+}
+
+static async Task TestLauncherReleaseDownloadVerification()
+{
+    var builtLauncher = File.ReadAllBytes(FindRepositoryFile(
+        "src", "DshLauncher", "bin", "Release", "net8.0-windows", "win-x64", "DSH Launcher.exe"));
+    var payload = new byte[Math.Max(1_200_000, builtLauncher.Length)];
+    builtLauncher.CopyTo(payload, 0);
+    var hash = Convert.ToHexString(SHA256.HashData(payload));
+    var version = LauncherUpdateService.CurrentVersion;
+    var release = new LauncherReleaseInfo(
+        $"v{version}",
+        version,
+        "下载测试",
+        string.Empty,
+        DateTimeOffset.UtcNow,
+        $"https://github.com/121103qwq/DSH-Launcher/releases/download/v{version}/DSH.Launcher.exe",
+        payload.Length,
+        hash);
+    using var client = new HttpClient(new NodeTestHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new ByteArrayContent(payload)
+    }));
+    using var service = new LauncherUpdateService(client);
+    var sink = new NodeProgressSink();
+    var downloaded = await service.DownloadReleaseAsync(
+        release,
+        sink,
+        CancellationToken.None);
+    Assert(File.Exists(downloaded) && File.ReadAllBytes(downloaded).SequenceEqual(payload),
+        "Release 下载结果必须与校验过的附件完全一致。 ");
+    Assert(sink.Last.Percent is 100,
+        "Launcher 下载完成时必须报告真实 100% 进度。 ");
+
+    var rejected = release with { Sha256 = new string('0', 64) };
+    await AssertThrowsAsync<InvalidDataException>(
+        () => service.DownloadReleaseCoreAsync(
+            rejected,
+            progress: null,
+            validateFileVersion: false,
+            CancellationToken.None),
+        "SHA-256 不一致的 Release 附件必须拒绝安装。 ");
+
+    var untrusted = release with { AssetUrl = "https://example.com/DSH.Launcher.exe" };
+    await AssertThrowsAsync<InvalidDataException>(
+        () => service.DownloadReleaseCoreAsync(
+            untrusted,
+            progress: null,
+            validateFileVersion: false,
+            CancellationToken.None),
+        "版本操作必须拒绝非官方 GitHub Release 下载地址。 ");
+}
+
+static Task TestLauncherUpdateHelperArguments()
+{
+    var target = Path.Combine(Path.GetTempPath(), "DSH Launcher", "DSH.Launcher.exe");
+    var hash = new string('A', 64);
+    var valid = LauncherUpdateService.TryParseApplyArguments(
+        new[]
+        {
+            LauncherUpdateService.ApplyModeArgument,
+            "--target", target,
+            "--wait-pid", "1234",
+            "--sha256", hash
+        },
+        out var request);
+    Assert(valid && request is not null
+        && request.TargetPath == Path.GetFullPath(target)
+        && request.WaitProcessId == 1234
+        && request.ExpectedSha256 == hash,
+        "更新 helper 必须严格解析目标路径、旧 PID 和 SHA-256。 ");
+    Assert(!LauncherUpdateService.TryParseApplyArguments(
+        new[]
+        {
+            LauncherUpdateService.ApplyModeArgument,
+            "--target", target,
+            "--wait-pid", "0",
+            "--sha256", hash
+        },
+        out _),
+        "更新 helper 必须拒绝无效 PID。 ");
+    Assert(!LauncherUpdateService.TryParseReleaseTag("v1.0.8-rc.1", out _)
+        && !LauncherUpdateService.TryParseReleaseTag("v1.0.8.4", out _)
+        && LauncherUpdateService.TryParseReleaseTag("v1.0.8", out var version)
+        && version == new Version(1, 0, 8),
+        "Launcher 版本目录必须只接受稳定版语义版本标签。 ");
+    return Task.CompletedTask;
+}
+
+static Task TestLauncherExecutableAtomicReplacement()
+{
+    var builtLauncher = FindRepositoryFile(
+        "src", "DshLauncher", "bin", "Release", "net8.0-windows", "win-x64", "DSH Launcher.exe");
+    using var temporary = new TestDirectory();
+    var target = Path.Combine(temporary.Path, "DSH Launcher.exe");
+    var payload = Path.Combine(temporary.Path, "payload.exe");
+    File.Copy(builtLauncher, target);
+    File.Copy(builtLauncher, payload);
+    var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(payload)));
+
+    Assert(LauncherUpdateService.TryValidateUpdateTarget(target, out var error),
+        $"可写目录中的合法 DSH Launcher 应通过更新前检查：{error}");
+    LauncherUpdateService.ReplaceExecutableAtomically(payload, target, hash);
+    Assert(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(target))) == hash,
+        "更新 helper 必须在同目录完成完整文件替换，不能留下半写 EXE。 ");
+    Assert(!Directory.EnumerateFiles(temporary.Path)
+        .Any(path => path.Contains(".update-", StringComparison.OrdinalIgnoreCase)
+            || path.Contains(".backup-", StringComparison.OrdinalIgnoreCase)),
+        "成功替换后必须清理目标目录中的事务临时文件。 ");
+    return Task.CompletedTask;
+}
+
 static Task TestChatWindowIndependentTaskbarIdentity()
 {
     var chatWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ChatWindow.xaml");
@@ -1291,6 +1484,7 @@ static Task TestChatWindowIndependentTaskbarIdentity()
 static Task TestMainWindowCodeResourceReferences()
 {
     var appXamlPath = FindRepositoryFile("src", "DshLauncher", "App.xaml");
+    var appCodePath = FindRepositoryFile("src", "DshLauncher", "App.xaml.cs");
     var mainWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml");
     var mainWindowCodePath = FindRepositoryFile("src", "DshLauncher", "MainWindow.xaml.cs");
     var extensionWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ExtensionWindow.xaml");
@@ -1304,6 +1498,7 @@ static Task TestMainWindowCodeResourceReferences()
     var conversationWindowXamlPath = FindRepositoryFile("src", "DshLauncher", "ConversationWindow.xaml");
     var conversationWindowCodePath = FindRepositoryFile("src", "DshLauncher", "ConversationWindow.xaml.cs");
     var appXaml = File.ReadAllText(appXamlPath, Encoding.UTF8);
+    var appCode = File.ReadAllText(appCodePath, Encoding.UTF8);
     var mainWindowXaml = File.ReadAllText(mainWindowXamlPath, Encoding.UTF8);
     var mainWindowCode = File.ReadAllText(mainWindowCodePath, Encoding.UTF8);
     var extensionWindowXaml = File.ReadAllText(extensionWindowXamlPath, Encoding.UTF8);
@@ -1340,9 +1535,21 @@ static Task TestMainWindowCodeResourceReferences()
         && reconcile > renderYield
         && runtimeRefresh > reconcile,
         "启动时应先显示本地实例，再核对运行状态和扫描运行环境。 ");
+    var updateHelperMode = appCode.IndexOf("LauncherUpdateService.ApplyModeArgument", StringComparison.Ordinal);
+    var singleInstanceMutex = appCode.IndexOf("new Mutex", StringComparison.Ordinal);
+    Assert(updateHelperMode >= 0 && singleInstanceMutex > updateHelperMode
+        && mainWindowCode.Contains("AddLauncherUpdateSection(panel)", StringComparison.Ordinal)
+        && mainWindowCode.Contains("CheckForLauncherUpdateOnStartupAsync", StringComparison.Ordinal)
+        && mainWindowCode.Contains("InstallLauncherReleaseAsync", StringComparison.Ordinal),
+        "Launcher 必须先处理独立更新 helper，再进入单实例逻辑；设置页和启动流程都应接入显式更新。 ");
     Assert(mainWindowXaml.Contains("ItemsSource=\"{Binding Instances}\"", StringComparison.Ordinal)
         && !mainWindowXaml.Contains("ItemsSource=\"{Binding RecentInstancesView}\"", StringComparison.Ordinal),
         "启动页实例列表必须显示全部版本，不能只绑定最近三个实例。 ");
+    Assert(mainWindowXaml.Contains("x:Name=\"NavigationDownloads\"", StringComparison.Ordinal)
+        && mainWindowCode.Contains("CreateDownloadsPage()", StringComparison.Ordinal)
+        && mainWindowCode.Contains("CreateDshDownloadsPanel()", StringComparison.Ordinal)
+        && mainWindowCode.Contains("ShowVersionControl(version)", StringComparison.Ordinal),
+        "顶栏下载页必须按 Launcher / DSh 版本分组，并把官方 DSh 选择接入新建版本流程。 ");
     Assert(mainWindowCode.Contains("Dispatcher.BeginInvoke(Close, DispatcherPriority.Background)", StringComparison.Ordinal),
         "异步清理完成后的第二次关闭必须排到 Closing 事件结束后，不能在原调用栈中重入。 ");
     Assert(mainWindowCode.Contains("private async void RunningInstances_MouseDoubleClick", StringComparison.Ordinal)
@@ -1361,6 +1568,18 @@ static Task TestMainWindowCodeResourceReferences()
         && !extensionWindowXaml.Contains("InstanceSelectorBox", StringComparison.Ordinal)
         && !extensionWindowCode.Contains("InstanceSelector_SelectionChanged", StringComparison.Ordinal),
         "扩展和 Agent 左栏必须为已安装列表保留可见高度、限制长文本并显示启用状态，但不能重复提供实例选择器。 ");
+    Assert(extensionWindowXaml.Contains("x:Name=\"ProfileSelectorBox\"", StringComparison.Ordinal)
+        && extensionWindowCode.Contains("ProfileSelectorBox_SelectionChanged", StringComparison.Ordinal)
+        && extensionWindowCode.Contains("_skillMarketCancellation?.Cancel()", StringComparison.Ordinal),
+        "扩展页必须能切换当前 Plugin Profile；旧 Agent 页面卸载时必须取消 Skill 市场请求。 ");
+    var capturedProfile = extensionWindowCode.IndexOf(
+        "var selectedProfileName = GetSelectedProfileName();",
+        StringComparison.Ordinal);
+    var marketplaceBackgroundScan = extensionWindowCode.IndexOf(
+        "var (installed, themeState) = await Task.Run",
+        StringComparison.Ordinal);
+    Assert(capturedProfile >= 0 && marketplaceBackgroundScan > capturedProfile,
+        "插件市场后台扫描前必须在 UI 线程捕获 Profile，不能从 Task.Run 读取 ComboBox。 ");
     Assert(versionSettingsXaml.Contains("x:Name=\"SnapshotPage\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"CreateSnapshot_Click\"", StringComparison.Ordinal)
         && versionSettingsXaml.Contains("Click=\"RollbackSnapshot_Click\"", StringComparison.Ordinal)
@@ -1371,6 +1590,15 @@ static Task TestMainWindowCodeResourceReferences()
         && versionControlCode.Contains("DshInstallProgressPhase.DownloadingPackage", StringComparison.Ordinal)
         && versionControlCode.Contains("progress.BytesText", StringComparison.Ordinal),
         "从官方 npm 包创建 DSh 版本时必须显示真实下载字节和百分比进度条。 ");
+    var capturedVersionName = versionControlCode.IndexOf("var versionName = dialog.VersionName;", StringComparison.Ordinal);
+    var backgroundCreate = versionControlCode.IndexOf(
+        "_packageService.CreateCleanVersion(runtimeTemplate, versionName)",
+        StringComparison.Ordinal);
+    Assert(capturedVersionName >= 0 && backgroundCreate > capturedVersionName
+        && !versionControlCode.Contains(
+            "_packageService.CreateCleanVersion(runtimeTemplate, dialog.VersionName)",
+            StringComparison.Ordinal),
+        "新建干净版本必须先在 UI 线程读取对话框文本，后台文件任务不能访问 WPF 控件。 ");
     Assert(mainWindowXaml.Contains("x:Name=\"NavigationProviders\"", StringComparison.Ordinal)
         && mainWindowCode.Contains("new ProviderManagementWindow", StringComparison.Ordinal)
         && providerWindowXaml.Contains("Text=\"全局 Coding\"", StringComparison.Ordinal)
@@ -1379,6 +1607,7 @@ static Task TestMainWindowCodeResourceReferences()
         "Provider 必须是全局 Coding 专用页面，不能显示或选择具体实例。 ");
     Assert(providerWindowXaml.Contains("Text=\"默认模型\"", StringComparison.Ordinal)
         && providerWindowCode.Contains("Interval = TimeSpan.FromSeconds(15)", StringComparison.Ordinal)
+        && providerWindowCode.Contains("_cancellation.IsCancellationRequested || !IsLoaded", StringComparison.Ordinal)
         && providerWindowCode.Contains("ReadProviderStatesAsync", StringComparison.Ordinal)
         && providerWindowCode.Contains("ProviderRuntimeMonitorState.Online", StringComparison.Ordinal),
         "Provider 页面必须提供全局默认模型和运行期间持续在线状态监控。 ");
@@ -1388,8 +1617,11 @@ static Task TestMainWindowCodeResourceReferences()
         && conversationWindowXaml.Contains("不是 Launcher 的版本同步工作区", StringComparison.Ordinal)
         && conversationWindowCode.Contains("SetWorkspaceSelection", StringComparison.Ordinal)
         && conversationWindowCode.Contains("SetSessionSelection", StringComparison.Ordinal)
+        && conversationWindowCode.Contains("RefreshWorkspaceChoices();", StringComparison.Ordinal)
         && mainWindowCode.Contains("ApplyConversationModelPolicyAsync", StringComparison.Ordinal)
-        && mainWindowCode.Contains("SelectSessionModelAsync", StringComparison.Ordinal),
+        && mainWindowCode.Contains("SelectSessionModelAsync", StringComparison.Ordinal)
+        && mainWindowCode.Contains("hadDeploymentDefaultSection", StringComparison.Ordinal)
+        && mainWindowCode.Contains("ClearDefaultModelLiveAsync", StringComparison.Ordinal),
         "对话页必须分别管理真实 DSh 工作区和单会话模型，并在打开会话时自动应用。 ");
     return Task.CompletedTask;
 }
@@ -2653,6 +2885,78 @@ static async Task TestExtensionEcosystemIsolation()
     await service.RemoveSkillAsync(instance, skill);
 }
 
+static async Task TestDshProfileSelection()
+{
+    using var temporary = new TestDirectory();
+    var root = Path.Combine(temporary.Path, "runtime");
+    var home = Path.Combine(temporary.Path, "dsh-home");
+    Directory.CreateDirectory(root);
+    Directory.CreateDirectory(home);
+    var instance = CreateTestInstance("profiles", root, home);
+
+    static void WriteProfile(string homePath, string name, string appBundle, string plugin)
+    {
+        var directory = Path.Combine(homePath, "profiles", name);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(
+            Path.Combine(directory, "package.json"),
+            JsonSerializer.Serialize(new
+            {
+                dependencies = new Dictionary<string, string> { [plugin] = "1.0.0" },
+                dsh = new
+                {
+                    profile = new
+                    {
+                        bundles = new[] { "@deepseek-ai/dsh-base", appBundle, plugin }
+                    }
+                }
+            }),
+            new UTF8Encoding(false));
+    }
+
+    WriteProfile(home, "web", "@deepseek-ai/dsh-web-app", "web-only-plugin");
+    WriteProfile(home, "desktop", "@deepseek-ai/dsh-web-app", "desktop-only-plugin");
+    WriteProfile(home, "headless", "@deepseek-ai/dsh-headless", "headless-only-plugin");
+    Directory.CreateDirectory(Path.Combine(home, "profiles", "node_modules"));
+
+    var settings = new VersionSettingsService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+    settings.Save(instance, new VersionSettingsData { ActiveProfileName = "desktop" });
+    var service = new ExtensionService(
+        profileProvider: current => settings.Read(current).ActiveProfileName);
+    var profiles = service.ListProfiles(instance);
+    Assert(profiles.SequenceEqual(new[] { "web", "desktop", "headless" }),
+        "Profile 枚举必须优先 web、排除共享 node_modules，并保留其它有效 Profile。 ");
+    Assert(DshProfileService.IsWebProfile(instance, "desktop")
+        && !DshProfileService.IsWebProfile(instance, "headless"),
+        "Launcher 必须根据 dsh.profile.bundles 区分可打开 Web UI 与 headless Profile。 ");
+
+    var plugins = (await service.ListAsync(instance))
+        .Where(entry => entry.Kind == ExtensionKind.Plugin)
+        .Select(entry => entry.Name)
+        .ToArray();
+    Assert(plugins.Contains("desktop-only-plugin", StringComparer.OrdinalIgnoreCase)
+        && !plugins.Contains("web-only-plugin", StringComparer.OrdinalIgnoreCase),
+        "Plugin 列表必须读取当前版本选中的 Profile，不能继续固定读取 web。 ");
+
+    var arguments = DshInstanceRunner.BuildWebArguments(instance, 43123, supportsNoOpen: true, "desktop");
+    Assert(arguments.Take(2).SequenceEqual(new[] { "--profile", "desktop" })
+        && arguments.Contains("--port")
+        && arguments.Contains("--no-open"),
+        "启动参数必须把当前 Web Profile 传给官方 dsh --profile。 ");
+
+    var marketplace = new MarketplaceService(new LauncherPaths(Path.Combine(temporary.Path, "market")));
+    var snapshot = marketplace.CreatePluginSnapshot(instance, "desktop");
+    var desktopManifest = Path.Combine(home, "profiles", "desktop", "package.json");
+    var webManifest = Path.Combine(home, "profiles", "web", "package.json");
+    var originalDesktop = File.ReadAllText(desktopManifest);
+    var originalWeb = File.ReadAllText(webManifest);
+    File.WriteAllText(desktopManifest, "{}", new UTF8Encoding(false));
+    Assert(marketplace.RestorePluginSnapshot(instance, snapshot, "desktop")
+        && File.ReadAllText(desktopManifest) == originalDesktop
+        && File.ReadAllText(webManifest) == originalWeb,
+        "Plugin 失败回档必须只恢复当前 Profile，不能误写 web 或其它 Profile。 ");
+}
+
 static async Task TestDshMarketThemeBridge()
 {
     var requests = new List<HttpRequestMessage>();
@@ -3502,7 +3806,7 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent("---\nname: flat-helper\ndescription: >\n  A single file\n  productivity skill\nuser-invocable: yes\n---\n# Flat\n", Encoding.UTF8)
+                    Content = new StringContent("---\nname: flat-helper\ndescription: >-\n  A single file\n  productivity skill\nuser-invocable: yes\n---\n# Flat\n", Encoding.UTF8)
                 };
             }
 
@@ -3549,6 +3853,8 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
         "重复 Skill 应优先保留标准 skills 目录并归入设计分类。 ");
     Assert(flatSkill.SkillPath == "skills/flat-helper.md" && flatSkill.Category == "效率",
         "单文件 Skill 应按官方格式被识别并分类。 ");
+    Assert(flatSkill.Description?.Contains("A single file productivity skill", StringComparison.Ordinal) == true,
+        "Skill 市场必须识别 YAML 的 >- / |- block scalar，而不能把符号显示成描述。 ");
     Assert(maxConcurrentValidations >= 2, "Skill 文件校验应并行执行，不能逐个串行等待。 ");
     Assert(service.ReadCached().Count == 3, "Skill 市场只应缓存校验通过的单个 Skill。 ");
 
@@ -3572,6 +3878,17 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
         && !ExtensionWindow.IsSkillInstalled(uiSkill, installedEntries),
         "Skill 市场应把当前实例中已安装的同名 Skill 显示为已安装，其他条目仍可安装。 ");
 
+    var blockSkillSource = Path.Combine(temporary.Path, "block-skill-source");
+    Directory.CreateDirectory(blockSkillSource);
+    File.WriteAllText(
+        Path.Combine(blockSkillSource, "SKILL.md"),
+        "---\nname: block-skill\ndescription: |-\n  First line\n  Second line\n---\n# Block\n",
+        new UTF8Encoding(false));
+    var blockSkill = await new ExtensionService().ImportSkillAsync(instance, blockSkillSource);
+    Assert(blockSkill.Description?.Contains("First line", StringComparison.Ordinal) == true
+        && blockSkill.Description.Contains("Second line", StringComparison.Ordinal),
+        "导入和重新列出 Skill 时必须同样支持 |- block scalar。 ");
+
     var installedFlatName = await service.InstallAsync(instance, flatSkill, new SkillProgressSink());
     Assert(installedFlatName == "flat-helper"
         && File.Exists(Path.Combine(home, "skills", "flat-helper", "SKILL.md")),
@@ -3585,6 +3902,34 @@ static async Task TestSkillMarketplaceDiscoveryAndValidation()
         && badRawRequests == 2
         && treeRequests == 3,
         "手动刷新应重新读取仓库页，但仓库分支和更新时间未变化时应复用已校验 Skill，避免重复下载。 ");
+
+    using var invalidJsonClient = new HttpClient(new ProviderTestHandler(_ =>
+        new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("not-json", Encoding.UTF8, "application/json")
+        }));
+    var invalidJsonFallback = await new SkillMarketService(
+        new ExtensionService(),
+        launcherPaths,
+        invalidJsonClient).SearchAsync();
+    Assert(invalidJsonFallback.Count == 3,
+        "GitHub 分页返回异常 JSON 时必须继续显示最近有效缓存。 ");
+
+    var emptyPaths = new LauncherPaths(Path.Combine(temporary.Path, "first-run-launcher"));
+    using var transientClient = new HttpClient(new ProviderTestHandler(request =>
+    {
+        if (request.RequestUri?.AbsolutePath == "/search/repositories")
+        {
+            return JsonResponse("{\"items\":[{\"full_name\":\"demo/transient-skill\",\"name\":\"transient-skill\",\"description\":\"temporary\",\"stargazers_count\":1,\"default_branch\":\"main\",\"pushed_at\":\"2026-08-25T00:00:00Z\"}]}");
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+    }));
+    var firstRunService = new SkillMarketService(new ExtensionService(), emptyPaths, transientClient);
+    var firstRunFallback = await firstRunService.SearchAsync();
+    Assert(firstRunFallback.Count >= 4
+        && !File.Exists(Path.Combine(emptyPaths.RootDirectory, "skill-market-cache.json")),
+        "首次仓库扫描暂时失败时应显示内置占位目录，但绝不能写入空缓存。 ");
 }
 
 static byte[] CreateSkillMarketArchive()
@@ -4125,6 +4470,9 @@ static Task TestVersionPackageOperations()
         "导入整合包中的文本配置也必须清理内联密钥与 URL 凭据。 ");
     packages.SavePackageExtension("zip");
     Assert(packages.PackageExtension == ".zip", "整合包扩展名设置应自动补点并保存。 ");
+    AssertThrows<ArgumentException>(
+        () => packages.SavePackageExtension(".tgz"),
+        ".tgz 必须保留给 DSH ModPack，不能再配置为 Launcher 原生 ZIP 扩展名。 ");
 
     var deletable = packages.CreateCleanVersion(source, "待删除版本");
     File.WriteAllText(Path.Combine(deletable.DshHome, "delete-me.txt"), "temporary", new UTF8Encoding(false));
@@ -4276,6 +4624,13 @@ static async Task TestModelSettingsRoundTrip()
         new CodingModelSelection("deepseek-official", "deepseek-v4-pro"));
     Assert(guarded.ReadDefaultModel(instance) == new CodingModelSelection("deepseek-official", "deepseek-v4-pro"),
         "运行期间全局默认只能窄写 agent-default-model，并由 DSh settings watcher 热加载。 ");
+    Assert(guarded.HasDefaultModelSection(instance),
+        "写入默认模型后必须能识别官方 agent-default-model section。 ");
+    await guarded.ClearDefaultModelLiveAsync(instance);
+    Assert(!guarded.HasDefaultModelSection(instance)
+        && guarded.ReadDefaultModel(instance) is null
+        && File.ReadAllText(settings).Contains("unrelated:", StringComparison.Ordinal),
+        "会话临时覆盖结束后必须能移除原本不存在的默认模型，同时保留其它设置。 ");
 }
 
 static Task TestGlobalCodingModelPolicies()
@@ -4308,6 +4663,22 @@ static Task TestGlobalCodingModelPolicies()
     Assert(File.Exists(paths.CodingModelPoliciesPath)
         && new CodingModelPolicyService(paths).Read().GlobalDefault == global,
         "全局 Coding 模型规则必须独立持久化并可重新读取。 ");
+    Assert(CodingModelPolicyService.NormalizeWorkingDirectory(@"C:\") == @"C:\",
+        "DSh 工作区是盘符根目录时必须保留结尾分隔符，不能变成盘符相对路径 C:。 ");
+    var catalog = new[]
+    {
+        new ModelProviderInfo(
+            "gateway",
+            "Gateway",
+            "llm-pi-ai",
+            null,
+            "https://gateway.example/v1",
+            new[] { "coding-model" },
+            Configured: true)
+    };
+    Assert(ProviderManagementWindow.SupportsSelection(catalog, workspace)
+        && !ProviderManagementWindow.SupportsSelection(catalog, global),
+        "全局默认模型只能应用到实际提供该 Provider/model 的版本。 ");
     return Task.CompletedTask;
 }
 

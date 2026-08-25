@@ -24,14 +24,17 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly Dictionary<string, bool> _noOpenSupportByRuntime = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<int> _portAllocator;
     private readonly DshHomeImportService _homeImporter;
+    private readonly Func<ManagerInstance, string> _profileProvider;
     private bool _disposed;
 
     public DshInstanceRunner(
         Func<int>? portAllocator = null,
-        DshHomeImportService? homeImporter = null)
+        DshHomeImportService? homeImporter = null,
+        Func<ManagerInstance, string>? profileProvider = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
+        _profileProvider = profileProvider ?? (_ => DshProfileService.DefaultProfileName);
     }
 
     public bool IsRunning(string instanceId)
@@ -258,6 +261,22 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             }
         }
 
+        string profileName;
+        try
+        {
+            profileName = DshProfileService.NormalizeName(_profileProvider(instance));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException)
+        {
+            return DshInstanceRunResult.Failure(ex.Message);
+        }
+
+        if (!DshProfileService.IsWebProfile(instance, profileName))
+        {
+            return DshInstanceRunResult.Failure(
+                $"Profile {profileName} 不是 Web Profile，Launcher 无法把它作为浏览器实例启动。可在扩展页切换并管理其 Plugin，或选择包含 @deepseek-ai/dsh-web-app 的 Profile。 ");
+        }
+
         if (!string.IsNullOrWhiteSpace(instance.ImportedFromDshHome))
         {
             try
@@ -299,6 +318,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 instance,
                 nodeRuntime,
                 sourceEntrypoint,
+                profileName,
                 cancellationToken);
 
             InstanceLock? instanceLock = null;
@@ -323,7 +343,13 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         var webUrl = $"http://127.0.0.1:{port}/";
                         process = new Process
                         {
-                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint, supportsNoOpen),
+                            StartInfo = CreateStartInfo(
+                                instance,
+                                port,
+                                nodeRuntime,
+                                sourceEntrypoint,
+                                supportsNoOpen,
+                                profileName),
                             EnableRaisingEvents = true
                         };
                         var output = new StringBuilder();
@@ -727,10 +753,31 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         int port,
         NodeRuntimeInfo? nodeRuntime,
         string? sourceEntrypoint,
-        bool supportsNoOpen)
+        bool supportsNoOpen,
+        string profileName)
     {
         var spec = ResolveLaunchSpec(instance, nodeRuntime, sourceEntrypoint);
-        var arguments = new List<string> { "web" };
+        var arguments = BuildWebArguments(instance, port, supportsNoOpen, profileName);
+        return DshRuntimeCommandFactory.Create(
+            spec,
+            arguments,
+            instance.RootPath,
+            instance.DshHome,
+            Path.Combine(instance.DshHome, ".agents"),
+            nodeRuntime?.ExecutablePath);
+    }
+
+    internal static IReadOnlyList<string> BuildWebArguments(
+        ManagerInstance instance,
+        int port,
+        bool supportsNoOpen,
+        string profileName)
+    {
+        var arguments = new List<string>
+        {
+            "--profile",
+            DshProfileService.NormalizeName(profileName)
+        };
         var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
         if (IsRegularFile(patchPath))
         {
@@ -746,23 +793,18 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         {
             arguments.Add("--no-open");
         }
-        return DshRuntimeCommandFactory.Create(
-            spec,
-            arguments,
-            instance.RootPath,
-            instance.DshHome,
-            Path.Combine(instance.DshHome, ".agents"),
-            nodeRuntime?.ExecutablePath);
+        return arguments;
     }
 
     private async Task<bool> ProbeNoOpenSupportAsync(
         ManagerInstance instance,
         NodeRuntimeInfo? nodeRuntime,
         string? sourceEntrypoint,
+        string profileName,
         CancellationToken cancellationToken)
     {
         var spec = ResolveLaunchSpec(instance, nodeRuntime, sourceEntrypoint);
-        var cacheKey = BuildCapabilityCacheKey(spec);
+        var cacheKey = $"{BuildCapabilityCacheKey(spec)}|profile={profileName}";
         lock (_noOpenSupportByRuntime)
         {
             if (_noOpenSupportByRuntime.TryGetValue(cacheKey, out var cached))
@@ -777,7 +819,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         {
             var startInfo = DshRuntimeCommandFactory.Create(
                 spec,
-                new[] { "web", "--help" },
+                new[] { "--profile", profileName, "--help" },
                 instance.RootPath,
                 instance.DshHome,
                 Path.Combine(instance.DshHome, ".agents"),

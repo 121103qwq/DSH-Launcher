@@ -216,9 +216,11 @@ public sealed class VersionHealthService
         ICollection<VersionHealthItem> items)
     {
         var problems = new List<string>();
+        var profileName = DshProfileService.DefaultProfileName;
         try
         {
-            _ = _settingsService.Read(instance);
+            var settings = _settingsService.Read(instance);
+            profileName = DshProfileService.NormalizeName(settings.ActiveProfileName);
         }
         catch (Exception ex)
         {
@@ -244,7 +246,7 @@ public sealed class VersionHealthService
 
         ValidateJson(Path.Combine(instance.DshHome, ".dsh-launcher", "providers.json"), "Provider 状态", problems);
         ValidateJson(Path.Combine(instance.DshHome, ".dsh-launcher", "mcp.json"), "MCP 配置", problems);
-        ValidatePluginManifest(Path.Combine(instance.DshHome, "profiles", "web", "package.json"), problems);
+        ValidatePluginManifest(DshProfileService.GetManifestPath(instance, profileName), problems, profileName);
 
         var credentials = Path.Combine(instance.DshHome, ".credentials.yaml");
         if (File.Exists(credentials))
@@ -264,7 +266,7 @@ public sealed class VersionHealthService
                 "configuration",
                 "配置与 Plugin",
                 VersionHealthState.Healthy,
-                "版本设置、Provider、MCP 与 web profile 配置可读取。")
+                $"版本设置、Provider、MCP 与 {profileName} profile 配置可读取。")
             : new VersionHealthItem(
                 "configuration",
                 "配置与 Plugin",
@@ -319,7 +321,10 @@ public sealed class VersionHealthService
         }
     }
 
-    private static void ValidatePluginManifest(string path, ICollection<string> problems)
+    private static void ValidatePluginManifest(
+        string path,
+        ICollection<string> problems,
+        string profileName)
     {
         if (!File.Exists(path))
         {
@@ -330,24 +335,24 @@ public sealed class VersionHealthService
         {
             if (IsReparsePoint(path))
             {
-                problems.Add("web profile package.json 是重解析点。");
+                problems.Add($"{profileName} profile package.json 是重解析点。");
                 return;
             }
 
             using var document = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
-                problems.Add("web profile package.json 根节点不是对象。");
+                problems.Add($"{profileName} profile package.json 根节点不是对象。");
             }
             else if (document.RootElement.TryGetProperty("dependencies", out var dependencies)
                 && dependencies.ValueKind != JsonValueKind.Object)
             {
-                problems.Add("web profile dependencies 不是对象。");
+                problems.Add($"{profileName} profile dependencies 不是对象。");
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            problems.Add($"web profile package.json 格式无效：{ex.Message}");
+            problems.Add($"{profileName} profile package.json 格式无效：{ex.Message}");
         }
     }
 

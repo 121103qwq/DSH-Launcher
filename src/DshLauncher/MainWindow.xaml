@@ -156,6 +156,12 @@
                                 <TextBlock Text="启动" />
                             </StackPanel>
                         </Button>
+                        <Button x:Name="NavigationDownloads" Tag="下载" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="⇩" Margin="0,0,7,0" />
+                                <TextBlock Text="下载" />
+                            </StackPanel>
+                        </Button>
                         <Button x:Name="NavigationExtensions" Tag="扩展" Click="Navigation_Click" Style="{StaticResource TopNavButton}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="◇" Margin="0,0,7,0" />

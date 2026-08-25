@@ -29,20 +29,15 @@ public sealed class VersionSnapshotService
         "launcher.patch.yml",
         ".dsh-launcher/version-settings.json",
         ".dsh-launcher/providers.json",
-        ".dsh-launcher/mcp.json",
-        "profiles/web/package.json",
-        "profiles/web/pnpm-lock.yaml",
-        "profiles/web/package-lock.json",
-        "profiles/web/yarn.lock",
-        "profiles/web/cordis.patch.yml"
+        ".dsh-launcher/mcp.json"
     };
-    private static readonly string[] LivePluginSnapshotFiles =
+    private static readonly string[] PluginProfileFileNames =
     {
-        "profiles/web/package.json",
-        "profiles/web/pnpm-lock.yaml",
-        "profiles/web/package-lock.json",
-        "profiles/web/yarn.lock",
-        "profiles/web/cordis.patch.yml"
+        "package.json",
+        "pnpm-lock.yaml",
+        "package-lock.json",
+        "yarn.lock",
+        "cordis.patch.yml"
     };
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -67,7 +62,7 @@ public sealed class VersionSnapshotService
         bool automatic = false)
     {
         EnsureCanMutate(instance);
-        return CreateSnapshotCore(instance, reason, automatic, SnapshotFiles);
+        return CreateSnapshotCore(instance, reason, automatic, BuildSnapshotFiles(instance, includeBaseFiles: true));
     }
 
     public VersionSnapshotInfo CreateLivePluginSnapshot(
@@ -79,7 +74,7 @@ public sealed class VersionSnapshotService
             throw new InvalidOperationException("Attached 版本不能创建 Launcher 热加载存档。 ");
         }
 
-        return CreateSnapshotCore(instance, reason, automatic: true, LivePluginSnapshotFiles);
+        return CreateSnapshotCore(instance, reason, automatic: true, BuildSnapshotFiles(instance, includeBaseFiles: false));
     }
 
     private VersionSnapshotInfo CreateSnapshotCore(
@@ -250,7 +245,7 @@ public sealed class VersionSnapshotService
         {
             foreach (var relativePath in payload.Manifest.ManagedFiles)
             {
-                if (!SnapshotFiles.Contains(relativePath, StringComparer.OrdinalIgnoreCase))
+                if (!IsAllowedManagedPath(relativePath))
                 {
                     throw new InvalidDataException($"快照包含未知的受管路径：{relativePath}");
                 }
@@ -333,6 +328,36 @@ public sealed class VersionSnapshotService
                 }
             }
         }
+    }
+
+    private static IReadOnlyList<string> BuildSnapshotFiles(
+        ManagerInstance instance,
+        bool includeBaseFiles)
+    {
+        var files = includeBaseFiles
+            ? new List<string>(SnapshotFiles)
+            : new List<string>();
+        foreach (var profile in DshProfileService.ListProfiles(instance))
+        {
+            files.AddRange(PluginProfileFileNames.Select(file => $"profiles/{profile}/{file}"));
+        }
+
+        return files;
+    }
+
+    private static bool IsAllowedManagedPath(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        if (SnapshotFiles.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var parts = normalized.Split('/');
+        return parts.Length == 3
+            && string.Equals(parts[0], "profiles", StringComparison.OrdinalIgnoreCase)
+            && DshProfileService.TryNormalizeName(parts[1], out _)
+            && PluginProfileFileNames.Contains(parts[2], StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool FilesEqual(string leftPath, string rightPath)

@@ -45,12 +45,15 @@ public partial class ExtensionWindow : UserControl
     private CancellationTokenSource? _marketplaceCancellation;
     private CancellationTokenSource? _searchDebounceCancellation;
     private CancellationTokenSource? _skillSearchDebounceCancellation;
+    private CancellationTokenSource? _skillMarketCancellation;
     private Window? _agentLayoutOwner;
     private readonly Dictionary<string, double> _marketplaceScrollOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _skillMarketScrollOffsets = new(StringComparer.Ordinal);
     private string _activeMarketplaceCategoryKey = string.Empty;
     private string _activeSkillMarketCategoryKey = string.Empty;
     private bool _useDshMarketHotReload = true;
+    private bool _profileSelectionReady;
+    private bool _isUnloaded;
 
     public ExtensionWindow(
         ManagerInstance instance,
@@ -107,10 +110,66 @@ public partial class ExtensionWindow : UserControl
         }
         else
         {
+            SetupProfileSelector();
             ImportSkillButton.Visibility = Visibility.Collapsed;
             ImportPresetButton.Visibility = Visibility.Collapsed;
         }
     }
+
+    private void SetupProfileSelector()
+    {
+        var profiles = _service.ListProfiles(_instance).ToList();
+        var configured = _service.GetActiveProfileName(_instance);
+        var selected = profiles.FirstOrDefault(profile =>
+                string.Equals(profile, configured, StringComparison.OrdinalIgnoreCase))
+            ?? profiles.First();
+        ProfileSelectorBox.ItemsSource = profiles;
+        ProfileSelectorBox.SelectedItem = selected;
+        ProfileSelectorPanel.Visibility = Visibility.Visible;
+        if (!string.Equals(selected, configured, StringComparison.OrdinalIgnoreCase)
+            && _versionSettingsService is not null)
+        {
+            var settings = _versionSettingsService.Read(_instance);
+            settings.ActiveProfileName = selected;
+            _versionSettingsService.Save(_instance, settings);
+        }
+
+        _profileSelectionReady = true;
+    }
+
+    private async void ProfileSelectorBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_profileSelectionReady
+            || _agentOnly
+            || ProfileSelectorBox.SelectedItem is not string profileName)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_versionSettingsService is not null)
+            {
+                var settings = _versionSettingsService.Read(_instance);
+                settings.ActiveProfileName = profileName;
+                _versionSettingsService.Save(_instance, settings);
+            }
+
+            StatusText.Text = $"已切换 Plugin 管理 Profile：{profileName}。";
+            await RefreshAsync();
+            if (_marketplaceSnapshot.Count > 0)
+            {
+                RenderMarketplaceItems();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+    }
+
+    private string GetSelectedProfileName() =>
+        ProfileSelectorBox.SelectedItem as string ?? _service.GetActiveProfileName(_instance);
 
     private void SetupSkillMarket()
     {
@@ -120,6 +179,11 @@ public partial class ExtensionWindow : UserControl
     private async Task SetupSkillMarketAsync()
     {
         var cached = await Task.Run(() => _skillMarketService!.ReadCached());
+        if (_isUnloaded)
+        {
+            return;
+        }
+
         if (cached.Count > 0)
         {
             _skillMarketSnapshot = cached;
@@ -176,6 +240,9 @@ public partial class ExtensionWindow : UserControl
         }
 
         _isSkillMarketLoading = true;
+        _skillMarketCancellation?.Cancel();
+        _skillMarketCancellation?.Dispose();
+        _skillMarketCancellation = new CancellationTokenSource();
         _lastSkillProgressItemCount = -1;
         _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
         SkillMarketRefreshButton.IsEnabled = false;
@@ -184,7 +251,7 @@ public partial class ExtensionWindow : UserControl
         {
             var progress = new Progress<SkillMarketRefreshProgress>(state =>
             {
-                if (!_isSkillMarketLoading)
+                if (!_isSkillMarketLoading || _isUnloaded)
                 {
                     return;
                 }
@@ -205,7 +272,14 @@ public partial class ExtensionWindow : UserControl
                     ? $"{state.Stage}…"
                     : $"{state.Stage}：{state.Completed} / {state.Total}";
             });
-            var items = await _skillMarketService.SearchAsync(progress: progress);
+            var items = await _skillMarketService.SearchAsync(
+                _skillMarketCancellation.Token,
+                progress);
+            if (_isUnloaded)
+            {
+                return;
+            }
+
             _skillMarketSnapshot = items;
             RenderSkillMarketItems(items);
         }
@@ -292,6 +366,9 @@ public partial class ExtensionWindow : UserControl
             SkillMarketStatusText.Text = message;
             progressWindow.Canceled(message);
         }
+        catch (OperationCanceledException) when (_skillMarketCancellation?.IsCancellationRequested == true)
+        {
+        }
         catch (Exception ex)
         {
             SkillMarketStatusText.Text = $"安装 Skill 失败：{ex.Message}";
@@ -338,6 +415,7 @@ public partial class ExtensionWindow : UserControl
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
+        _isUnloaded = false;
         _controlLoaded = true;
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
@@ -358,6 +436,12 @@ public partial class ExtensionWindow : UserControl
 
     private void Window_OnUnloaded(object sender, RoutedEventArgs e)
     {
+        _isUnloaded = true;
+        _controlLoaded = false;
+        _skillMarketCancellation?.Cancel();
+        _skillMarketCancellation?.Dispose();
+        _skillMarketCancellation = null;
+        _skillSearchDebounceCancellation?.Cancel();
         if (_agentLayoutOwner is not null)
         {
             _agentLayoutOwner.SizeChanged -= AgentLayoutOwner_SizeChanged;
@@ -572,12 +656,15 @@ public partial class ExtensionWindow : UserControl
         CancellationToken cancellationToken = default)
     {
         _marketplaceSnapshot = result.Items;
+        var selectedProfileName = GetSelectedProfileName();
+        var useThemeHotReload = _useDshMarketHotReload
+            && string.Equals(selectedProfileName, "web", StringComparison.OrdinalIgnoreCase);
         var (installed, themeState) = await Task.Run(async () =>
         {
             var scanned = await _service.ListAsync(_instance, cancellationToken);
-            var theme = _useDshMarketHotReload
+            var theme = useThemeHotReload
                 ? await _themeService.ReadAsync(_instance, cancellationToken)
-                : DshMarketThemeState.Unavailable("当前实例已关闭 dsh-market 热加载。 ");
+                : DshMarketThemeState.Unavailable("dsh-market 主题热加载只作用于 web profile。 ");
             return (scanned, theme);
         }, cancellationToken);
         _installedPlugins = installed
@@ -623,7 +710,8 @@ public partial class ExtensionWindow : UserControl
         var installedPlugins = _installedPlugins;
         var canMutate = _marketplaceCanMutate;
         var themeState = _themeState;
-        var instanceRunning = _instance.RuntimeStatus == InstanceRuntimeStatus.Running;
+        var instanceRunning = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            && string.Equals(GetSelectedProfileName(), "web", StringComparison.OrdinalIgnoreCase);
         var instanceAttached = _instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached;
         var mutating = _isMarketplaceMutating;
 
@@ -931,7 +1019,7 @@ public partial class ExtensionWindow : UserControl
             }
 
             progressWindow.SetIndeterminate("Plugin 校验通过，正在保存当前配置…");
-            var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
+            var snapshot = _marketplaceService.CreatePluginSnapshot(_instance, GetSelectedProfileName());
             var installMode = _pluginInstallMode();
             var installedEntry = item.IsInstalled
                 ? MarketplaceService.FindInstalledPlugin(item, _installedPlugins)
@@ -1035,7 +1123,10 @@ public partial class ExtensionWindow : UserControl
             }
             catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
             {
-                var restored = _marketplaceService.RestorePluginSnapshot(_instance, snapshot);
+                var restored = _marketplaceService.RestorePluginSnapshot(
+                    _instance,
+                    snapshot,
+                    GetSelectedProfileName());
                 var cancellationMessage = restored
                     ? "Plugin 操作已取消，已恢复操作前配置。"
                     : "Plugin 操作已取消；没有可恢复的配置备份。";
@@ -1123,7 +1214,7 @@ public partial class ExtensionWindow : UserControl
         {
             EnsureMarketplaceMutationAllowed();
             BeginMarketplaceMutation("正在卸载 Plugin…");
-            var snapshot = _marketplaceService.CreatePluginSnapshot(_instance);
+            var snapshot = _marketplaceService.CreatePluginSnapshot(_instance, GetSelectedProfileName());
             var installedEntry = MarketplaceService.FindInstalledPlugin(item, _installedPlugins);
             string output;
             try
@@ -1250,6 +1341,7 @@ public partial class ExtensionWindow : UserControl
     {
         _isMarketplaceMutating = true;
         MarketplaceRefreshButton.IsEnabled = false;
+        ProfileSelectorBox.IsEnabled = false;
         MarketplaceProgressPanel.Visibility = Visibility.Visible;
         MarketplaceProgressText.Text = message;
         RenderMarketplaceItems();
@@ -1265,6 +1357,7 @@ public partial class ExtensionWindow : UserControl
     {
         _isMarketplaceMutating = false;
         MarketplaceRefreshButton.IsEnabled = true;
+        ProfileSelectorBox.IsEnabled = true;
         MarketplaceProgressPanel.Visibility = Visibility.Collapsed;
         _marketplaceCanMutate = _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
             && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
@@ -1281,14 +1374,17 @@ public partial class ExtensionWindow : UserControl
         string rollbackMessage;
         try
         {
-            rollbackSucceeded = _marketplaceService?.RestorePluginSnapshot(_instance, snapshot) == true;
+            rollbackSucceeded = _marketplaceService?.RestorePluginSnapshot(
+                _instance,
+                snapshot,
+                GetSelectedProfileName()) == true;
             rollbackMessage = rollbackSucceeded
-                ? "已恢复操作前的 web profile 配置。"
-                : "没有可用的 web profile 备份，未能自动恢复。";
+                ? $"已恢复操作前的 {GetSelectedProfileName()} profile 配置。"
+                : $"没有可用的 {GetSelectedProfileName()} profile 备份，未能自动恢复。";
         }
         catch (Exception rollbackError)
         {
-            rollbackMessage = $"自动恢复 web profile 失败：{rollbackError.Message}";
+            rollbackMessage = $"自动恢复 {GetSelectedProfileName()} profile 失败：{rollbackError.Message}";
         }
 
         PluginFailureReport? report = null;
@@ -1411,6 +1507,13 @@ public partial class ExtensionWindow : UserControl
         {
             throw new InvalidOperationException("请先停止实例，再卸载 Plugin。");
         }
+
+        if (allowRunning
+            && _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            && !string.Equals(GetSelectedProfileName(), "web", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("非 web Profile 的 Plugin 修改需要先停止实例。 ");
+        }
     }
 
     private static string Tail(string value)
@@ -1505,7 +1608,9 @@ public partial class ExtensionWindow : UserControl
         try
         {
             EnsureMarketplaceMutationAllowed(allowRunning: true);
-            snapshot = _marketplaceService?.CreatePluginSnapshot(_instance) ?? string.Empty;
+            snapshot = _marketplaceService?.CreatePluginSnapshot(
+                _instance,
+                GetSelectedProfileName()) ?? string.Empty;
             mutationStarted = true;
             var installMode = _pluginInstallMode();
             async Task<string> ExecuteMutationAsync(PluginInstallMode mode)
