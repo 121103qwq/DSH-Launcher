@@ -481,7 +481,9 @@ public partial class ExtensionWindow : UserControl
         _isMarketplaceLoading = true;
         _marketplaceCancellation?.Cancel();
         _marketplaceCancellation?.Dispose();
-        _marketplaceCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // 刷新总预算：社区目录大文件（约 2MB）在慢网络需 50s 左右，
+        // 放宽到 90s（各来源并行，实际等待约等于最慢来源）。
+        _marketplaceCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         MarketplaceStatusText.Text = _marketplaceSnapshot.Count == 0
             ? "正在读取插件目录，请稍候…"
             : "正在后台更新目录，当前先显示本地缓存。";

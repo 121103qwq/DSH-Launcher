@@ -19,7 +19,11 @@ public sealed class MarketplaceService
     public const string CommunityCatalogUrl = "https://awesome-dsh-plugin.com/plugins.json";
     public const string GitHubTopicUrl = "https://api.github.com/search/repositories?q=topic%3Adsh-plugin&per_page=50";
 
-    private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// 单个来源超时。社区目录完整数据约 1.9MB，慢网络可达 50s+；
+    /// 10s 会让它永远超时被跳过，这里放宽到 60s（刷新总预算 90s）。
+    /// </summary>
+    private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(60);
     private const int MaxThemePreviewBytes = 8 * 1024 * 1024;
     private static readonly Regex MarkdownImage = new(
         @"!\[[^\]]*\]\(\s*(?:<(?<url>[^>]+)>|(?<url>[^\s\)]+))(?:\s+[\""'][^\)]*)?\s*\)",
@@ -74,20 +78,32 @@ public sealed class MarketplaceService
             LoadGitHubTopicAsync(cancellationToken)
         };
 
-        foreach (var task in sourceTasks)
+        // 各来源并行拉取（各自带源级超时）；避免串行等待拖长刷新时间。
+        var sourceResults = await Task.WhenAll(sourceTasks.Select(async task =>
         {
-            sourcesChecked++;
             try
             {
-                items.AddRange(await task);
+                return (Ok: true, Items: await task, Error: (string?)null);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                warnings.Add("一个插件来源响应超时，已跳过。");
+                return (Ok: false, Items: (IReadOnlyList<MarketplaceItem>?)null, Error: "一个插件来源响应超时，已跳过。");
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or InvalidDataException)
             {
-                warnings.Add($"一个插件来源暂时无法读取：{ex.Message}");
+                return (Ok: false, Items: (IReadOnlyList<MarketplaceItem>?)null, Error: $"一个插件来源暂时无法读取：{ex.Message}");
+            }
+        }));
+        sourcesChecked += sourceResults.Length;
+        foreach (var sourceResult in sourceResults)
+        {
+            if (sourceResult.Ok)
+            {
+                items.AddRange(sourceResult.Items!);
+            }
+            else
+            {
+                warnings.Add(sourceResult.Error!);
             }
         }
 
