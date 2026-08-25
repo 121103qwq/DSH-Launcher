@@ -411,7 +411,8 @@
                                                     Padding="12,6"
                                                     Margin="0,0,0,7">
                                                 <Button.Style>
-                                                    <Style TargetType="Button">
+                                                    <!-- BasedOn 继承启动器隐式按钮样式（圆角等），与卸载/其他按钮一致 -->
+                                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                                                         <Setter Property="Visibility" Value="Collapsed" />
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding IsTheme}" Value="True">
