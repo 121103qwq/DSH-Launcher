@@ -19,7 +19,8 @@ public sealed record SkillMarketRefreshProgress(
     IReadOnlyList<SkillMarketItem> Items,
     int Completed,
     int Total,
-    string Stage);
+    string Stage,
+    IReadOnlyList<string>? Warnings = null);
 
 public sealed record SkillInstallProgress(
     long BytesReceived,

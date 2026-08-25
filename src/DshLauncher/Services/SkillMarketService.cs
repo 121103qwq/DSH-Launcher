@@ -88,6 +88,28 @@ public sealed class SkillMarketService
         IProgress<SkillMarketRefreshProgress>? progress = null)
     {
         var cached = ReadCached();
+        var warnings = new List<string>();
+        var warningsSync = new object();
+
+        void AddWarning(string message)
+        {
+            lock (warningsSync)
+            {
+                if (!warnings.Contains(message, StringComparer.Ordinal))
+                {
+                    warnings.Add(message);
+                }
+            }
+        }
+
+        IReadOnlyList<string> WarningsSnapshot()
+        {
+            lock (warningsSync)
+            {
+                return warnings.ToArray();
+            }
+        }
+
         List<SkillMarketItem> candidates;
         using (var searchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
@@ -100,14 +122,25 @@ public sealed class SkillMarketService
             {
                 if (cached.Count > 0)
                 {
+                    AddWarning("GitHub 仓库搜索超时；当前显示上次缓存。");
                     return cached;
                 }
 
                 throw new TimeoutException("GitHub Skill 仓库搜索超时，请检查网络后重试。");
             }
-            catch (HttpRequestException) when (cached.Count > 0)
+            catch (HttpRequestException ex) when (cached.Count > 0)
             {
+                AddWarning(ex.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.TooManyRequests
+                    ? "GitHub 搜索接口被限流（未认证限额约 10 次/分钟）；当前显示上次缓存，稍后再刷新。"
+                    : $"GitHub 仓库搜索失败：{ex.Message}；当前显示上次缓存。");
                 return cached;
+            }
+            catch (HttpRequestException ex)
+            {
+                AddWarning(ex.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.TooManyRequests
+                    ? "GitHub 搜索接口被限流（未认证限额约 10 次/分钟），请稍后刷新重试。"
+                    : $"GitHub 仓库搜索失败：{ex.Message}");
+                throw;
             }
         }
 
@@ -146,7 +179,8 @@ public sealed class SkillMarketService
             reusableSnapshot,
             scanCompleted,
             candidates.Count,
-            "正在扫描仓库目录"));
+            "正在扫描仓库目录",
+            WarningsSnapshot()));
 
         var discovered = new List<SkillPathCandidate>();
         var scanSync = new object();
@@ -185,10 +219,16 @@ public sealed class SkillMarketService
                     reusableSnapshot,
                     current,
                     candidates.Count,
-                    "正在扫描仓库目录"));
+                    "正在扫描仓库目录",
+                    WarningsSnapshot()));
             }).ToArray();
 
             await Task.WhenAll(scanTasks);
+        }
+
+        if (transientScanFailures > 0)
+        {
+            AddWarning($"{transientScanFailures} 个仓库扫描失败（GitHub 接口限流或超时）；以下结果不完整，稍后再刷新可恢复。");
         }
 
         var validationCandidates = discovered
@@ -213,7 +253,8 @@ public sealed class SkillMarketService
             BuildSkillSnapshot(validItems),
             0,
             validationCandidates.Length,
-            "正在校验 Skill 文件"));
+            "正在校验 Skill 文件",
+            WarningsSnapshot()));
 
         using (var validationGate = new SemaphoreSlim(MaxConcurrentValidations))
         {
@@ -259,7 +300,8 @@ public sealed class SkillMarketService
                             BuildSkillSnapshot(validItems),
                             current,
                             validationCandidates.Length,
-                            "正在校验 Skill 文件");
+                            "正在校验 Skill 文件",
+                            WarningsSnapshot());
                     }
                 }
 
@@ -273,10 +315,16 @@ public sealed class SkillMarketService
         }
 
         var result = BuildSkillSnapshot(validItems);
+        if (transientValidationFailures > 0)
+        {
+            AddWarning($"{transientValidationFailures} 个 Skill 文件校验失败（网络超时）；稍后再刷新可补全。");
+        }
+
         if (result.Count == 0
             && cached.Count > 0
             && (transientScanFailures > 0 || transientValidationFailures > 0))
         {
+            AddWarning("本次刷新没有可用结果，已改显示上次缓存。");
             return cached;
         }
 

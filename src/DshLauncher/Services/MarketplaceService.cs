@@ -224,6 +224,24 @@ public sealed class MarketplaceService
         };
     }
 
+    /// <summary>
+    /// 社区目录与常见仓库声明的规范分类键 → 市场分类 Tab。
+    /// 社区目录自带 21 个分类（ui/tools/dev/workflow/skill/usage/memory/…），
+    /// 仅靠中文/英文关键词匹配会让大半条目跌入“未分类”、多数 Tab 为空。
+    /// </summary>
+    private static readonly Dictionary<string, string> CategoryAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ui"] = "UI", ["sidebar"] = "UI", ["interface"] = "UI",
+        ["tool"] = "工具", ["tools"] = "工具", ["utility"] = "工具", ["utilities"] = "工具",
+        ["browser"] = "工具", ["vision"] = "工具", ["voice"] = "工具", ["docs"] = "工具",
+        ["notify"] = "工具", ["security"] = "工具", ["market"] = "工具", ["remote"] = "工具",
+        ["workflow"] = "工作流", ["automation"] = "工作流", ["session"] = "工作流", ["memory"] = "工作流",
+        ["agent"] = "Agent", ["agents"] = "Agent", ["skill"] = "Agent", ["skills"] = "Agent", ["mcp"] = "Agent",
+        ["model"] = "模型", ["models"] = "模型", ["provider"] = "模型", ["providers"] = "模型",
+        ["theme"] = "主题", ["themes"] = "主题", ["skin"] = "主题", ["wallpaper"] = "主题",
+        ["dev"] = "开发", ["developer"] = "开发", ["development"] = "开发", ["git"] = "开发", ["code"] = "开发"
+    };
+
     public static string NormalizeCategory(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -232,6 +250,11 @@ public sealed class MarketplaceService
         }
 
         var normalized = value.Trim().ToLowerInvariant();
+        if (CategoryAliases.TryGetValue(normalized, out var aliased))
+        {
+            return aliased;
+        }
+
         if (normalized.Contains("ui") || normalized.Contains("界面") || normalized.Contains("sidebar"))
         {
             return "UI";

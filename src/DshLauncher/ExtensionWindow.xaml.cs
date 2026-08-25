@@ -33,6 +33,7 @@ public partial class ExtensionWindow : UserControl
     private bool _isSkillMarketLoading;
     private bool _isSkillMarketMutating;
     private int _lastSkillProgressItemCount = -1;
+    private IReadOnlyList<string> _skillMarketWarnings = Array.Empty<string>();
     private DateTimeOffset _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
     private IReadOnlyList<MarketplaceItem> _marketplaceSnapshot = Array.Empty<MarketplaceItem>();
     private IReadOnlyList<ExtensionEntry> _installedPlugins = Array.Empty<ExtensionEntry>();
@@ -177,6 +178,7 @@ public partial class ExtensionWindow : UserControl
         _isSkillMarketLoading = true;
         _lastSkillProgressItemCount = -1;
         _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
+        _skillMarketWarnings = Array.Empty<string>();
         SkillMarketRefreshButton.IsEnabled = false;
         SkillMarketStatusText.Text = "正在从 GitHub 搜索并校验 SKILL.md…";
         try
@@ -189,6 +191,7 @@ public partial class ExtensionWindow : UserControl
                 }
 
                 _skillMarketSnapshot = state.Items;
+                _skillMarketWarnings = state.Warnings ?? Array.Empty<string>();
                 var now = DateTimeOffset.UtcNow;
                 var shouldRender = state.Items.Count != _lastSkillProgressItemCount
                     && (now - _lastSkillProgressRenderAt >= TimeSpan.FromMilliseconds(150)
@@ -200,13 +203,21 @@ public partial class ExtensionWindow : UserControl
                     _lastSkillProgressRenderAt = now;
                 }
 
-                SkillMarketStatusText.Text = state.Total == 0
+                var progressText = state.Total == 0
                     ? $"{state.Stage}…"
                     : $"{state.Stage}：{state.Completed} / {state.Total}";
+                SkillMarketStatusText.Text = _skillMarketWarnings.Count > 0
+                    ? $"{progressText}\n⚠ {_skillMarketWarnings[^1]}"
+                    : progressText;
             });
             var items = await _skillMarketService.SearchAsync(progress: progress);
             _skillMarketSnapshot = items;
             RenderSkillMarketItems(items);
+            if (_skillMarketWarnings.Count > 0)
+            {
+                // 刷新结束保留失败提示，避免“目录为空”误导（GitHub 限流等）。
+                SkillMarketStatusText.Text = $"⚠ {_skillMarketWarnings[^1]}";
+            }
         }
         catch (Exception ex)
         {
