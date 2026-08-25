@@ -1258,7 +1258,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var panel = new StackPanel
         {
-            Margin = new Thickness(18),
+            Margin = new Thickness(0),
             VerticalAlignment = VerticalAlignment.Top,
             MaxWidth = 980
         };

@@ -56,7 +56,7 @@
                       HorizontalContentAlignment="Stretch"
                       CanContentScroll="False"
                       PanningMode="VerticalOnly">
-            <StackPanel Margin="20,18,24,26">
+            <StackPanel Margin="18">
                 <TextBlock x:Name="PageHeaderText"
                            Text="个性化"
                            FontSize="20"

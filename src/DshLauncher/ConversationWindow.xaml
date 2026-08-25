@@ -5,7 +5,7 @@
         HorizontalAlignment="Stretch"
         VerticalAlignment="Stretch"
         Loaded="Window_OnLoaded">
-    <Grid Margin="18">
+    <Grid Margin="0">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />

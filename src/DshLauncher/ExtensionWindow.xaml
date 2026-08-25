@@ -6,7 +6,7 @@
              HorizontalAlignment="Stretch"
              VerticalAlignment="Stretch"
              Loaded="Window_OnLoaded">
-    <Grid Margin="18">
+    <Grid Margin="0">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="340" />
             <ColumnDefinition Width="16" />
