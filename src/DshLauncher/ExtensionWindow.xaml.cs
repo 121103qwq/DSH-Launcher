@@ -474,14 +474,6 @@ public partial class ExtensionWindow : UserControl
             }
 
             await SetMarketplaceSnapshotAsync(cached, fromCache: true);
-            // 旧版本缓存可能没有“中文官网”来源标记：提示刷新后来源筛选才完整。
-            var hasZhMarks = cached.Items.Any(item =>
-                item.MergedSourceKinds?.Contains(MarketplaceSourceKind.ZhCatalog) == true);
-            if (!hasZhMarks)
-            {
-                MarketplaceStatusText.Text = "当前缓存来自旧版本；点击“刷新目录”后“中文官网”来源筛选才会完整。";
-            }
-
             return true;
         }
         catch (Exception ex)

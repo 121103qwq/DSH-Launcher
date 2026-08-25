@@ -18,12 +18,6 @@ public sealed class MarketplaceService
 {
     public const string CommunityCatalogUrl = "https://awesome-dsh-plugin.com/plugins.json";
 
-    /// <summary>
-    /// 中文官网对应的数据端点（与英文目录同源：同一份双语 plugins.json，
-    /// 未语言区分；作为独立来源便于筛选与展示，合并时显示为“GitHub / 中文官网”）。
-    /// </summary>
-    public const string CommunityCatalogZhUrl = "https://awesome-dsh-plugin.com/plugins.json?lang=zh";
-
     /// <summary>插件官网（中文站）地址：仅用于界面打开浏览，数据仍来自 plugins.json。</summary>
     public const string CommunitySiteZhUrl = "https://awesome-dsh-plugin.com/zh/";
 
@@ -81,10 +75,9 @@ public sealed class MarketplaceService
         var warnings = new List<string>();
         var sourcesChecked = 0;
 
-        // 插件市场来源：GitHub（英文目录）。中文官网(plugins.json?lang=zh)与
-        // 本目录同源同内容（同一份双语 plugins.json），不重复下载 1.9MB ——
-        // 双大文件并行在本网络会互相挤带宽导致其中之一超时；这里单次下载后
-        // 为每个条目附加两个来源标记，来源筛选与卡片标签照常可用。
+        // 插件市场来源：GitHub（awesome-dsh-plugin 目录）。中文官网即同一仓库
+        // （?lang=zh 被服务器忽略，字节级同源），不作为独立来源；界面仅保留
+        // “中文官网↗” 链接按钮供浏览。
         var sourceTasks = new[]
         {
             LoadRemoteCatalogAsync(new Uri(CommunityCatalogUrl), MarketplaceSourceKind.CommunityCatalog, "GitHub", cancellationToken)
@@ -160,12 +153,7 @@ public sealed class MarketplaceService
 
         cancellationToken.ThrowIfCancellationRequested();
         var cached = TryReadCache();
-        var mergedItems = MergeItems(items).Select(item => item with
-        {
-            // 中文官网与 GitHub 同源：统一附加双来源标记。
-            MergedSourceKinds = new[] { MarketplaceSourceKind.CommunityCatalog, MarketplaceSourceKind.ZhCatalog },
-            MergedSourceText = string.IsNullOrWhiteSpace(item.MergedSourceText) ? "GitHub / 中文官网" : item.MergedSourceText
-        }).ToArray();
+        var mergedItems = MergeItems(items);
         var remoteItems = mergedItems.ToArray();
         if (remoteItems.Length > 0)
         {
