@@ -45,16 +45,27 @@ public sealed class MarketplaceService
     private readonly HttpClient _httpClient;
     private readonly LauncherPaths _paths;
     private readonly IReadOnlyList<Uri> _customSources;
+    private readonly Action<string>? _beforeSnapshotFileCommit;
     private readonly Dictionary<string, ThemeReadmePreview> _themePreviewCache = new(StringComparer.OrdinalIgnoreCase);
 
     public MarketplaceService(
         LauncherPaths? paths = null,
         HttpClient? httpClient = null,
         IEnumerable<Uri>? customSources = null)
+        : this(paths, httpClient, customSources, null)
+    {
+    }
+
+    internal MarketplaceService(
+        LauncherPaths? paths,
+        HttpClient? httpClient,
+        IEnumerable<Uri>? customSources,
+        Action<string>? beforeSnapshotFileCommit)
     {
         _paths = paths ?? new LauncherPaths();
         _httpClient = httpClient ?? CreateHttpClient();
         _customSources = customSources?.Where(uri => uri.IsAbsoluteUri).ToArray() ?? Array.Empty<Uri>();
+        _beforeSnapshotFileCommit = beforeSnapshotFileCommit;
     }
 
     public async Task<MarketplaceSearchResult> SearchAsync(
@@ -474,31 +485,156 @@ public sealed class MarketplaceService
         }
 
         Directory.CreateDirectory(profileDirectory);
-        foreach (var file in PluginProfileFiles)
+        var updates = new List<StagedSnapshotFile>();
+        try
         {
-            var source = Path.Combine(snapshot, file);
-            var target = Path.Combine(profileDirectory, file);
-            if (File.Exists(source))
+            foreach (var file in PluginProfileFiles)
             {
-                if (IsReparsePoint(source) || (File.Exists(target) && IsReparsePoint(target)))
+                var source = Path.Combine(snapshot, file);
+                var target = Path.Combine(profileDirectory, file);
+                if (File.Exists(source) && IsReparsePoint(source)
+                    || File.Exists(target) && IsReparsePoint(target))
                 {
                     throw new IOException($"无法安全恢复 Plugin 配置：{file}");
                 }
 
-                File.Copy(source, target, overwrite: true);
+                updates.Add(StagedSnapshotFile.Prepare(source, target));
             }
-            else if (File.Exists(target))
+
+            foreach (var update in updates)
             {
-                if (IsReparsePoint(target))
+                update.CreateBackup();
+            }
+
+            var committed = 0;
+            try
+            {
+                foreach (var update in updates)
                 {
-                    throw new IOException($"无法安全删除失败操作留下的配置：{file}");
+                    _beforeSnapshotFileCommit?.Invoke(update.TargetPath);
+                    update.Commit();
+                    committed++;
+                }
+            }
+            catch (Exception commitError)
+            {
+                var rollbackErrors = new List<string>();
+                for (var index = committed - 1; index >= 0; index--)
+                {
+                    try
+                    {
+                        updates[index].Restore();
+                    }
+                    catch (Exception rollbackError)
+                    {
+                        rollbackErrors.Add(rollbackError.Message);
+                    }
                 }
 
-                File.Delete(target);
+                if (rollbackErrors.Count > 0)
+                {
+                    throw new IOException(
+                        $"Plugin 回档失败，且恢复回档前状态时遇到错误：{string.Join("；", rollbackErrors)}",
+                        commitError);
+                }
+
+                throw;
+            }
+        }
+        finally
+        {
+            foreach (var update in updates)
+            {
+                update.Dispose();
             }
         }
 
         return true;
+    }
+
+    private sealed class StagedSnapshotFile : IDisposable
+    {
+        private readonly bool _targetExisted;
+        private readonly string? _stagedPath;
+        private string? _backupPath;
+
+        private StagedSnapshotFile(string targetPath, string? stagedPath)
+        {
+            TargetPath = targetPath;
+            _stagedPath = stagedPath;
+            _targetExisted = File.Exists(targetPath);
+        }
+
+        public string TargetPath { get; }
+
+        public static StagedSnapshotFile Prepare(string sourcePath, string targetPath)
+        {
+            if (!File.Exists(sourcePath))
+            {
+                return new StagedSnapshotFile(targetPath, null);
+            }
+
+            var stagedPath = $"{targetPath}.{Guid.NewGuid():N}.restore";
+            File.Copy(sourcePath, stagedPath, overwrite: false);
+            return new StagedSnapshotFile(targetPath, stagedPath);
+        }
+
+        public void CreateBackup()
+        {
+            if (!_targetExisted)
+            {
+                return;
+            }
+
+            _backupPath = $"{TargetPath}.{Guid.NewGuid():N}.bak";
+            File.Copy(TargetPath, _backupPath, overwrite: false);
+        }
+
+        public void Commit()
+        {
+            if (_stagedPath is null)
+            {
+                if (File.Exists(TargetPath))
+                {
+                    File.Delete(TargetPath);
+                }
+
+                return;
+            }
+
+            File.Move(_stagedPath, TargetPath, overwrite: true);
+        }
+
+        public void Restore()
+        {
+            if (_targetExisted)
+            {
+                if (_backupPath is null || !File.Exists(_backupPath))
+                {
+                    throw new IOException($"缺少 Plugin 回档前备份：{Path.GetFileName(TargetPath)}");
+                }
+
+                File.Move(_backupPath, TargetPath, overwrite: true);
+                _backupPath = null;
+            }
+            else if (File.Exists(TargetPath))
+            {
+                File.Delete(TargetPath);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_stagedPath is not null && File.Exists(_stagedPath))
+            {
+                File.Delete(_stagedPath);
+            }
+
+            if (_backupPath is not null && File.Exists(_backupPath))
+            {
+                File.Delete(_backupPath);
+            }
+        }
     }
 
     public static IReadOnlyList<MarketplaceItem> ParseCatalog(

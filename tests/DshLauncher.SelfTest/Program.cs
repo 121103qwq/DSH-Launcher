@@ -35,6 +35,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node installer download progress", TestNodeInstallerDownloadProgress),
     ("Launcher release update catalog", TestLauncherReleaseUpdateCatalog),
     ("Launcher release download verification", TestLauncherReleaseDownloadVerification),
+    ("DSH Desktop release download verification", TestDshDesktopReleaseDownloadVerification),
     ("Launcher update helper arguments", TestLauncherUpdateHelperArguments),
     ("Launcher executable atomic replacement", TestLauncherExecutableAtomicReplacement),
     ("Node install result states", TestNodeInstallResultStates),
@@ -1395,6 +1396,73 @@ static async Task TestLauncherReleaseDownloadVerification()
         "版本操作必须拒绝非官方 GitHub Release 下载地址。 ");
 }
 
+static async Task TestDshDesktopReleaseDownloadVerification()
+{
+    var payload = new byte[10 * 1024 * 1024];
+    payload[0] = (byte)'M';
+    payload[1] = (byte)'Z';
+    BitConverter.GetBytes(0x80).CopyTo(payload, 0x3C);
+    payload[0x80] = (byte)'P';
+    payload[0x81] = (byte)'E';
+    var hash = Convert.ToHexString(SHA256.HashData(payload));
+    const string tag = "v9.8.7";
+    const string assetName = "DSH-Desktop-9.8.7-x64-Setup.exe";
+    var githubUrl = $"https://github.com/anywhere-labs/dsh-desktop/releases/download/{tag}/{assetName}";
+    var metadata = JsonSerializer.Serialize(new
+    {
+        tag_name = tag,
+        draft = false,
+        prerelease = false,
+        assets = new[]
+        {
+            new
+            {
+                name = assetName,
+                state = "uploaded",
+                size = payload.Length,
+                digest = $"sha256:{hash.ToLowerInvariant()}",
+                browser_download_url = githubUrl
+            }
+        }
+    });
+    var requests = new List<string>();
+    using var client = new HttpClient(new ProviderTestHandler(request =>
+    {
+        requests.Add(request.RequestUri!.AbsoluteUri);
+        return request.RequestUri.AbsoluteUri.Contains("releases/latest", StringComparison.Ordinal)
+            ? JsonResponse(metadata)
+            : new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payload)
+            };
+    }));
+    using var service = new DshDesktopInstallService(client);
+    var release = await service.ReadLatestReleaseAsync();
+    Assert(release.Version == new Version(9, 8, 7)
+        && release.AssetName == assetName
+        && release.Sha256 == hash,
+        "DSH Desktop 下载目录必须只接受可验证的 Windows x64 Setup。 ");
+
+    var sink = new NodeProgressSink();
+    var downloaded = await service.DownloadInstallerAsync(
+        release,
+        DshDesktopDownloadSource.ProjectMirror,
+        sink);
+    try
+    {
+        Assert(File.Exists(downloaded) && new FileInfo(downloaded).Length == payload.Length,
+            "DSH Desktop 安装包必须在大小、SHA-256 和 PE 格式校验后才可交给安装程序。 ");
+        Assert(sink.Last.Percent is 100,
+            "DSH Desktop 安装包下载完成必须报告真实 100% 进度。 ");
+        Assert(requests.Contains(DshDesktopInstallService.ProjectWindowsDownloadUrl),
+            "项目源按钮必须使用 DSH Desktop 项目提供的 Windows 下载入口。 ");
+    }
+    finally
+    {
+        DshDesktopInstallService.CleanupDownloadedInstaller(downloaded);
+    }
+}
+
 static Task TestLauncherUpdateHelperArguments()
 {
     var target = Path.Combine(Path.GetTempPath(), "DSH Launcher", "DSH.Launcher.exe");
@@ -2429,12 +2497,32 @@ static async Task TestSourceRunnerLifecycle()
         + "http.createServer((request, response) => { response.statusCode = 200; response.end('ok'); }).listen(port, host);\n",
         new UTF8Encoding(false));
 
+    var dshHome = Path.Combine(temporary.Path, "dsh-home");
+    var profileDirectory = Path.Combine(dshHome, "profiles", "web");
+    Directory.CreateDirectory(profileDirectory);
+    File.WriteAllText(
+        Path.Combine(profileDirectory, "package.json"),
+        "{\"dependencies\":{\"@deepseek-ai/dsh-web-app\":\"1.0.0\",\"lock-probe-plugin\":\"1.0.0\"}}",
+        new UTF8Encoding(false));
+    var importedHome = Path.Combine(temporary.Path, "imported-home");
+    var importedPackage = Path.Combine(
+        importedHome,
+        "profiles",
+        "web",
+        "node_modules",
+        "lock-probe-plugin");
+    Directory.CreateDirectory(importedPackage);
+    File.WriteAllText(
+        Path.Combine(importedPackage, "marker.txt"),
+        "must-not-copy-before-lock",
+        new UTF8Encoding(false));
+
     var instance = new ManagerInstance(
         Id: "source-lifecycle-test",
         Name: "Source 生命周期测试",
         RootPath: root,
         Kind: InstanceKind.Source,
-        DshHome: Path.Combine(temporary.Path, "dsh-home"),
+        DshHome: dshHome,
         DshExecutablePath: null,
         DetectedVersion: "0.1.0",
         RuntimeStatus: InstanceRuntimeStatus.Ready,
@@ -2447,6 +2535,21 @@ static async Task TestSourceRunnerLifecycle()
     var started = await runner.StartAsync(instance, runtime, cancellation.Token);
     Assert(started.IsSuccess, started.Error ?? "Source 生命周期启动失败。");
     Assert(started.Port is > 0 && started.WebUrl is not null, "Source 启动成功必须返回端口和 URL。");
+
+    await using var competingRunner = new DshInstanceRunner();
+    var blocked = await competingRunner.StartAsync(
+        instance with
+        {
+            Id = "source-lifecycle-lock-probe",
+            ImportedFromDshHome = importedHome
+        },
+        runtime,
+        cancellation.Token);
+    Assert(!blocked.IsSuccess && blocked.Error?.Contains("锁", StringComparison.Ordinal) == true,
+        "另一个 Runner 必须在恢复导入 Plugin 前先取得 DSH_HOME 锁。 ");
+    Assert(!Directory.Exists(Path.Combine(profileDirectory, "node_modules", "lock-probe-plugin")),
+        "实例锁冲突时不能先把导入来源的 Plugin 写进正在运行的 DSH_HOME。 ");
+
     var stopped = await runner.StopAsync(instance.Id, cancellation.Token);
     Assert(stopped.IsSuccess, stopped.Error ?? "Source 生命周期停止失败。");
     Assert(!runner.IsRunning(instance.Id), "Source 停止后不能继续报告运行中。");
@@ -3480,6 +3583,31 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     File.WriteAllText(Path.Combine(home, "profiles", "web", "package.json"), "{\"broken\":true}", new UTF8Encoding(false));
     Assert(service.RestorePluginSnapshot(instance, snapshot), "Plugin 操作失败后应能恢复操作前的 web profile 配置。 ");
     Assert(File.ReadAllText(Path.Combine(home, "profiles", "web", "package.json")) == "{}", "恢复 Plugin 快照不能留下失败操作写入的配置。 ");
+
+    var profileDirectory = Path.Combine(home, "profiles", "web");
+    var packagePath = Path.Combine(profileDirectory, "package.json");
+    var patchPath = Path.Combine(profileDirectory, "cordis.patch.yml");
+    File.WriteAllText(packagePath, "{\"failed-install\":true}", new UTF8Encoding(false));
+    File.WriteAllText(patchPath, "- failed-install\n", new UTF8Encoding(false));
+    var failingRestore = new MarketplaceService(
+        new LauncherPaths(launcherRoot),
+        httpClient,
+        customSources: null,
+        beforeSnapshotFileCommit: path =>
+        {
+            if (Path.GetFileName(path).Equals("cordis.patch.yml", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("模拟 Plugin 回档中途失败");
+            }
+        });
+    AssertThrows<IOException>(
+        () => failingRestore.RestorePluginSnapshot(instance, snapshot),
+        "Plugin 回档任一文件提交失败时必须报告失败。 ");
+    Assert(File.ReadAllText(packagePath) == "{\"failed-install\":true}"
+        && File.ReadAllText(patchPath) == "- failed-install\n",
+        "Plugin 回档中途失败时必须恢复回档前的完整状态，不能留下半份旧配置。 ");
+    Assert(service.RestorePluginSnapshot(instance, snapshot),
+        "事务回档失败测试后仍应可以正常恢复快照。 ");
 
     var cached = service.ReadCached(null, "plugin");
     Assert(cached is not null && cached.Items.Count == 2, "在线市场结果应写入缓存，并可在没有网络请求时读取。 ");
@@ -4956,6 +5084,35 @@ static Task TestModelProviderSynchronization()
         && File.ReadAllText(Path.Combine(first.DshHome, ".credentials.yaml"), Encoding.UTF8) == firstCredentialsBeforeFailure,
         "Provider 同步写入凭据失败时必须同时恢复 settings.yaml 和 .credentials.yaml。 ");
 
+    states.SetEnabled(first, "legacy-provider", false);
+    states.SetEnabled(second, "gateway", false);
+    File.SetLastWriteTimeUtc(states.GetStatePath(first), DateTime.UtcNow.AddMinutes(-2));
+    File.SetLastWriteTimeUtc(states.GetStatePath(second), DateTime.UtcNow.AddMinutes(-1));
+    File.SetLastWriteTimeUtc(Path.Combine(first.DshHome, "settings.yaml"), DateTime.UtcNow.AddMinutes(-2));
+    File.SetLastWriteTimeUtc(Path.Combine(second.DshHome, "settings.yaml"), DateTime.UtcNow.AddMinutes(-1));
+    var settingsBeforeStateFailure = File.ReadAllText(Path.Combine(first.DshHome, "settings.yaml"), Encoding.UTF8);
+    var credentialsBeforeStateFailure = File.ReadAllText(Path.Combine(first.DshHome, ".credentials.yaml"), Encoding.UTF8);
+    var stateBeforeStateFailure = File.ReadAllText(states.GetStatePath(first), Encoding.UTF8);
+    var failingStateSync = new ModelProviderSyncService(
+        settings,
+        models,
+        states,
+        isRunning: null,
+        beforeProviderFileCommit: path =>
+        {
+            if (Path.GetFileName(path).Equals("providers.json", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("模拟 Provider 状态提交失败");
+            }
+        });
+    var failedStateSync = failingStateSync.Synchronize(first, new[] { first, second });
+    Assert(failedStateSync.HasErrors,
+        "Provider 状态文件提交失败必须报告同步失败。 ");
+    Assert(File.ReadAllText(Path.Combine(first.DshHome, "settings.yaml"), Encoding.UTF8) == settingsBeforeStateFailure
+        && File.ReadAllText(Path.Combine(first.DshHome, ".credentials.yaml"), Encoding.UTF8) == credentialsBeforeStateFailure
+        && File.ReadAllText(states.GetStatePath(first), Encoding.UTF8) == stateBeforeStateFailure,
+        "Provider 状态写入失败时必须同时恢复 settings.yaml、凭据和原状态文件。 ");
+
     var runningSecond = second with
     {
         RuntimeStatus = InstanceRuntimeStatus.Running,
@@ -5217,7 +5374,8 @@ static Task TestConversationSynchronization()
 
     var firstSession = Path.Combine(first.DshHome, "sessions", "--C-work--", "session-a", "session.jsonl");
     Directory.CreateDirectory(Path.GetDirectoryName(firstSession)!);
-    File.WriteAllText(firstSession, "first workspace session", new UTF8Encoding(false));
+    var firstContent = BuildSessionJsonl("session-a", "C:\\work", "first workspace session");
+    File.WriteAllText(firstSession, firstContent, new UTF8Encoding(false));
     File.SetLastWriteTimeUtc(firstSession, new DateTime(2026, 8, 16, 10, 0, 0, DateTimeKind.Utc));
 
     var sync = new ConversationSyncService(settings);
@@ -5226,13 +5384,21 @@ static Task TestConversationSynchronization()
     Assert(workspaceResult.CopiedFiles == 1 && File.Exists(secondSession), "工作区同步应把会话文件复制到同工作区版本。");
     Assert(!File.Exists(Path.Combine(independent.DshHome, "sessions", "--C-work--", "session-a", "session.jsonl")), "独立版本不应收到工作区会话文件。");
 
-    var newer = "newer workspace session";
+    File.WriteAllText(firstSession, "损坏但时间更新的会话", new UTF8Encoding(false));
+    File.SetLastWriteTimeUtc(firstSession, new DateTime(2026, 8, 16, 10, 30, 0, DateTimeKind.Utc));
+    var repaired = sync.Synchronize(first, new[] { first, second, independent });
+    Assert(repaired.HasErrors
+        && File.ReadAllText(firstSession) == firstContent
+        && File.ReadAllText(secondSession) == firstContent,
+        "较新的损坏会话必须被跳过，并由同工作区中的有效副本恢复，不能覆盖有效会话。 ");
+
+    var newer = BuildSessionJsonl("session-a", "C:\\work", "newer workspace session");
     File.WriteAllText(firstSession, newer, new UTF8Encoding(false));
     File.SetLastWriteTimeUtc(firstSession, new DateTime(2026, 8, 16, 11, 0, 0, DateTimeKind.Utc));
     var runningSecond = second with { RuntimeStatus = InstanceRuntimeStatus.Running };
     var skipped = sync.Synchronize(first, new[] { first, runningSecond, independent });
     Assert(skipped.SkippedRunningVersions == 1, "运行中的工作区版本应被跳过，不能直接写入它的会话文件。");
-    Assert(File.ReadAllText(secondSession) == "first workspace session", "运行中的版本会话文件不应被同步覆盖。");
+    Assert(File.ReadAllText(secondSession) == firstContent, "运行中的版本会话文件不应被同步覆盖。");
 
     settings.Save(independent, new VersionSettingsData { ConversationSyncMode = ConversationSyncMode.All });
     var allResult = sync.Synchronize(independent, new[] { first, second, independent });
@@ -5248,12 +5414,27 @@ static Task TestConversationSynchronization()
     sync.SynchronizeAll(new[] { first, second, independent });
     Assert(!File.Exists(firstSession) && !File.Exists(secondSession) && !File.Exists(independentSession), "删除标记应阻止旧会话在下一次同步时复活。");
 
-    File.WriteAllText(firstSession, "new session after deletion", new UTF8Encoding(false));
+    var recreated = BuildSessionJsonl("session-a", "C:\\work", "new session after deletion");
+    File.WriteAllText(firstSession, recreated, new UTF8Encoding(false));
     File.SetLastWriteTimeUtc(firstSession, DateTime.UtcNow.AddSeconds(2));
     sync.Synchronize(first, new[] { first, second, independent });
-    Assert(File.ReadAllText(independentSession) == "new session after deletion", "重新创建同一路径的新会话应清除旧删除标记并同步。");
+    Assert(File.ReadAllText(independentSession) == recreated, "重新创建同一路径的新会话应清除旧删除标记并同步。");
     return Task.CompletedTask;
 }
+
+static string BuildSessionJsonl(string id, string workingDirectory, string text) =>
+    JsonSerializer.Serialize(new
+    {
+        type = "session",
+        version = 0,
+        id,
+        createdAt = 1,
+        cwd = workingDirectory,
+        delegationDepth = 0
+    })
+    + "\n"
+    + JsonSerializer.Serialize(new { type = "message", text })
+    + "\n";
 
 static byte[] CompressZstd(string text)
 {

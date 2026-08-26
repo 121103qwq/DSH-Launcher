@@ -98,22 +98,28 @@ public sealed class ModelProviderSyncService
 
             try
             {
-                if (configurationSource is not null
-                    && !string.Equals(configurationSource.Id, target.Id, StringComparison.Ordinal))
+                var copyConfiguration = configurationSource is not null
+                    && !string.Equals(configurationSource.Id, target.Id, StringComparison.Ordinal);
+                var copyStates = sourceStates is not null
+                    && !string.Equals(stateSource?.Id, target.Id, StringComparison.Ordinal);
+                if (!copyConfiguration && !copyStates)
                 {
-                    var settingsText = _modelService.BuildProviderConfigurationText(configurationSource, target);
-                    CopyProviderSnapshot(
-                        configurationSource,
-                        target,
-                        settingsText,
-                        _beforeProviderFileCommit);
+                    continue;
                 }
 
-                if (sourceStates is not null
-                    && !string.Equals(stateSource?.Id, target.Id, StringComparison.Ordinal))
-                {
-                    _providerStateService.Replace(target, sourceStates);
-                }
+                var settingsText = copyConfiguration
+                    ? _modelService.BuildProviderConfigurationText(configurationSource!, target)
+                    : null;
+                var stateText = copyStates
+                    ? _providerStateService.BuildReplacementText(sourceStates!)
+                    : null;
+                CopyProviderSnapshot(
+                    copyConfiguration ? configurationSource : null,
+                    target,
+                    settingsText,
+                    copyStates ? _providerStateService.GetStatePath(target) : null,
+                    stateText,
+                    _beforeProviderFileCommit);
 
                 copied++;
             }
@@ -224,22 +230,32 @@ public sealed class ModelProviderSyncService
     }
 
     private static void CopyProviderSnapshot(
-        ManagerInstance source,
+        ManagerInstance? source,
         ManagerInstance target,
-        string settingsText,
+        string? settingsText,
+        string? statePath,
+        string? stateText,
         Action<string>? beforeProviderFileCommit)
     {
         Directory.CreateDirectory(target.DshHome);
         var updates = new List<StagedProviderFile>();
         try
         {
-            var settingsPath = Path.Combine(target.DshHome, "settings.yaml");
-            updates.Add(StageText(settingsPath, settingsText));
-
-            var credentialUpdate = StageCredentialStore(source, target);
-            if (credentialUpdate is not null)
+            if (source is not null && settingsText is not null)
             {
-                updates.Add(credentialUpdate);
+                var settingsPath = Path.Combine(target.DshHome, "settings.yaml");
+                updates.Add(StageText(settingsPath, settingsText));
+
+                var credentialUpdate = StageCredentialStore(source, target);
+                if (credentialUpdate is not null)
+                {
+                    updates.Add(credentialUpdate);
+                }
+            }
+
+            if (statePath is not null && stateText is not null)
+            {
+                updates.Add(StageText(statePath, stateText));
             }
 
             foreach (var update in updates)
@@ -293,6 +309,9 @@ public sealed class ModelProviderSyncService
 
     private static StagedProviderFile StageText(string targetPath, string content)
     {
+        var directory = Path.GetDirectoryName(targetPath)
+            ?? throw new InvalidOperationException("Provider 同步目标没有父目录。 ");
+        Directory.CreateDirectory(directory);
         var temporary = $"{targetPath}.{Guid.NewGuid():N}.tmp";
         using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         using (var writer = new StreamWriter(output, new UTF8Encoding(false)))

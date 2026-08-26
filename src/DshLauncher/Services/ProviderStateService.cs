@@ -62,14 +62,11 @@ public sealed class ProviderStateService
 
     public void Replace(ManagerInstance instance, IReadOnlyDictionary<string, bool> states)
     {
-        var normalized = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (var pair in states)
-        {
-            normalized[NormalizeProvider(pair.Key)] = pair.Value;
-        }
-
-        Write(instance, normalized);
+        Write(instance, NormalizeStates(states));
     }
+
+    internal string BuildReplacementText(IReadOnlyDictionary<string, bool> states) =>
+        JsonSerializer.Serialize(NormalizeStates(states), JsonOptions);
 
     private void Write(ManagerInstance instance, IReadOnlyDictionary<string, bool> states)
     {
@@ -103,6 +100,18 @@ public sealed class ProviderStateService
             || normalized.Any(character => !(char.IsLetterOrDigit(character) || character is '-' or '_' or '.')))
         {
             throw new ArgumentException("Provider 名称格式无效。", nameof(provider));
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyDictionary<string, bool> NormalizeStates(
+        IReadOnlyDictionary<string, bool> states)
+    {
+        var normalized = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var pair in states)
+        {
+            normalized[NormalizeProvider(pair.Key)] = pair.Value;
         }
 
         return normalized;

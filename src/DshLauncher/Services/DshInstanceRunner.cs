@@ -271,31 +271,6 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             return DshInstanceRunResult.Failure(ex.Message);
         }
 
-        if (!DshProfileService.IsWebProfile(instance, profileName))
-        {
-            return DshInstanceRunResult.Failure(
-                $"Profile {profileName} 不是 Web Profile，Launcher 无法把它作为浏览器实例启动。可在扩展页切换并管理其 Plugin，或选择包含 @deepseek-ai/dsh-web-app 的 Profile。 ");
-        }
-
-        if (!string.IsNullOrWhiteSpace(instance.ImportedFromDshHome))
-        {
-            try
-            {
-                await _homeImporter.RestoreProfilePackagesAsync(
-                    instance.ImportedFromDshHome,
-                    instance.DshHome,
-                    cancellationToken);
-            }
-            catch (Exception ex) when (ex is IOException
-                or UnauthorizedAccessException
-                or InvalidDataException
-                or JsonException)
-            {
-                return DshInstanceRunResult.Failure(
-                    $"恢复导入配置引用的 Plugin 失败：{ex.Message}");
-            }
-        }
-
         await _operationGate.WaitAsync(cancellationToken);
         try
         {
@@ -314,13 +289,6 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             }
 
             RemoveExited(instance.Id);
-            var supportsNoOpen = await ProbeNoOpenSupportAsync(
-                instance,
-                nodeRuntime,
-                sourceEntrypoint,
-                profileName,
-                cancellationToken);
-
             InstanceLock? instanceLock = null;
             try
             {
@@ -332,6 +300,38 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         ? "此实例的 DSH_HOME 已被另一个 Launcher 或遗留 DSh 进程锁定，不能重复启动。请先在另一处停止实例；若任务栏已没有对应窗口，请结束残留进程后重试。"
                         : $"无法建立实例启动锁：{lockResult.Error ?? "锁目录不可访问"}。请检查当前用户对 Launcher 数据目录的权限。");
                 }
+
+                if (!DshProfileService.IsWebProfile(instance, profileName))
+                {
+                    return DshInstanceRunResult.Failure(
+                        $"Profile {profileName} 不是 Web Profile，Launcher 无法把它作为浏览器实例启动。可在扩展页切换并管理其 Plugin，或选择包含 @deepseek-ai/dsh-web-app 的 Profile。 ");
+                }
+
+                if (!string.IsNullOrWhiteSpace(instance.ImportedFromDshHome))
+                {
+                    try
+                    {
+                        await _homeImporter.RestoreProfilePackagesAsync(
+                            instance.ImportedFromDshHome,
+                            instance.DshHome,
+                            cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is IOException
+                        or UnauthorizedAccessException
+                        or InvalidDataException
+                        or JsonException)
+                    {
+                        return DshInstanceRunResult.Failure(
+                            $"恢复导入配置引用的 Plugin 失败：{ex.Message}");
+                    }
+                }
+
+                var supportsNoOpen = await ProbeNoOpenSupportAsync(
+                    instance,
+                    nodeRuntime,
+                    sourceEntrypoint,
+                    profileName,
+                    cancellationToken);
 
                 for (var attempt = 1; attempt <= PortStartAttempts; attempt++)
                 {
@@ -508,21 +508,25 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         await _operationGate.WaitAsync();
         try
         {
-            RunningDshProcess[] processes;
+            KeyValuePair<string, RunningDshProcess>[] processes;
             lock (_running)
             {
-                processes = _running.ToArray()
-                    .Select(pair => pair.Value)
-                    .ToArray();
+                processes = _running.ToArray();
             }
 
-            foreach (var running in processes)
+            var failures = new List<string>();
+            foreach (var pair in processes)
             {
-                var instanceId = FindInstanceId(running);
-                if (instanceId is not null)
+                if (!await StopCoreAsync(pair.Key, pair.Value))
                 {
-                    await StopCoreAsync(instanceId, running);
+                    failures.Add($"{pair.Key}（PID {TryGetProcessId(pair.Value.Process)}）");
                 }
+            }
+
+            if (failures.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"以下 DSh 实例未能停止，运行状态和实例锁仍被保留：{string.Join("、", failures)}。");
             }
         }
         finally
@@ -737,14 +741,6 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             _running.Remove(instanceId);
             running.InstanceLock.Dispose();
             running.Process.Dispose();
-        }
-    }
-
-    private string? FindInstanceId(RunningDshProcess running)
-    {
-        lock (_running)
-        {
-            return _running.FirstOrDefault(pair => ReferenceEquals(pair.Value, running)).Key;
         }
     }
 
@@ -1068,6 +1064,18 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         catch
         {
             return true;
+        }
+    }
+
+    private static int TryGetProcessId(Process process)
+    {
+        try
+        {
+            return process.Id;
+        }
+        catch
+        {
+            return 0;
         }
     }
 

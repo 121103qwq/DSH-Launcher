@@ -63,6 +63,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly NodeInstallService _nodeInstaller = new();
     private readonly LauncherUpdateService _launcherUpdateService = new();
     private readonly DshVersionCatalogService _dshVersionCatalogService = new();
+    private readonly DshDesktopInstallService _dshDesktopInstallService = new();
     private readonly SourceBuildService _sourceBuilder = new();
     private readonly CancellationTokenSource _windowCancellation = new();
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
@@ -1337,6 +1338,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         categoryList.Items.Add(new ListBoxItem { Content = "Launcher", Tag = "launcher" });
         categoryList.Items.Add(new ListBoxItem { Content = "DSh 版本", Tag = "dsh" });
+        categoryList.Items.Add(new ListBoxItem { Content = "DSH Desktop", Tag = "desktop" });
         var categoryStyle = new Style(typeof(ListBoxItem));
         categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.PaddingProperty, new Thickness(16, 12, 16, 12)));
         categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.MarginProperty, new Thickness(0, 0, 0, 6)));
@@ -1377,6 +1379,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (string.Equals(key, "dsh", StringComparison.Ordinal))
             {
                 contentHost.Content = CreateDshDownloadsPanel();
+                return;
+            }
+
+            if (string.Equals(key, "desktop", StringComparison.Ordinal))
+            {
+                contentHost.Content = CreateDshDesktopDownloadsPanel();
                 return;
             }
 
@@ -1522,6 +1530,226 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         _ = RefreshVersionsAsync();
         return panel;
+    }
+
+    private FrameworkElement CreateDshDesktopDownloadsPanel()
+    {
+        var panel = new StackPanel
+        {
+            MaxWidth = 980,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "DSH Desktop",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "安装社区维护的 DSH Desktop Windows x64 版本。它不是 DeepSeek 官方产品；Launcher 会校验 GitHub Release 的大小和 SHA-256，打开原生安装程序，并在安装结束后自动检测和导入可管理实例。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 0)
+        });
+
+        var content = new StackPanel();
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+        var detected = _detectedDshRuntimes
+            .Where(runtime => runtime.IsAvailable
+                && runtime.EffectiveLaunchSpec?.ProductName?.Contains("Desktop", StringComparison.OrdinalIgnoreCase) == true)
+            .Select(runtime => runtime.DisplayVersionText)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        content.Children.Add(new TextBlock
+        {
+            Text = detected.Length == 0
+                ? "本机尚未检测到可用的 DSH Desktop。"
+                : $"本机已检测：{string.Join("、", detected)}",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap
+        });
+        var actions = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
+        var mirrorButton = new System.Windows.Controls.Button
+        {
+            Content = "项目源下载并安装",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var githubButton = new System.Windows.Controls.Button
+        {
+            Content = "GitHub 下载并安装",
+            Padding = new Thickness(14, 8, 14, 8)
+        };
+        actions.Children.Add(mirrorButton);
+        actions.Children.Add(githubButton);
+        content.Children.Add(actions);
+        var status = new TextBlock
+        {
+            Text = "项目源适合中国大陆网络；GitHub 源直接下载同一份 Release 附件。两者都会用 GitHub 公布的 SHA-256 校验。",
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        content.Children.Add(status);
+
+        async Task InstallAsync(DshDesktopDownloadSource source)
+        {
+            mirrorButton.IsEnabled = false;
+            githubButton.IsEnabled = false;
+            try
+            {
+                await InstallDshDesktopAsync(source, status);
+            }
+            finally
+            {
+                mirrorButton.IsEnabled = true;
+                githubButton.IsEnabled = true;
+            }
+        }
+
+        mirrorButton.Click += async (_, _) => await InstallAsync(DshDesktopDownloadSource.ProjectMirror);
+        githubButton.Click += async (_, _) => await InstallAsync(DshDesktopDownloadSource.GitHub);
+        return panel;
+    }
+
+    private async Task InstallDshDesktopAsync(
+        DshDesktopDownloadSource source,
+        TextBlock status)
+    {
+        if (!TryBeginLifecycleOperation())
+        {
+            status.Text = "当前有实例或安装操作正在进行，请稍候重试。";
+            return;
+        }
+
+        try
+        {
+            await InstallDshDesktopCoreAsync(source, status);
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
+    }
+
+    private async Task InstallDshDesktopCoreAsync(
+        DshDesktopDownloadSource source,
+        TextBlock status)
+    {
+        status.Text = "正在读取 DSH Desktop 最新稳定版…";
+        DshDesktopReleaseInfo release;
+        try
+        {
+            release = await _dshDesktopInstallService.ReadLatestReleaseAsync(_windowCancellation.Token);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidDataException)
+        {
+            status.Text = $"读取 DSH Desktop Release 失败：{ex.Message}";
+            return;
+        }
+
+        var sourceText = source == DshDesktopDownloadSource.ProjectMirror ? "项目源" : "GitHub";
+        if (System.Windows.MessageBox.Show(
+                this,
+                $"将从{sourceText}下载并打开 DSH Desktop {release.VersionText} 的 Windows x64 安装程序。\n\n"
+                + "DSH Desktop 是社区维护项目，不是 DeepSeek 官方产品。安装界面由它自己提供；如果已有旧版，请先正常退出。安装完成后 Launcher 会自动检测并导入实例。是否继续？",
+                "安装 DSH Desktop",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            status.Text = "已取消安装。";
+            return;
+        }
+
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        var progressWindow = new RuntimeProgressWindow(
+            this,
+            cancellation,
+            "安装 DSH Desktop",
+            "下载阶段可以取消；安装程序打开后请在它的窗口中完成或取消安装。 ");
+        string? installerPath = null;
+        try
+        {
+            progressWindow.SetIndeterminate(true);
+            progressWindow.SetStatus($"正在准备 DSH Desktop {release.VersionText}…");
+            progressWindow.Show();
+            var progress = new Progress<NodeDownloadProgress>(item =>
+                progressWindow.SetDownloadProgress(item, $"DSH Desktop {release.VersionText}"));
+            installerPath = await _dshDesktopInstallService.DownloadInstallerAsync(
+                release,
+                source,
+                progress,
+                cancellation.Token);
+
+            progressWindow.SetInstallPhase(
+                true,
+                "安装程序已打开，请在 DSH Desktop 安装窗口中完成或取消安装。 ");
+            using var installer = Process.Start(new ProcessStartInfo(installerPath)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(installerPath)!
+            });
+            if (installer is null)
+            {
+                throw new InvalidOperationException("Windows 没有启动 DSH Desktop 安装程序。 ");
+            }
+
+            await installer.WaitForExitAsync();
+            progressWindow.SetInstallPhase(false);
+            if (installer.ExitCode != 0)
+            {
+                status.Text = $"DSH Desktop 安装程序退出码为 {installer.ExitCode}；没有自动导入实例。";
+                return;
+            }
+
+            progressWindow.SetIndeterminate(true);
+            progressWindow.SetStatus("安装程序已结束，正在检测并导入 DSH Desktop…");
+            await RefreshDshAsync(forceRefresh: true);
+            await RefreshNodeAsync();
+            var detected = _detectedDshRuntimes.Any(runtime => runtime.IsAvailable
+                && runtime.EffectiveLaunchSpec?.ProductName?.Contains("Desktop", StringComparison.OrdinalIgnoreCase) == true);
+            status.Text = detected
+                ? $"DSH Desktop {release.VersionText} 已完成安装流程，并已检测为可管理运行环境。"
+                : "安装程序已正常结束，但 Launcher 暂未检测到 DSH Desktop。可在设置中使用“扫描自定义目录”。";
+            ShowNotice(status.Text);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            status.Text = "DSH Desktop 下载已取消。";
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or IOException
+            or InvalidDataException
+            or InvalidOperationException
+            or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception)
+        {
+            status.Text = $"安装 DSH Desktop 失败：{ex.Message}";
+        }
+        finally
+        {
+            progressWindow.SetInstallPhase(false);
+            if (progressWindow.IsVisible)
+            {
+                progressWindow.Close();
+            }
+
+            DshDesktopInstallService.CleanupDownloadedInstaller(installerPath);
+        }
     }
 
     private FrameworkElement CreateSettingsPage()
@@ -4111,9 +4339,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 await _instanceRunner.DisposeAsync();
             }
-            catch
+            catch (Exception ex)
             {
-                // A failed DSh child-process cleanup must not leave Launcher in the background.
+                System.Windows.MessageBox.Show(
+                    this,
+                    $"Launcher 关闭前没能停止全部 DSh 进程，这些进程可能仍在后台运行。\n\n{ex.Message}",
+                    "DSH Launcher",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
             }
 
             _shutdownCleanupCompleted = true;
@@ -4452,6 +4685,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _dshApiClient.Dispose();
         _launcherUpdateService.Dispose();
         _dshVersionCatalogService.Dispose();
+        _dshDesktopInstallService.Dispose();
         _windowCancellation.Dispose();
         base.OnClosed(e);
     }

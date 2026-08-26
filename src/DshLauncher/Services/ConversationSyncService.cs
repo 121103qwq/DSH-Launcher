@@ -329,6 +329,13 @@ public sealed class ConversationSyncService
                 SessionFile? sessionFile = null;
                 try
                 {
+                    if (!ConversationService.HasRecognizedSessionHeader(entry))
+                    {
+                        errors.Add(
+                            $"{instance.Name}/{Path.GetRelativePath(root, entry)}：会话 header 无效，已跳过。 ");
+                        continue;
+                    }
+
                     var info = new FileInfo(entry);
                     sessionFile = new SessionFile(
                         instance,

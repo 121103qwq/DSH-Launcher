@@ -742,6 +742,8 @@ public sealed class ConversationService
         }
     }
 
+    internal static bool HasRecognizedSessionHeader(string path) => ReadHeader(path) is not null;
+
     private static HeaderInfo? ParseHeader(string? line)
     {
         if (string.IsNullOrWhiteSpace(line) || line.Length > MaxHeaderBytes)

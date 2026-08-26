@@ -2,10 +2,11 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.9`。本轮目标是修复多 Profile 无法切换、干净版本创建跨线程异常和 Skill 市场空白，并增加 PCL2 信息层级的下载页；同时保留已完成的 Launcher 更新/回退功能。
+当前源码版本为 `v1.0.10`。本轮目标是修复 Provider/Plugin/Conversation 的半写入风险、实例启动锁和关闭残留状态，并在现有下载页增加可校验的 DSH Desktop 交互式安装入口。
 
 ## 已完成内容
 
+- 本轮修复与新增：Provider 的 `settings.yaml`、官方 `.credentials.yaml` 和 Launcher `providers.json` 现在按单目标整体暂存、提交和失败回滚；Plugin 快照回档也先准备全部文件再整体提交，市场卡片及左侧已安装列表的更新/删除统一复用失败回档与诊断；Conversation 同步源复用正式 session header 校验，较新的损坏文件不再覆盖有效会话。Runner 在恢复导入 Plugin、读取 Web Profile 和执行 capability probe 前先取得 DSH_HOME 锁；关闭时任一 Managed 进程停止失败会保留运行记录/锁并提示，不再把清理失败视为已释放。下载页新增社区 DSH Desktop：读取 `anywhere-labs/dsh-desktop` 最新稳定 Release，项目源/GitHub 源均按 GitHub 大小与 SHA-256 验证，打开交互式安装程序，结束后复用现有 Runtime 检测和实例自动导入。
 - 本轮修复与新增：版本设置持久化当前 Profile，扩展页可在 `web`、`desktop` 等实际 Profile 间切换；Plugin 列表、官方 CLI、失败快照/回档、健康检查、导入依赖恢复和版本加密快照不再固定 `profiles\web`。含 `@deepseek-ai/dsh-web-app` 的 Profile 使用官方 `dsh --profile` 启动，非 Web Profile 明确拒绝浏览器启动。新建干净版本先在 UI 线程读取对话框字符串，消除 `Task.Run` 读取 WPF TextBox 的跨线程异常。Skill 市场无/空/坏缓存时显示 4 个待校验种子，在线扫描失败不写空缓存、异常 JSON 回退有效缓存、页面卸载取消搜索，并支持 `|-` / `>-` frontmatter。顶栏新增“下载”，左侧按 Launcher / DSh 版本分组，右侧复用更新回退和官方版本创建流程。
 - 发布前吸收 PR #12 Codex Review：Provider 监控卸载后不再重启；对话刷新同时刷新 DSh 工作区选项；`.tgz` 保留给 ModPack；Windows 盘符根路径保持 `C:\`；会话临时模型覆盖在原先没有 deployment default 时会删除被官方 API 临时创建的默认段；全局默认模型只有在所有已配置 Coding 版本都实际提供时才允许保存。
 - 本轮新增：启动完成后后台读取 GitHub 稳定版 Release，发现高于当前版本的可验证附件时由用户选择是否更新；设置页可刷新版本目录并选择较新版本更新或较旧版本回退。只接受仓库固定的 `DSH.Launcher.exe`，下载显示真实字节进度并核对大小、文件版本和 GitHub SHA-256；通过后由独立 helper 等待旧进程正常退出、原子替换并重启。目标目录不可写时在下载前拒绝，不请求 UAC，helper 失败会重新打开原 Launcher。
@@ -88,6 +89,7 @@
 
 ## 已执行测试及结果
 
+- `v1.0.10` 发布候选验证：`dotnet build tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 为 0 warnings、0 errors；随后 `dotnet run --project tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-build --no-restore` 完整自检 74/74 通过。新增覆盖 DSH Desktop Release metadata/真实字节进度/大小/SHA-256/PE 校验、锁冲突前禁止恢复 Plugin、Provider 状态提交失败全量回滚、Plugin 回档中途失败恢复回档前状态，以及损坏的新会话不会覆盖有效工作区副本。Windows x64 自包含压缩单文件 publish 为 0 errors；固定附件 `DSH.Launcher.exe` 为 72,555,907 字节，文件版本 `1.0.10.0`，SHA-256 `0D6FC5ABBC7148E690664607F7540DE3147DAA7B149577C3AE7FB5A0D8EED645`，完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.10-reliability-20260826-204143`，桌面同名文件夹顶层 EXE 哈希一致。
 - `v1.0.9` 已发布：远端 `main` 的产品提交为 `c0db4ec`，标签指向同一提交，Release 为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v1.0.9`。Windows x64 自包含压缩单文件版本 `1.0.9.0`，`DSH.Launcher.exe` 为 72,546,598 字节，GitHub digest 与本地 SHA-256 均为 `06F3D25D088B8C618CCD7DF3EAB25D5B98536A16A62BD303F6DA34F90071D11F`。完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.9-profile-download-20260825-165807`，桌面同名文件夹顶层 `DSH Launcher.exe` 已同步；公开 latest 路由继续使用固定附件名 `DSH.Launcher.exe`。
 - `v1.0.9` 候选代码：Release 构建 0 warnings、0 errors，完整自检 73/73 通过。Computer Use 使用隔离 `DSH_LAUNCHER_TEST_ROOT` 实测：下载页读取 10 个官方 DSh 版本；从下载页创建本机已有 `0.1.0-rc.6` 干净版本成功且不再跨线程失败；Skill 首屏先显示 4 张种子卡，约 9 秒后更新为 197 个已校验 Skill；DSH Desktop 版本的 Profile 下拉显示 `web/desktop`，切到 `desktop` 后 Plugin 路径改为 `profiles\desktop`，Launcher 启动到随机端口 1482 并通过健康检查。Computer Use 发现并促成修复了市场后台任务读取 Profile ComboBox 的二次跨线程问题；重构后复测缓存 2081 项正常加载。测试实例已停止，DeepSeek 与 Launcher 测试窗口均已关闭。隔离测试构建位于 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\feedback-fixes-20260825-162449`。
 - 本轮 Launcher 更新/回退：Release 构建 0 warnings、0 errors，完整自检 72/72 通过。新增覆盖稳定版目录过滤、固定附件名和 GitHub SHA-256 读取、历史版本回退目标、真实下载字节与 100% 进度、大小/哈希/非官方 URL 拒绝、helper 参数、helper 先于单实例逻辑，以及使用真实构建 EXE 在临时目录完成原子替换且无残留事务文件。2026-08-23 实查 v1.0.8/v1.0.7/v1.0.6 Release 均有 `DSH.Launcher.exe` 和 GitHub digest。Windows x64 自包含测试版已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\launcher-update-20260823-211640`；EXE 为 72,537,640 字节，文件版本 `1.0.8.0`，SHA-256 `2864484490CECDDE5C9DF6BC063B2CF3342203C0CCA9004FD93A0AD2CC141C8F`。本轮未使用 Computer Use，也没有覆盖当前正在使用的 Launcher。
@@ -164,6 +166,7 @@
 
 ## 已知问题
 
+- DSH Desktop 安装入口的 Release 解析、下载和文件校验已由伪造 HTTP 响应自动测试；本轮没有实际运行第三方 NSIS 安装程序，也没有修改本机已安装的 DSH Desktop。真实安装窗口和安装结束后的自动导入仍需由后续无依赖安装包任务在隔离环境验收。
 - Launcher Release 目录、下载校验、helper 参数和临时 EXE 原子替换已完成自动测试；真实从已发布版本更新或回退并重启仍需在独立测试副本上做一次 Windows UI 验收，不能用当前开发工作区进程直接覆盖验证。
 - DeepSeek 独立任务栏分组已通过代码和回归测试，仍需在 Windows Shell 中实际打开一次 Chat 窗口确认视觉分组；本轮按默认规则未使用 Computer Use。
 - Source 项目的 `.dsh/skills` 和 `.agents/skills` 是 DSh 项目级共享只读资源；实例 `DSH_HOME` 内的 Skill 才是版本私有。
@@ -210,4 +213,4 @@
 
 ## 下一步最直接的任务
 
-发布 `v1.0.9` 后，在公开 Release 副本上实际执行一次 `v1.0.8 → v1.0.9 → 历史版本`，确认自更新和回退两个方向的替换重启完整生效。
+把本轮源码、测试结果和 DSH Desktop 安装入口边界交给“制作并发布 Harness 安装包”任务，由该任务在隔离环境制作无依赖完整安装包、执行真实安装验收并发布 Release。

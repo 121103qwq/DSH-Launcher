@@ -96,13 +96,13 @@ internal sealed class RuntimeProgressWindow : Window
 
     internal static bool IsCloseAllowed(bool installPhase) => !installPhase;
 
-    public void SetInstallPhase(bool installing)
+    public void SetInstallPhase(bool installing, string? status = null)
     {
         _isInstallPhase = installing;
         _cancelButton.IsEnabled = !installing;
         if (installing)
         {
-            _statusText.Text = "Node.js 系统安装正在进行，请等待安装完成。";
+            _statusText.Text = status ?? "Node.js 系统安装正在进行，请等待安装完成。";
         }
     }
 }

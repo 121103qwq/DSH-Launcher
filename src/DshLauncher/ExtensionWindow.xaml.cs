@@ -1769,7 +1769,20 @@ public partial class ExtensionWindow : UserControl
         if (ExtensionList.SelectedItem is not ExtensionEntry entry || entry.Kind != ExtensionKind.Plugin || !entry.Managed) return;
         try
         {
-            var output = await _service.UpdatePluginAsync(_instance, entry.Name, _nodeRuntime());
+            var snapshot = _marketplaceService?.CreatePluginSnapshot(
+                _instance,
+                GetSelectedProfileName()) ?? string.Empty;
+            string output;
+            try
+            {
+                output = await _service.UpdatePluginAsync(_instance, entry.Name, _nodeRuntime());
+            }
+            catch (Exception ex)
+            {
+                var recovery = await RecoverPluginFailureAsync(snapshot, ex, "update", entry.Name);
+                throw new InvalidOperationException(recovery.Summary, ex);
+            }
+
             StatusText.Text = string.IsNullOrWhiteSpace(output) ? "Plugin 更新完成。" : $"Plugin 更新完成：{output}";
             await RefreshAsync();
         }
@@ -1785,8 +1798,22 @@ public partial class ExtensionWindow : UserControl
             switch (entry.Kind)
             {
                 case ExtensionKind.Plugin when entry.Managed:
-                    await _service.RemovePluginAsync(_instance, entry.Name, _nodeRuntime());
+                {
+                    var snapshot = _marketplaceService?.CreatePluginSnapshot(
+                        _instance,
+                        GetSelectedProfileName()) ?? string.Empty;
+                    try
+                    {
+                        await _service.RemovePluginAsync(_instance, entry.Name, _nodeRuntime());
+                    }
+                    catch (Exception ex)
+                    {
+                        var recovery = await RecoverPluginFailureAsync(snapshot, ex, "remove", entry.Name);
+                        throw new InvalidOperationException(recovery.Summary, ex);
+                    }
+
                     break;
+                }
                 case ExtensionKind.Skill when entry.Managed:
                     await _service.RemoveSkillAsync(_instance, entry);
                     break;
