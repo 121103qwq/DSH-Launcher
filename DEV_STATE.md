@@ -89,6 +89,7 @@
 
 ## 已执行测试及结果
 
+- `v1.0.10` 已发布：产品提交与标签均为 `4dc629905eacde07ed698fa4e22b3d19edfe2920`，Release 为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v1.0.10`。GitHub 附件固定命名为 `DSH.Launcher.exe`，大小 72,555,907 字节，GitHub digest 与本地 SHA-256 均为 `0D6FC5ABBC7148E690664607F7540DE3147DAA7B149577C3AE7FB5A0D8EED645`；公开 latest 下载路由保持不变。
 - `v1.0.10` 发布候选验证：`dotnet build tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore` 为 0 warnings、0 errors；随后 `dotnet run --project tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-build --no-restore` 完整自检 74/74 通过。新增覆盖 DSH Desktop Release metadata/真实字节进度/大小/SHA-256/PE 校验、锁冲突前禁止恢复 Plugin、Provider 状态提交失败全量回滚、Plugin 回档中途失败恢复回档前状态，以及损坏的新会话不会覆盖有效工作区副本。Windows x64 自包含压缩单文件 publish 为 0 errors；固定附件 `DSH.Launcher.exe` 为 72,555,907 字节，文件版本 `1.0.10.0`，SHA-256 `0D6FC5ABBC7148E690664607F7540DE3147DAA7B149577C3AE7FB5A0D8EED645`，完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.10-reliability-20260826-204143`，桌面同名文件夹顶层 EXE 哈希一致。
 - `v1.0.9` 已发布：远端 `main` 的产品提交为 `c0db4ec`，标签指向同一提交，Release 为 `https://github.com/121103qwq/DSH-Launcher/releases/tag/v1.0.9`。Windows x64 自包含压缩单文件版本 `1.0.9.0`，`DSH.Launcher.exe` 为 72,546,598 字节，GitHub digest 与本地 SHA-256 均为 `06F3D25D088B8C618CCD7DF3EAB25D5B98536A16A62BD303F6DA34F90071D11F`。完整产物已复制到 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.0.9-profile-download-20260825-165807`，桌面同名文件夹顶层 `DSH Launcher.exe` 已同步；公开 latest 路由继续使用固定附件名 `DSH.Launcher.exe`。
 - `v1.0.9` 候选代码：Release 构建 0 warnings、0 errors，完整自检 73/73 通过。Computer Use 使用隔离 `DSH_LAUNCHER_TEST_ROOT` 实测：下载页读取 10 个官方 DSh 版本；从下载页创建本机已有 `0.1.0-rc.6` 干净版本成功且不再跨线程失败；Skill 首屏先显示 4 张种子卡，约 9 秒后更新为 197 个已校验 Skill；DSH Desktop 版本的 Profile 下拉显示 `web/desktop`，切到 `desktop` 后 Plugin 路径改为 `profiles\desktop`，Launcher 启动到随机端口 1482 并通过健康检查。Computer Use 发现并促成修复了市场后台任务读取 Profile ComboBox 的二次跨线程问题；重构后复测缓存 2081 项正常加载。测试实例已停止，DeepSeek 与 Launcher 测试窗口均已关闭。隔离测试构建位于 `C:\Users\121103qwq\Desktop\DSH Launcher\Test Builds\feedback-fixes-20260825-162449`。
@@ -213,4 +214,4 @@
 
 ## 下一步最直接的任务
 
-把本轮源码、测试结果和 DSH Desktop 安装入口边界交给“制作并发布 Harness 安装包”任务，由该任务在隔离环境制作无依赖完整安装包、执行真实安装验收并发布 Release。
+在隔离 Windows 环境实际运行 DSH Desktop 第三方安装程序，确认安装结束后的 Runtime 自动检测、实例导入和首次启动链路；Launcher `v1.0.10` Release 本身已完成。
