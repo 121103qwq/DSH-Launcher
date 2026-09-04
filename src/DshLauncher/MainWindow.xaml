@@ -413,6 +413,7 @@
                                     Grid.Column="2"
                                     Background="{StaticResource CardBrush}"
                                     CornerRadius="13"
+                                    ClipToBounds="True"
                                     Padding="18"
                                     BorderBrush="{StaticResource LineBrush}"
                                     BorderThickness="1">

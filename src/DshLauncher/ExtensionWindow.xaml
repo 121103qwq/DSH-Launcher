@@ -80,7 +80,8 @@
                         BorderBrush="{StaticResource LineBrush}"
                         BorderThickness="1"
                         CornerRadius="10"
-                        Padding="8">
+                        Padding="8"
+                        ClipToBounds="True">
                     <ListBox x:Name="ExtensionList"
                              BorderThickness="0"
                              Background="Transparent"
@@ -332,7 +333,8 @@
                         BorderBrush="{StaticResource LineBrush}"
                         BorderThickness="1"
                         CornerRadius="10"
-                        Padding="8">
+                        Padding="8"
+                        ClipToBounds="True">
                     <ListBox x:Name="MarketplaceList"
                              MaxHeight="700"
                              BorderThickness="0"
@@ -489,6 +491,7 @@
                 BorderThickness="1"
                 CornerRadius="12"
                 Padding="18"
+                ClipToBounds="True"
                 Visibility="Collapsed">
             <Grid>
                 <Grid.RowDefinitions>
