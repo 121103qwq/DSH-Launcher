@@ -688,6 +688,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     RuntimeStatus = InstanceRuntimeStatus.Stopped,
                     RuntimeOwnership = InstanceRuntimeOwnership.None,
                     ProcessId = null,
+                    ProcessStartedAt = null,
                     Port = null,
                     WebUrl = null
                 };
@@ -3665,6 +3666,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 RuntimeStatus = InstanceRuntimeStatus.Stopped,
                 RuntimeOwnership = InstanceRuntimeOwnership.None,
                 ProcessId = null,
+                ProcessStartedAt = null,
                 Port = null,
                 WebUrl = null,
                 LastError = null
@@ -3765,6 +3767,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 RuntimeStatus = InstanceRuntimeStatus.Stopped,
                 RuntimeOwnership = InstanceRuntimeOwnership.None,
                 ProcessId = null,
+                ProcessStartedAt = null,
                 Port = null,
                 WebUrl = null,
                 LastError = null
@@ -3774,6 +3777,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 RuntimeStatus = InstanceRuntimeStatus.Stopped,
                 RuntimeOwnership = InstanceRuntimeOwnership.None,
                 ProcessId = null,
+                ProcessStartedAt = null,
                 Port = null,
                 WebUrl = null,
                 LastError = null
@@ -3830,6 +3834,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     RuntimeStatus = InstanceRuntimeStatus.Stopped,
                     RuntimeOwnership = InstanceRuntimeOwnership.None,
                     ProcessId = null,
+                    ProcessStartedAt = null,
                     Port = null,
                     WebUrl = null,
                     LastError = null
@@ -3872,6 +3877,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 RuntimeStatus = InstanceRuntimeStatus.Running,
                 RuntimeOwnership = InstanceRuntimeOwnership.Managed,
                 ProcessId = result.ProcessId,
+                ProcessStartedAt = result.ProcessStartedAt,
                 Port = result.Port,
                 WebUrl = result.WebUrl,
                 LastError = null,
@@ -4001,6 +4007,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     ? original.RuntimeOwnership
                     : InstanceRuntimeOwnership.None,
                 ProcessId = status == InstanceRuntimeStatus.Running ? original.ProcessId : null,
+                ProcessStartedAt = status == InstanceRuntimeStatus.Running ? original.ProcessStartedAt : null,
                 Port = status == InstanceRuntimeStatus.Running ? original.Port : null,
                 WebUrl = status == InstanceRuntimeStatus.Running ? original.WebUrl : null,
                 LastError = error
@@ -4093,6 +4100,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RuntimeStatus = InstanceRuntimeStatus.Running,
             RuntimeOwnership = InstanceRuntimeOwnership.Managed,
             ProcessId = result.ProcessId,
+            ProcessStartedAt = result.ProcessStartedAt,
             Port = result.Port,
             WebUrl = result.WebUrl,
             LastError = null,

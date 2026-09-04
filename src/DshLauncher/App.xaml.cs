@@ -70,8 +70,8 @@ public partial class App : System.Windows.Application
 
     private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
-        // UI 线程未处理异常不再直接杀死进程：写入崩溃日志后继续运行，便于
-        // 事后定位（例如窗口关闭与异步初始化竞态曾导致整个应用崩溃）。
+        // 已经显示主窗口时保留原有降级行为；启动或关闭阶段没有可用窗口时
+        // 不能吞掉异常，否则进程会占着单实例锁留在后台，用户再次双击也无法打开。
         try
         {
             var logDirectory = Path.Combine(
@@ -87,8 +87,15 @@ public partial class App : System.Windows.Application
             // 日志失败不影响兜底行为。
         }
 
-        e.Handled = true;
+        var mainWindowLoaded = MainWindow?.IsLoaded == true;
+        var shutdownStarted = Dispatcher.HasShutdownStarted
+            || Dispatcher.HasShutdownFinished
+            || MainWindow is MainWindow { IsShutdownInProgress: true };
+        e.Handled = ShouldHandleDispatcherException(mainWindowLoaded, shutdownStarted);
     }
+
+    internal static bool ShouldHandleDispatcherException(bool mainWindowLoaded, bool shutdownStarted) =>
+        mainWindowLoaded && !shutdownStarted;
 
     protected override void OnExit(ExitEventArgs e)
     {

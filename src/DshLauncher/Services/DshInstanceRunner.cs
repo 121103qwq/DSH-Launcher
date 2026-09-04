@@ -16,6 +16,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private static readonly TimeSpan HealthRequestTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CapabilityProbeTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan ProcessStartTimeTolerance = TimeSpan.FromSeconds(2);
     private const int PortStartAttempts = 3;
 
     private readonly SemaphoreSlim _operationGate = new(1, 1);
@@ -145,15 +146,15 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             try
             {
                 process = Process.GetProcessById(instance.ProcessId.Value);
-                // Launcher 只通过 cmd.exe 包装或 node.exe 直接启动实例；进程名
-                // 不一致视为 PID 已被复用，拒绝收编。
-                if (!string.Equals(process.ProcessName, "cmd", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(process.ProcessName, "node", StringComparison.OrdinalIgnoreCase))
+                if (process.HasExited)
                 {
                     return false;
                 }
 
-                if (process.HasExited)
+                // PID、启动时间和实际宿主必须同时匹配。ElectronBootstrap 直接由
+                // DSH Desktop.exe 等封装宿主运行，不能再写死为 cmd/node；启动时间
+                // 则防止 Windows 复用旧 PID 后误收编、误杀无关进程。
+                if (!IsExpectedManagedProcess(instance, process))
                 {
                     return false;
                 }
@@ -279,7 +280,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 return DshInstanceRunResult.Success(
                     existing.Process.Id,
                     existing.Port,
-                    existing.WebUrl);
+                    existing.WebUrl,
+                    TryGetProcessStartedAt(existing.Process));
             }
 
             if (IsAttached(instance.Id))
@@ -374,7 +376,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         if (health.IsSuccess)
                         {
                             instanceLock = null;
-                            return DshInstanceRunResult.Success(running.Process.Id, port, webUrl);
+                            return DshInstanceRunResult.Success(
+                                running.Process.Id,
+                                port,
+                                webUrl,
+                                TryGetProcessStartedAt(running.Process));
                         }
 
                         var retryPort = attempt < PortStartAttempts && IsPortConflict(health.Error);
@@ -1064,6 +1070,81 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         catch
         {
             return true;
+        }
+    }
+
+    private static bool IsExpectedManagedProcess(ManagerInstance instance, Process process)
+    {
+        var actualStartedAt = TryGetProcessStartedAt(process);
+        if (instance.ProcessStartedAt is not { } expectedStartedAt
+            || actualStartedAt is not { } startedAt
+            || (startedAt - expectedStartedAt).Duration() > ProcessStartTimeTolerance)
+        {
+            return false;
+        }
+
+        if (instance.Kind == InstanceKind.Source)
+        {
+            return string.Equals(process.ProcessName, "node", StringComparison.OrdinalIgnoreCase);
+        }
+
+        var expectedHost = ResolveExpectedManagedHostPath(instance.EffectiveDshLaunchSpec);
+        if (string.IsNullOrWhiteSpace(expectedHost))
+        {
+            return false;
+        }
+
+        try
+        {
+            var actualHost = process.MainModule?.FileName;
+            return !string.IsNullOrWhiteSpace(actualHost)
+                && string.Equals(
+                    Path.GetFullPath(actualHost),
+                    Path.GetFullPath(expectedHost),
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+                                   or System.ComponentModel.Win32Exception
+                                   or NotSupportedException
+                                   or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static string? ResolveExpectedManagedHostPath(DshRuntimeLaunchSpec? spec)
+    {
+        if (spec is null)
+        {
+            return null;
+        }
+
+        if (spec.Mode == DshRuntimeLaunchMode.DirectCommand
+            && (Path.GetExtension(spec.HostPath).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+                || Path.GetExtension(spec.HostPath).Equals(".bat", StringComparison.OrdinalIgnoreCase)))
+        {
+            var commandInterpreter = Environment.GetEnvironmentVariable("ComSpec");
+            return !string.IsNullOrWhiteSpace(commandInterpreter)
+                ? commandInterpreter
+                : Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        }
+
+        return spec.Mode == DshRuntimeLaunchMode.NodeScript
+            ? spec.NodeExecutablePath ?? spec.HostPath
+            : spec.HostPath;
+    }
+
+    private static DateTimeOffset? TryGetProcessStartedAt(Process process)
+    {
+        try
+        {
+            return new DateTimeOffset(process.StartTime).ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+                                   or System.ComponentModel.Win32Exception
+                                   or NotSupportedException)
+        {
+            return null;
         }
     }
 

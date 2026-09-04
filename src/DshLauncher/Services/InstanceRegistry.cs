@@ -234,6 +234,7 @@ public sealed class InstanceRegistry
             DshLaunchSpec = launchSpec,
             RuntimeStatus = status,
             LastError = error,
+            ProcessStartedAt = status == InstanceRuntimeStatus.Running ? entry.ProcessStartedAt : null,
             ImportedFromDshHome = NormalizeOptionalPath(entry.ImportedFromDshHome)
         };
     }

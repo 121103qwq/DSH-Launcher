@@ -66,6 +66,7 @@ public sealed class VersionHealthService
                 RuntimeStatus = InstanceRuntimeStatus.Ready,
                 RuntimeOwnership = InstanceRuntimeOwnership.None,
                 ProcessId = null,
+                ProcessStartedAt = null,
                 Port = null,
                 WebUrl = null,
                 LastError = null

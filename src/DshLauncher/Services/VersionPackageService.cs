@@ -39,7 +39,7 @@ public sealed partial class VersionPackageService
         @"(?i)([?&](?:api[-_]?key|token|secret|password|access[-_]?token|refresh[-_]?token|credential(?:s)?)=)[^&#\s]+",
         RegexOptions.CultureInvariant);
     private static readonly Regex SensitiveAssignment = new(
-        @"^(?<prefix>\s*(?:export\s+)?(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*).*$",
+        @"^(?<prefix>\s*(?:(?:export|const|let|var)\s+)?(?:\$env:)?(?<key>[A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*).*$",
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly InstanceRegistry _registry;
@@ -684,11 +684,12 @@ public sealed partial class VersionPackageService
             var archivePath = $"{archiveRoot}/{relative}";
             AddTextEntry(archive, archivePath, SanitizeSettingsText(File.ReadAllText(file, Encoding.UTF8)));
             contents.Add(archivePath);
-            var name = Path.GetFileNameWithoutExtension(file);
-            if (string.Equals(name, "SKILL", StringComparison.OrdinalIgnoreCase))
-            {
-                name = new DirectoryInfo(Path.GetDirectoryName(file) ?? sourceRoot).Name;
-            }
+            // 清单描述的是顶层 Skill / Preset，而不是其每个伴随文件。
+            // 目录式条目统一取首段，平铺的单文件条目仍使用文件名。
+            var firstSeparator = relative.IndexOf('/');
+            var name = firstSeparator > 0
+                ? relative[..firstSeparator]
+                : Path.GetFileNameWithoutExtension(file);
 
             if (!string.IsNullOrWhiteSpace(name))
             {
@@ -731,7 +732,17 @@ public sealed partial class VersionPackageService
             || extension.Equals(".yml", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".json", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".txt", StringComparison.OrdinalIgnoreCase);
+            || extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".js", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".mjs", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".cjs", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".ts", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".py", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".ps1", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".psm1", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".sh", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".bat", StringComparison.OrdinalIgnoreCase);
     }
 
     private static PackageManifest ReadPackageManifest(ZipArchive archive, ZipArchiveEntry? knownEntry = null)

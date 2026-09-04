@@ -411,14 +411,17 @@ public sealed class ExtensionService
         }
         else
         {
-            File.Delete(target);
             var parent = Directory.GetParent(target)?.FullName;
-            if (parent is not null
-                && !string.Equals(parent, root, StringComparison.OrdinalIgnoreCase)
-                && Directory.Exists(parent)
-                && !Directory.EnumerateFileSystemEntries(parent).Any())
+            if (Path.GetFileName(target).Equals("SKILL.md", StringComparison.OrdinalIgnoreCase)
+                && parent is not null
+                && !string.Equals(parent, root, StringComparison.OrdinalIgnoreCase))
             {
+                RejectReparsePoint(parent, "Skill 目录");
                 DeleteDirectoryIfOwned(parent, root);
+            }
+            else
+            {
+                File.Delete(target);
             }
         }
         return Task.CompletedTask;

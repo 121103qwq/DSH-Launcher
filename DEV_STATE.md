@@ -2,10 +2,11 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.0.10`。本轮目标是修复 Provider/Plugin/Conversation 的半写入风险、实例启动锁和关闭残留状态，并在现有下载页增加可校验的 DSH Desktop 交互式安装入口。
+当前源码版本为 `v1.0.11`。本轮目标是修复无窗口后台残留、封装运行时收编、旧会话重新导入、目录式 Skill 删除和整合包伴随脚本缺失。
 
 ## 已完成内容
 
+- 本轮修复：启动/关闭阶段的 UI 未处理异常不再被吞掉，避免 Launcher 无窗口驻留并继续占用单实例锁；Managed 进程收编改为校验 PID、启动时间、端口和实际宿主路径，支持 ElectronBootstrap 封装桌面宿主且拒绝 PID 复用。旧时间戳会话导入会标记为当前重新创建，不再被旧删除标记吞掉；目录式 Skill 删除会连同其伴随文件清理。`.dshpack` 与 ModPack 现保留常见文本脚本并继续脱敏，顶层 Skill/Preset 摘要不会把伴随文件误计为独立条目。
 - 本轮修复与新增：Provider 的 `settings.yaml`、官方 `.credentials.yaml` 和 Launcher `providers.json` 现在按单目标整体暂存、提交和失败回滚；Plugin 快照回档也先准备全部文件再整体提交，市场卡片及左侧已安装列表的更新/删除统一复用失败回档与诊断；Conversation 同步源复用正式 session header 校验，较新的损坏文件不再覆盖有效会话。Runner 在恢复导入 Plugin、读取 Web Profile 和执行 capability probe 前先取得 DSH_HOME 锁；关闭时任一 Managed 进程停止失败会保留运行记录/锁并提示，不再把清理失败视为已释放。下载页新增社区 DSH Desktop：读取 `anywhere-labs/dsh-desktop` 最新稳定 Release，项目源/GitHub 源均按 GitHub 大小与 SHA-256 验证，打开交互式安装程序，结束后复用现有 Runtime 检测和实例自动导入。
 - 本轮修复与新增：版本设置持久化当前 Profile，扩展页可在 `web`、`desktop` 等实际 Profile 间切换；Plugin 列表、官方 CLI、失败快照/回档、健康检查、导入依赖恢复和版本加密快照不再固定 `profiles\web`。含 `@deepseek-ai/dsh-web-app` 的 Profile 使用官方 `dsh --profile` 启动，非 Web Profile 明确拒绝浏览器启动。新建干净版本先在 UI 线程读取对话框字符串，消除 `Task.Run` 读取 WPF TextBox 的跨线程异常。Skill 市场无/空/坏缓存时显示 4 个待校验种子，在线扫描失败不写空缓存、异常 JSON 回退有效缓存、页面卸载取消搜索，并支持 `|-` / `>-` frontmatter。顶栏新增“下载”，左侧按 Launcher / DSh 版本分组，右侧复用更新回退和官方版本创建流程。
 - 发布前吸收 PR #12 Codex Review：Provider 监控卸载后不再重启；对话刷新同时刷新 DSh 工作区选项；`.tgz` 保留给 ModPack；Windows 盘符根路径保持 `C:\`；会话临时模型覆盖在原先没有 deployment default 时会删除被官方 API 临时创建的默认段；全局默认模型只有在所有已配置 Coding 版本都实际提供时才允许保存。

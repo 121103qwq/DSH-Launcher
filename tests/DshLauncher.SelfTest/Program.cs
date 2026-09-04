@@ -43,6 +43,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Node MSI verification and deferred cleanup", TestNodeMsiVerificationAndDeferredCleanup),
     ("Lifecycle busy guard", TestLifecycleBusyGuard),
     ("Single instance activation channel", TestSingleInstanceActivationChannel),
+    ("Unhandled startup exception policy", TestUnhandledStartupExceptionPolicy),
     ("Window resize hit testing", TestWindowResizeHitTesting),
     ("Chat window independent taskbar identity", TestChatWindowIndependentTaskbarIdentity),
     ("Main window code resource references", TestMainWindowCodeResourceReferences),
@@ -1396,6 +1397,17 @@ static async Task TestLauncherReleaseDownloadVerification()
         "版本操作必须拒绝非官方 GitHub Release 下载地址。 ");
 }
 
+static Task TestUnhandledStartupExceptionPolicy()
+{
+    Assert(!App.ShouldHandleDispatcherException(mainWindowLoaded: false, shutdownStarted: false),
+        "主窗口尚未加载时不能吞掉 UI 异常，否则会留下占用单实例锁的无窗口后台进程。");
+    Assert(App.ShouldHandleDispatcherException(mainWindowLoaded: true, shutdownStarted: false),
+        "主窗口已经可用时仍应保留现有的可恢复异常降级行为。");
+    Assert(!App.ShouldHandleDispatcherException(mainWindowLoaded: true, shutdownStarted: true),
+        "关闭阶段不能吞掉 UI 异常并阻止进程退出。");
+    return Task.CompletedTask;
+}
+
 static async Task TestDshDesktopReleaseDownloadVerification()
 {
     var payload = new byte[10 * 1024 * 1024];
@@ -2743,13 +2755,17 @@ static async Task TestInstanceAdoptionAfterAbnormalExit()
         }
     });
 
+    var packagedHost = Path.Combine(Environment.SystemDirectory, "PING.EXE");
+    var bootstrap = Path.Combine(temporary.Path, "desktop-cli.js");
+    File.WriteAllText(bootstrap, "// test bootstrap\n", new UTF8Encoding(false));
     var lingering = System.Diagnostics.Process.Start(
-        new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 600 127.0.0.1 > nul")
+        new System.Diagnostics.ProcessStartInfo(packagedHost, "-n 600 127.0.0.1")
         {
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            RedirectStandardOutput = true
         });
-    Assert(lingering is not null, "测试需要能启动辅助 cmd 进程。");
+    Assert(lingering is not null, "测试需要能启动辅助封装宿主进程。");
     try
     {
         var instance = CreateTestInstance("adopt-test", temporary.Path, Path.Combine(temporary.Path, "dsh-home"))
@@ -2757,27 +2773,43 @@ static async Task TestInstanceAdoptionAfterAbnormalExit()
             {
                 RuntimeStatus = InstanceRuntimeStatus.Running,
                 ProcessId = lingering!.Id,
+                ProcessStartedAt = new DateTimeOffset(lingering.StartTime).ToUniversalTime(),
                 Port = port,
-                WebUrl = $"http://127.0.0.1:{port}/"
+                WebUrl = $"http://127.0.0.1:{port}/",
+                DshExecutablePath = packagedHost,
+                DshLaunchSpec = new DshRuntimeLaunchSpec(
+                    DshRuntimeLaunchMode.ElectronBootstrap,
+                    packagedHost,
+                    bootstrap)
             };
 
         await using var runner = new DshInstanceRunner();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var staleIdentity = instance with
+        {
+            Id = "adopt-stale-start",
+            DshHome = Path.Combine(temporary.Path, "home-stale-start"),
+            ProcessStartedAt = instance.ProcessStartedAt!.Value.AddMinutes(-1)
+        };
+        Assert(!await runner.TryAdoptRunningProcessAsync(staleIdentity, cancellation.Token),
+            "PID 已复用或启动时间不匹配时必须拒绝收编。");
         Assert(await runner.TryAdoptRunningProcessAsync(instance, cancellation.Token),
-            "Launcher 异常退出遗留的实例（PID 存活且端口仍在服务）应被收编回 Managed。");
+            "Launcher 异常退出遗留的 Electron 封装实例应按真实宿主路径收编回 Managed。");
         Assert(runner.IsManaged(instance.Id), "收编后 Stop/Restart/删除应恢复可用。");
         var stopped = await runner.StopAsync(instance.Id, cancellation.Token);
         Assert(stopped.IsSuccess, stopped.Error ?? "收编后的遗留实例必须可以停止。");
         Assert(lingering.HasExited, "停止收编实例必须终止遗留的进程树。");
 
+        using var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
         var mismatched = instance with
         {
             Id = "adopt-mismatch",
             DshHome = Path.Combine(temporary.Path, "home-mismatch"),
-            ProcessId = Environment.ProcessId
+            ProcessId = Environment.ProcessId,
+            ProcessStartedAt = new DateTimeOffset(currentProcess.StartTime).ToUniversalTime()
         };
         Assert(!await runner.TryAdoptRunningProcessAsync(mismatched, cancellation.Token),
-            "记录的 PID 指向非 cmd/node 进程（PID 复用）时必须拒绝收编。");
+            "记录的 PID 指向其它宿主进程时必须拒绝收编。");
 
         using var deadPortListener = new TcpListener(IPAddress.Loopback, 0);
         deadPortListener.Start();
@@ -2930,10 +2962,15 @@ static async Task TestExtensionEcosystemIsolation()
         Path.Combine(agentSkillDirectory, "SKILL.md"),
         "---\nname: agent-only\ndescription: Instance-local agent skill\n---\n# Agent only\n",
         new UTF8Encoding(false));
+    Directory.CreateDirectory(Path.Combine(agentSkillDirectory, "scripts"));
+    File.WriteAllText(
+        Path.Combine(agentSkillDirectory, "scripts", "helper.ps1"),
+        "Write-Output 'helper'\n",
+        new UTF8Encoding(false));
     var agentSkill = (await service.ListAsync(instance)).Single(entry => entry.Name == "agent-only");
     Assert(agentSkill.Managed, "实例 DSH_AGENTS_HOME 下的 Skill 必须被识别为当前实例资源。");
     await service.RemoveSkillAsync(instance, agentSkill);
-    Assert(!Directory.Exists(agentSkillDirectory), "删除实例 DSH_AGENTS_HOME 下的 Skill 不能留下目录。");
+    Assert(!Directory.Exists(agentSkillDirectory), "删除目录式 Skill 必须一并删除配套文件，不能留下失去 SKILL.md 的孤立目录。");
 
     await AssertThrowsAsync<InvalidOperationException>(
         () => service.ImportSkillAsync(instance, Path.Combine(home, "skills")),
@@ -4394,6 +4431,12 @@ static Task TestVersionPackageOperations()
         Path.Combine(skillDirectory, "SKILL.md"),
         "---\nname: code-review\ndescription: Review code\n---\napiKey: skill-secret\nprivateKey: >-\n  skill-block-secret\nOPENAI_API_KEY=skill-assignment-secret\nexport TOKEN=skill-export-secret\nhotkey: Ctrl+K\npublicKey: public-material\n",
         new UTF8Encoding(false));
+    var skillScriptDirectory = Path.Combine(skillDirectory, "scripts");
+    Directory.CreateDirectory(skillScriptDirectory);
+    File.WriteAllText(
+        Path.Combine(skillScriptDirectory, "review.ps1"),
+        "$env:OPENAI_API_KEY = 'skill-script-secret'\nWrite-Output 'review-ready'\n",
+        new UTF8Encoding(false));
     var presetDirectory = Path.Combine(source.DshHome, ".agent-presets", "reviewer");
     Directory.CreateDirectory(presetDirectory);
     File.WriteAllText(Path.Combine(presetDirectory, "agent.cordis.yml"), "name: reviewer\n", new UTF8Encoding(false));
@@ -4507,6 +4550,16 @@ static Task TestVersionPackageOperations()
         Assert(safeSkill.Contains("hotkey: Ctrl+K", StringComparison.Ordinal)
             && safeSkill.Contains("publicKey: public-material", StringComparison.Ordinal),
             "整合包脱敏不能误删 hotkey、publicKey 等正常配置。 ");
+        var skillScriptEntry = exported.GetEntry("dsh-home/skills/code-review/scripts/review.ps1");
+        Assert(skillScriptEntry is not null, "整合包必须保留目录式 Skill 的文本伴随脚本。 ");
+        using var skillScriptReader = new StreamReader(
+            skillScriptEntry!.Open(),
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true);
+        var safeSkillScript = skillScriptReader.ReadToEnd();
+        Assert(!safeSkillScript.Contains("skill-script-secret", StringComparison.Ordinal)
+            && safeSkillScript.Contains("Write-Output 'review-ready'", StringComparison.Ordinal),
+            "Skill 伴随脚本必须经过凭据脱敏且保留正常代码。 ");
         Assert(exported.GetEntry("dsh-home/.agent-presets/reviewer/agent.cordis.yml") is not null,
             "整合包应包含 Agent Preset 配置。 ");
     }
@@ -4543,6 +4596,11 @@ static Task TestVersionPackageOperations()
     Assert(File.Exists(importedSkill)
         && !File.ReadAllText(importedSkill).Contains("skill-secret", StringComparison.Ordinal),
         "导入整合包应恢复 Skill，但不能恢复敏感值。 ");
+    var importedSkillScript = Path.Combine(importedDesign.DshHome, "skills", "code-review", "scripts", "review.ps1");
+    Assert(File.Exists(importedSkillScript)
+        && File.ReadAllText(importedSkillScript).Contains("review-ready", StringComparison.Ordinal)
+        && !File.ReadAllText(importedSkillScript).Contains("skill-script-secret", StringComparison.Ordinal),
+        "导入整合包应恢复 Skill 伴随脚本，同时保持凭据已脱敏。 ");
     Assert(File.Exists(Path.Combine(importedDesign.DshHome, ".agent-presets", "reviewer", "agent.cordis.yml")),
         "导入整合包应恢复 Agent Preset。 ");
     Assert(settingsService.Read(importedDesign).NodeExecutablePath is null,
@@ -5415,10 +5473,14 @@ static Task TestConversationSynchronization()
     Assert(!File.Exists(firstSession) && !File.Exists(secondSession) && !File.Exists(independentSession), "删除标记应阻止旧会话在下一次同步时复活。");
 
     var recreated = BuildSessionJsonl("session-a", "C:\\work", "new session after deletion");
-    File.WriteAllText(firstSession, recreated, new UTF8Encoding(false));
-    File.SetLastWriteTimeUtc(firstSession, DateTime.UtcNow.AddSeconds(2));
+    var oldExport = Path.Combine(temporary.Path, "old-session.jsonl");
+    File.WriteAllText(oldExport, recreated, new UTF8Encoding(false));
+    File.SetLastWriteTimeUtc(oldExport, DateTime.UtcNow.AddDays(-1));
+    var importedSession = new ConversationService().Import(first, oldExport);
+    Assert(File.GetLastWriteTimeUtc(importedSession) > File.GetLastWriteTimeUtc(oldExport),
+        "导入旧会话必须标记为当前重新创建，不能沿用早于删除标记的文件时间。");
     sync.Synchronize(first, new[] { first, second, independent });
-    Assert(File.ReadAllText(independentSession) == recreated, "重新创建同一路径的新会话应清除旧删除标记并同步。");
+    Assert(File.ReadAllText(independentSession) == recreated, "重新导入同一路径的旧会话应清除旧删除标记并同步。");
     return Task.CompletedTask;
 }
 

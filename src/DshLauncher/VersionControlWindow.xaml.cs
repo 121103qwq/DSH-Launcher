@@ -601,6 +601,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             PackageManager = "npm",
             LastError = null,
             ProcessId = null,
+            ProcessStartedAt = null,
             Port = null,
             WebUrl = null,
             DshLaunchSpec = launchSpec,

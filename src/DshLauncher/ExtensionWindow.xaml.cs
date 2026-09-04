@@ -1582,6 +1582,7 @@ public partial class ExtensionWindow : UserControl
                 RuntimeStatus = InstanceRuntimeStatus.Stopped,
                 RuntimeOwnership = InstanceRuntimeOwnership.None,
                 ProcessId = null,
+                ProcessStartedAt = null,
                 Port = null,
                 WebUrl = null,
                 LastError = null

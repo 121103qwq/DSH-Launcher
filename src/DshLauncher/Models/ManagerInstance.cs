@@ -44,7 +44,8 @@ public sealed record ManagerInstance(
     string? WebUrl = null,
     DshRuntimeLaunchSpec? DshLaunchSpec = null,
     DateTimeOffset? LastUsedAt = null,
-    string? ImportedFromDshHome = null)
+    string? ImportedFromDshHome = null,
+    DateTimeOffset? ProcessStartedAt = null)
 {
     [JsonIgnore]
     public string KindText => Kind == InstanceKind.Installed ? "installed" : "source";

@@ -167,11 +167,7 @@ public sealed class ConversationService
             throw new InvalidDataException("备份不是可识别的 DSh session 文件，不能恢复。");
         }
 
-        var restored = Import(instance, source);
-        // 恢复代表重新创建会话。使用当前时间可让同步服务识别它晚于旧删除标记，
-        // 从而在下一次同步时清除该标记，而不是把刚恢复的文件再次删除。
-        File.SetLastWriteTimeUtc(restored, DateTime.UtcNow);
-        return restored;
+        return Import(instance, source);
     }
 
     public string Export(ManagerInstance instance, ConversationEntry entry, string destinationPath)
@@ -253,6 +249,9 @@ public sealed class ConversationService
         try
         {
             File.Copy(source, temporary, overwrite: false);
+            // 导入代表用户主动重新创建该会话。先在临时文件上更新时间，避免
+            // 同路径的旧删除标记在随后的版本同步中把刚导入的会话再次删除。
+            File.SetLastWriteTimeUtc(temporary, DateTime.UtcNow);
             File.Move(temporary, target, overwrite: false);
         }
         finally
