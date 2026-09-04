@@ -106,18 +106,17 @@
                 </Grid>
             </Border>
 
-            <ScrollViewer Grid.Column="2"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
-                          CanContentScroll="False"
-                          PanningMode="VerticalOnly">
-            <Border
+            <Border Grid.Column="2"
                     Background="{StaticResource CardBrush}"
                     BorderBrush="{StaticResource LineBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
-                    Padding="22">
-                <StackPanel>
+                    ClipToBounds="True">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              CanContentScroll="False"
+                              PanningMode="VerticalOnly">
+                <StackPanel Margin="22">
                     <TextBlock Text="版本控制" FontSize="20" FontWeight="SemiBold" />
                     <TextBlock x:Name="HintText"
                                Text="每个版本拥有独立 DSH_HOME；同一个 DSh 运行目录可以被多个版本共用。"
@@ -238,8 +237,8 @@
                         </StackPanel>
                     </Border>
                     <TextBlock x:Name="StatusText" Foreground="{StaticResource BlueBrush}" TextWrapping="Wrap" Margin="0,18,0,0" />
-                </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
             </Border>
-            </ScrollViewer>
         </Grid>
 </UserControl>
