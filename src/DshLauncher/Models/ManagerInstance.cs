@@ -42,6 +42,7 @@ public sealed record ManagerInstance(
     int? ProcessId = null,
     int? Port = null,
     string? WebUrl = null,
+    string? AuthenticatedWebUrl = null,
     DshRuntimeLaunchSpec? DshLaunchSpec = null,
     DateTimeOffset? LastUsedAt = null,
     string? ImportedFromDshHome = null)

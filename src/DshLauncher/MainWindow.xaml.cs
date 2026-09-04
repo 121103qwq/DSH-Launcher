@@ -675,7 +675,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     RuntimeOwnership = InstanceRuntimeOwnership.None,
                     ProcessId = null,
                     Port = null,
-                    WebUrl = null
+                    WebUrl = null,
+                    AuthenticatedWebUrl = null
                 };
             }
 
@@ -2789,15 +2790,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 if (GetSelectedOpenMode() == VersionOpenMode.Web)
                 {
-                    // Web 启动模式：重新打开 = 在默认浏览器打开（与 dsh 原生行为一致）
-                    OpenWebUrlInBrowser(selected.WebUrl);
+                    // Web 启动模式：重新打开 = 在默认浏览器打开（与 dsh 原生行为一致）；
+                    // 0.1.2-rc.1 起页面需要 launch token，优先用带 token 的地址。
+                    OpenWebUrlInBrowser(selected.AuthenticatedWebUrl ?? selected.WebUrl);
                     ShowNotice($"实例仍在运行，已在默认浏览器打开：{selected.WebUrl}。");
                 }
                 else
                 {
                     if (!TryFocusChatWindow(selected.Id))
                     {
-                        OpenChatWindow(selected.Id, selected.WebUrl);
+                        OpenChatWindow(selected.Id, selected.AuthenticatedWebUrl ?? selected.WebUrl);
                     }
 
                     ShowNotice($"实例仍在运行，已重新打开：{selected.Name}。关闭窗口不会停止实例。 ");
@@ -2933,6 +2935,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ProcessId = null,
                 Port = null,
                 WebUrl = null,
+                AuthenticatedWebUrl = null,
                 LastError = null
             };
             UpdateInstance(stopped);
@@ -3033,6 +3036,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ProcessId = null,
                 Port = null,
                 WebUrl = null,
+                AuthenticatedWebUrl = null,
                 LastError = null
             });
             await SynchronizeConversationsAsync(selected with
@@ -3042,6 +3046,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ProcessId = null,
                 Port = null,
                 WebUrl = null,
+                AuthenticatedWebUrl = null,
                 LastError = null
             });
             ShowNotice($"实例已停止：{selected.Name}。");
@@ -3098,6 +3103,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     ProcessId = null,
                     Port = null,
                     WebUrl = null,
+                    AuthenticatedWebUrl = null,
                     LastError = null
                 };
                 UpdateInstance(selected);
@@ -3140,10 +3146,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ProcessId = result.ProcessId,
                 Port = result.Port,
                 WebUrl = result.WebUrl,
+                AuthenticatedWebUrl = result.AuthenticatedWebUrl,
                 LastError = null,
                 LastUsedAt = DateTimeOffset.UtcNow
             });
-            OpenChatWindow(selected.Id, result.WebUrl);
+            OpenChatWindow(selected.Id, result.AuthenticatedWebUrl ?? result.WebUrl);
             ShowNotice($"实例已重启：{selected.Name}，运行地址 {result.WebUrl}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -3269,6 +3276,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ProcessId = status == InstanceRuntimeStatus.Running ? original.ProcessId : null,
                 Port = status == InstanceRuntimeStatus.Running ? original.Port : null,
                 WebUrl = status == InstanceRuntimeStatus.Running ? original.WebUrl : null,
+                AuthenticatedWebUrl = status == InstanceRuntimeStatus.Running ? original.AuthenticatedWebUrl : null,
                 LastError = error
             });
         }
@@ -3364,6 +3372,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ProcessId = result.ProcessId,
             Port = result.Port,
             WebUrl = result.WebUrl,
+            AuthenticatedWebUrl = result.AuthenticatedWebUrl,
             LastError = null,
             LastUsedAt = DateTimeOffset.UtcNow
         });
@@ -4213,8 +4222,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return true;
         }
 
-        // Desktop 启动（启动器方式）：Launcher 用内部 Chat 窗口承载 WebUI
-        OpenChatWindow(selected.Id, result.WebUrl);
+        // Desktop 启动（启动器方式）：Launcher 用内部 Chat 窗口承载 WebUI；
+        // 0.1.2-rc.1 起页面需要 launch token，优先用带 token 的地址。
+        OpenChatWindow(selected.Id, result.AuthenticatedWebUrl ?? result.WebUrl);
         ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
         return true;
     }
@@ -4256,7 +4266,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     RuntimeStatus = InstanceRuntimeStatus.Running,
                     RuntimeOwnership = InstanceRuntimeOwnership.Managed,
-                    WebUrl = started.WebUrl
+                    WebUrl = started.WebUrl,
+                    AuthenticatedWebUrl = started.AuthenticatedWebUrl
                 };
             }
             finally
@@ -4279,7 +4290,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         else
         {
-            chat = OpenChatWindow(instance.Id, instance.WebUrl);
+            chat = OpenChatWindow(instance.Id, instance.AuthenticatedWebUrl ?? instance.WebUrl);
         }
 
         if (chat is null)
@@ -4472,7 +4483,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return false;
             }
 
-            OpenChatWindow(instance.Id, instance.WebUrl, entry.SessionId);
+            OpenChatWindow(instance.Id, instance.AuthenticatedWebUrl ?? instance.WebUrl, entry.SessionId);
             return true;
         }
 
@@ -4511,7 +4522,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return false;
             }
 
-            OpenChatWindow(instance.Id, result.WebUrl, entry.SessionId);
+            OpenChatWindow(instance.Id, result.AuthenticatedWebUrl ?? result.WebUrl, entry.SessionId);
             ShowNotice($"实例已启动，正在打开对话：{entry.SessionId}。 ");
             return true;
         }

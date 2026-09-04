@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.IO;
 using DshLauncher.Models;
 
@@ -15,7 +16,17 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan HealthRequestTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan AuthenticatedUrlWaitTimeout = TimeSpan.FromSeconds(5);
     private const int PortStartAttempts = 3;
+
+    /// <summary>
+    /// dsh 0.1.2-rc.1 起 web 应用在启动输出打印带一次性 launch token 的地址行：
+    /// `dsh web: http://127.0.0.1:&lt;port&gt;/?token=…`。裸地址请求返回 401，
+    /// 必须携带 token（或换取 cookie）才能加载页面；该 token 每次进程启动生成。
+    /// </summary>
+    private static readonly Regex AuthenticatedUrlPattern = new(
+        @"dsh\s+web:\s*(https?://\S+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly Dictionary<string, RunningDshProcess> _running = new(StringComparer.Ordinal);
@@ -163,7 +174,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     return false;
                 }
 
-                var webUrl = instance.WebUrl ?? $"http://127.0.0.1:{instance.Port.Value}/";
+                var webUrl = instance.AuthenticatedWebUrl ?? instance.WebUrl ?? $"http://127.0.0.1:{instance.Port.Value}/";
                 lock (_running)
                 {
                     _running[instance.Id] = new RunningDshProcess(
@@ -311,7 +322,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 return DshInstanceRunResult.Success(
                     existing.Process.Id,
                     existing.Port,
-                    existing.WebUrl);
+                    existing.WebUrl,
+                    existing.AuthenticatedWebUrl);
             }
 
             if (IsAttached(instance.Id))
@@ -348,7 +360,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                             EnableRaisingEvents = true
                         };
                         var output = new StringBuilder();
-                        process.OutputDataReceived += (_, args) => AppendOutput(output, args.Data);
+                        process.OutputDataReceived += (_, args) =>
+                        {
+                            AppendOutput(output, args.Data);
+                            TryCaptureAuthenticatedUrl(instance.Id, args.Data);
+                        };
                         process.ErrorDataReceived += (_, args) => AppendOutput(output, args.Data);
 
                         if (!process.Start())
@@ -368,8 +384,15 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         var health = await WaitForHealthAsync(running, cancellationToken);
                         if (health.IsSuccess)
                         {
+                            // 0.1.2-rc.1 起 web 页面需要 launch token；地址行在 Loader
+                            // 树落定后才打印（可能晚于健康检查通过），再等一小段窗口。
+                            await WaitForAuthenticatedUrlAsync(running, cancellationToken);
                             instanceLock = null;
-                            return DshInstanceRunResult.Success(running.Process.Id, port, webUrl);
+                            return DshInstanceRunResult.Success(
+                                running.Process.Id,
+                                port,
+                                webUrl,
+                                running.AuthenticatedWebUrl);
                         }
 
                         var retryPort = attempt < PortStartAttempts && IsPortConflict(health.Error);
@@ -611,6 +634,98 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
 
         return HealthResult.Failed($"DSh 健康检查超时（30 秒）。{lastError ?? string.Empty}{GetDiagnosticSuffix(running)}");
+    }
+
+    /// <summary>
+    /// 从 dsh 的启动输出解析带 launch token 的 Web 地址（0.1.2-rc.1 新增）。
+    /// 输出行形如 `dsh web: http://127.0.0.1:&lt;port&gt;/?token=…`；打印时机在
+    /// Loader 树落定之后，可能晚于健康检查通过，因此健康检查成功后再等待一小段
+    /// 窗口：先扫输出缓冲（兜底），再轮询事件捕获结果。超时静默——不影响启动，
+    /// 只是 Chat 窗口可能退化为需要用户粘贴带 token 地址。
+    /// </summary>
+    private static async Task WaitForAuthenticatedUrlAsync(
+        RunningDshProcess running,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + AuthenticatedUrlWaitTimeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.IsNullOrWhiteSpace(running.AuthenticatedWebUrl))
+            {
+                return;
+            }
+
+            if (TryScanOutputForAuthenticatedUrl(running))
+            {
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+    }
+
+    private static bool TryScanOutputForAuthenticatedUrl(RunningDshProcess running)
+    {
+        string? snapshot;
+        lock (running.Output)
+        {
+            if (running.Output.Length == 0)
+            {
+                return false;
+            }
+
+            snapshot = running.Output.ToString();
+        }
+
+        if (TryExtractAuthenticatedUrl(snapshot, out var url))
+        {
+            running.AuthenticatedWebUrl = url;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractAuthenticatedUrl(string? text, out string url)
+    {
+        url = string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var match = AuthenticatedUrlPattern.Match(text);
+        if (!match.Success || !Uri.TryCreate(match.Groups[1].Value, UriKind.Absolute, out var parsed)
+            || !parsed.IsLoopback || parsed.Scheme is not ("http" or "https"))
+        {
+            return false;
+        }
+
+        url = parsed.ToString();
+        return true;
+    }
+
+    /// <summary>
+    /// 输出事件快速路径：从 `dsh web: …` 行捕获带 token 地址。捕获到一次后不再处理；
+    /// 与输出缓冲兜底（{@link WaitForAuthenticatedUrlAsync}）互补，覆盖事件早于
+    /// 运行条目入表时的间隙。
+    /// </summary>
+    private void TryCaptureAuthenticatedUrl(string instanceId, string? line)
+    {
+        if (!TryExtractAuthenticatedUrl(line, out var url))
+        {
+            return;
+        }
+
+        lock (_running)
+        {
+            if (_running.TryGetValue(instanceId, out var current)
+                && string.IsNullOrWhiteSpace(current.AuthenticatedWebUrl))
+            {
+                current.AuthenticatedWebUrl = url;
+            }
+        }
     }
 
     private static async Task<bool> ProbeEndpointAsync(Uri endpoint, CancellationToken cancellationToken)
@@ -998,12 +1113,39 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
-    private sealed record RunningDshProcess(
-        Process Process,
-        int Port,
-        string WebUrl,
-        StringBuilder Output,
-        InstanceLock InstanceLock);
+    private sealed class RunningDshProcess
+    {
+        public RunningDshProcess(
+            Process process,
+            int port,
+            string webUrl,
+            StringBuilder output,
+            InstanceLock instanceLock)
+        {
+            Process = process;
+            Port = port;
+            WebUrl = webUrl;
+            Output = output;
+            InstanceLock = instanceLock;
+        }
+
+        public Process Process { get; }
+
+        public int Port { get; }
+
+        public string WebUrl { get; }
+
+        public StringBuilder Output { get; }
+
+        public InstanceLock InstanceLock { get; }
+
+        /// <summary>
+        /// dsh 0.1.2-rc.1 起启动输出里的带 launch token 地址（
+        /// `http://127.0.0.1:&lt;port&gt;/?token=…`），仅供 Chat 窗口导航；
+        /// 未捕获到时为 null，调用方回退裸地址。
+        /// </summary>
+        public string? AuthenticatedWebUrl { get; set; }
+    }
 
     private sealed record AttachedDshService(Uri Endpoint, int Port);
 
