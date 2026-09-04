@@ -1083,19 +1083,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>
     /// PCL 式页面切换动画：淡入 + 8px 上浮（EaseOut）。
+    /// 动画结束后清除 RenderTransform / Opacity 基值——残留的 Transform
+    /// 会让 WPF 走非像素对齐渲染路径，导致文本发虚（125% DPI 下尤甚）。
     /// </summary>
     private static void AnimateIn(FrameworkElement element)
     {
-        element.Opacity = 0;
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         var translate = new TranslateTransform { Y = 8 };
         element.RenderTransform = translate;
-        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
-        element.BeginAnimation(
-            OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease });
-        translate.BeginAnimation(
-            TranslateTransform.YProperty,
-            new DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(160)) { EasingFunction = ease });
+        var rise = new DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(160)) { EasingFunction = ease };
+        rise.Completed += (_, _) =>
+        {
+            translate.BeginAnimation(TranslateTransform.YProperty, null);
+            element.RenderTransform = null;
+        };
+        translate.BeginAnimation(TranslateTransform.YProperty, rise);
+
+        element.Opacity = 0;
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease };
+        fade.Completed += (_, _) =>
+        {
+            // 先恢复基值再移除动画：否则 BeginAnimation(null) 会回落到基值 0（透明）。
+            element.Opacity = 1;
+            element.BeginAnimation(OpacityProperty, null);
+        };
+        element.BeginAnimation(OpacityProperty, fade);
     }
 
     private void VersionControl_Click(object sender, RoutedEventArgs e) => ShowVersionControl();

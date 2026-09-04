@@ -31,6 +31,21 @@
         <DropShadowEffect x:Key="CardShadow" Color="#3E5C7A" BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.14" />
         <DropShadowEffect x:Key="CardShadowSoft" Color="#3E5C7A" BlurRadius="10" ShadowDepth="1" Direction="270" Opacity="0.08" />
 
+        <!-- 文本渲染：Display/ClearType（WPF 默认 Ideal 在高 DPI 下发虚）；
+             布局取整避免亚像素错位。应用到所有 Window 与嵌入 UserControl。 -->
+        <Style TargetType="{x:Type Window}">
+            <Setter Property="UseLayoutRounding" Value="True" />
+            <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+            <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+            <Setter Property="TextOptions.TextHintingMode" Value="Fixed" />
+        </Style>
+        <Style TargetType="{x:Type UserControl}">
+            <Setter Property="UseLayoutRounding" Value="True" />
+            <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+            <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+            <Setter Property="TextOptions.TextHintingMode" Value="Fixed" />
+        </Style>
+
         <!-- PCL 式细滚动条：无箭头、圆角 thumb、透明轨道（全局生效） -->
         <Style TargetType="{x:Type ScrollBar}">
             <Setter Property="Background" Value="Transparent" />
