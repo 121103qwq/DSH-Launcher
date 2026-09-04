@@ -34,6 +34,7 @@ dsh-launcher-dev/
 | 15 | `ExtensionWindow.xaml.cs` | 运行中 dsh-market 热加载「更新」增加与安装对称的前检：插件不在 dsh-market 目录时轻提示“停止实例后普通更新”，不再触发回档+诊断报告重流程 |
 | 16 | `ExtensionWindow.xaml(.cs)` | 页面高度固定为视口可用高度（`RootLayout.Height`）：插件数量多时滚动只发生在内层列表，不再出现内外两级滚动条；**同时移除** 4dd3644 加入的“插件市场自定义目录”配置口（用户反馈目录格式不兼容暂缓；对应代码仅在历史提交中） |
 | 17 | `Services/DshInstanceRunner.cs` 等 | **dsh 0.1.2-rc.1 浏览器 token 适配**：新版 web 应用要求 `?token=` 认证（裸地址 401），启动输出行 `dsh web: http://127.0.0.1:<port>/?token=…` 仅打印在进程 stdout。启动后从进程输出解析带 token 地址（事件捕获+缓冲扫描双通道，健康检查后最多等 5s），存入 `Instance.AuthenticatedWebUrl`（与 `WebUrl` 共存：后者保持裸地址语义，用于展示/校验/attach）；Chat 窗口与 Web 模式重开浏览器均优先使用带 token 地址（WebView2 首次导航即种 cookie，之后免 token）；停止/清空时同步清空；adopt 与 attach 场景无法取得 token 时回退裸地址（用户可自行粘贴带 token URL） |
+| 18 | `MainWindow.xaml.cs` | **启动崩溃修复**：`HandleWmGetMinMaxInfo` / `ClampMaximizedWindowPos` 对 `lParam==NULL` 的早期 `WM_GETMINMAXINFO`/`WM_WINDOWPOSCHANGING` 未防护，窗口初始化阶段触发 `NullReferenceException`（crash.log 实测抓到的启动崩溃）；两处均早退。修复后干净启动无新崩溃日志 |
 
 其余文件与上游逐字节一致。构建 0 警告 0 错误；功能全部实测通过（见 work-log 12-15、17）。
 
