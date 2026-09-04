@@ -25,8 +25,8 @@
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
         <Style x:Key="WindowControlButton" TargetType="Button">
-            <Setter Property="Width" Value="42" />
-            <Setter Property="Height" Value="42" />
+            <Setter Property="Width" Value="34" />
+            <Setter Property="Height" Value="34" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
@@ -36,17 +36,25 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Chrome"
                                 Background="{TemplateBinding Background}"
-                                CornerRadius="10">
+                                CornerRadius="17">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#3388D3" />
+                                <Setter TargetName="Chrome" Property="Background" Value="#55FFFFFF" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#1D69AF" />
+                                <Setter TargetName="Chrome" Property="Background" Value="#B3FFFFFF" />
                             </Trigger>
+                            <!-- 关闭按钮：Tag=Close，悬停红色警示（PCL 式） -->
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Value="Close" />
+                                    <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource TemplatedParent}}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="Chrome" Property="Background" Value="#CE2111" />
+                            </MultiDataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -78,7 +86,7 @@
 
             <Border x:Name="TitleBarBorder"
                     Grid.Row="0"
-                    Background="{StaticResource BlueBrush}"
+                    Background="{StaticResource TitleBarGradient}"
                     CornerRadius="17,17,0,0"
                     MouseLeftButtonDown="TitleBar_OnMouseLeftButtonDown">
                 <Grid Margin="18,0,16,0">
@@ -102,7 +110,7 @@
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center"
                             Foreground="White"
-                            Background="#2578C4"
+                            Background="#55FFFFFF"
                             BorderBrush="#80FFFFFF"
                             BorderThickness="1"
                             Cursor="Hand"
@@ -121,10 +129,10 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="BackChrome" Property="Background" Value="#3388D3" />
+                                        <Setter TargetName="BackChrome" Property="Background" Value="#80FFFFFF" />
                                     </Trigger>
                                     <Trigger Property="IsPressed" Value="True">
-                                        <Setter TargetName="BackChrome" Property="Background" Value="#1D69AF" />
+                                        <Setter TargetName="BackChrome" Property="Background" Value="#B3FFFFFF" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -142,7 +150,7 @@
                             Height="44"
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center"
-                            Background="#2578C4"
+                            Background="#55FFFFFF"
                             BorderBrush="#80FFFFFF"
                             BorderThickness="1"
                             CornerRadius="10"
@@ -229,8 +237,8 @@
                         <Button x:Name="MaximizeButton"
                                 Click="Maximize_Click"
                                 Style="{StaticResource WindowControlButton}"
-                                Width="50"
-                                Height="50"
+                                Width="34"
+                                Height="34"
                                 Margin="0,0,2,0"
                                 ToolTip="最大化">
                             <TextBlock x:Name="MaximizeGlyph"
@@ -241,6 +249,7 @@
                         </Button>
                         <Button Click="Close_Click"
                                 Style="{StaticResource WindowControlButton}"
+                                Tag="Close"
                                 ToolTip="关闭">
                             <TextBlock Text="×" FontSize="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
@@ -308,7 +317,7 @@
                                     </Grid>
                                     <Grid Grid.Row="1" Margin="0,22,0,0">
                                         <StackPanel VerticalAlignment="Center" Visibility="{Binding NoInstancesVisibility}">
-                                            <Border Width="58" Height="58" Background="#EAF3FC" CornerRadius="18" HorizontalAlignment="Center">
+                                            <Border Width="58" Height="58" Background="#EAF2FE" CornerRadius="18" HorizontalAlignment="Center">
                                                 <TextBlock Text="＋" Foreground="{StaticResource BlueBrush}" FontSize="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             </Border>
                                             <TextBlock Text="尚未创建 DSh 版本"
@@ -482,6 +491,33 @@
                                                 </DataTemplate>
                                             </ListBox.ItemTemplate>
                                         </ListBox>
+                                        <!-- 无实例引导（右栏空态，PCL 式插画） -->
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="{Binding NoInstancesVisibility}" Margin="0,26,0,0">
+                                            <Grid Width="170" Height="112">
+                                                <Ellipse Width="112" Height="112" HorizontalAlignment="Left" VerticalAlignment="Top">
+                                                    <Ellipse.Fill>
+                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                            <GradientStop Color="#4890F5" Offset="0" />
+                                                            <GradientStop Color="#96C0F9" Offset="1" />
+                                                        </LinearGradientBrush>
+                                                    </Ellipse.Fill>
+                                                </Ellipse>
+                                                <Ellipse Width="34" Height="34" HorizontalAlignment="Right" VerticalAlignment="Bottom" Fill="#7FB2F9" Margin="8,0,16,10" />
+                                                <Ellipse Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Bottom" Fill="#C6DCFC" Margin="30,0,0,2" />
+                                                <Path Data="M 8,0 L 8,58 L 78,58" Stroke="White" StrokeThickness="5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="24,0,0,0" Opacity="0.92" />
+                                                <TextBlock Text="DSH" FontSize="24" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-6,16,0" Opacity="0.95" />
+                                            </Grid>
+                                            <TextBlock Text="启动后的实例与运行状态会显示在这里"
+                                                       HorizontalAlignment="Center"
+                                                       FontWeight="SemiBold"
+                                                       FontSize="15"
+                                                       Margin="0,22,0,0" />
+                                            <TextBlock Text="在左侧准备或导入一个 DSh 版本后即可启动"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       HorizontalAlignment="Center"
+                                                       FontSize="12"
+                                                       Margin="0,6,0,0" />
+                                        </StackPanel>
                                     </Grid>
                             </Border>
                         </Grid>

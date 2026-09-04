@@ -396,6 +396,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
+            // 窗口尺寸自适应：不超过工作区 92% 并居中。WPF 的 Width/Left 是
+            // DIP（逻辑单位），SystemParameters.WorkArea 是物理像素（system-aware
+            // 进程），高 DPI（如 125%）下必须除以 DpiScale 再比较，否则窗控按钮
+            // 会被裁出屏幕右缘。
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var workArea = SystemParameters.WorkArea;
+            Width = Math.Min(Width, workArea.Width * 0.92 / dpi.DpiScaleX);
+            Height = Math.Min(Height, workArea.Height * 0.92 / dpi.DpiScaleY);
+            Left = workArea.Left / dpi.DpiScaleX + Math.Max(0, (workArea.Width / dpi.DpiScaleX - Width) / 2);
+            Top = workArea.Top / dpi.DpiScaleY + Math.Max(0, (workArea.Height / dpi.DpiScaleY - Height) / 2);
+
             SwitchSection("启动");
             LoadCachedInstances();
             await Dispatcher.Yield(DispatcherPriority.Background);

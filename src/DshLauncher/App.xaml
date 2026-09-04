@@ -4,14 +4,29 @@
              StartupUri="MainWindow.xaml"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
-        <FontFamily x:Key="UiFont">Segoe UI</FontFamily>
-        <SolidColorBrush x:Key="BlueBrush" Color="#1778D5" />
-        <SolidColorBrush x:Key="BlueDarkBrush" Color="#0E5FAF" />
-        <SolidColorBrush x:Key="PageBrush" Color="#EEF5FD" />
+        <FontFamily x:Key="UiFont">Segoe UI, Microsoft YaHei UI</FontFamily>
+        <!-- 蓝系：PCL 式 10 级渐变体系（#0b5bcb→#1370f3→#4890f5→…→#eaf2fe） -->
+        <SolidColorBrush x:Key="BlueBrush" Color="#1370F3" />
+        <SolidColorBrush x:Key="BlueDarkBrush" Color="#0B5BCB" />
+        <SolidColorBrush x:Key="BlueBrightBrush" Color="#4890F5" />
+        <SolidColorBrush x:Key="PaleBlueBrush" Color="#96C0F9" />
+        <SolidColorBrush x:Key="HoverBlueBrush" Color="#E0EAFD" />
+        <SolidColorBrush x:Key="SelectedBlueBrush" Color="#EAF2FE" />
+        <SolidColorBrush x:Key="PageBrush" Color="#EAF2FE" />
         <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="TextBrush" Color="#26384A" />
-        <SolidColorBrush x:Key="MutedBrush" Color="#718196" />
-        <SolidColorBrush x:Key="LineBrush" Color="#D7E4F2" />
+        <SolidColorBrush x:Key="TextBrush" Color="#343D4A" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#8C8C8C" />
+        <SolidColorBrush x:Key="FaintBrush" Color="#A6A6A6" />
+        <SolidColorBrush x:Key="LineBrush" Color="#D5E6FD" />
+        <SolidColorBrush x:Key="RedBrush" Color="#CE2111" />
+        <SolidColorBrush x:Key="GreenBrush" Color="#2EA66B" />
+        <SolidColorBrush x:Key="WhiteFaintBrush" Color="#55FFFFFF" />
+        <SolidColorBrush x:Key="WhiteSoftBrush" Color="#80FFFFFF" />
+        <SolidColorBrush x:Key="WhiteStrongBrush" Color="#B3FFFFFF" />
+        <LinearGradientBrush x:Key="TitleBarGradient" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#0B5BCB" Offset="0" />
+            <GradientStop Color="#1370F3" Offset="1" />
+        </LinearGradientBrush>
         <Style x:Key="ContextInstanceMenuStyle" TargetType="ContextMenu">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -55,10 +70,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="#E8F3FE" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="#E0EAFD" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="#DCEEFF" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="#EAF2FE" />
                                 <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -342,7 +357,7 @@
             <Setter Property="FontSize" Value="15" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#E3F0FD" />
+                    <Setter Property="Background" Value="#E0EAFD" />
                     <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                 </Trigger>
             </Style.Triggers>
@@ -353,13 +368,30 @@
             <Setter Property="Foreground" Value="White" />
             <Setter Property="Padding" Value="15,8" />
             <Setter Property="FontSize" Value="14" />
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#2D8BE0" />
-                    <Setter Property="BorderBrush" Value="#2D8BE0" />
-                    <Setter Property="Foreground" Value="White" />
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="NavChrome"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="10"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="NavChrome" Property="Background" Value="#55FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="NavChrome" Property="Background" Value="#B3FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Application.Resources>
 </Application>
