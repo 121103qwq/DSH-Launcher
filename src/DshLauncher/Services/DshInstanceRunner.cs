@@ -881,11 +881,13 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             arguments.Add(patchPath);
         }
 
-        // Desktop 启动（启动器方式）由 Launcher 用内部 Chat 窗口承载 WebUI，
-        // 必须抑制 dsh 默认打开系统浏览器，避免双开；
-        // Web 启动（dsh 原生方式）不传 --no-open，由 dsh 原生打开默认浏览器。
-        // --no-open 是 0.1.0-rc.8 才加入的开关，旧版 dsh 传了会以 unknown option 退出。
-        if (!openBrowser && SupportsNoOpen(instance.DetectedVersion))
+        // dsh 0.1.2 的浏览器交接（open@11 的 Windows 实现）实测不弹浏览器：
+        // 其 PowerShell Start 调用静默失败（exit 0 且无新窗口），而直接
+        // Start-Process / UseShellExecute 正常。Launcher 改为全部托管打开：
+        // 总是传 --no-open（0.1.0-rc.8+ 支持），启动成功后由 Launcher 用系统
+        // 默认方式打开（Web 模式开浏览器 / Desktop 模式开 Chat 窗口），
+        // 彻底绕开 dsh→open 链路。旧版 dsh（< 0.1.0-rc.8）不传，保持其原生行为。
+        if (SupportsNoOpen(instance.DetectedVersion))
         {
             arguments.Add("--no-open");
         }

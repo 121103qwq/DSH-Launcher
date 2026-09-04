@@ -4239,8 +4239,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (openBrowser)
         {
-            // Web 启动（dsh 原生方式）：打开方式交给 dsh 默认浏览器，Launcher 不重复开窗口
-            ShowNotice($"实例已启动：{selected.Name}，{result.WebUrl}（dsh 已在默认浏览器打开）。");
+            // Web 启动：dsh 已带 --no-open，由 Launcher 用系统默认方式打开；
+            // 0.1.2-rc.1 起页面需要 launch token，必须用带 token 的地址。
+            OpenWebUrlInBrowser(result.AuthenticatedWebUrl ?? result.WebUrl);
+            ShowNotice($"实例已启动：{selected.Name}，{result.WebUrl}（已在默认浏览器打开）。");
             return true;
         }
 
