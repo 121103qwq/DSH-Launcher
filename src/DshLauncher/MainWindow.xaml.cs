@@ -3887,6 +3887,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void HandleWmGetMinMaxInfo(IntPtr windowHandle, IntPtr wordParameter)
     {
+        // 窗口早期（Handle 已建但系统尚未回传 lParam）可能收到空指针，直接跳过
+        if (wordParameter == IntPtr.Zero)
+        {
+            return;
+        }
+
         var monitor = MonitorFromWindow(windowHandle, MonitorDefaultToNearest);
         if (monitor == IntPtr.Zero)
         {
@@ -3920,6 +3926,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ClampMaximizedWindowPos(IntPtr windowHandle, IntPtr wordParameter)
     {
+        if (wordParameter == IntPtr.Zero)
+        {
+            return;
+        }
+
         var monitor = MonitorFromWindow(windowHandle, MonitorDefaultToNearest);
         if (monitor == IntPtr.Zero)
         {
