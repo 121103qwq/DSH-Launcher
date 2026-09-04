@@ -9,6 +9,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Data;
 using System.Windows.Threading;
 using System.Text.RegularExpressions;
@@ -155,6 +156,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceSummary));
             OnPropertyChanged(nameof(SelectedInstanceStatus));
             OnPropertyChanged(nameof(SelectedInstanceStatusBrush));
+            OnPropertyChanged(nameof(SelectedInstanceStatusBackgroundBrush));
+            OnPropertyChanged(nameof(SelectedInstanceStatusTextBrush));
             OnPropertyChanged(nameof(InstanceEndpointText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
@@ -198,6 +201,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromRgb(46, 166, 107)),
         InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromRgb(217, 74, 74)),
         _ => new SolidColorBrush(WpfColor.FromRgb(150, 163, 181))
+    };
+
+    /// <summary>状态胶囊底色（状态色 15% 透明度）。</summary>
+    public WpfBrush SelectedInstanceStatusBackgroundBrush => SelectedInstance?.RuntimeStatus switch
+    {
+        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromArgb(38, 46, 166, 107)),
+        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromArgb(38, 217, 74, 74)),
+        _ => new SolidColorBrush(WpfColor.FromArgb(30, 150, 163, 181))
+    };
+
+    /// <summary>状态胶囊文字色（状态色深色调）。</summary>
+    public WpfBrush SelectedInstanceStatusTextBrush => SelectedInstance?.RuntimeStatus switch
+    {
+        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromRgb(31, 122, 80)),
+        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromRgb(180, 35, 24)),
+        _ => new SolidColorBrush(WpfColor.FromRgb(96, 107, 122))
     };
 
     public bool CanStartInstance => SelectedInstance is null
@@ -1048,6 +1067,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         EmbeddedPageHost.Content = null;
         EmbeddedPageHost.Visibility = Visibility.Collapsed;
         MainDashboardGrid.Visibility = Visibility.Visible;
+        AnimateIn(MainDashboardGrid);
     }
 
     private void ShowEmbeddedPage(object page)
@@ -1055,6 +1075,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         MainDashboardGrid.Visibility = Visibility.Collapsed;
         EmbeddedPageHost.Content = page;
         EmbeddedPageHost.Visibility = Visibility.Visible;
+        if (page is FrameworkElement fe)
+        {
+            AnimateIn(fe);
+        }
+    }
+
+    /// <summary>
+    /// PCL 式页面切换动画：淡入 + 8px 上浮（EaseOut）。
+    /// </summary>
+    private static void AnimateIn(FrameworkElement element)
+    {
+        element.Opacity = 0;
+        var translate = new TranslateTransform { Y = 8 };
+        element.RenderTransform = translate;
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        element.BeginAnimation(
+            OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)) { EasingFunction = ease });
+        translate.BeginAnimation(
+            TranslateTransform.YProperty,
+            new DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(160)) { EasingFunction = ease });
     }
 
     private void VersionControl_Click(object sender, RoutedEventArgs e) => ShowVersionControl();
@@ -3409,6 +3450,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         OnPropertyChanged(nameof(SelectedInstanceStatus));
         OnPropertyChanged(nameof(SelectedInstanceStatusBrush));
+        OnPropertyChanged(nameof(SelectedInstanceStatusBackgroundBrush));
+        OnPropertyChanged(nameof(SelectedInstanceStatusTextBrush));
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(StartInstanceButtonText));
         OnPropertyChanged(nameof(LauncherStartVisibility));

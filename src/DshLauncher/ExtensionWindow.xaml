@@ -492,6 +492,7 @@
                 CornerRadius="12"
                 Padding="18"
                 ClipToBounds="True"
+                Effect="{StaticResource CardShadowSoft}"
                 Visibility="Collapsed">
             <Grid>
                 <Grid.RowDefinitions>

@@ -16,7 +16,8 @@
                     BorderBrush="{StaticResource LineBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
-                    Padding="14">
+                    Padding="14"
+                    Effect="{StaticResource CardShadowSoft}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />

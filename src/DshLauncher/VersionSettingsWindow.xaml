@@ -13,7 +13,8 @@
                 Background="{StaticResource CardBrush}"
                 BorderBrush="{StaticResource LineBrush}"
                 BorderThickness="0,0,1,0"
-                Padding="10,18">
+                Padding="10,18"
+                Effect="{StaticResource CardShadowSoft}">
             <StackPanel>
                 <TextBlock x:Name="VersionSettingsHeaderText"
                            Text="版本设置"

@@ -28,6 +28,9 @@
             <GradientStop Color="#1370F3" Offset="1" />
         </LinearGradientBrush>
 
+        <DropShadowEffect x:Key="CardShadow" Color="#3E5C7A" BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.14" />
+        <DropShadowEffect x:Key="CardShadowSoft" Color="#3E5C7A" BlurRadius="10" ShadowDepth="1" Direction="270" Opacity="0.08" />
+
         <!-- PCL 式细滚动条：无箭头、圆角 thumb、透明轨道（全局生效） -->
         <Style TargetType="{x:Type ScrollBar}">
             <Setter Property="Background" Value="Transparent" />

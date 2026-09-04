@@ -300,7 +300,8 @@
                                     Padding="18"
                                     VerticalAlignment="Top"
                                     BorderBrush="{StaticResource LineBrush}"
-                                    BorderThickness="1">
+                                    BorderThickness="1"
+                                    Effect="{StaticResource CardShadow}">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -308,10 +309,10 @@
                                     </Grid.RowDefinitions>
                                     <Grid>
                                         <TextBlock Text="实例状态" FontSize="18" FontWeight="SemiBold" />
-                                        <Border HorizontalAlignment="Right" Background="#F1F5F9" CornerRadius="10" Padding="9,4">
+                                        <Border HorizontalAlignment="Right" Background="{Binding SelectedInstanceStatusBackgroundBrush}" CornerRadius="10" Padding="9,4">
                                             <StackPanel Orientation="Horizontal">
                                                 <Ellipse Width="8" Height="8" Fill="{Binding SelectedInstanceStatusBrush}" Margin="0,0,6,0" />
-                                                <TextBlock Text="{Binding SelectedInstanceStatus}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                                                <TextBlock Text="{Binding SelectedInstanceStatus}" Foreground="{Binding SelectedInstanceStatusTextBrush}" FontSize="11" />
                                             </StackPanel>
                                         </Border>
                                     </Grid>
@@ -416,7 +417,8 @@
                                     ClipToBounds="True"
                                     Padding="18"
                                     BorderBrush="{StaticResource LineBrush}"
-                                    BorderThickness="1">
+                                    BorderThickness="1"
+                                    Effect="{StaticResource CardShadow}">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
