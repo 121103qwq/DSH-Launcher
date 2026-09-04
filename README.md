@@ -70,6 +70,27 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - 对话列表显示会话名称和所属实例，不直接暴露内部路径 ID。
 - 对话模型按“单独对话 → DSh 真实工作目录 → 全局默认”自动继承；从 Launcher 打开会话时通过 DSh 官方 `session.selectModel` 应用。
 - 对话可选择版本独立、按工作区同步或全量同步；运行中的版本不会被同步写入。
+- 对话页可同时按时间、范围和全文搜索标题、工作区及 JSONL/Zstandard 正文；损坏文件不会中断整批结果。
+
+### 任务、运行与诊断
+
+- 顶栏任务中心集中显示下载、运行环境准备、Plugin 操作和实例导入任务，支持取消、重试及最近 50 条历史。
+- Launcher 管理的实例显示整个进程树的 CPU、内存和运行时长；资源数据只保存在内存中。
+- 每个版本可独立设置空闲自动停止和崩溃自动重启；默认关闭，自动重启采用有限退避并最多连续尝试 5 次。
+- Plugin 安装前读取包声明的 DSh 兼容范围；单项安装允许用户确认后强制尝试，批量更新会跳过明确不兼容项。
+- 设置页可查看最近 7 天日志、导出不包含凭据和会话正文的诊断 ZIP，并按实例预览存储分类与安全清理候选。
+- 安全清理只把自动快照、Launcher 报告和明确缓存逐文件移入 Windows 回收站，不处理会话、凭据、手动快照或目录。
+
+### CLI、URL 协议与快捷方式
+
+- 设置页可为当前 Windows 用户注册 `dsh-launcher://`，不需要管理员权限；版本设置可创建指定实例的桌面启动快捷方式。
+- 命令行支持 `open`、`start`、`stop`、`restart`、`chat`、`version-settings`、`plugins` 和 `conversations`，并把指令转发给已经运行的 Launcher。
+
+```powershell
+& '.\DSH.Launcher.exe' start --instance-id '<实例 ID>'
+& '.\DSH.Launcher.exe' chat --instance-id '<实例 ID>' --session-id '<会话 ID>'
+Start-Process 'dsh-launcher://plugins?instanceId=<实例 ID>'
+```
 
 ### 独立聊天窗口
 
@@ -132,4 +153,4 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.0.11**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.1.0**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。

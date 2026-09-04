@@ -196,6 +196,20 @@
                     <StackPanel Orientation="Horizontal"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
+                        <Button x:Name="TaskCenterButton"
+                                Click="TaskCenter_Click"
+                                MinWidth="54"
+                                Height="42"
+                                Padding="10,0"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                Foreground="White"
+                                ToolTip="查看下载、安装与维护任务">
+                            <TextBlock x:Name="TaskCenterButtonText"
+                                       Text="任务"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
                         <Button Click="Minimize_Click"
                                 Width="42"
                                 Height="42"
@@ -321,6 +335,11 @@
                                                        FontSize="12"
                                                        TextWrapping="Wrap"
                                                        Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding SelectedInstanceRuntimeResourceText}"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="11"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,6,0,0" />
                                             <WrapPanel Margin="0,24,0,0">
                                                 <Button Content="重命名"
                                                         Click="RenameSelectedInstance_Click"
@@ -452,6 +471,7 @@
                                                                 <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                                                                 <TextBlock Text="{Binding DshVersionText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0" />
                                                                 <TextBlock Text="{Binding ResourceSummaryText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                                                                <TextBlock Text="{Binding RuntimeResourceText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                                                                 <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource BlueBrush}" FontSize="11" />
                                                             </StackPanel>
                                                         </Grid>

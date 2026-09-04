@@ -24,6 +24,7 @@ public partial class VersionSettingsWindow : UserControl
     private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
     private readonly Action _settingsSaved;
     private readonly bool _openPluginPage;
+    private readonly LauncherIntegrationService _integrationService = new();
     private VersionSettingsData _settings = new();
 
     public VersionSettingsWindow(
@@ -141,6 +142,8 @@ public partial class VersionSettingsWindow : UserControl
         ConversationWorkspaceRadio.IsChecked = _settings.ConversationSyncMode == ConversationSyncMode.Workspace;
         ConversationAllRadio.IsChecked = _settings.ConversationSyncMode == ConversationSyncMode.All;
         SyncModelProvidersCheckBox.IsChecked = _settings.SyncModelProviders;
+        IdleStopMinutesBox.Text = Math.Max(0, _settings.IdleStopMinutes).ToString();
+        RestartOnCrashCheckBox.IsChecked = _settings.RestartOnCrash;
         ConfigurationOptionsPanel.IsEnabled = !_settings.SyncAllConfiguration;
         UpdateWorkspaceEnabled();
     }
@@ -393,6 +396,7 @@ public partial class VersionSettingsWindow : UserControl
 
     private VersionSettingsData ReadConfigurationSettings() => new()
     {
+        ActiveProfileName = _settings.ActiveProfileName,
         SyncAllConfiguration = SyncAllConfigurationCheckBox.IsChecked == true,
         ConversationSyncMode = ConversationWorkspaceRadio.IsChecked == true
             ? ConversationSyncMode.Workspace
@@ -403,12 +407,25 @@ public partial class VersionSettingsWindow : UserControl
             ? ConversationWorkspaceBox.Text
             : null,
         SyncModelProviders = SyncModelProvidersCheckBox.IsChecked == true,
+        IdleStopMinutes = ReadIdleStopMinutes(),
+        RestartOnCrash = RestartOnCrashCheckBox.IsChecked == true,
         UseDshMarketHotReload = _settings.UseDshMarketHotReload,
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
         OpenMode = _settings.OpenMode,
         CustomOpenTargetPath = _settings.CustomOpenTargetPath
     };
+
+    private int ReadIdleStopMinutes()
+    {
+        if (!int.TryParse(IdleStopMinutesBox.Text.Trim(), out var minutes)
+            || minutes is < 0 or > 10080)
+        {
+            throw new InvalidDataException("空闲停止时间必须是 0 到 10080 分钟之间的整数。");
+        }
+
+        return minutes;
+    }
 
     private void OpenModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateCustomOpenTargetEnabled();
@@ -507,12 +524,35 @@ public partial class VersionSettingsWindow : UserControl
         }
     }
 
+    private void CreateDesktopShortcut_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            OpenModeStatusText.Text = "请先选择版本。";
+            return;
+        }
+
+        try
+        {
+            _integrationService.RegisterProtocol();
+            var path = _integrationService.CreateDesktopShortcut(_instance);
+            OpenModeStatusText.Text = $"桌面快捷方式已创建：{path}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            OpenModeStatusText.Text = $"创建桌面快捷方式失败：{ex.Message}";
+        }
+    }
+
     private VersionSettingsData CopySettings() => new()
     {
+        ActiveProfileName = _settings.ActiveProfileName,
         SyncAllConfiguration = _settings.SyncAllConfiguration,
         ConversationSyncMode = _settings.ConversationSyncMode,
         ConversationWorkspace = _settings.ConversationWorkspace,
         SyncModelProviders = _settings.SyncModelProviders,
+        IdleStopMinutes = _settings.IdleStopMinutes,
+        RestartOnCrash = _settings.RestartOnCrash,
         UseDshMarketHotReload = _settings.UseDshMarketHotReload,
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
@@ -629,10 +669,13 @@ public partial class VersionSettingsWindow : UserControl
 
             var updated = new VersionSettingsData
             {
+                ActiveProfileName = _settings.ActiveProfileName,
                 SyncAllConfiguration = _settings.SyncAllConfiguration,
                 ConversationSyncMode = _settings.ConversationSyncMode,
                 ConversationWorkspace = _settings.ConversationWorkspace,
                 SyncModelProviders = _settings.SyncModelProviders,
+                IdleStopMinutes = _settings.IdleStopMinutes,
+                RestartOnCrash = _settings.RestartOnCrash,
                 WindowTitle = WindowTitleBox.Text,
                 NodeExecutablePath = nodePath,
                 OpenMode = _settings.OpenMode,

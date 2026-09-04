@@ -92,6 +92,9 @@ public sealed record ManagerInstance(
     public string ResourceSummaryText => $"{ReadPluginCount()} Plugins · {ReadSkillCount()} Skills";
 
     [JsonIgnore]
+    public string? RuntimeResourceText { get; init; }
+
+    [JsonIgnore]
     public DateTimeOffset RecentSortAt => LastUsedAt ?? RegisteredAt;
 
     private int ReadPluginCount()

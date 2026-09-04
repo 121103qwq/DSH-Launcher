@@ -1,9 +1,11 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using DshLauncher.Services;
+using DshLauncher.Models;
 
 namespace DshLauncher;
 
@@ -17,6 +19,8 @@ public partial class App : System.Windows.Application
     private bool _ownsSingleInstanceMutex;
     private bool _startupWindowCreationCompleted;
     private bool _activationPending;
+    private LauncherCommand? _startupCommand;
+    private LauncherCommand? _pendingActivationCommand;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -32,13 +36,18 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        _ = LauncherCommandParser.TryParse(e.Args, out _startupCommand);
+        var activationPayload = _startupCommand is null
+            ? null
+            : JsonSerializer.Serialize(_startupCommand);
+
         // 实例锁是进程级文件句柄：两个 Launcher 同时运行时，第二个只能以只读
         // Attached 连接实例，Stop/Restart 会不可用。因此限制单实例，再次启动时
         // 唤起已有窗口。
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var createdNew);
         if (!createdNew)
         {
-            var activation = RequestExistingLauncherActivation();
+            var activation = RequestExistingLauncherActivation(activationPayload);
             var activated = activation == SingleInstanceActivationResult.Accepted
                 || (activation == SingleInstanceActivationResult.Unavailable
                     && ActivateExistingLauncherByWindowHandle());
@@ -60,9 +69,12 @@ public partial class App : System.Windows.Application
             () =>
             {
                 _startupWindowCreationCompleted = true;
-                if (_activationPending)
+                var command = _pendingActivationCommand ?? _startupCommand;
+                _pendingActivationCommand = null;
+                _startupCommand = null;
+                if (_activationPending || command is not null)
                 {
-                    TryActivateMainWindow();
+                    TryActivateMainWindow(command);
                 }
             },
             DispatcherPriority.ApplicationIdle);
@@ -131,13 +143,14 @@ public partial class App : System.Windows.Application
         Environment.Exit(0);
     }
 
-    private static SingleInstanceActivationResult RequestExistingLauncherActivation()
+    private static SingleInstanceActivationResult RequestExistingLauncherActivation(string? payload)
     {
         try
         {
             return SingleInstanceActivationChannel.RequestActivationAsync(
                     GetActivationPipeName(),
-                    ActivationRequestTimeout)
+                    ActivationRequestTimeout,
+                    payload)
                 .GetAwaiter()
                 .GetResult();
         }
@@ -159,7 +172,7 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private bool ActivateLauncherFromBackgroundThread()
+    private bool ActivateLauncherFromBackgroundThread(string? payload)
     {
         if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
         {
@@ -168,7 +181,22 @@ public partial class App : System.Windows.Application
 
         try
         {
-            var operation = Dispatcher.InvokeAsync(TryActivateMainWindow, DispatcherPriority.Send);
+            LauncherCommand? command = null;
+            if (!string.IsNullOrWhiteSpace(payload))
+            {
+                try
+                {
+                    command = JsonSerializer.Deserialize<LauncherCommand>(payload);
+                }
+                catch (JsonException)
+                {
+                    return false;
+                }
+            }
+
+            var operation = Dispatcher.InvokeAsync(
+                () => TryActivateMainWindow(command),
+                DispatcherPriority.Send);
             return operation.Task.Wait(ActivationRequestTimeout)
                 && operation.Task.GetAwaiter().GetResult();
         }
@@ -180,7 +208,7 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private bool TryActivateMainWindow()
+    private bool TryActivateMainWindow(LauncherCommand? command = null)
     {
         var window = MainWindow;
         if (window is null)
@@ -188,6 +216,7 @@ public partial class App : System.Windows.Application
             if (!_startupWindowCreationCompleted)
             {
                 _activationPending = true;
+                _pendingActivationCommand = command ?? _pendingActivationCommand;
                 return true;
             }
 
@@ -222,6 +251,10 @@ public partial class App : System.Windows.Application
 
             window.Activate();
             window.Focus();
+            if (command is not null && window is MainWindow mainWindow)
+            {
+                mainWindow.HandleLauncherCommand(command);
+            }
             return true;
         }
         catch (InvalidOperationException)

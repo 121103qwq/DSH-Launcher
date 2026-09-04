@@ -515,6 +515,17 @@ public partial class ExtensionWindow : UserControl
                     RenderSkillMarketItems(_skillMarketSnapshot);
                 }
             }
+            else
+            {
+                _installedPlugins = entries
+                    .Where(entry => entry.Kind == ExtensionKind.Plugin)
+                    .ToArray();
+                UpdateMarketplaceUpdateAllButton();
+                if (_marketplaceSnapshot.Count > 0)
+                {
+                    RenderMarketplaceItems();
+                }
+            }
             // 整批替换 ItemsSource，避免逐条 Add 触发多次布局。
             ExtensionList.ItemsSource = rendered;
             if (selectedId is not null)
@@ -537,6 +548,199 @@ public partial class ExtensionWindow : UserControl
         if (!_isMarketplaceMutating)
         {
             await RefreshMarketplaceAsync();
+        }
+    }
+
+    private async void MarketplaceUpdateAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (_marketplaceService is null || _isMarketplaceMutating)
+        {
+            return;
+        }
+
+        var updates = SelectAvailableMarketplaceUpdates(_marketplaceSnapshot, _installedPlugins);
+        if (updates.Count == 0)
+        {
+            MarketplaceStatusText.Text = "当前实例没有可批量更新的 Plugin。";
+            UpdateMarketplaceUpdateAllButton();
+            return;
+        }
+
+        try
+        {
+            EnsureMarketplaceMutationAllowed();
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"将串行更新当前 Profile 中的 {updates.Count} 个 Plugin。每个 Plugin 更新前都会单独保存快照，失败项会自动回档并继续处理下一项。",
+                "确认全部更新",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        var progressWindow = new PluginProgressWindow(
+            Window.GetWindow(this),
+            cancellation,
+            "批量更新 Plugin",
+            $"准备更新 {updates.Count} 个 Plugin…");
+        progressWindow.Show();
+        BeginMarketplaceMutation($"正在批量更新 {updates.Count} 个 Plugin…");
+
+        var succeeded = new List<string>();
+        var skipped = new List<string>();
+        var failed = new List<string>();
+        try
+        {
+            for (var index = 0; index < updates.Count; index++)
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                var item = updates[index];
+                var installedEntry = MarketplaceService.FindInstalledPlugin(item, _installedPlugins);
+                if (installedEntry is null || !installedEntry.Managed)
+                {
+                    skipped.Add($"{item.Name}：已不在当前 Profile 中");
+                    continue;
+                }
+
+                var ordinal = index + 1;
+                var itemPrefix = $"[{ordinal}/{updates.Count}] {item.Name}";
+                progressWindow.SetProgress(
+                    index * 100d / updates.Count,
+                    $"{itemPrefix}：正在重新校验…");
+                SetMarketplaceMutationText($"{itemPrefix}：正在重新校验…");
+
+                MarketplaceVerificationResult verification;
+                try
+                {
+                    verification = await _marketplaceService.VerifyAsync(
+                        item,
+                        _instance.DetectedVersion,
+                        cancellation.Token);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    skipped.Add($"{item.Name}：校验失败，{Tail(ex.Message)}");
+                    continue;
+                }
+
+                if (verification.Status == MarketplaceVerificationStatus.Rejected)
+                {
+                    skipped.Add($"{item.Name}：{verification.Message}");
+                    continue;
+                }
+
+                if (verification.CompatibilityStatus == MarketplaceCompatibilityStatus.Incompatible)
+                {
+                    skipped.Add($"{item.Name}：与当前 DSh {_instance.DetectedVersion ?? "未知版本"} 不兼容");
+                    continue;
+                }
+
+                var packageName = installedEntry.Name;
+                var snapshot = string.Empty;
+                try
+                {
+                    progressWindow.SetIndeterminate($"{itemPrefix}：正在保存当前配置…");
+                    snapshot = _marketplaceService.CreatePluginSnapshot(
+                        _instance,
+                        GetSelectedProfileName());
+                    var mode = _pluginInstallMode();
+                    async Task<string> ExecuteUpdateAsync(PluginInstallMode selectedMode)
+                    {
+                        var modeText = selectedMode == PluginInstallMode.Fast ? "快速安装" : "兼容性安装";
+                        var message = $"{itemPrefix}：正在通过官方 DSh CLI 更新（{modeText}）…";
+                        SetMarketplaceMutationText(message);
+                        var cliProgress = new Progress<PluginCommandProgress>(update =>
+                            progressWindow.SetPackageProgress(update, message));
+                        return await _service.UpdatePluginAsync(
+                            _instance,
+                            packageName,
+                            _nodeRuntime(),
+                            selectedMode,
+                            cancellation.Token,
+                            cliProgress);
+                    }
+
+                    _ = await ExecutePluginInstallWithFallbackAsync(
+                        ExecuteUpdateAsync,
+                        mode,
+                        progressWindow,
+                        cancellation.Token);
+                    succeeded.Add(item.Name);
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                {
+                    if (!string.IsNullOrWhiteSpace(snapshot))
+                    {
+                        _marketplaceService.RestorePluginSnapshot(
+                            _instance,
+                            snapshot,
+                            GetSelectedProfileName());
+                    }
+
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    var detail = ex.Message;
+                    if (!string.IsNullOrWhiteSpace(snapshot))
+                    {
+                        var recovery = await RecoverPluginFailureAsync(
+                            snapshot,
+                            ex,
+                            "batch-update",
+                            packageName);
+                        detail = recovery.Summary;
+                    }
+
+                    failed.Add($"{item.Name}：{Tail(detail)}");
+                }
+                finally
+                {
+                    progressWindow.SetProgress(
+                        ordinal * 100d / updates.Count,
+                        $"已处理 {ordinal} / {updates.Count} 个 Plugin");
+                }
+            }
+
+            await RefreshAsync();
+            var summary = $"批量更新完成：成功 {succeeded.Count}，跳过 {skipped.Count}，失败 {failed.Count}。";
+            var details = string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    succeeded.Count == 0 ? null : $"成功：{string.Join("、", succeeded)}",
+                    skipped.Count == 0 ? null : $"跳过：{string.Join(Environment.NewLine + "  ", skipped)}",
+                    failed.Count == 0 ? null : $"失败：{string.Join(Environment.NewLine + "  ", failed)}"
+                }.Where(static value => value is not null));
+            StatusText.Text = summary;
+            MarketplaceStatusText.Text = summary;
+            progressWindow.Complete(summary, details);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            const string message = "批量更新已取消；当前正在处理的 Plugin 已恢复操作前配置。";
+            StatusText.Text = message;
+            MarketplaceStatusText.Text = message;
+            progressWindow.Canceled(message);
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            MarketplaceStatusText.Text = ex.Message;
+            progressWindow.Fail(ex.Message);
+        }
+        finally
+        {
+            EndMarketplaceMutation();
         }
     }
 
@@ -618,6 +822,7 @@ public partial class ExtensionWindow : UserControl
         }
 
         _isMarketplaceLoading = true;
+        UpdateMarketplaceUpdateAllButton();
         _marketplaceCancellation?.Cancel();
         _marketplaceCancellation?.Dispose();
         _marketplaceCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -647,6 +852,7 @@ public partial class ExtensionWindow : UserControl
         finally
         {
             _isMarketplaceLoading = false;
+            UpdateMarketplaceUpdateAllButton();
         }
     }
 
@@ -674,6 +880,7 @@ public partial class ExtensionWindow : UserControl
         _marketplaceCanMutate = !_isMarketplaceMutating
             && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
             && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
+        UpdateMarketplaceUpdateAllButton();
         RenderMarketplaceItems();
         MarketplaceSummaryText.Text = $"找到 {_marketplaceSnapshot.Count} 个候选插件 · 已检查 {result.SourcesChecked} 个来源"
             + (fromCache ? " · 本地缓存" : string.Empty);
@@ -818,6 +1025,63 @@ public partial class ExtensionWindow : UserControl
         }
 
         return rendered;
+    }
+
+    internal static IReadOnlyList<MarketplaceItem> SelectAvailableMarketplaceUpdates(
+        IReadOnlyList<MarketplaceItem> snapshot,
+        IReadOnlyList<ExtensionEntry> installedPlugins)
+    {
+        var updates = new Dictionary<string, MarketplaceItem>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in snapshot)
+        {
+            var installed = MarketplaceService.FindInstalledPlugin(item, installedPlugins);
+            if (installed is null
+                || !installed.Managed
+                || MarketplaceService.GetUpdateStatus(item.Version, installed.Version)
+                    != MarketplaceUpdateStatus.Available)
+            {
+                continue;
+            }
+
+            var candidate = item with
+            {
+                IsInstalled = true,
+                IsManaged = true,
+                InstalledVersion = installed.Version,
+                UpdateStatus = MarketplaceUpdateStatus.Available
+            };
+            if (!updates.TryGetValue(installed.Name, out var existing)
+                || MarketplaceService.GetUpdateStatus(candidate.Version, existing.Version)
+                    == MarketplaceUpdateStatus.Available)
+            {
+                updates[installed.Name] = candidate;
+            }
+        }
+
+        return updates.Values
+            .OrderBy(static item => item.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+    }
+
+    private void UpdateMarketplaceUpdateAllButton()
+    {
+        if (_agentOnly || MarketplaceUpdateAllButton is null)
+        {
+            return;
+        }
+
+        var count = SelectAvailableMarketplaceUpdates(_marketplaceSnapshot, _installedPlugins).Count;
+        MarketplaceUpdateAllButton.Content = count == 0 ? "全部更新" : $"全部更新 ({count})";
+        MarketplaceUpdateAllButton.IsEnabled = count > 0
+            && !_isMarketplaceLoading
+            && !_isMarketplaceMutating
+            && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
+            && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
+        MarketplaceUpdateAllButton.ToolTip = count == 0
+            ? "当前 Profile 没有检测到可更新的 Plugin"
+            : _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+                ? "批量更新前请先停止实例"
+                : $"串行更新 {count} 个 Plugin；每项都会独立快照和失败回档";
     }
 
     internal static bool IsFeaturedMarketplaceItem(MarketplaceItem item) =>
@@ -1010,11 +1274,28 @@ public partial class ExtensionWindow : UserControl
                 }
             }
 
-            var verification = await _marketplaceService.VerifyAsync(item, operationCancellation.Token);
+            var verification = await _marketplaceService.VerifyAsync(
+                item,
+                _instance.DetectedVersion,
+                operationCancellation.Token);
             if (verification.Status == MarketplaceVerificationStatus.Rejected)
             {
                 MarketplaceStatusText.Text = verification.Message;
                 progressWindow.Fail(verification.Message);
+                return;
+            }
+
+
+            if (verification.CompatibilityStatus == MarketplaceCompatibilityStatus.Incompatible
+                && System.Windows.MessageBox.Show(
+                    Window.GetWindow(this),
+                    verification.Message + "\n\n仍要强制尝试安装吗？",
+                    "Plugin 兼容性警告",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            {
+                MarketplaceStatusText.Text = "已取消安装不兼容的 Plugin。";
+                progressWindow.Canceled("用户取消了不兼容 Plugin 的强制安装。");
                 return;
             }
 
@@ -1341,6 +1622,7 @@ public partial class ExtensionWindow : UserControl
     {
         _isMarketplaceMutating = true;
         MarketplaceRefreshButton.IsEnabled = false;
+        MarketplaceUpdateAllButton.IsEnabled = false;
         ProfileSelectorBox.IsEnabled = false;
         MarketplaceProgressPanel.Visibility = Visibility.Visible;
         MarketplaceProgressText.Text = message;
@@ -1361,6 +1643,7 @@ public partial class ExtensionWindow : UserControl
         MarketplaceProgressPanel.Visibility = Visibility.Collapsed;
         _marketplaceCanMutate = _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
             && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
+        UpdateMarketplaceUpdateAllButton();
         RenderMarketplaceItems();
     }
 

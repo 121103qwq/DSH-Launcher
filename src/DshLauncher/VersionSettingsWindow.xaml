@@ -155,11 +155,14 @@
                                                TextWrapping="Wrap"
                                                FontSize="11"
                                                Margin="0,8,0,0" />
-                                    <Button Content="保存打开方式"
-                                            Click="SaveOpenMode_Click"
-                                            Style="{StaticResource PrimaryButton}"
-                                            HorizontalAlignment="Left"
-                                            Margin="0,14,0,0" />
+                                    <WrapPanel Margin="0,14,0,0">
+                                        <Button Content="保存打开方式"
+                                                Click="SaveOpenMode_Click"
+                                                Style="{StaticResource PrimaryButton}"
+                                                Margin="0,0,8,0" />
+                                        <Button Content="创建桌面启动快捷方式"
+                                                Click="CreateDesktopShortcut_Click" />
+                                    </WrapPanel>
                                 </StackPanel>
                             </Border>
                         </StackPanel>
@@ -216,6 +219,34 @@
                                        TextWrapping="Wrap"
                                        FontSize="11"
                                        Margin="0,6,0,0" />
+                            <Separator Margin="0,18,0,16" />
+                            <TextBlock Text="自动运行策略" FontWeight="SemiBold" />
+                            <TextBlock Text="默认全部关闭。只管理由 Launcher 启动的实例；外部连接实例不会被停止或重启。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       FontSize="11"
+                                       Margin="0,6,0,10" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="空闲停止" VerticalAlignment="Center" />
+                                <TextBox x:Name="IdleStopMinutesBox"
+                                         Grid.Column="1"
+                                         Margin="10,0,8,0"
+                                         Text="0"
+                                         MaxLength="5"
+                                         VerticalContentAlignment="Center" />
+                                <TextBlock Grid.Column="2"
+                                           Text="分钟（0 表示关闭）"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+                            <CheckBox x:Name="RestartOnCrashCheckBox"
+                                      Content="进程意外退出后自动重启（最多 5 次，逐步延迟）"
+                                      Margin="0,12,0,0" />
                             <Button Content="保存配置"
                                     Click="SaveConfiguration_Click"
                                     Style="{StaticResource PrimaryButton}"

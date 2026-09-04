@@ -364,6 +364,12 @@ public sealed class MarketplaceService
 
     public async Task<MarketplaceVerificationResult> VerifyAsync(
         MarketplaceItem item,
+        CancellationToken cancellationToken = default) =>
+        await VerifyAsync(item, null, cancellationToken);
+
+    public async Task<MarketplaceVerificationResult> VerifyAsync(
+        MarketplaceItem item,
+        string? currentDshVersion,
         CancellationToken cancellationToken = default)
     {
         if (item.SourceKind == MarketplaceSourceKind.Official
@@ -382,12 +388,12 @@ public sealed class MarketplaceService
                 && !string.IsNullOrWhiteSpace(item.RepositoryUrl));
         if (installTargetsGitHub)
         {
-            return await VerifyGitHubRepositoryAsync(item, cancellationToken);
+            return await VerifyGitHubRepositoryAsync(item, currentDshVersion, cancellationToken);
         }
 
         if (!string.IsNullOrWhiteSpace(item.PackageName))
         {
-            return await VerifyNpmPackageAsync(item, cancellationToken);
+            return await VerifyNpmPackageAsync(item, currentDshVersion, cancellationToken);
         }
 
         return new MarketplaceVerificationResult(
@@ -722,6 +728,7 @@ public sealed class MarketplaceService
 
     private async Task<MarketplaceVerificationResult> VerifyNpmPackageAsync(
         MarketplaceItem item,
+        string? currentDshVersion,
         CancellationToken cancellationToken)
     {
         var packageName = item.PackageName!.Trim();
@@ -752,11 +759,12 @@ public sealed class MarketplaceService
             return Rejected(item, "npm 仓库没有找到可读取的版本信息。");
         }
 
-        return VerifyManifest(packageManifest, packageName, version, packageName);
+        return VerifyManifest(packageManifest, packageName, version, packageName, currentDshVersion);
     }
 
     private async Task<MarketplaceVerificationResult> VerifyGitHubRepositoryAsync(
         MarketplaceItem item,
+        string? currentDshVersion,
         CancellationToken cancellationToken)
     {
         var normalizedInstallSpec = NormalizeInstallSpec(item.InstallSpec);
@@ -826,7 +834,7 @@ public sealed class MarketplaceService
                 var root = document.RootElement;
                 var packageName = ReadString(root, "name");
                 var version = ReadString(root, "version");
-                var verification = VerifyManifest(root, packageName, version, item.InstallSpec);
+                var verification = VerifyManifest(root, packageName, version, item.InstallSpec, currentDshVersion);
                 if (verification.Status == MarketplaceVerificationStatus.Verified
                     || !string.IsNullOrWhiteSpace(repository.Subpath))
                 {
@@ -852,6 +860,7 @@ public sealed class MarketplaceService
                 var discovered = await FindPluginInRepositoryTreeAsync(
                     repository,
                     discoveryBranch,
+                    currentDshVersion,
                     cancellationToken);
                 if (discovered is not null)
                 {
@@ -1047,6 +1056,7 @@ public sealed class MarketplaceService
     private async Task<MarketplaceVerificationResult?> FindPluginInRepositoryTreeAsync(
         GitHubRepository repository,
         string branch,
+        string? currentDshVersion,
         CancellationToken cancellationToken)
     {
         try
@@ -1100,7 +1110,8 @@ public sealed class MarketplaceService
                         manifest,
                         ReadString(manifest, "name"),
                         ReadString(manifest, "version"),
-                        installSpec);
+                        installSpec,
+                        currentDshVersion);
                     if (verification.Status == MarketplaceVerificationStatus.Verified)
                     {
                         return verification with
@@ -1151,7 +1162,8 @@ public sealed class MarketplaceService
         JsonElement manifest,
         string? packageName,
         string? version,
-        string? installSpec)
+        string? installSpec,
+        string? currentDshVersion = null)
     {
         if (!HasDshBundlePatch(manifest))
         {
@@ -1177,12 +1189,204 @@ public sealed class MarketplaceService
                 installSpec);
         }
 
+        var (compatibility, declaredRange) = EvaluateDshCompatibility(manifest, currentDshVersion);
+        var compatibilityText = compatibility switch
+        {
+            MarketplaceCompatibilityStatus.Compatible => $"兼容当前 DSh {currentDshVersion}（声明 {declaredRange}）。",
+            MarketplaceCompatibilityStatus.Incompatible => $"声明需要 DSh {declaredRange}，当前为 {currentDshVersion}；仍可由用户强制尝试。",
+            _ when string.IsNullOrWhiteSpace(declaredRange) => "没有声明 DSh 兼容范围，兼容性未知。",
+            _ => $"声明了 DSh {declaredRange}，但当前实例版本未知，无法判断兼容性。"
+        };
         return new MarketplaceVerificationResult(
             MarketplaceVerificationStatus.Verified,
-            "已读取 package.json，确认它声明了 DSh bundle 和可加载入口。",
+            $"已读取 package.json，确认它声明了 DSh bundle 和可加载入口。{compatibilityText}",
             packageName,
             version,
-            installSpec);
+            installSpec,
+            compatibility,
+            declaredRange);
+    }
+
+    internal static (MarketplaceCompatibilityStatus Status, string? DeclaredRange) EvaluateDshCompatibility(
+        JsonElement manifest,
+        string? currentDshVersion)
+    {
+        var range = ReadDependencyRange(manifest, "engines", "dsh")
+            ?? ReadDependencyRange(manifest, "engines", "@deepseek-ai/dsh")
+            ?? ReadDependencyRange(manifest, "peerDependencies", "@deepseek-ai/dsh")
+            ?? ReadDependencyRange(manifest, "peerDependencies", "dsh");
+        if (string.IsNullOrWhiteSpace(range))
+        {
+            return (MarketplaceCompatibilityStatus.Unknown, null);
+        }
+
+        if (!SemanticVersion.TryParse(currentDshVersion, out var current))
+        {
+            return (MarketplaceCompatibilityStatus.Unknown, range);
+        }
+
+        return (SatisfiesRange(current, range)
+            ? MarketplaceCompatibilityStatus.Compatible
+            : MarketplaceCompatibilityStatus.Incompatible, range);
+    }
+
+    private static string? ReadDependencyRange(JsonElement manifest, string sectionName, string packageName)
+    {
+        if (!manifest.TryGetProperty(sectionName, out var section)
+            || section.ValueKind != JsonValueKind.Object
+            || !section.TryGetProperty(packageName, out var value)
+            || value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return value.GetString()?.Trim();
+    }
+
+    private static bool SatisfiesRange(SemanticVersion current, string range)
+    {
+        if (string.IsNullOrWhiteSpace(range)
+            || range.Trim() is "*" or "latest")
+        {
+            return true;
+        }
+
+        return range.Split("||", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Any(group => group.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .All(part => SatisfiesComparator(current, part)));
+    }
+
+    private static bool SatisfiesComparator(SemanticVersion current, string comparator)
+    {
+        comparator = comparator.Trim();
+        if (comparator.Length == 0 || comparator is "*" or "x" or "X")
+        {
+            return true;
+        }
+
+        if (comparator.StartsWith('^') && SemanticVersion.TryParse(comparator[1..], out var caret))
+        {
+            var upper = caret.Major > 0
+                ? new SemanticVersion(caret.Major + 1, 0, 0, null)
+                : caret.Minor > 0
+                    ? new SemanticVersion(0, caret.Minor + 1, 0, null)
+                    : new SemanticVersion(0, 0, caret.Patch + 1, null);
+            return current.CompareTo(caret) >= 0 && current.CompareTo(upper) < 0;
+        }
+
+        if (comparator.StartsWith('~') && SemanticVersion.TryParse(comparator[1..], out var tilde))
+        {
+            var upper = new SemanticVersion(tilde.Major, tilde.Minor + 1, 0, null);
+            return current.CompareTo(tilde) >= 0 && current.CompareTo(upper) < 0;
+        }
+
+        foreach (var operation in new[] { ">=", "<=", ">", "=", "<" })
+        {
+            if (!comparator.StartsWith(operation, StringComparison.Ordinal)
+                || !SemanticVersion.TryParse(comparator[operation.Length..], out var expected))
+            {
+                continue;
+            }
+
+            var comparison = current.CompareTo(expected);
+            return operation switch
+            {
+                ">=" => comparison >= 0,
+                "<=" => comparison <= 0,
+                ">" => comparison > 0,
+                "<" => comparison < 0,
+                _ => comparison == 0
+            };
+        }
+
+        if (comparator.EndsWith(".x", StringComparison.OrdinalIgnoreCase)
+            || comparator.EndsWith(".*", StringComparison.OrdinalIgnoreCase))
+        {
+            var prefix = comparator[..^2].Split('.', StringSplitOptions.RemoveEmptyEntries);
+            return prefix.Length > 0
+                && int.TryParse(prefix[0], out var major)
+                && current.Major == major
+                && (prefix.Length == 1
+                    || int.TryParse(prefix[1], out var minor) && current.Minor == minor);
+        }
+
+        return SemanticVersion.TryParse(comparator, out var exact)
+            && current.CompareTo(exact) == 0;
+    }
+
+    private readonly record struct SemanticVersion(int Major, int Minor, int Patch, string? PreRelease)
+        : IComparable<SemanticVersion>
+    {
+        public static bool TryParse(string? value, out SemanticVersion version)
+        {
+            version = default;
+            var text = value?.Trim().TrimStart('v', 'V');
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            var metadataIndex = text.IndexOf('+');
+            if (metadataIndex >= 0)
+            {
+                text = text[..metadataIndex];
+            }
+
+            var dash = text.IndexOf('-');
+            var prerelease = dash >= 0 ? text[(dash + 1)..] : null;
+            var core = (dash >= 0 ? text[..dash] : text).Split('.');
+            var minor = 0;
+            var patch = 0;
+            if (core.Length == 0
+                || core.Length > 3
+                || !int.TryParse(core[0], out var major)
+                || core.Length > 1 && !int.TryParse(core[1], out minor)
+                || core.Length > 2 && !int.TryParse(core[2], out patch))
+            {
+                return false;
+            }
+
+            version = new SemanticVersion(
+                major,
+                minor,
+                patch,
+                prerelease);
+            return true;
+        }
+
+        public int CompareTo(SemanticVersion other)
+        {
+            var core = Major.CompareTo(other.Major);
+            if (core == 0) core = Minor.CompareTo(other.Minor);
+            if (core == 0) core = Patch.CompareTo(other.Patch);
+            if (core != 0) return core;
+            if (PreRelease is null) return other.PreRelease is null ? 0 : 1;
+            if (other.PreRelease is null) return -1;
+            return ComparePrerelease(PreRelease, other.PreRelease);
+        }
+
+        private static int ComparePrerelease(string left, string right)
+        {
+            var leftParts = left.Split('.');
+            var rightParts = right.Split('.');
+            for (var index = 0; index < Math.Max(leftParts.Length, rightParts.Length); index++)
+            {
+                if (index >= leftParts.Length) return -1;
+                if (index >= rightParts.Length) return 1;
+                var leftNumeric = int.TryParse(leftParts[index], out var leftNumber);
+                var rightNumeric = int.TryParse(rightParts[index], out var rightNumber);
+                var comparison = leftNumeric && rightNumeric
+                    ? leftNumber.CompareTo(rightNumber)
+                    : leftNumeric
+                        ? -1
+                        : rightNumeric
+                            ? 1
+                            : string.Compare(leftParts[index], rightParts[index], StringComparison.OrdinalIgnoreCase);
+                if (comparison != 0) return comparison;
+            }
+
+            return 0;
+        }
     }
 
     private async Task<IReadOnlyList<(bool IsFile, string Value)>> ReadCustomSourcesAsync(CancellationToken cancellationToken)

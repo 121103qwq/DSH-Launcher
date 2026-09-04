@@ -86,6 +86,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Provider state and diagnostics", TestProviderStateAndDiagnostics),
     ("Model provider synchronization", TestModelProviderSynchronization),
     ("Launcher settings and workspaces", TestLauncherSettingsAndWorkspaces),
+    ("Launcher management features", TestLauncherManagementFeatures),
     ("Conversation file management", TestConversationFileManagement),
     ("Conversation synchronization", TestConversationSynchronization)
 };
@@ -145,6 +146,25 @@ static async Task TestSingleInstanceActivationChannel()
         TimeSpan.FromSeconds(2));
     Assert(rejected == SingleInstanceActivationResult.Rejected,
         "正在退出的主进程拒绝唤醒时，次进程必须等待互斥锁，不能误走旧版窗口回退。 ");
+
+    var commandPipeName = $"DSH-Launcher-SelfTest-Command-{Guid.NewGuid():N}";
+    string? receivedPayload = null;
+    using var commandChannel = new SingleInstanceActivationChannel(
+        commandPipeName,
+        payload =>
+        {
+            receivedPayload = payload;
+            return true;
+        });
+    commandChannel.Start();
+    const string activationPayload = "{\"action\":\"Start\",\"instanceId\":\"demo\"}";
+    var commandAccepted = await SingleInstanceActivationChannel.RequestActivationAsync(
+        commandPipeName,
+        TimeSpan.FromSeconds(2),
+        activationPayload);
+    Assert(commandAccepted == SingleInstanceActivationResult.Accepted
+        && receivedPayload == activationPayload,
+        "单实例通道必须向已运行 Launcher 原样转发 CLI/URL 命令载荷。 ");
 }
 
 var failures = 0;
@@ -3487,6 +3507,26 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         MarketplaceVerificationStatus.Unverified,
         "待检查"));
     Assert(verified.Status == MarketplaceVerificationStatus.Verified && verified.Version == "1.2.3", "有 dsh.bundle.patch 和入口的 npm 包应通过检查。 ");
+    using (var compatibleManifest = JsonDocument.Parse(
+               "{\"engines\":{\"@deepseek-ai/dsh\":\"^0.1.0-rc.6\"}}"))
+    {
+        var compatibility = MarketplaceService.EvaluateDshCompatibility(
+            compatibleManifest.RootElement,
+            "0.1.0-rc.11");
+        Assert(compatibility.Status == MarketplaceCompatibilityStatus.Compatible
+            && compatibility.DeclaredRange == "^0.1.0-rc.6",
+            "Plugin 兼容预检应识别 RC11 满足声明的 DSh prerelease 范围。 ");
+    }
+
+    using (var incompatibleManifest = JsonDocument.Parse(
+               "{\"peerDependencies\":{\"@deepseek-ai/dsh\":\">=0.2.0\"}}"))
+    {
+        var compatibility = MarketplaceService.EvaluateDshCompatibility(
+            incompatibleManifest.RootElement,
+            "0.1.0-rc.11");
+        Assert(compatibility.Status == MarketplaceCompatibilityStatus.Incompatible,
+            "Plugin 兼容预检必须在当前 DSh 不满足声明范围时阻止静默安装。 ");
+    }
     var scopedCatalog = MarketplaceService.ParseCatalog(
         "{\"plugins\":[{\"name\":\"scoped-plugin\",\"npm\":\"@demo/scoped-plugin\"}]}",
         MarketplaceSourceKind.CommunityCatalog,
@@ -3810,6 +3850,18 @@ static async Task TestMarketplaceDiscoveryAndVerification()
     Assert(MarketplaceService.GetUpdateStatus("1.1.0", "1.0.0") == MarketplaceUpdateStatus.Available, "较新的市场版本应显示可更新。 ");
     Assert(MarketplaceService.GetUpdateStatus("1.0.0", "1.0.0") == MarketplaceUpdateStatus.UpToDate, "相同版本应显示已是最新。 ");
     Assert(MarketplaceService.GetUpdateStatus(null, "1.0.0") == MarketplaceUpdateStatus.Unknown, "缺少版本信息时更新状态应为未知。 ");
+    var batchUpdates = ExtensionWindow.SelectAvailableMarketplaceUpdates(
+        new[]
+        {
+            merged[0],
+            merged[0] with { Id = "catalog:better-sidebar-newer", Version = "1.3.0" },
+            githubOnlyMarketplaceItem with { Version = "1.0.0" }
+        },
+        new[] { installed, installedGitHubPackage with { Managed = false } });
+    Assert(batchUpdates.Count == 1
+        && batchUpdates[0].Version == "1.3.0"
+        && batchUpdates[0].InstalledVersion == "1.0.0",
+        "批量更新必须只选择可管理且确有新版本的 Plugin，并按真实安装项去重。 ");
 
     var invalidOfficial = MarketplaceService.ParseCatalog(
         "{\"plugins\":[{\"name\":\"community\",\"npm\":\"community\"}]}",
@@ -5191,10 +5243,18 @@ static Task TestLauncherSettingsAndWorkspaces()
     var first = registry.Register("全局同步 A", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var second = registry.Register("全局同步 B", runtime, InstanceKind.Installed, detectedVersion: "test", packageManager: "npm");
     var settings = new VersionSettingsService(new LauncherPaths(launcherRoot));
-    settings.Save(first, new VersionSettingsData { SyncModelProviders = false });
+    settings.Save(first, new VersionSettingsData
+    {
+        SyncModelProviders = false,
+        IdleStopMinutes = 45,
+        RestartOnCrash = true
+    });
     settings.Save(second, new VersionSettingsData { SyncModelProviders = false });
 
     Assert(!settings.ShouldSyncConversations(first, second), "独立模式下默认不应同步对话。");
+    var automaticPolicy = settings.Read(first);
+    Assert(automaticPolicy.IdleStopMinutes == 45 && automaticPolicy.RestartOnCrash,
+        "版本设置应持久化空闲自动停止和崩溃自动重启策略。 ");
     var launcherSettings = settings.ReadLauncherSettings();
     Assert(launcherSettings.PluginInstallMode == PluginInstallMode.Fast,
         "首次使用时 Plugin 安装模式必须默认是快速安装。");
@@ -5265,6 +5325,149 @@ static Task TestLauncherSettingsAndWorkspaces()
     return Task.CompletedTask;
 }
 
+static async Task TestLauncherManagementFeatures()
+{
+    using var temporary = new TestDirectory();
+    var launcherRoot = Path.Combine(temporary.Path, "launcher");
+    var paths = new LauncherPaths(launcherRoot);
+
+    var taskService = new LauncherTaskService(paths);
+    var completed = taskService.Begin("下载测试包", "下载");
+    completed.Report(42, "正在下载");
+    Assert(completed.Snapshot is { Status: LauncherTaskStatus.Running, Progress: 42 },
+        "任务中心应实时保留任务进度。 ");
+    completed.Complete("下载完成");
+    Assert(completed.Snapshot is { Status: LauncherTaskStatus.Succeeded, Progress: 100 },
+        "任务完成后应进入成功历史。 ");
+
+    var cancellationObserved = false;
+    var cancelable = taskService.Begin("可取消任务", "测试");
+    using (cancelable.Token.Register(() => cancellationObserved = true))
+    {
+        cancelable.Cancel("用户取消");
+    }
+    Assert(cancellationObserved && cancelable.Snapshot?.Status == LauncherTaskStatus.Canceled,
+        "任务中心取消操作应传播到工作线程的 CancellationToken。 ");
+
+    var retryCount = 0;
+    var retryable = taskService.Begin(
+        "可重试任务",
+        "测试",
+        _ =>
+        {
+            retryCount++;
+            return Task.CompletedTask;
+        });
+    retryable.Fail("模拟失败");
+    Assert(await retryable.RetryAsync() && retryCount == 1
+        && retryable.Snapshot?.Status == LauncherTaskStatus.Succeeded,
+        "失败任务应能执行登记的重试操作并更新历史。 ");
+
+    for (var index = 0; index < LauncherTaskService.MaximumRetainedTasks + 8; index++)
+    {
+        var item = taskService.Begin($"历史任务 {index}", "测试", canCancel: false);
+        item.Complete();
+    }
+    Assert(taskService.GetAll().Count == LauncherTaskService.MaximumRetainedTasks
+        && File.Exists(paths.TaskHistoryPath),
+        "任务历史应持久化并严格限制为最近 50 条。 ");
+
+    var interruptedPaths = new LauncherPaths(Path.Combine(temporary.Path, "interrupted-launcher"));
+    var beforeRestart = new LauncherTaskService(interruptedPaths);
+    var interrupted = beforeRestart.Begin("未完成任务", "测试");
+    var afterRestart = new LauncherTaskService(interruptedPaths);
+    Assert(afterRestart.GetSnapshot(interrupted.Id) is { Status: LauncherTaskStatus.Failed, CanCancel: false },
+        "重新打开 Launcher 后，旧进程遗留的运行中任务应标记为已中断，不能永久显示运行中。 ");
+
+    var command = LauncherCommandParser.Parse(new[] { "start", "--instance-id", "demo-instance" });
+    Assert(command is { Action: LauncherCommandAction.Start, InstanceId: "demo-instance" },
+        "CLI 应解析实例启动命令。 ");
+    var urlCommand = LauncherCommandParser.ParseUrl(
+        "dsh-launcher://chat?instanceId=demo-instance&sessionId=session-1");
+    Assert(urlCommand is
+        {
+            Action: LauncherCommandAction.Chat,
+            InstanceId: "demo-instance",
+            SessionId: "session-1"
+        },
+        "dsh-launcher URL 协议应解析对话打开命令。 ");
+    Assert(!LauncherCommandParser.TryParse(
+            new[] { "open", "--path", "..\\outside" },
+            out _),
+        "CLI 不应接受包含父目录跳转的路径。 ");
+
+    var runtimeRoot = Path.Combine(temporary.Path, "runtime");
+    var home = Path.Combine(temporary.Path, "instance-home");
+    Directory.CreateDirectory(runtimeRoot);
+    Directory.CreateDirectory(home);
+    var instance = CreateTestInstance("management-instance", runtimeRoot, home);
+    var sessionPath = Path.Combine(home, "sessions", "--C-demo--", "session-1", "session.jsonl");
+    Directory.CreateDirectory(Path.GetDirectoryName(sessionPath)!);
+    File.WriteAllText(sessionPath, BuildSessionJsonl("session-1", "C:\\demo", "keep-session"));
+    File.WriteAllText(Path.Combine(home, ".credentials.yaml"), "api_key: keep-secret");
+    var reportPath = Path.Combine(home, ".dsh-launcher", "reports", "failure.txt");
+    Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
+    File.WriteAllText(reportPath, "report");
+    var cachePath = Path.Combine(home, "cache", "catalog.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+    File.WriteAllText(cachePath, "cache");
+    var snapshotRoot = paths.GetVersionSnapshotDirectory(instance.Id);
+    Directory.CreateDirectory(snapshotRoot);
+    var automaticSnapshot = Path.Combine(snapshotRoot, "auto-before-install.dshsnapshot");
+    var manualSnapshot = Path.Combine(snapshotRoot, "manual-backup.dshsnapshot");
+    File.WriteAllText(automaticSnapshot, "automatic");
+    File.WriteAllText(manualSnapshot, "manual");
+
+    var storageService = new InstanceStorageService(paths);
+    var usage = await storageService.GetUsageAsync(instance);
+    var cleanup = await storageService.PreviewCleanupAsync(instance);
+    Assert(usage.GetCategory(InstanceStorageCategory.Sessions).FileCount == 1
+        && usage.GetCategory(InstanceStorageCategory.Reports).FileCount == 1,
+        "空间管理应分别统计会话和 Launcher 报告。 ");
+    Assert(cleanup.Candidates.Any(item => item.FullPath == Path.GetFullPath(reportPath))
+        && cleanup.Candidates.Any(item => item.FullPath == Path.GetFullPath(cachePath))
+        && cleanup.Candidates.Any(item => item.FullPath == Path.GetFullPath(automaticSnapshot))
+        && cleanup.Candidates.All(item => item.FullPath != Path.GetFullPath(sessionPath))
+        && cleanup.Candidates.All(item => item.FullPath != Path.GetFullPath(manualSnapshot))
+        && cleanup.Candidates.All(item => !item.FullPath.EndsWith(".credentials.yaml", StringComparison.OrdinalIgnoreCase)),
+        "安全清理预览只能包含自动快照、报告和明确缓存，不能包含会话、凭据或手动快照。 ");
+
+    var runningInstance = instance with
+    {
+        RuntimeStatus = InstanceRuntimeStatus.Running,
+        RuntimeOwnership = InstanceRuntimeOwnership.Managed,
+        ProcessId = Environment.ProcessId,
+        ProcessStartedAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+    };
+    var resource = await new InstanceResourceMonitor().SampleAsync(runningInstance);
+    Assert(resource.IsAvailable
+        && resource.ProcessIds.Contains(Environment.ProcessId)
+        && resource.WorkingSetBytes > 0
+        && resource.RuntimeDuration >= TimeSpan.Zero,
+        "资源监控应读取托管实例进程树的内存、运行时长和根 PID。 ");
+
+    const string secret = "sk-selftest-secret-123456";
+    var logService = new LauncherLogService(paths);
+    logService.Write("SelfTest", $"api_key={secret} Bearer {secret}");
+    var diagnosticPath = Path.Combine(temporary.Path, "diagnostics.zip");
+    new DiagnosticBundleService(paths).Create(
+        diagnosticPath,
+        new[] { instance },
+        NodeRuntimeInfo.Missing(),
+        DshRuntimeInfo.Missing());
+    using var archive = ZipFile.OpenRead(diagnosticPath);
+    var diagnosticText = new StringBuilder();
+    foreach (var entry in archive.Entries)
+    {
+        using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+        diagnosticText.AppendLine(await reader.ReadToEndAsync());
+    }
+    Assert(archive.GetEntry("environment.txt") is not null
+        && archive.GetEntry("instances.json") is not null
+        && !diagnosticText.ToString().Contains(secret, StringComparison.Ordinal),
+        "诊断包应包含环境和实例摘要，并从日志中隐藏 API 密钥。 ");
+}
+
 static Task TestConversationFileManagement()
 {
     using var temporary = new TestDirectory();
@@ -5282,13 +5485,13 @@ static Task TestConversationFileManagement()
     var sourcePath = Path.Combine(sourceDirectory, "session.jsonl");
     File.WriteAllText(
         sourcePath,
-        "{\"type\":\"session\",\"version\":0,\"id\":\"session-1\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\",\"delegationDepth\":0}\n{\"type\":\"message\"}\n",
+        "{\"type\":\"session\",\"version\":0,\"id\":\"session-1\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\",\"delegationDepth\":0}\n{\"type\":\"message\",\"text\":\"SEARCH-PLAIN-NEEDLE\"}\n",
         new UTF8Encoding(false));
     var compressedDirectory = Path.Combine(home, "sessions", "--C-work-demo--", "session-2");
     Directory.CreateDirectory(compressedDirectory);
     var compressedPath = Path.Combine(compressedDirectory, "session.jsonl.zstd");
     var compressedHeader = "{\"type\":\"session\",\"version\":0,\"id\":\"session-2\",\"createdAt\":1,\"cwd\":\"C:\\\\work\\\\demo\",\"delegationDepth\":0}\n";
-    var compressedEvents = "{\"type\":\"message\"}\n";
+    var compressedEvents = "{\"type\":\"message\",\"text\":\"SEARCH-ZSTD-NEEDLE\"}\n";
     File.WriteAllBytes(compressedPath, CompressZstd(compressedHeader).Concat(CompressZstd(compressedEvents)).ToArray());
     var invalidCompressedPath = Path.Combine(home, "sessions", "--C-work-demo--", "session-3", "session.jsonl.zstd");
     Directory.CreateDirectory(Path.GetDirectoryName(invalidCompressedPath)!);
@@ -5325,6 +5528,12 @@ static Task TestConversationFileManagement()
     Assert(compressedSession.IsCompressed && compressedSession.HasValidHeader && compressedSession.SessionId == "session-2", "应解压压缩会话的首个 Zstandard frame 并读取会话头部。");
     Assert(entries.Any(entry => entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(invalidCompressedPath)), "损坏的压缩会话应列出但标记为不可解析。");
     Assert(entries.Any(entry => !entry.IsCompressed && !entry.HasValidHeader && entry.FullPath == Path.GetFullPath(malformedPath)), "字段类型异常的会话应列出但不能让整个会话页刷新失败。");
+    Assert(service.Search(entries, "search-plain-needle").Single().SessionId == "session-1",
+        "对话全文搜索应忽略大小写并匹配普通 JSONL 正文。 ");
+    Assert(service.Search(entries, "SEARCH-ZSTD-NEEDLE").Single().SessionId == "session-2",
+        "对话全文搜索应解压并匹配 Zstandard 会话正文。 ");
+    Assert(service.Search(entries, "不存在的正文").Count == 0,
+        "损坏会话文件不能让全文搜索产生错误结果或中断整个搜索。 ");
 
     var backup = service.Backup(instance, session);
     Assert(File.Exists(backup), "备份对话必须生成独立文件。");

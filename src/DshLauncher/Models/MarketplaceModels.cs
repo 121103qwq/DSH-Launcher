@@ -32,6 +32,13 @@ public enum MarketplaceUpdateStatus
     Unavailable
 }
 
+public enum MarketplaceCompatibilityStatus
+{
+    Unknown,
+    Compatible,
+    Incompatible
+}
+
 public sealed record MarketplaceItem(
     string Id,
     string Name,
@@ -150,7 +157,9 @@ public sealed record MarketplaceVerificationResult(
     string Message,
     string? PackageName,
     string? Version,
-    string? InstallSpec);
+    string? InstallSpec,
+    MarketplaceCompatibilityStatus CompatibilityStatus = MarketplaceCompatibilityStatus.Unknown,
+    string? DeclaredDshRange = null);
 
 public sealed record ThemeReadmePreview(
     byte[]? ImageBytes,

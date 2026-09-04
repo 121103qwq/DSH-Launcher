@@ -34,6 +34,18 @@ public sealed class VersionSettingsData
 
     public bool UseDshMarketHotReload { get; set; } = true;
 
+    /// <summary>
+    /// Stops a Launcher-managed instance after this many minutes without a
+    /// conversation file update. Zero disables the behavior.
+    /// </summary>
+    public int IdleStopMinutes { get; set; }
+
+    /// <summary>
+    /// Restarts a Launcher-managed instance after an unexpected process exit.
+    /// The Launcher applies a bounded retry count and backoff.
+    /// </summary>
+    public bool RestartOnCrash { get; set; }
+
     public string? WindowTitle { get; set; }
 
     public string? NodeExecutablePath { get; set; }

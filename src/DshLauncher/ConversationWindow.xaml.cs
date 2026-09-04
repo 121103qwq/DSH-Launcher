@@ -22,6 +22,8 @@ public partial class ConversationWindow : UserControl
     private readonly CodingModelPolicyService? _modelPolicyService;
     private readonly Func<Task<IReadOnlyList<CodingModelOption>>>? _modelOptionsProvider;
     private IReadOnlyList<ModelChoice> _modelChoices = Array.Empty<ModelChoice>();
+    private IReadOnlySet<string>? _searchMatches;
+    private bool _searchInProgress;
     private bool _instanceSelectorReady;
 
     public ConversationWindow(
@@ -146,15 +148,100 @@ public partial class ConversationWindow : UserControl
         }
     }
 
+    private void ConversationTime_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsLoaded)
+        {
+            ApplyConversationFilter();
+        }
+    }
+
+    private async void ConversationSearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await SearchConversationsAsync();
+    }
+
+    private async void SearchConversations_Click(object sender, RoutedEventArgs e) =>
+        await SearchConversationsAsync();
+
+    private async Task SearchConversationsAsync()
+    {
+        if (_searchInProgress)
+        {
+            return;
+        }
+
+        var query = ConversationSearchBox.Text.Trim();
+        if (query.Length == 0)
+        {
+            _searchMatches = null;
+            ApplyConversationFilter();
+            StatusText.Text = $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。";
+            return;
+        }
+
+        _searchInProgress = true;
+        ConversationSearchBox.IsEnabled = false;
+        StatusText.Text = $"正在搜索 {Entries.Count} 个对话的标题、工作区和正文…";
+        try
+        {
+            var matches = await Task.Run(() =>
+                _service.Search(Entries.ToArray(), query));
+            _searchMatches = matches
+                .Select(static entry => entry.FullPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            ApplyConversationFilter();
+            StatusText.Text = $"“{query}”找到 {ConversationList.Items.Count} 个结果。";
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+        finally
+        {
+            _searchInProgress = false;
+            ConversationSearchBox.IsEnabled = true;
+            ConversationSearchBox.Focus();
+        }
+    }
+
+    private void ClearConversationSearch_Click(object sender, RoutedEventArgs e)
+    {
+        ConversationSearchBox.Clear();
+        _searchMatches = null;
+        ApplyConversationFilter();
+        StatusText.Text = $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。";
+    }
+
     private void ApplyConversationFilter()
     {
         var scope = (ConversationScopeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "All";
-        ConversationList.ItemsSource = scope switch
+        IEnumerable<ConversationEntry> filtered = scope switch
         {
             "Isolated" => Entries.Where(static entry => string.IsNullOrWhiteSpace(entry.WorkingDirectory)).ToArray(),
             "Workspace" => Entries.Where(static entry => !string.IsNullOrWhiteSpace(entry.WorkingDirectory)).ToArray(),
             _ => Entries.ToArray()
         };
+
+        var timeTag = (ConversationTimeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "All";
+        if (int.TryParse(timeTag, out var days) && days > 0)
+        {
+            var threshold = DateTimeOffset.UtcNow.AddDays(-days);
+            filtered = filtered.Where(entry => entry.UpdatedAt >= threshold);
+        }
+
+        if (_searchMatches is not null)
+        {
+            filtered = filtered.Where(entry => _searchMatches.Contains(entry.FullPath));
+        }
+
+        ConversationList.ItemsSource = filtered.ToArray();
     }
 
     private async Task RefreshModelConfigurationAsync()

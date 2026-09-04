@@ -15,6 +15,7 @@ public sealed class ConversationService
 {
     private const int MaxHeaderBytes = 256_000;
     private const int ZstdReadBufferSize = 64 * 1024;
+    private const long MaxSearchCharactersPerSession = 32L * 1024 * 1024;
     private const int SupportedSessionFormatVersion = 0;
     private const long MaxSafeInteger = 9_007_199_254_740_991;
     private readonly LauncherPaths _paths;
@@ -43,6 +44,115 @@ public sealed class ConversationService
             .OrderByDescending(entry => entry.UpdatedAt)
             .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Searches session metadata and the append-only JSONL body without modifying it.
+    /// Individual unreadable or damaged files are skipped so one bad conversation does
+    /// not make the whole result unavailable.
+    /// </summary>
+    public IReadOnlyList<ConversationEntry> Search(
+        IEnumerable<ConversationEntry> entries,
+        string query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var term = query?.Trim() ?? string.Empty;
+        var snapshot = entries.ToArray();
+        if (term.Length == 0)
+        {
+            return snapshot;
+        }
+
+        var result = new List<ConversationEntry>();
+        foreach (var entry in snapshot)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (MetadataContains(entry, term) || SessionBodyContains(entry, term, cancellationToken))
+            {
+                result.Add(entry);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool MetadataContains(ConversationEntry entry, string term) =>
+        entry.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || entry.InstanceName.Contains(term, StringComparison.OrdinalIgnoreCase)
+        || (entry.SessionId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (entry.WorkingDirectory?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool SessionBodyContains(
+        ConversationEntry entry,
+        string term,
+        CancellationToken cancellationToken)
+    {
+        if (!entry.HasValidHeader || !File.Exists(entry.FullPath) || IsReparsePoint(entry.FullPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var source = File.OpenRead(entry.FullPath);
+            if (entry.IsCompressed)
+            {
+                using var decompressor = new DecompressionStream(
+                    source,
+                    ZstdReadBufferSize,
+                    checkEndOfStream: false,
+                    leaveOpen: false);
+                return StreamContains(decompressor, term, cancellationToken);
+            }
+
+            return StreamContains(source, term, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or ZstdException
+            or DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    private static bool StreamContains(
+        Stream stream,
+        string term,
+        CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(
+            stream,
+            new UTF8Encoding(false, true),
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 16 * 1024,
+            leaveOpen: true);
+        var buffer = new char[16 * 1024];
+        var carry = string.Empty;
+        long charactersRead = 0;
+        while (charactersRead < MaxSearchCharactersPerSession)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var requested = (int)Math.Min(buffer.Length, MaxSearchCharactersPerSession - charactersRead);
+            var count = reader.Read(buffer, 0, requested);
+            if (count == 0)
+            {
+                return false;
+            }
+
+            charactersRead += count;
+            var block = carry + new string(buffer, 0, count);
+            if (block.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var overlap = Math.Min(Math.Max(0, term.Length - 1), block.Length);
+            carry = overlap == 0 ? string.Empty : block[^overlap..];
+        }
+
+        return false;
     }
 
     public string Backup(ManagerInstance instance, ConversationEntry entry)

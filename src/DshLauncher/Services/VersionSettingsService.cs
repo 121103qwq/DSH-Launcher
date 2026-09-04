@@ -331,6 +331,11 @@ public sealed class VersionSettingsService
             settings.OpenMode = null;
         }
 
+        if (settings.IdleStopMinutes is < 0 or > 10080)
+        {
+            throw new ArgumentException("空闲停止时间必须在 0 到 10080 分钟之间。", nameof(settings));
+        }
+
         settings.ConversationWorkspace = string.IsNullOrWhiteSpace(settings.ConversationWorkspace)
             ? null
             : settings.ConversationWorkspace.Trim();

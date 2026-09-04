@@ -64,12 +64,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly LauncherUpdateService _launcherUpdateService = new();
     private readonly DshVersionCatalogService _dshVersionCatalogService = new();
     private readonly DshDesktopInstallService _dshDesktopInstallService = new();
+    private readonly LauncherLogService _launcherLogService = new();
+    private readonly DiagnosticBundleService _diagnosticBundleService = new();
+    private readonly LauncherIntegrationService _launcherIntegrationService = new();
+    private readonly InstanceStorageService _instanceStorageService = new();
+    private readonly InstanceResourceMonitor _instanceResourceMonitor = new();
     private readonly SourceBuildService _sourceBuilder = new();
     private readonly CancellationTokenSource _windowCancellation = new();
+    private readonly DispatcherTimer _instanceMonitorTimer;
+    private readonly Dictionary<string, InstanceResourceSnapshot> _resourceSnapshots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AutomaticRestartState> _automaticRestartStates = new(StringComparer.Ordinal);
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
     private DshRuntimeInfo _dshRuntime = DshRuntimeInfo.Missing();
     private IReadOnlyList<DshRuntimeInfo> _detectedDshRuntimes = Array.Empty<DshRuntimeInfo>();
     private readonly Dictionary<string, ChatWindow> _chatWindows = new(StringComparer.Ordinal);
+    private readonly Queue<LauncherCommand> _pendingLauncherCommands = new();
     private readonly HashSet<string> _recentInstanceIds = new(StringComparer.Ordinal);
     private ManagerInstance? _selectedInstance;
     private string _versionSettingsReturnSection = "启动";
@@ -90,6 +99,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string _currentSection = "启动";
     private Action? _runtimePanelUpdateStatus;
     private HwndSource? _windowSource;
+    private bool _instanceMonitorTickInProgress;
+    private DateTimeOffset _lastAutomaticMaintenanceAt = DateTimeOffset.MinValue;
 
     public MainWindow()
     {
@@ -124,8 +135,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 用“无法优雅关闭”保证 Launcher 重开后不会出现第二次 Node MSI 与残留安装重叠。
         _nodeInstaller.LingeringInstallerCompleted += OnLingeringInstallerCompleted;
         InitializeComponent();
+        _instanceMonitorTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = TimeSpan.FromSeconds(3)
+        };
+        _instanceMonitorTimer.Tick += InstanceMonitorTimer_Tick;
+        LauncherTaskService.Shared.Changed += LauncherTasks_Changed;
         WindowSizeHelper.FitInitialSize(this);
         DataContext = this;
+        RefreshTaskCenterIndicator();
     }
 
     public string PageTitle { get; private set; } = "启动";
@@ -164,6 +182,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceStatus));
             OnPropertyChanged(nameof(SelectedInstanceStatusBrush));
             OnPropertyChanged(nameof(InstanceEndpointText));
+            OnPropertyChanged(nameof(SelectedInstanceRuntimeResourceText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
@@ -312,6 +331,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string InstanceEndpointText => SelectedInstance?.WebUrl
         ?? (SelectedInstance?.RuntimeStatus == InstanceRuntimeStatus.Running ? "正在检查运行地址…" : "尚未启动");
 
+    public string SelectedInstanceRuntimeResourceText => SelectedInstance?.RuntimeResourceText ?? string.Empty;
+
     public bool CanInstallDsh => !_isDshInstallInProgress
         && !_isNodeDetectionInProgress
         && _nodeRuntime.IsAvailable
@@ -412,6 +433,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             LoadCachedInstances();
             await Dispatcher.Yield(DispatcherPriority.Background);
             await ReconcileCachedInstanceStatesAsync();
+            _instanceMonitorTimer.Start();
             await RefreshDshAsync();
             await RefreshNodeAsync();
             await PromptFirstRunSetupIfNeededAsync();
@@ -647,6 +669,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshRunningInstances();
             _instancesLoadedSuccessfully = true;
             OnPropertyChanged(nameof(CanStartInstance));
+            DrainPendingLauncherCommands();
         }
         catch (Exception ex)
         {
@@ -808,6 +831,360 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(RunningInstancesVisibility));
     }
 
+    private async void InstanceMonitorTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_instanceMonitorTickInProgress || _windowCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _instanceMonitorTickInProgress = true;
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now - _lastAutomaticMaintenanceAt >= TimeSpan.FromSeconds(15))
+            {
+                _lastAutomaticMaintenanceAt = now;
+                await RunAutomaticInstanceMaintenanceAsync(now);
+            }
+
+            foreach (var instance in Instances
+                         .Where(candidate => _instanceRunner.IsRunning(candidate.Id)
+                             && candidate.ProcessId is > 0)
+                         .ToArray())
+            {
+                _resourceSnapshots.TryGetValue(instance.Id, out var previous);
+                var snapshot = await _instanceResourceMonitor.SampleAsync(
+                    instance,
+                    previous,
+                    _windowCancellation.Token);
+                _resourceSnapshots[instance.Id] = snapshot;
+                if (snapshot.IsAvailable)
+                {
+                    UpdateInstanceTelemetry(instance.Id, FormatRuntimeResourceText(snapshot));
+                }
+            }
+
+            var runningIds = Instances
+                .Where(candidate => _instanceRunner.IsRunning(candidate.Id))
+                .Select(static candidate => candidate.Id)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var staleId in _resourceSnapshots.Keys.Where(id => !runningIds.Contains(id)).ToArray())
+            {
+                _resourceSnapshots.Remove(staleId);
+                UpdateInstanceTelemetry(staleId, null);
+            }
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _launcherLogService.Write("Monitor", "实例状态监控失败。", ex);
+        }
+        finally
+        {
+            _instanceMonitorTickInProgress = false;
+        }
+    }
+
+    private async Task RunAutomaticInstanceMaintenanceAsync(DateTimeOffset now)
+    {
+        foreach (var original in Instances.ToArray())
+        {
+            var current = ResolveInstanceById(Instances, original.Id);
+            if (current is null)
+            {
+                _automaticRestartStates.Remove(original.Id);
+                continue;
+            }
+
+            VersionSettingsData settings;
+            try
+            {
+                settings = _versionSettingsService.Read(current);
+            }
+            catch (Exception ex)
+            {
+                _launcherLogService.Write("Monitor", $"无法读取实例 {current.Name} 的自动运行策略。", ex);
+                continue;
+            }
+
+            var managedWasRunning = current.RuntimeStatus == InstanceRuntimeStatus.Running
+                && current.RuntimeOwnership == InstanceRuntimeOwnership.Managed;
+            var managedIsRunning = _instanceRunner.IsManaged(current.Id);
+            if (managedWasRunning && !managedIsRunning)
+            {
+                CloseChatWindow(current.Id);
+                var failed = current with
+                {
+                    RuntimeStatus = InstanceRuntimeStatus.Error,
+                    RuntimeOwnership = InstanceRuntimeOwnership.None,
+                    ProcessId = null,
+                    ProcessStartedAt = null,
+                    Port = null,
+                    WebUrl = null,
+                    RuntimeResourceText = null,
+                    LastError = settings.RestartOnCrash
+                        ? "DSh 进程意外退出，正在等待自动重启。"
+                        : "DSh 进程意外退出。"
+                };
+                UpdateInstance(failed);
+                _launcherLogService.Write("Runtime", $"实例 {current.Name} 的进程意外退出。");
+
+                if (settings.RestartOnCrash)
+                {
+                    var attempts = _automaticRestartStates.TryGetValue(current.Id, out var previousRestart)
+                        ? previousRestart.Attempts
+                        : 0;
+                    if (attempts >= AutomaticRestartDelays.Length)
+                    {
+                        _automaticRestartStates.Remove(current.Id);
+                        ShowNotice($"实例 {current.Name} 自动重启已达到 5 次上限，请查看日志后手动处理。");
+                    }
+                    else
+                    {
+                        var delay = AutomaticRestartDelays[attempts];
+                        _automaticRestartStates[current.Id] = new AutomaticRestartState(
+                            Attempts: attempts,
+                            WindowStartedAt: previousRestart?.WindowStartedAt ?? now,
+                            NextAttemptAt: now + delay);
+                        ShowNotice($"实例意外退出：{current.Name}。将在 {delay.TotalSeconds:0} 秒后尝试自动重启。");
+                    }
+                }
+
+                continue;
+            }
+
+            if (_automaticRestartStates.TryGetValue(current.Id, out var restartState))
+            {
+                if (!settings.RestartOnCrash || current.RuntimeStatus == InstanceRuntimeStatus.Stopped)
+                {
+                    _automaticRestartStates.Remove(current.Id);
+                }
+                else if (managedIsRunning)
+                {
+                    if (current.ProcessStartedAt is { } startedAt
+                        && now - startedAt >= TimeSpan.FromMinutes(10))
+                    {
+                        _automaticRestartStates.Remove(current.Id);
+                    }
+                }
+                else if (now >= restartState.NextAttemptAt)
+                {
+                    await TryAutomaticRestartAsync(current, restartState, now);
+                    continue;
+                }
+            }
+
+            if (!managedIsRunning || settings.IdleStopMinutes <= 0 || _isLifecycleInProgress)
+            {
+                continue;
+            }
+
+            var latestActivity = await Task.Run(
+                () => ReadLatestInstanceActivity(current),
+                _windowCancellation.Token);
+            if (now - latestActivity >= TimeSpan.FromMinutes(settings.IdleStopMinutes))
+            {
+                await StopIdleInstanceAsync(current, settings.IdleStopMinutes);
+            }
+        }
+    }
+
+    private async Task TryAutomaticRestartAsync(
+        ManagerInstance instance,
+        AutomaticRestartState state,
+        DateTimeOffset now)
+    {
+        if (state.Attempts >= AutomaticRestartDelays.Length)
+        {
+            _automaticRestartStates.Remove(instance.Id);
+            _launcherLogService.Write("Runtime", $"实例 {instance.Name} 已达到自动重启上限。 ");
+            ShowNotice($"实例 {instance.Name} 自动重启已达到 5 次上限，请查看日志后手动处理。");
+            return;
+        }
+
+        if (!TryBeginLifecycleOperation())
+        {
+            return;
+        }
+
+        var attempt = state.Attempts + 1;
+        try
+        {
+            _launcherLogService.Write("Runtime", $"正在第 {attempt} 次自动重启实例 {instance.Name}。");
+            var result = await StartManagedInstanceAsync(instance);
+            if (result is { IsSuccess: true })
+            {
+                _automaticRestartStates[instance.Id] = state with
+                {
+                    Attempts = attempt,
+                    NextAttemptAt = DateTimeOffset.MaxValue
+                };
+                ShowNotice($"实例已自动重启：{instance.Name}（第 {attempt} 次尝试）。");
+                return;
+            }
+
+            ScheduleNextAutomaticRestart(instance, state, attempt, now, result?.Error);
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ScheduleNextAutomaticRestart(instance, state, attempt, now, ex.Message);
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
+    }
+
+    private void ScheduleNextAutomaticRestart(
+        ManagerInstance instance,
+        AutomaticRestartState state,
+        int attempt,
+        DateTimeOffset now,
+        string? error)
+    {
+        if (attempt >= AutomaticRestartDelays.Length)
+        {
+            _automaticRestartStates.Remove(instance.Id);
+            _launcherLogService.Write("Runtime", $"实例 {instance.Name} 第 {attempt} 次自动重启失败，已达到上限：{error}");
+            ShowNotice($"实例 {instance.Name} 自动重启失败并达到 5 次上限。", error);
+            return;
+        }
+
+        var delay = AutomaticRestartDelays[attempt];
+        _automaticRestartStates[instance.Id] = state with
+        {
+            Attempts = attempt,
+            NextAttemptAt = now + delay
+        };
+        _launcherLogService.Write("Runtime", $"实例 {instance.Name} 第 {attempt} 次自动重启失败，{delay.TotalSeconds:0} 秒后重试：{error}");
+    }
+
+    private async Task StopIdleInstanceAsync(ManagerInstance instance, int idleMinutes)
+    {
+        if (!TryBeginLifecycleOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token);
+            if (!result.IsSuccess)
+            {
+                _launcherLogService.Write("Runtime", $"空闲停止实例 {instance.Name} 失败：{result.Error}");
+                return;
+            }
+
+            CloseChatWindow(instance.Id);
+            var stopped = instance with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                RuntimeOwnership = InstanceRuntimeOwnership.None,
+                ProcessId = null,
+                ProcessStartedAt = null,
+                Port = null,
+                WebUrl = null,
+                LastError = null,
+                RuntimeResourceText = null
+            };
+            UpdateInstance(stopped);
+            await SynchronizeConversationsAsync(stopped);
+            _launcherLogService.Write("Runtime", $"实例 {instance.Name} 空闲 {idleMinutes} 分钟后已自动停止。");
+            ShowNotice($"实例已按空闲策略自动停止：{instance.Name}。");
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
+    }
+
+    private DateTimeOffset ReadLatestInstanceActivity(ManagerInstance instance)
+    {
+        var latest = instance.ProcessStartedAt ?? DateTimeOffset.UtcNow;
+        try
+        {
+            foreach (var conversation in _conversationService.List(instance))
+            {
+                if (conversation.UpdatedAt > latest)
+                {
+                    latest = conversation.UpdatedAt;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _launcherLogService.Write("Runtime", $"读取实例 {instance.Name} 的最近会话活动失败。", ex);
+        }
+
+        return latest;
+    }
+
+    private void UpdateInstanceTelemetry(string instanceId, string? text)
+    {
+        var index = Instances.ToList().FindIndex(instance =>
+            string.Equals(instance.Id, instanceId, StringComparison.Ordinal));
+        if (index < 0 || string.Equals(Instances[index].RuntimeResourceText, text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var updated = Instances[index] with { RuntimeResourceText = text };
+        var selected = string.Equals(_selectedInstance?.Id, instanceId, StringComparison.Ordinal);
+        Instances[index] = updated;
+        if (selected)
+        {
+            _selectedInstance = updated;
+            OnPropertyChanged(nameof(SelectedInstance));
+            OnPropertyChanged(nameof(SelectedInstanceRuntimeResourceText));
+        }
+    }
+
+    private static string FormatRuntimeResourceText(InstanceResourceSnapshot snapshot)
+    {
+        var cpu = snapshot.CpuUsagePercent is { } cpuValue
+            ? $"CPU {cpuValue:0.#}%"
+            : "CPU 采样中";
+        var memory = snapshot.WorkingSetBytes is { } bytes
+            ? $"内存 {FormatBytes(bytes)}"
+            : "内存未知";
+        var runtime = snapshot.RuntimeDuration is { } duration
+            ? $"运行 {FormatRuntimeDuration(duration)}"
+            : "运行时长未知";
+        var warning = snapshot.CpuUsagePercent >= 90
+            || snapshot.WorkingSetBytes >= 2L * 1024 * 1024 * 1024
+                ? " · ⚠ 资源占用较高"
+                : string.Empty;
+        return $"{cpu} · {memory} · {runtime}{warning}";
+    }
+
+    private static string FormatBytes(long bytes) => bytes >= 1024L * 1024 * 1024
+        ? $"{bytes / (1024d * 1024 * 1024):0.0} GB"
+        : $"{bytes / (1024d * 1024):0} MB";
+
+    private static string FormatRuntimeDuration(TimeSpan duration) => duration.TotalHours >= 1
+        ? $"{(int)duration.TotalHours}小时 {duration.Minutes}分"
+        : $"{Math.Max(0, duration.Minutes)}分 {duration.Seconds}秒";
+
+    private static readonly TimeSpan[] AutomaticRestartDelays =
+    [
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(15),
+        TimeSpan.FromSeconds(45),
+        TimeSpan.FromMinutes(2),
+        TimeSpan.FromMinutes(5)
+    ];
+
+    private sealed record AutomaticRestartState(
+        int Attempts,
+        DateTimeOffset WindowStartedAt,
+        DateTimeOffset NextAttemptAt);
+
     internal static IReadOnlyList<ManagerInstance> SelectRecentInstances(
         IEnumerable<ManagerInstance> instances,
         int maximumCount = 3) =>
@@ -887,6 +1264,121 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         SwitchSection(section);
+    }
+
+    private void TaskCenter_Click(object sender, RoutedEventArgs e) => SwitchSection("任务");
+
+    private void LauncherTasks_Changed(object? sender, EventArgs e)
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.DataBind, RefreshTaskCenterIndicator);
+    }
+
+    private void RefreshTaskCenterIndicator()
+    {
+        var running = LauncherTaskService.Shared.GetRunning().Count;
+        TaskCenterButtonText.Text = running > 0 ? $"任务 {running}" : "任务";
+        TaskCenterButton.ToolTip = running > 0
+            ? $"有 {running} 个任务正在运行"
+            : "查看下载、安装与维护任务";
+    }
+
+    internal void HandleLauncherCommand(LauncherCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!_instancesLoadedSuccessfully)
+        {
+            _pendingLauncherCommands.Enqueue(command);
+            return;
+        }
+
+        _ = HandleLauncherCommandAsync(command);
+    }
+
+    private void DrainPendingLauncherCommands()
+    {
+        while (_pendingLauncherCommands.TryDequeue(out var command))
+        {
+            _ = HandleLauncherCommandAsync(command);
+        }
+    }
+
+    private async Task HandleLauncherCommandAsync(LauncherCommand command)
+    {
+        var target = string.IsNullOrWhiteSpace(command.InstanceId)
+            ? SelectedInstance
+            : Instances.FirstOrDefault(instance =>
+                string.Equals(instance.Id, command.InstanceId, StringComparison.Ordinal));
+        if (command.Action != LauncherCommandAction.Open && target is null)
+        {
+            ShowNotice(string.IsNullOrWhiteSpace(command.InstanceId)
+                ? "命令需要一个实例，请先创建或选择版本。"
+                : $"命令指定的实例不存在：{command.InstanceId}");
+            return;
+        }
+
+        if (target is not null)
+        {
+            SelectedInstance = target;
+            MarkInstanceUsed(target.Id);
+        }
+
+        switch (command.Action)
+        {
+            case LauncherCommandAction.Open:
+                SwitchSection("启动");
+                break;
+            case LauncherCommandAction.Start:
+                SwitchSection("启动");
+                await StartSelectedInstanceAsync();
+                break;
+            case LauncherCommandAction.Stop:
+                SwitchSection("启动");
+                await StopSelectedInstanceAsync();
+                break;
+            case LauncherCommandAction.Restart:
+                SwitchSection("启动");
+                await RestartSelectedInstanceAsync();
+                break;
+            case LauncherCommandAction.Chat:
+                await OpenCommandChatAsync(command);
+                break;
+            case LauncherCommandAction.VersionSettings:
+                ShowVersionSettings();
+                break;
+            case LauncherCommandAction.Plugins:
+                SwitchSection("扩展");
+                break;
+            case LauncherCommandAction.Conversations:
+                SwitchSection("对话");
+                break;
+        }
+    }
+
+    private async Task OpenCommandChatAsync(LauncherCommand command)
+    {
+        if (SelectedInstance is null)
+        {
+            return;
+        }
+
+        if (!_instanceRunner.IsRunning(SelectedInstance.Id))
+        {
+            await StartSelectedInstanceAsync();
+        }
+
+        var current = ResolveInstanceById(Instances, SelectedInstance.Id);
+        if (current is null || string.IsNullOrWhiteSpace(current.WebUrl))
+        {
+            ShowNotice("实例没有可用的 Web 地址，无法打开对话窗口。");
+            return;
+        }
+
+        OpenChatWindow(current.Id, current.WebUrl, command.SessionId);
     }
 
     private void Window_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -974,7 +1466,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _currentSection = section;
         SetNavigationSelection(section);
         VersionSettingsBackButton.Visibility = Visibility.Collapsed;
-        StartupBrandText.Visibility = section is "启动" or "下载" or "Provider"
+        StartupBrandText.Visibility = section is "启动" or "下载" or "Provider" or "任务"
             ? Visibility.Visible
             : Visibility.Collapsed;
         ContextInstanceSelector.Visibility = section is "扩展" or "Agent" && Instances.Count > 0
@@ -993,6 +1485,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             PageTitle = "下载";
             PageSubtitle = "获取 Launcher 更新和官方 DSh 版本";
             ShowEmbeddedPage(CreateDownloadsPage());
+        }
+        else if (section == "任务")
+        {
+            PageTitle = "任务";
+            PageSubtitle = "集中查看下载、安装与维护任务";
+            ShowEmbeddedPage(new TaskCenterView(LauncherTaskService.Shared));
         }
         else if (section == "Provider")
         {
@@ -1714,6 +2212,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (installer.ExitCode != 0)
             {
                 status.Text = $"DSH Desktop 安装程序退出码为 {installer.ExitCode}；没有自动导入实例。";
+                progressWindow.FailTask(status.Text);
                 return;
             }
 
@@ -1727,10 +2226,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ? $"DSH Desktop {release.VersionText} 已完成安装流程，并已检测为可管理运行环境。"
                 : "安装程序已正常结束，但 Launcher 暂未检测到 DSH Desktop。可在设置中使用“扫描自定义目录”。";
             ShowNotice(status.Text);
+            progressWindow.CompleteTask(status.Text);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
             status.Text = "DSH Desktop 下载已取消。";
+            progressWindow.CancelTask(status.Text);
         }
         catch (Exception ex) when (ex is HttpRequestException
             or IOException
@@ -1740,6 +2241,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             or System.ComponentModel.Win32Exception)
         {
             status.Text = $"安装 DSH Desktop 失败：{ex.Message}";
+            progressWindow.FailTask(status.Text);
         }
         finally
         {
@@ -1994,7 +2496,243 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         AddPluginInstallModeSection(panel);
         AddVersionSyncSection(panel);
+        AddLauncherIntegrationSection(panel);
+        AddStorageManagementSection(panel);
+        AddDiagnosticsSection(panel);
         return panel;
+    }
+
+    private void AddStorageManagementSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "实例空间管理",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+
+        var instanceText = new TextBlock
+        {
+            Text = SelectedInstance is { } instance
+                ? $"当前实例：{instance.Name}"
+                : "当前没有选中实例",
+            FontWeight = FontWeights.SemiBold
+        };
+        content.Children.Add(instanceText);
+        content.Children.Add(new TextBlock
+        {
+            Text = "统计 Sessions、快照、报告、插件依赖和缓存占用；清理前会列出候选，只把自动快照、报告和明确的缓存文件移入 Windows 回收站。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11,
+            Margin = new Thickness(0, 6, 0, 0)
+        });
+
+        var open = new System.Windows.Controls.Button
+        {
+            Content = "查看空间占用",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 14, 0, 0),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            IsEnabled = SelectedInstance is not null
+        };
+        open.Click += (_, _) =>
+        {
+            if (SelectedInstance is not { } selected)
+            {
+                return;
+            }
+
+            new StorageManagementWindow(
+                this,
+                selected,
+                _instanceStorageService,
+                _windowCancellation.Token).ShowDialog();
+        };
+        content.Children.Add(open);
+    }
+
+    private void AddLauncherIntegrationSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "命令与系统入口",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+        var content = new StackPanel();
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "注册 dsh-launcher:// 后，可从脚本、网页或桌面快捷方式打开、启动、停止、重启实例。注册只写入当前 Windows 用户，不需要管理员权限。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11
+        });
+        var actions = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
+        var register = new System.Windows.Controls.Button
+        {
+            Content = "注册 URL 协议",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var unregister = new System.Windows.Controls.Button
+        {
+            Content = "取消注册",
+            Padding = new Thickness(14, 8, 14, 8)
+        };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 10, 0, 0),
+            Text = _launcherIntegrationService.IsProtocolRegistered()
+                ? "当前可使用 dsh-launcher://。"
+                : "当前尚未注册 dsh-launcher://。"
+        };
+        register.Click += (_, _) =>
+        {
+            try
+            {
+                _launcherIntegrationService.RegisterProtocol();
+                status.Text = "已为当前 Windows 用户注册 dsh-launcher://。";
+            }
+            catch (Exception ex)
+            {
+                status.Text = $"注册失败：{ex.Message}";
+            }
+        };
+        unregister.Click += (_, _) =>
+        {
+            try
+            {
+                status.Text = _launcherIntegrationService.UnregisterProtocol()
+                    ? "已取消 dsh-launcher:// 注册。"
+                    : "当前注册不属于这份 Launcher，未做修改。";
+            }
+            catch (Exception ex)
+            {
+                status.Text = $"取消注册失败：{ex.Message}";
+            }
+        };
+        actions.Children.Add(register);
+        actions.Children.Add(unregister);
+        content.Children.Add(actions);
+        content.Children.Add(status);
+    }
+
+    private void AddDiagnosticsSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "日志与诊断",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+        var content = new StackPanel();
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "查看最近 7 天 Launcher 日志，或导出不包含凭据和会话正文的诊断 ZIP。Plugin 安装失败生成的原始报告仍保持原有本地排障行为。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 11
+        });
+        var actions = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
+        var viewLogs = new System.Windows.Controls.Button
+        {
+            Content = "查看日志",
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var export = new System.Windows.Controls.Button
+        {
+            Content = "导出诊断包",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 8, 14, 8)
+        };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        viewLogs.Click += (_, _) => new LogCenterWindow(this, _launcherLogService).ShowDialog();
+        export.Click += async (_, _) =>
+        {
+            using var dialog = new Forms.SaveFileDialog
+            {
+                Title = "导出 DSH Launcher 诊断包",
+                Filter = "诊断 ZIP (*.zip)|*.zip",
+                FileName = $"dsh-launcher-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+                AddExtension = true,
+                DefaultExt = "zip",
+                OverwritePrompt = true
+            };
+            if (dialog.ShowDialog() != Forms.DialogResult.OK)
+            {
+                return;
+            }
+
+            export.IsEnabled = false;
+            status.Text = "正在收集日志、运行环境和版本目录清单…";
+            try
+            {
+                var path = await Task.Run(() => _diagnosticBundleService.Create(
+                    dialog.FileName,
+                    Instances.ToArray(),
+                    _nodeRuntime,
+                    _dshRuntime));
+                status.Text = $"诊断包已导出：{path}";
+            }
+            catch (Exception ex)
+            {
+                status.Text = $"导出诊断包失败：{ex.Message}";
+            }
+            finally
+            {
+                export.IsEnabled = true;
+            }
+        };
+        actions.Children.Add(viewLogs);
+        actions.Children.Add(export);
+        content.Children.Add(actions);
+        content.Children.Add(status);
     }
 
     private void AddLauncherUpdateSection(StackPanel panel)
@@ -2294,11 +3032,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             progressWindow.SetStatus("正在正常关闭 Launcher；辅助程序会在退出后完成替换并重新打开。");
+            progressWindow.CompleteTask($"已下载并校验 {release.TagName}，更新辅助程序已启动。");
             progressWindow.Close();
             Close();
         }
         catch (OperationCanceledException)
         {
+            progressWindow.CancelTask("Launcher 版本操作已取消。");
             ShowNotice("Launcher 版本操作已取消。");
         }
         catch (Exception ex) when (ex is HttpRequestException
@@ -2308,6 +3048,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             or InvalidOperationException
             or UnauthorizedAccessException)
         {
+            progressWindow.FailTask($"Launcher {action}失败：{ex.Message}");
             System.Windows.MessageBox.Show(
                 this,
                 $"Launcher {action}失败：{ex.Message}",
@@ -2829,6 +3570,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 var updated = new VersionSettingsData
                 {
+                    ActiveProfileName = current.ActiveProfileName,
                     SyncAllConfiguration = versionSyncAll.IsChecked == true,
                     ConversationSyncMode = workspaceRadio.IsChecked == true
                         ? ConversationSyncMode.Workspace
@@ -2837,6 +3579,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                             : ConversationSyncMode.Independent,
                     ConversationWorkspace = workspace,
                     SyncModelProviders = syncProviders.IsChecked == true,
+                    IdleStopMinutes = current.IdleStopMinutes,
+                    RestartOnCrash = current.RestartOnCrash,
                     WindowTitle = current.WindowTitle,
                     NodeExecutablePath = current.NodeExecutablePath,
                     OpenMode = current.OpenMode,
@@ -3005,8 +3749,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     prepareNodeEngine);
                 if (!nodeResult.IsSuccess)
                 {
-                    progressWindow.SetStatus(nodeResult.Error ?? "Node.js 安装失败。");
-                    System.Windows.MessageBox.Show(this, nodeResult.Error ?? "Node.js 安装失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    var message = nodeResult.Error ?? "Node.js 安装失败。";
+                    progressWindow.SetStatus(message);
+                    progressWindow.FailTask(message);
+                    System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -3023,8 +3769,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 if (!_nodeRuntime.IsAvailable)
                 {
-                    progressWindow.SetStatus("Node.js 安装后仍未被检测到，请确认安装路径后重新检测。");
-                    System.Windows.MessageBox.Show(this, "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    const string message = "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。";
+                    progressWindow.SetStatus(message);
+                    progressWindow.FailTask(message);
+                    System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -3072,8 +3820,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     cancellation.Token);
                 if (!dshResult.IsSuccess)
                 {
-                    progressWindow.SetStatus(dshResult.Error ?? "DSh 安装失败。");
-                    System.Windows.MessageBox.Show(this, dshResult.Error ?? "DSh 安装失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    var message = dshResult.Error ?? "DSh 安装失败。";
+                    progressWindow.SetStatus(message);
+                    progressWindow.FailTask(message);
+                    System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -3090,8 +3840,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 if (!_dshRuntime.IsAvailable)
                 {
-                    progressWindow.SetStatus("DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。");
-                    System.Windows.MessageBox.Show(this, "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    const string message = "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。";
+                    progressWindow.SetStatus(message);
+                    progressWindow.FailTask(message);
+                    System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
             }
@@ -3119,11 +3871,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var message = $"Node.js {_nodeRuntime.VersionText} 与当前 DSh 要求（{finalRequirement ?? "未声明"}）不兼容。\n\n"
                     + "Launcher 不会自动卸载现有 Node.js。请安装满足要求的兼容版本后重试。";
                 progressWindow.SetStatus(message);
+                progressWindow.FailTask(message);
                 System.Windows.MessageBox.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
 
             progressWindow.SetStatus("运行环境已就绪。");
+            progressWindow.CompleteTask("运行环境已就绪。");
             ShowNotice(packagedRuntime is not null
                 ? $"运行环境已就绪：{packagedRuntime.ProductName ?? "封装应用"} 内置 DSh，不需要系统 Node.js。"
                 : target?.Kind == InstanceKind.Source
@@ -3133,11 +3887,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
+            progressWindow.CancelTask("运行环境准备已取消。");
             ShowNotice("运行环境准备已取消。");
             return false;
         }
         catch (Exception ex)
         {
+            progressWindow.FailTask($"准备运行环境失败：{ex.Message}");
             ShowNotice($"准备运行环境失败：{ex.Message}");
             return false;
         }
@@ -3403,9 +4159,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 cancellation.Token);
             if (scan.Runtimes.Count == 0)
             {
-                ShowNotice(scan.FoundCandidate
+                var message = scan.FoundCandidate
                     ? "找到了疑似 DSh 文件，但版本命令或 package.json 校验未通过。"
-                    : "所选目录中没有找到可用的 DSH Desktop 或 @deepseek-ai/dsh。源码目录请使用版本控制中的源码导入入口。");
+                    : "所选目录中没有找到可用的 DSH Desktop 或 @deepseek-ai/dsh。源码目录请使用版本控制中的源码导入入口。";
+                ShowNotice(message);
+                progressWindow.CompleteTask(message);
                 return Array.Empty<ManagerInstance>();
             }
 
@@ -3439,15 +4197,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ShowNotice($"已识别 {scan.Runtimes.Count} 个运行环境，但没有可导入或更新的实例。");
             }
 
+            progressWindow.CompleteTask($"扫描完成：识别 {scan.Runtimes.Count} 个运行环境，导入或更新 {changed.Length} 个实例。");
             return changed;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
+            progressWindow.CancelTask("目录扫描已取消。");
             ShowNotice("目录扫描已取消。");
             return Array.Empty<ManagerInstance>();
         }
         catch (Exception ex)
         {
+            progressWindow.FailTask($"导入实例失败：{ex.Message}");
             ShowNotice($"导入实例失败：{ex.Message}");
             return Array.Empty<ManagerInstance>();
         }
@@ -3734,6 +4495,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void StopInstance_Click(object sender, RoutedEventArgs e)
     {
+        await StopSelectedInstanceAsync();
+    }
+
+    private async Task StopSelectedInstanceAsync()
+    {
         if (SelectedInstance is null)
         {
             return;
@@ -3798,6 +4564,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private async void RestartInstance_Click(object sender, RoutedEventArgs e)
+    {
+        await RestartSelectedInstanceAsync();
+    }
+
+    private async Task RestartSelectedInstanceAsync()
     {
         if (SelectedInstance is null)
         {
@@ -4341,6 +5112,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             _shutdownCleanupStarted = true;
+            _instanceMonitorTimer.Stop();
             _windowCancellation.Cancel();
             CloseAllChatWindows();
             try
@@ -4687,6 +5459,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     protected override void OnClosed(EventArgs e)
     {
+        LauncherTaskService.Shared.Changed -= LauncherTasks_Changed;
         _windowSource?.RemoveHook(WindowProcedure);
         _windowSource = null;
         CloseAllChatWindows();
@@ -5117,6 +5890,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ShowNotice(string message, string? detail = null)
     {
+        _launcherLogService.Write("Notice", message + (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" | {detail}"));
         PageNotice = message;
         PageNoticeVisibility = Visibility.Visible;
         PageNoticeDetail = string.IsNullOrWhiteSpace(detail) ? string.Empty : detail.Trim();

@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using DshLauncher.Models;
+using DshLauncher.Services;
 using Button = System.Windows.Controls.Button;
 using ProgressBar = System.Windows.Controls.ProgressBar;
 using TextBox = System.Windows.Controls.TextBox;
@@ -18,6 +19,8 @@ internal sealed class PluginProgressWindow : Window
     private readonly TextBox _detailsBox;
     private readonly Button _actionButton;
     private readonly WindowState _ownerInitialState;
+    private readonly LauncherTaskHandle _task;
+    private readonly CancellationTokenRegistration _taskCancellationRegistration;
     private bool _canClose;
 
     public PluginProgressWindow(
@@ -28,6 +31,11 @@ internal sealed class PluginProgressWindow : Window
     {
         _cancellation = cancellation;
         _ownerInitialState = owner?.WindowState ?? WindowState.Normal;
+        _task = LauncherTaskService.Shared.Begin(
+            title,
+            title.Contains("Skill", StringComparison.OrdinalIgnoreCase) ? "Skill" : "Plugin");
+        _task.Report(5, initialStatus);
+        _taskCancellationRegistration = _task.Token.Register(_cancellation.Cancel);
         Title = title;
         Width = 520;
         Height = 250;
@@ -105,6 +113,7 @@ internal sealed class PluginProgressWindow : Window
                 return;
             }
 
+            _task.Cancel("正在取消操作…");
             _cancellation.Cancel();
             _statusText.Text = "正在取消 Plugin 操作…";
             _actionButton.IsEnabled = false;
@@ -118,7 +127,11 @@ internal sealed class PluginProgressWindow : Window
         WindowSizeHelper.FitInitialSize(this);
     }
 
-    public void SetStatus(string message) => _statusText.Text = message;
+    public void SetStatus(string message)
+    {
+        _statusText.Text = message;
+        _task.Report(statusMessage: message);
+    }
 
     public void SetProgress(double percentage, string message)
     {
@@ -127,6 +140,7 @@ internal sealed class PluginProgressWindow : Window
         _progressBar.IsIndeterminate = false;
         _progressBar.Value = value;
         _progressText.Text = $"{value:0}%";
+        _task.Report(value, message);
     }
 
     public void SetIndeterminate(string message, string detail = "处理中")
@@ -134,6 +148,7 @@ internal sealed class PluginProgressWindow : Window
         _statusText.Text = message;
         _progressBar.IsIndeterminate = true;
         _progressText.Text = detail;
+        _task.Report(progress: null, statusMessage: message);
     }
 
     public void SetDownloadProgress(SkillInstallProgress progress, string itemName)
@@ -152,6 +167,7 @@ internal sealed class PluginProgressWindow : Window
             _progressBar.Value = Math.Min(progress.BytesReceived, progress.TotalBytes.Value);
             _progressText.Text = $"{progress.Percent ?? 0}%";
             _statusText.Text = $"正在下载 {itemName}… {receivedText} / {FormatBytes(progress.TotalBytes.Value)}";
+            _task.Report(progress.Percent, _statusText.Text);
             return;
         }
 
@@ -172,14 +188,23 @@ internal sealed class PluginProgressWindow : Window
             : $"{completed}/{progress.Resolved}";
         _detailsBox.Text = $"实际包进度：解析 {progress.Resolved}，复用 {progress.Reused}，下载 {progress.Downloaded}，添加 {progress.Added}";
         _detailsBox.Visibility = Visibility.Visible;
+        _task.Report(
+            progress.Resolved <= 0 ? null : completed * 100d / progress.Resolved,
+            message);
     }
 
-    public void Complete(string message)
+    public void Complete(string message, string? details = null)
     {
         _canClose = true;
         SetProgress(100, message);
+        if (!string.IsNullOrWhiteSpace(details))
+        {
+            _detailsBox.Text = details;
+            _detailsBox.Visibility = Visibility.Visible;
+        }
         _actionButton.Content = "关闭";
         _actionButton.IsEnabled = true;
+        _task.Complete(message);
         PresentResult();
     }
 
@@ -194,6 +219,7 @@ internal sealed class PluginProgressWindow : Window
         _actionButton.Content = "关闭";
         _actionButton.IsEnabled = true;
         Height = Math.Min(420, SystemParameters.WorkArea.Height * 0.8);
+        _task.Fail(message);
         PresentResult();
     }
 
@@ -205,6 +231,7 @@ internal sealed class PluginProgressWindow : Window
         _progressText.Text = "已取消";
         _actionButton.Content = "关闭";
         _actionButton.IsEnabled = true;
+        _task.Cancel(message);
         PresentResult();
     }
 
@@ -245,6 +272,7 @@ internal sealed class PluginProgressWindow : Window
         if (!_canClose)
         {
             e.Cancel = true;
+            _task.Cancel("正在取消操作…");
             _cancellation.Cancel();
             _statusText.Text = "正在取消 Plugin 操作…";
             _actionButton.IsEnabled = false;
@@ -252,5 +280,11 @@ internal sealed class PluginProgressWindow : Window
         }
 
         base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _taskCancellationRegistration.Dispose();
+        base.OnClosed(e);
     }
 }

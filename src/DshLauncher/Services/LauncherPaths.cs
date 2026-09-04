@@ -29,6 +29,10 @@ public sealed class LauncherPaths
 
     public string RuntimeCachePath => Path.Combine(RootDirectory, "runtime-cache.json");
 
+    public string LogsDirectory => Path.Combine(RootDirectory, "logs");
+
+    public string TaskHistoryPath => Path.Combine(RootDirectory, "task-history.json");
+
     public string ManagedDshRuntimeDirectory => Path.Combine(RootDirectory, "runtime", "dsh");
 
     public string VersionSettingsPath => Path.Combine(RootDirectory, "version-settings.json");

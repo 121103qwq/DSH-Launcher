@@ -228,6 +228,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBox x:Name="MarketplaceSearchBox"
                              Height="38"
@@ -236,6 +237,12 @@
                              ToolTip="输入插件名称、包名或关键词"
                              TextChanged="MarketplaceSearchBox_TextChanged" />
                     <Button Grid.Column="1"
+                            x:Name="MarketplaceUpdateAllButton"
+                            Content="全部更新"
+                            Click="MarketplaceUpdateAll_Click"
+                            IsEnabled="False"
+                            Margin="8,0,0,0" />
+                    <Button Grid.Column="2"
                             x:Name="MarketplaceRefreshButton"
                             Content="刷新目录"
                             Click="MarketplaceRefresh_Click"
