@@ -4,16 +4,12 @@
              FontFamily="{StaticResource UiFont}"
              Loaded="Window_OnLoaded"
              Unloaded="Window_OnUnloaded">
-    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                  HorizontalScrollBarVisibility="Disabled"
-                  CanContentScroll="False"
-                  PanningMode="VerticalOnly">
-        <Grid Margin="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="280" />
-                <ColumnDefinition Width="20" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+    <Grid Margin="0">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="280" />
+            <ColumnDefinition Width="20" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0"
                     Background="{StaticResource CardBrush}"
@@ -110,7 +106,12 @@
                 </Grid>
             </Border>
 
-            <Border Grid.Column="2"
+            <ScrollViewer Grid.Column="2"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          CanContentScroll="False"
+                          PanningMode="VerticalOnly">
+            <Border
                     Background="{StaticResource CardBrush}"
                     BorderBrush="{StaticResource LineBrush}"
                     BorderThickness="1"
@@ -239,6 +240,6 @@
                     <TextBlock x:Name="StatusText" Foreground="{StaticResource BlueBrush}" TextWrapping="Wrap" Margin="0,18,0,0" />
                 </StackPanel>
             </Border>
+            </ScrollViewer>
         </Grid>
-    </ScrollViewer>
 </UserControl>
