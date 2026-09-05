@@ -166,6 +166,6 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.1.1**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.1.2**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
 
 本次更新补齐跨电脑密码快照、GitHub 请求缓存与配额提示，并修复旧凭据导入、实例选择丢失、快照遗漏 pnpm 构建配置、主题预览大图限制及切换 Profile 后主题状态残留等问题。

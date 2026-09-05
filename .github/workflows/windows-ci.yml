@@ -111,8 +111,8 @@ jobs:
             throw "Tag $tag declares version $tagVersion, but the project declares $projectVersion"
           }
 
-      - name: Restore launcher
-        run: dotnet restore .\src\DshLauncher\DshLauncher.csproj --locked-mode
+      - name: Restore launcher and self-contained Windows runtime packs
+        run: dotnet restore .\src\DshLauncher\DshLauncher.csproj --locked-mode -r win-x64 -p:SelfContained=true
 
       - name: Publish win-x64 single-file executable
         shell: pwsh
@@ -125,6 +125,9 @@ jobs:
             -p:EnableCompressionInSingleFile=true `
             --no-restore `
             -o $publishDirectory
+          if ($LASTEXITCODE -ne 0) {
+            throw "Publishing the Windows executable failed"
+          }
 
           $published = Join-Path $publishDirectory "DSH Launcher.exe"
           if (-not (Test-Path -LiteralPath $published -PathType Leaf)) {
