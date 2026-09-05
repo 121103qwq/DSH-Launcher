@@ -49,6 +49,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 - Plugin 市场聚合社区目录、GitHub `dsh-plugin` 标签和用户自定义目录。
 - 缓存优先打开，搜索、分类、来源和排序在本地完成；只有刷新目录时才联网。
+- GitHub 请求使用 ETag / Last-Modified 条件缓存；设置页显示剩余配额和限流恢复时间，并可选保存当前 Windows 用户 DPAPI 加密的 Token，Token 不会回显或进入分享包。
 - 安装前检查 `package.json`、`dsh.bundle.patch` 和实际安装来源，最后调用官方 DSh Plugin CLI。
 - Plugin 安装目标只来自市场目录和已验证的包元数据，不读取 README 改写安装命令。
 - 默认使用快速安装；快速模式失败时可直接用兼容模式重试，也可在设置中把兼容模式设为默认。
@@ -56,6 +57,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - Plugin CLI 会继承当前环境或 Git 全局代理，避免 Launcher 从资源管理器启动后 GitHub codeload 下载绕过已有代理。
 - 默认 Plugin `@deepseek-ai/dsh-base` 与 `@deepseek-ai/dsh-web-app` 只读保护，不能禁用或删除。
 - 同一版本存在多个 DSh Profile 时，可在扩展页切换当前 Profile；Plugin 列表、CLI 安装和回档随选择切换。包含 Web App 的 Profile 也可由 Launcher 启动，非 Web Profile 会给出明确提示。
+- Chat 主题联动会先探测 DSh 上游 `ui-theme.preference` 能力；不支持、未运行或没有打开 Chat 时按钮保持禁用，不注入私有兼容接口。
 - Skill 市场发现并校验仓库中的单个 `SKILL.md`，支持分类、搜索和按 Skill 目录安装。
 - 新电脑没有缓存或 GitHub 暂时不可用时先显示内置待校验条目，不再出现整页空白；联网成功后自动替换为最新目录。
 - 支持导入本地 Skill 与 Agent Preset，并按当前版本隔离保存。
@@ -66,6 +68,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - Provider 页面在打开期间每 15 秒读取 DSh 官方 `llm.providers` 状态，显示在线、未加载或运行异常；离开页面后停止监控。
 - Launcher 配置只保存 API Key 的环境变量名称；真实密钥继续由 DSh 官方 `.credentials.yaml` 管理。
 - Provider 自动同步只在双方都开启同步且实例已停止时生效，会原子复制官方凭据文件，但不会解析、显示、记录或打包其中的密钥；没有 llm Provider 配置时不会覆盖文件。
+- 导入或同步旧 DSh 数据时，会把历史 `version: 1` / `refs:` 凭据包装转换为当前官方插件接受的平铺格式；只调整结构，不显示密钥内容。
 - 管理 `session.jsonl` / `session.jsonl.zstd`：查看、打开、导入、导出、备份、恢复和删除。
 - 对话列表显示会话名称和所属实例，不直接暴露内部路径 ID。
 - 对话模型按“单独对话 → DSh 真实工作目录 → 全局默认”自动继承；从 Launcher 打开会话时通过 DSh 官方 `session.selectModel` 应用。
@@ -124,12 +127,17 @@ Documents\DeepSeek\launcher\
 
 Plugin、Skill、MCP、Provider、Agent、Settings 和 Conversation 策略都以版本自己的 `DSH_HOME` 为边界。复制版本会复制整套版本数据；新建干净版本只复用 DSh 运行程序，不复用原版本数据。
 
+版本设置提供两种配置快照：`.dshsnapshot` 使用 Windows DPAPI，适合同一电脑上的快速回滚；`.dshpsnapshot` 使用密码派生密钥和 AES-GCM，适合跨电脑迁移。两种快照都不包含对话或运行依赖，跨电脑导入前会先创建本机回滚点。
+
+Launcher 自有的实例注册、全局设置和版本设置带有 schema 版本。旧格式会先备份再原子迁移；较新且无法识别的 schema 不会被改写。
+
 ## 从源码构建
 
 需要安装 .NET 8 SDK。在仓库根目录执行：
 
 ```powershell
-dotnet build .\src\DshLauncher\DshLauncher.csproj -c Release -r win-x64
+dotnet restore .\src\DshLauncher\DshLauncher.csproj --locked-mode
+dotnet build .\src\DshLauncher\DshLauncher.csproj -c Release -r win-x64 --no-restore
 ```
 
 生成 Windows x64 自包含单文件：
@@ -143,14 +151,21 @@ dotnet publish .\src\DshLauncher\DshLauncher.csproj `
   -o ".\DSH Launcher"
 ```
 
-运行当前自测：
+运行正式单元测试和完整 SelfTest：
 
 ```powershell
-dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Debug
+dotnet restore .\tests\DshLauncher.UnitTests\DshLauncher.UnitTests.csproj --locked-mode
+dotnet test .\tests\DshLauncher.UnitTests\DshLauncher.UnitTests.csproj -c Release --no-restore
+dotnet restore .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj --locked-mode
+dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore
 ```
+
+仓库的 Windows CI 使用固定 .NET SDK 和 NuGet lock files；`v*` 标签与项目版本一致时，才会生成固定名 `DSH.Launcher.exe`、`version.json` 和 `SHA256SUMS.txt`，并创建草稿 Release 供发布前确认。
 
 发布文件位于 `DSH Launcher\DSH Launcher.exe`。
 
 ## 当前版本
 
-当前源码版本为 **v1.1.0**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.1.1**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+
+本次更新补齐跨电脑密码快照、GitHub 请求缓存与配额提示，并修复旧凭据导入、实例选择丢失、快照遗漏 pnpm 构建配置、主题预览大图限制及切换 Profile 后主题状态残留等问题。

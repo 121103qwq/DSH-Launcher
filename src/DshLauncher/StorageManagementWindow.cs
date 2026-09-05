@@ -29,11 +29,12 @@ namespace DshLauncher;
 /// Displays per-instance storage usage and cleans only the file candidates
 /// returned by <see cref="InstanceStorageService"/>.
 /// </summary>
-public sealed class StorageManagementWindow : Window
+public sealed class StorageManagementView : System.Windows.Controls.UserControl
 {
     private readonly ManagerInstance _instance;
     private readonly InstanceStorageService _storageService;
     private readonly CancellationTokenSource _cancellation;
+    private readonly Action _returnToSettings;
     private readonly TextBlock _statusText;
     private readonly TextBlock _usageSummaryText;
     private readonly TextBlock _previewSummaryText;
@@ -44,13 +45,13 @@ public sealed class StorageManagementWindow : Window
     private readonly WpfButton _cleanupButton;
     private bool _isBusy;
     private bool _closeRequested;
-    private bool _allowClose;
+    private bool _disposed;
     private bool _loadedOnce;
 
-    public StorageManagementWindow(
-        Window? owner,
+    public StorageManagementView(
         ManagerInstance instance,
         InstanceStorageService storageService,
+        Action returnToSettings,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(instance);
@@ -58,19 +59,8 @@ public sealed class StorageManagementWindow : Window
 
         _instance = instance;
         _storageService = storageService;
+        _returnToSettings = returnToSettings ?? throw new ArgumentNullException(nameof(returnToSettings));
         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-        Title = $"空间管理 · {instance.Name}";
-        Width = 820;
-        Height = 680;
-        MinWidth = 620;
-        MinHeight = 480;
-        ResizeMode = ResizeMode.CanResize;
-        ShowInTaskbar = false;
-        Owner = owner;
-        WindowStartupLocation = owner is null
-            ? WindowStartupLocation.CenterScreen
-            : WindowStartupLocation.CenterOwner;
 
         var root = new Grid { Margin = new Thickness(22) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -273,11 +263,10 @@ public sealed class StorageManagementWindow : Window
         _cleanupButton.Click += Cleanup_Click;
         var closeButton = new WpfButton
         {
-            Content = "关闭",
-            IsCancel = true,
+            Content = "← 返回设置",
             Padding = new Thickness(14, 7, 14, 7)
         };
-        closeButton.Click += (_, _) => Close();
+        closeButton.Click += (_, _) => RequestClose();
         actions.Children.Add(_refreshButton);
         actions.Children.Add(_cleanupButton);
         actions.Children.Add(closeButton);
@@ -301,7 +290,7 @@ public sealed class StorageManagementWindow : Window
 
         Content = root;
         Loaded += StorageManagementWindow_Loaded;
-        WindowSizeHelper.FitInitialSize(this);
+        Unloaded += StorageManagementView_Unloaded;
         SetBusy(false);
     }
 
@@ -370,7 +359,7 @@ public sealed class StorageManagementWindow : Window
 
         var candidates = preview.Candidates.ToArray();
         var confirmation = WpfMessageBox.Show(
-            this,
+            Window.GetWindow(this),
             $"将把服务返回的 {preview.ReclaimableFiles:N0} 个文件逐个移入 Windows 回收站，共 {FormatBytes(preview.ReclaimableBytes)}。\n\n"
                 + "不会处理 Sessions、凭据、手动快照或任何目录，也不会跟随 reparse point。\n\n"
                 + "确定继续吗？",
@@ -466,20 +455,18 @@ public sealed class StorageManagementWindow : Window
 
     private void CloseAfterCancellationIfRequested()
     {
-        if (!_closeRequested || _isBusy || _allowClose)
+        if (!_closeRequested || _isBusy)
         {
             return;
         }
 
-        _allowClose = true;
-        Close();
+        _returnToSettings();
     }
 
-    protected override void OnClosing(CancelEventArgs e)
+    private void RequestClose()
     {
-        if (!_allowClose && _isBusy)
+        if (_isBusy)
         {
-            e.Cancel = true;
             _closeRequested = true;
             _cancellation.Cancel();
             _statusText.Text = "正在取消操作…";
@@ -487,15 +474,19 @@ public sealed class StorageManagementWindow : Window
             return;
         }
 
-        _cancellation.Cancel();
-        base.OnClosing(e);
+        _returnToSettings();
     }
 
-    protected override void OnClosed(EventArgs e)
+    private void StorageManagementView_Unloaded(object sender, RoutedEventArgs e)
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         _cancellation.Cancel();
         _cancellation.Dispose();
-        base.OnClosed(e);
     }
 
     private static CleanupResult RecycleCandidates(

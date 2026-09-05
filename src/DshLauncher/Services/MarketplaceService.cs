@@ -43,6 +43,7 @@ public sealed class MarketplaceService
         Converters = { new JsonStringEnumConverter() }
     };
     private readonly HttpClient _httpClient;
+    private readonly GitHubApiService _githubApi;
     private readonly LauncherPaths _paths;
     private readonly IReadOnlyList<Uri> _customSources;
     private readonly Action<string>? _beforeSnapshotFileCommit;
@@ -51,8 +52,10 @@ public sealed class MarketplaceService
     public MarketplaceService(
         LauncherPaths? paths = null,
         HttpClient? httpClient = null,
-        IEnumerable<Uri>? customSources = null)
-        : this(paths, httpClient, customSources, null)
+        IEnumerable<Uri>? customSources = null,
+        GitHubApiService? githubApi = null,
+        string? githubToken = null)
+        : this(paths, httpClient, customSources, null, githubApi, githubToken)
     {
     }
 
@@ -60,13 +63,20 @@ public sealed class MarketplaceService
         LauncherPaths? paths,
         HttpClient? httpClient,
         IEnumerable<Uri>? customSources,
-        Action<string>? beforeSnapshotFileCommit)
+        Action<string>? beforeSnapshotFileCommit,
+        GitHubApiService? githubApi = null,
+        string? githubToken = null)
     {
         _paths = paths ?? new LauncherPaths();
         _httpClient = httpClient ?? CreateHttpClient();
+        _githubApi = githubApi ?? new GitHubApiService(_httpClient, githubToken);
         _customSources = customSources?.Where(uri => uri.IsAbsoluteUri).ToArray() ?? Array.Empty<Uri>();
         _beforeSnapshotFileCommit = beforeSnapshotFileCommit;
     }
+
+    public GitHubRateLimitInfo? LastGitHubRateLimit => _githubApi.LastRateLimit;
+
+    public GitHubApiStatus GitHubStatus => _githubApi.Status;
 
     public async Task<MarketplaceSearchResult> SearchAsync(
         ManagerInstance? instance,
@@ -681,10 +691,9 @@ public sealed class MarketplaceService
 
     private async Task<IReadOnlyList<MarketplaceItem>> LoadGitHubTopicAsync(CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, GitHubTopicUrl);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        using var response = await SendAsync(request, cancellationToken);
-        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var response = await _githubApi.GetAsync(new Uri(GitHubTopicUrl), cancellationToken);
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(response.ReadAsString());
         if (!document.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidDataException("GitHub 搜索结果没有 items 数组。");
@@ -789,9 +798,9 @@ public sealed class MarketplaceService
             try
             {
                 var metadataUri = new Uri($"https://api.github.com/repos/{repository.Owner}/{repository.Name}");
-                using var metadataRequest = new HttpRequestMessage(HttpMethod.Get, metadataUri);
-                using var metadataResponse = await SendAsync(metadataRequest, cancellationToken);
-                using var metadata = JsonDocument.Parse(await metadataResponse.Content.ReadAsStringAsync(cancellationToken));
+                var metadataResponse = await _githubApi.GetAsync(metadataUri, cancellationToken);
+                metadataResponse.EnsureSuccessStatusCode();
+                using var metadata = JsonDocument.Parse(metadataResponse.ReadAsString());
                 defaultBranch = ReadString(metadata.RootElement, "default_branch");
                 if (!string.IsNullOrWhiteSpace(defaultBranch))
                 {
@@ -887,9 +896,9 @@ public sealed class MarketplaceService
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(SourceTimeout);
         var readmeUri = new Uri($"https://api.github.com/repos/{repository.Owner}/{repository.Name}/readme");
-        using var readmeRequest = new HttpRequestMessage(HttpMethod.Get, readmeUri);
-        using var readmeResponse = await SendAsync(readmeRequest, timeout.Token);
-        using var document = JsonDocument.Parse(await readmeResponse.Content.ReadAsStringAsync(timeout.Token));
+        var readmeResponse = await _githubApi.GetAsync(readmeUri, timeout.Token);
+        readmeResponse.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(readmeResponse.ReadAsString());
         var root = document.RootElement;
         var encodedContent = ReadString(root, "content");
         var downloadUrl = ReadString(root, "download_url");
@@ -923,6 +932,20 @@ public sealed class MarketplaceService
 
             try
             {
+                if (GitHubApiService.IsGitHubUri(candidate))
+                {
+                    var githubImageResponse = await _githubApi.GetAsync(
+                        candidate, timeout.Token, maximumResponseBytes: MaxThemePreviewBytes);
+                    githubImageResponse.EnsureSuccessStatusCode();
+                    var githubImageBytes = githubImageResponse.ReadAsByteArray();
+                    if (githubImageBytes.Length > 0)
+                    {
+                        return new ThemeReadmePreview(githubImageBytes, candidate.AbsoluteUri, "预览图来自该主题仓库的 README。");
+                    }
+
+                    continue;
+                }
+
                 using var imageRequest = new HttpRequestMessage(HttpMethod.Get, candidate);
                 imageRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("image/*"));
                 using var imageResponse = await SendAsync(imageRequest, timeout.Token);
@@ -1063,9 +1086,9 @@ public sealed class MarketplaceService
         {
             var treeUri = new Uri(
                 $"https://api.github.com/repos/{repository.Owner}/{repository.Name}/git/trees/{Uri.EscapeDataString(branch)}?recursive=1");
-            using var request = new HttpRequestMessage(HttpMethod.Get, treeUri);
-            using var response = await SendAsync(request, cancellationToken);
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            var response = await _githubApi.GetAsync(treeUri, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            using var document = JsonDocument.Parse(response.ReadAsString());
             if (!document.RootElement.TryGetProperty("tree", out var tree)
                 || tree.ValueKind != JsonValueKind.Array)
             {
@@ -1435,6 +1458,13 @@ public sealed class MarketplaceService
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(SourceTimeout);
+        if (GitHubApiService.IsGitHubUri(uri))
+        {
+            var githubResponse = await _githubApi.GetAsync(uri, timeout.Token);
+            githubResponse.EnsureSuccessStatusCode();
+            return githubResponse.ReadAsString();
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         using var response = await SendAsync(request, timeout.Token);
         return await response.Content.ReadAsStringAsync(timeout.Token);

@@ -10,9 +10,13 @@ namespace DshLauncher;
 public partial class ChatWindow : Window
 {
     private const string DeepSeekWindowAppUserModelId = "DSHLauncher.DeepSeekWindow";
+    private static readonly object OpenWindowsGate = new();
+    private static readonly Dictionary<string, WeakReference<ChatWindow>> OpenWindows = new(
+        StringComparer.OrdinalIgnoreCase);
     private readonly string _address;
     private readonly string? _conversationId;
     private bool _conversationSelectionApplied;
+    private bool _openWindowRegistered;
     private readonly TaskCompletionSource<bool> _navigationReady = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -30,12 +34,71 @@ public partial class ChatWindow : Window
         WindowSizeHelper.FitInitialSize(this);
     }
 
+    public static event EventHandler? OpenChatWindowsChanged;
+
+    public static bool TryGetOpenChat(string? address, out ChatWindow? chat)
+    {
+        chat = null;
+        if (!TryGetWindowKey(address, out var key))
+        {
+            return false;
+        }
+
+        lock (OpenWindowsGate)
+        {
+            if (!OpenWindows.TryGetValue(key, out var reference)
+                || !reference.TryGetTarget(out var candidate)
+                || !candidate.IsVisible
+                || candidate.Dispatcher.HasShutdownStarted)
+            {
+                OpenWindows.Remove(key);
+                return false;
+            }
+
+            chat = candidate;
+            return true;
+        }
+    }
+
+    public static async Task<bool> TrySyncOpenChatAsync(
+        string? address,
+        CancellationToken cancellationToken = default)
+    {
+        return TryGetOpenChat(address, out var chat)
+            && await chat!.SyncThemeAsync(cancellationToken);
+    }
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
         TaskbarWindowIdentity.TrySetAppUserModelId(
             new WindowInteropHelper(this).Handle,
             DeepSeekWindowAppUserModelId);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        UnregisterOpenWindow();
+        base.OnClosed(e);
+    }
+
+    public async Task<bool> SyncThemeAsync(CancellationToken cancellationToken = default)
+    {
+        if (!await WaitForNavigationAsync(cancellationToken)
+            || Browser.CoreWebView2 is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            Browser.CoreWebView2.Reload();
+            return true;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or COMException)
+        {
+            return false;
+        }
     }
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
@@ -141,6 +204,8 @@ public partial class ChatWindow : Window
         }
     }
 
+    private void Window_OnContentRendered(object? sender, EventArgs e) => RegisterOpenWindow();
+
     private static string BuildSendMessageScript(string message)
     {
         var serializedMessage = JsonSerializer.Serialize(message);
@@ -229,5 +294,60 @@ public partial class ChatWindow : Window
         {
             // A blocked external browser must not close the Chat or Launcher window.
         }
+    }
+
+    private void RegisterOpenWindow()
+    {
+        if (_openWindowRegistered || !TryGetWindowKey(_address, out var key))
+        {
+            return;
+        }
+
+        lock (OpenWindowsGate)
+        {
+            OpenWindows[key] = new WeakReference<ChatWindow>(this);
+        }
+
+        _openWindowRegistered = true;
+        OpenChatWindowsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void UnregisterOpenWindow()
+    {
+        _openWindowRegistered = false;
+        if (!TryGetWindowKey(_address, out var key))
+        {
+            return;
+        }
+
+        var removed = false;
+        lock (OpenWindowsGate)
+        {
+            if (OpenWindows.TryGetValue(key, out var reference)
+                && reference.TryGetTarget(out var candidate)
+                && ReferenceEquals(candidate, this))
+            {
+                OpenWindows.Remove(key);
+                removed = true;
+            }
+        }
+
+        if (removed)
+        {
+            OpenChatWindowsChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private static bool TryGetWindowKey(string? address, out string key)
+    {
+        if (!Uri.TryCreate(address, UriKind.Absolute, out var parsed)
+            || parsed.Scheme is not ("http" or "https"))
+        {
+            key = string.Empty;
+            return false;
+        }
+
+        key = parsed.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        return !string.IsNullOrWhiteSpace(key);
     }
 }

@@ -12,7 +12,8 @@
         ShowInTaskbar="True"
         Topmost="False"
         Background="#F4F8FC"
-        Loaded="Window_OnLoaded">
+        Loaded="Window_OnLoaded"
+        ContentRendered="Window_OnContentRendered">
     <Grid>
         <wv2:WebView2 x:Name="Browser" />
     </Grid>

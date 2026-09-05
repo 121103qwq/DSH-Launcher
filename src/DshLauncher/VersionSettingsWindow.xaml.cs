@@ -220,7 +220,7 @@ public partial class VersionSettingsWindow : UserControl
             : activeButton == PluginsButton
                 ? "像 PCL2 的 Mod 管理一样，在当前版本快速启用、禁用或删除 Plugin。"
                 : activeButton == SnapshotsButton
-                    ? "创建加密配置快照，或把当前版本恢复到先前状态。"
+                    ? "创建本机 DPAPI 快照，或使用密码导入跨电脑快照并回滚当前版本配置。"
                 : activeButton == ExportButton
                     ? "导出可以分享的版本设计，不带隐私内容和会话。"
                     : "查看当前版本和它自己的 DSH_HOME。";
@@ -343,9 +343,128 @@ public partial class VersionSettingsWindow : UserControl
         RollbackSnapshotButton.IsEnabled = !busy
             && CanMutateSnapshot()
             && SnapshotBox.SelectedItem is VersionSnapshotInfo;
+        ExportPasswordSnapshotButton.IsEnabled = !busy && CanMutateSnapshot();
+        ImportPasswordSnapshotButton.IsEnabled = !busy && CanMutateSnapshot();
     }
 
     private void UpdateSnapshotButtons() => SetSnapshotBusy(false);
+
+    private async void ExportPasswordSnapshot_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is not { } instance || !CanMutateSnapshot())
+        {
+            PasswordSnapshotStatusText.Text = "请先停止当前版本，再导出跨电脑密码快照。";
+            return;
+        }
+
+        using var dialog = new Forms.SaveFileDialog
+        {
+            Title = "导出跨电脑密码快照",
+            Filter = $"DSH 跨电脑密码快照 (*{PasswordSnapshotEncryptionService.FileExtension})|*{PasswordSnapshotEncryptionService.FileExtension}|所有文件|*.*",
+            AddExtension = true,
+            DefaultExt = PasswordSnapshotEncryptionService.FileExtension.TrimStart('.'),
+            FileName = $"{SafeFileName(instance.Name)}{PasswordSnapshotEncryptionService.FileExtension}",
+            OverwritePrompt = true,
+            RestoreDirectory = true
+        };
+        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        var password = PasswordPromptWindow.Show(
+            Window.GetWindow(this),
+            "设置跨电脑快照密码",
+            "请输入用于另一台电脑导入的密码。密码不会保存到设置或日志。",
+            confirmPassword: true);
+        if (password is null)
+        {
+            return;
+        }
+
+        SetSnapshotBusy(true);
+        try
+        {
+            PasswordSnapshotStatusText.Text = "正在生成跨电脑密码快照…";
+            var info = await Task.Run(() => _snapshotService.ExportPasswordSnapshot(instance, dialog.FileName, password));
+            PasswordSnapshotStatusText.Text = $"跨电脑密码快照已导出：{info.FilePath}。请使用相同密码导入；密码未保存。";
+        }
+        catch (Exception ex)
+        {
+            PasswordSnapshotStatusText.Text = $"导出跨电脑密码快照失败：{ex.Message}";
+        }
+        finally
+        {
+            password = string.Empty;
+            SetSnapshotBusy(false);
+        }
+    }
+
+    private async void ImportPasswordSnapshot_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is not { } instance || !CanMutateSnapshot())
+        {
+            PasswordSnapshotStatusText.Text = "请先停止当前版本，再导入跨电脑密码快照。";
+            return;
+        }
+
+        using var dialog = new Forms.OpenFileDialog
+        {
+            Title = "选择跨电脑密码快照",
+            Filter = $"DSH 跨电脑密码快照 (*{PasswordSnapshotEncryptionService.FileExtension})|*{PasswordSnapshotEncryptionService.FileExtension}|所有文件|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+            RestoreDirectory = true
+        };
+        if (dialog.ShowDialog() != Forms.DialogResult.OK)
+        {
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"确定用“{Path.GetFileName(dialog.FileName)}”替换当前版本的受管配置并回滚？\n\n只会处理版本设置、Provider、MCP 和 Plugin 配置，不会改变会话文件。恢复前会自动创建本机 DPAPI 回滚点。",
+                "确认导入并回滚",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var password = PasswordPromptWindow.Show(
+            Window.GetWindow(this),
+            "输入跨电脑快照密码",
+            "请输入导出时设置的密码。密码错误或文件被篡改时不会修改当前版本。",
+            confirmPassword: false);
+        if (password is null)
+        {
+            return;
+        }
+
+        SetSnapshotBusy(true);
+        try
+        {
+            PasswordSnapshotStatusText.Text = "正在验证密码并导入跨电脑快照…";
+            var rollbackPoint = await Task.Run(() => _snapshotService.RestorePasswordSnapshot(instance, dialog.FileName, password));
+            _settings = _settingsService.Read(instance);
+            LoadWorkspaceNames();
+            LoadConfigurationControls();
+            LoadPluginSettingsControls();
+            await LoadPluginsAsync();
+            _settingsSaved();
+            RefreshSnapshots();
+            PasswordSnapshotStatusText.Text = $"跨电脑快照已导入并回滚；恢复前状态保存在：{rollbackPoint.DisplayName}。密码未保存。";
+        }
+        catch (Exception ex)
+        {
+            PasswordSnapshotStatusText.Text = $"导入跨电脑密码快照失败：{ex.Message}";
+        }
+        finally
+        {
+            password = string.Empty;
+            SetSnapshotBusy(false);
+        }
+    }
 
     private void SyncAllConfiguration_Changed(object sender, RoutedEventArgs e)
     {

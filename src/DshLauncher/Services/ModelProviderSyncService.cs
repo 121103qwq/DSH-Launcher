@@ -345,11 +345,14 @@ public sealed class ModelProviderSyncService
             RejectCredentialLink(targetPath);
         }
 
+        var credentialText = File.ReadAllText(sourcePath, new UTF8Encoding(false, true));
+        credentialText = DshCredentialStoreNormalizer.NormalizeForCurrentDsh(credentialText);
         var temporary = $"{targetPath}.{Guid.NewGuid():N}.tmp";
-        using (var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
         using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (var writer = new StreamWriter(output, new UTF8Encoding(false)))
         {
-            input.CopyTo(output);
+            writer.Write(credentialText);
+            writer.Flush();
             output.Flush(flushToDisk: true);
         }
 

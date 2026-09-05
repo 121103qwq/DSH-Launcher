@@ -16,10 +16,12 @@ public sealed class VersionSettingsService
     };
 
     private readonly LauncherPaths _paths;
+    private readonly LauncherConfigMigrationService _migrationService;
 
     public VersionSettingsService(LauncherPaths? paths = null)
     {
         _paths = paths ?? new LauncherPaths();
+        _migrationService = new LauncherConfigMigrationService(_paths);
     }
 
     public string GetSettingsPath(ManagerInstance instance) =>
@@ -47,6 +49,7 @@ public sealed class VersionSettingsService
 
         try
         {
+            _migrationService.EnsureCurrent(path, LauncherConfigFileKind.VersionSettings);
             var settings = JsonSerializer.Deserialize<VersionSettingsData>(
                 File.ReadAllText(path, Encoding.UTF8),
                 JsonOptions) ?? new VersionSettingsData();
@@ -61,8 +64,15 @@ public sealed class VersionSettingsService
 
     public void Save(ManagerInstance instance, VersionSettingsData settings)
     {
+        var path = GetSettingsPath(instance);
+        if (File.Exists(path))
+        {
+            _migrationService.EnsureCurrent(path, LauncherConfigFileKind.VersionSettings);
+        }
+
+        settings.SchemaVersion = LauncherConfigSchema.CurrentVersion;
         Normalize(settings);
-        WriteSettingsFile(GetSettingsPath(instance), JsonSerializer.Serialize(settings, JsonOptions));
+        WriteSettingsFile(path, JsonSerializer.Serialize(settings, JsonOptions));
     }
 
     private static void WriteSettingsFile(string path, string json)
@@ -97,6 +107,7 @@ public sealed class VersionSettingsService
 
         try
         {
+            _migrationService.EnsureCurrent(LauncherSettingsPath, LauncherConfigFileKind.LauncherSettings);
             var settings = JsonSerializer.Deserialize<LauncherSettingsData>(
                 File.ReadAllText(LauncherSettingsPath, Encoding.UTF8), JsonOptions);
             if (settings is null)
@@ -117,6 +128,14 @@ public sealed class VersionSettingsService
     public void SaveLauncherSettings(LauncherSettingsData settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        if (File.Exists(LauncherSettingsPath))
+        {
+            _migrationService.EnsureCurrent(
+                LauncherSettingsPath,
+                LauncherConfigFileKind.LauncherSettings);
+        }
+
+        settings.SchemaVersion = LauncherConfigSchema.CurrentVersion;
         NormalizeLauncherSettings(settings);
         WriteSettingsFile(LauncherSettingsPath, JsonSerializer.Serialize(settings, JsonOptions));
     }

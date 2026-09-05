@@ -1676,7 +1676,7 @@ static Task TestMainWindowCodeResourceReferences()
         "var selectedProfileName = GetSelectedProfileName();",
         StringComparison.Ordinal);
     var marketplaceBackgroundScan = extensionWindowCode.IndexOf(
-        "var (installed, themeState) = await Task.Run",
+        "var installed = await Task.Run",
         StringComparison.Ordinal);
     Assert(capturedProfile >= 0 && marketplaceBackgroundScan > capturedProfile,
         "插件市场后台扫描前必须在 UI 线程捕获 Profile，不能从 Task.Run 读取 ComboBox。 ");

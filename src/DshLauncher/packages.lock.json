@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows7.0": {
+      "Microsoft.Web.WebView2": {
+        "type": "Direct",
+        "requested": "[1.0.4078.44, )",
+        "resolved": "1.0.4078.44",
+        "contentHash": "TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A=="
+      },
+      "ZstdSharp.Port": {
+        "type": "Direct",
+        "requested": "[0.8.8, )",
+        "resolved": "0.8.8",
+        "contentHash": "UIDFkA5DC3en3tOJ3Mof11yBx9kUQLsaeo/oFdvN6Bbkr9E9+VCqfIadHci8cu+I51K2Sl7XYWVl2R/mA75NBQ=="
+      }
+    },
+    "net8.0-windows7.0/win-x64": {
+      "Microsoft.Web.WebView2": {
+        "type": "Direct",
+        "requested": "[1.0.4078.44, )",
+        "resolved": "1.0.4078.44",
+        "contentHash": "TQkHa/aOHUqFHnJIJ/2ZmJ4nLcQJi0Pc0rj9BAs7SP5sT/KtVtb8jFp9uqQL6cKzCRSrwjS/wEPA43NWUOzU+A=="
+      }
+    }
+  }
+}

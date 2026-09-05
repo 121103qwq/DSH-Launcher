@@ -1,0 +1,236 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_SDK_VERSION: 8.0.423
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  verify:
+    name: Restore, build, xUnit, SelfTest
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Set up fixed .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Verify SDK and commit
+        shell: pwsh
+        run: |
+          $sdk = (dotnet --version).Trim()
+          if ($sdk -ne $env:DOTNET_SDK_VERSION) {
+            throw "Expected .NET SDK $env:DOTNET_SDK_VERSION but found $sdk"
+          }
+          $commit = (git rev-parse HEAD).Trim()
+          if ($commit -ne "${{ github.sha }}") {
+            throw "Checkout commit $commit does not match workflow commit ${{ github.sha }}"
+          }
+
+      - name: Restore locked dependency graphs
+        shell: pwsh
+        run: |
+          dotnet restore .\src\DshLauncher\DshLauncher.csproj --locked-mode
+          dotnet restore .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj --locked-mode
+          dotnet restore .\tests\DshLauncher.UnitTests\DshLauncher.UnitTests.csproj --locked-mode
+
+      - name: Build launcher
+        run: dotnet build .\src\DshLauncher\DshLauncher.csproj -c Release --no-restore
+
+      - name: Build SelfTest
+        run: dotnet build .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-restore
+
+      - name: Build xUnit tests
+        run: dotnet build .\tests\DshLauncher.UnitTests\DshLauncher.UnitTests.csproj -c Release --no-restore
+
+      - name: Run xUnit tests
+        run: dotnet test .\tests\DshLauncher.UnitTests\DshLauncher.UnitTests.csproj -c Release --no-build --no-restore --logger "console;verbosity=normal"
+
+      - name: Run SelfTest
+        run: dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c Release --no-build --no-restore
+
+  release:
+    name: Publish Windows release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact tag commit
+        uses: actions/checkout@v4
+
+      - name: Set up fixed .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Verify SDK and commit
+        shell: pwsh
+        run: |
+          $sdk = (dotnet --version).Trim()
+          if ($sdk -ne $env:DOTNET_SDK_VERSION) {
+            throw "Expected .NET SDK $env:DOTNET_SDK_VERSION but found $sdk"
+          }
+          $commit = (git rev-parse HEAD).Trim()
+          if ($commit -ne "${{ github.sha }}") {
+            throw "Checkout commit $commit does not match workflow commit ${{ github.sha }}"
+          }
+
+      - name: Validate tag version against project version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v(?<version>[^/]+)$') {
+            throw "Release job requires a v* tag, got $tag"
+          }
+          $tagVersion = $Matches.version
+          $projectPath = Join-Path $env:GITHUB_WORKSPACE "src\DshLauncher\DshLauncher.csproj"
+          [xml]$project = Get-Content -LiteralPath $projectPath -Raw
+          $versionNode = $project.SelectSingleNode('/Project/PropertyGroup/Version')
+          if ($null -eq $versionNode) {
+            throw "Could not find the project Version in $projectPath"
+          }
+          $projectVersion = $versionNode.InnerText.Trim()
+          if ($tagVersion -ne $projectVersion) {
+            throw "Tag $tag declares version $tagVersion, but the project declares $projectVersion"
+          }
+
+      - name: Restore launcher
+        run: dotnet restore .\src\DshLauncher\DshLauncher.csproj --locked-mode
+
+      - name: Publish win-x64 single-file executable
+        shell: pwsh
+        run: |
+          $publishDirectory = Join-Path $env:GITHUB_WORKSPACE "release"
+          New-Item -ItemType Directory -Path $publishDirectory -Force | Out-Null
+          dotnet publish .\src\DshLauncher\DshLauncher.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            --no-restore `
+            -o $publishDirectory
+
+          $published = Join-Path $publishDirectory "DSH Launcher.exe"
+          if (-not (Test-Path -LiteralPath $published -PathType Leaf)) {
+            throw "The expected single-file output was not produced: $published"
+          }
+          Rename-Item -LiteralPath $published -NewName "DSH.Launcher.exe"
+
+          $tag = $env:GITHUB_REF_NAME
+          $version = $tag.Substring(1)
+          $commitDate = (git show -s --format=%cI HEAD).Trim()
+          if ([string]::IsNullOrWhiteSpace($commitDate)) {
+            throw "Could not read the checked-out commit date"
+          }
+          $versionInfo = [ordered]@{
+            product = "DSH Launcher"
+            version = $version
+            tag = $tag
+            commit = (git rev-parse HEAD).Trim()
+            commitDate = $commitDate
+            runtime = "win-x64"
+            selfContained = $true
+            singleFile = $true
+            generatedAt = $commitDate
+          }
+          $versionInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $publishDirectory "version.json") -Encoding utf8NoBOM
+
+          $sumLines = @(
+            ((Get-FileHash -LiteralPath (Join-Path $publishDirectory "DSH.Launcher.exe") -Algorithm SHA256).Hash.ToLowerInvariant() + "  DSH.Launcher.exe")
+            ((Get-FileHash -LiteralPath (Join-Path $publishDirectory "version.json") -Algorithm SHA256).Hash.ToLowerInvariant() + "  version.json")
+          )
+          $sumLines | Set-Content -LiteralPath (Join-Path $publishDirectory "SHA256SUMS.txt") -Encoding ascii
+
+      - name: Create or complete the tagged draft release without duplicates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $releaseDirectory = Join-Path $env:GITHUB_WORKSPACE "release"
+          $requiredAssets = @("DSH.Launcher.exe", "SHA256SUMS.txt", "version.json")
+          $localPaths = @{}
+          foreach ($assetName in $requiredAssets) {
+            $localPaths[$assetName] = Join-Path $releaseDirectory $assetName
+          }
+
+          $existingJson = gh release view $tag --repo $env:GITHUB_REPOSITORY --json tagName,assets 2>$null
+          if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingJson)) {
+            $existing = $existingJson | ConvertFrom-Json
+            $existingAssets = @($existing.assets)
+            $duplicateNames = @(
+              $existingAssets |
+                Group-Object -Property name |
+                Where-Object { $_.Count -gt 1 } |
+                ForEach-Object { $_.Name }
+            )
+            if ($duplicateNames.Count -gt 0) {
+              throw "Release $tag contains duplicate asset names: $($duplicateNames -join ', ')"
+            }
+            $existingNames = @($existingAssets | ForEach-Object { $_.name })
+            $missing = @(
+              foreach ($assetName in $requiredAssets) {
+                if (-not $existingNames.Contains($assetName)) {
+                  $assetName
+                }
+              }
+            )
+            if ($missing.Count -gt 0) {
+              throw "Release $tag already exists but is missing required assets: $($missing -join ', ')"
+            }
+
+            foreach ($assetName in $requiredAssets) {
+              $remoteAsset = $existingAssets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
+              $remoteDigest = [string]$remoteAsset.digest
+              if ([string]::IsNullOrWhiteSpace($remoteDigest)) {
+                throw "Release $tag asset $assetName has no GitHub SHA-256 digest; refusing to keep an unverified artifact"
+              }
+              $remoteDigest = $remoteDigest -replace '^sha256:', ''
+              $localDigest = (Get-FileHash -LiteralPath $localPaths[$assetName] -Algorithm SHA256).Hash
+              if (-not $remoteDigest.Equals($localDigest, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Release $tag asset $assetName has digest $remoteDigest, expected $localDigest"
+              }
+            }
+
+            $comparisonDirectory = Join-Path $env:RUNNER_TEMP "dsh-launcher-release-check"
+            New-Item -ItemType Directory -Path $comparisonDirectory -Force | Out-Null
+            & gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern "SHA256SUMS.txt" --dir $comparisonDirectory --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not download the existing SHA256SUMS.txt for release $tag"
+            }
+            $remoteSums = Get-Content -LiteralPath (Join-Path $comparisonDirectory "SHA256SUMS.txt") -Raw
+            $localSums = Get-Content -LiteralPath $localPaths["SHA256SUMS.txt"] -Raw
+            if ($remoteSums -cne $localSums) {
+              throw "Release $tag has a different SHA256SUMS.txt; refusing to keep a potentially stale artifact"
+            }
+            Write-Host "Release $tag already exists; no duplicate release was created."
+            exit 0
+          }
+
+          & gh release create $tag `
+            $localPaths["DSH.Launcher.exe"] `
+            $localPaths["SHA256SUMS.txt"] `
+            $localPaths["version.json"] `
+            --repo $env:GITHUB_REPOSITORY `
+            --draft `
+            --title "DSH Launcher $tag" `
+            --generate-notes
+          if ($LASTEXITCODE -ne 0) {
+            throw "Creating draft release $tag failed"
+          }

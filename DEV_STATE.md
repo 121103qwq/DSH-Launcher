@@ -2,9 +2,16 @@
 
 ## 当前目标
 
-当前源码版本为 `v1.1.0`。本轮目标是完成评审路线图中的 F-01 至 F-09 管理能力，并发布可直接验证的 Windows Release。
+当前源码版本为 `v1.1.1`。评审路线图收尾与后续审计修复已完成，用户已明确授权提交远端并发布 Release；本轮只进行代码、自动化测试及产物核验，不使用 Computer Use。
 
 ## 已完成内容
+
+- 后续审计修复：两种配置快照均纳入 `pnpm-workspace.yaml`，旧快照不误删当前配置；主题图片在流式下载及缓存读取时执行 8 MiB 上限；GitHub 配额请求超时恢复可重试状态；切换 Profile 立即撤销旧主题能力，并忽略晚到结果。发布前代码候选的 xUnit 33/33、SelfTest 76/76 通过。
+- 本轮评审路线收口：Plugin 与 Skill 市场共用 GitHub 条件请求服务，支持 ETag / Last-Modified、配额/恢复时间和可选 DPAPI Token；版本设置保留 `.dshsnapshot` 本机回滚，并新增 PBKDF2-SHA256 + AES-GCM 的 `.dshpsnapshot` 跨电脑密码快照。Launcher 自有实例、全局设置和版本设置统一升级到 schema v1，旧格式先备份再原子迁移，未知较新 schema 拒绝改写。
+- 本轮结构与交互：主题逻辑从 `ExtensionWindow` 渐进拆到独立控制器，只在 DSh 上游 `settings.describe` 明确暴露 `ui-theme.preference` 且 Chat 已打开时启用联动；日志与空间管理并入主导航，Chat 继续保持独立任务栏窗口。
+- 本轮工程化：新增正式 xUnit 项目，覆盖会话同步、整合包脱敏、配置迁移、GitHub 条件请求/限流、密码快照和主题能力探测；Windows CI 固定 .NET SDK 并锁定三套 NuGet 依赖，分支/PR 运行 build、xUnit、SelfTest，`v*` 标签校验项目版本后生成固定名 EXE、提交元数据和 SHA-256，再创建草稿 Release。
+- 本轮实机修复：隔离导入发现旧 `.credentials.yaml` 的 `version: 1` / `refs:` 包装会令当前 `dsh-credentials-local` 在启动前退出；导入、覆盖和 Provider 同步现统一转换为平铺映射。另修复主仪表盘收起或列表项替换时 WPF 瞬时清空当前实例的问题，避免返回启动页后详情及停止按钮失效。
+- 前一轮本机实机验证（审计修复前）：使用隔离 Launcher 根目录实际导入 4 个本机 Runtime，4/4 凭据均转为当前格式；DSH Desktop 2.0.1 / DSh rc.7 启动后持续运行并通过健康检查，DeepSeek 工作区和历史对话正常渲染。Launcher 与 DeepSeek 两个可见顶层窗口均为无 Owner 的 AppWindow；扩展页实际探测到上游 `ui-theme.preference`，切回启动页后实例选择和停止按钮保持可用，停止及关闭后没有残留测试 DSh 进程。本次发布不重复进行桌面操作。
 
 - `v1.1.0` 管理能力批次：新增统一任务中心、对话全文检索、Plugin 批量更新、实例进程树 CPU/内存/运行时长监控、空闲自动停止与受限崩溃重启、Plugin/DSh 兼容性预检、Launcher 日志与诊断包、可预览的安全存储清理，以及命令行/`dsh-launcher://`/实例快捷方式。Release SelfTest 76/76 通过；Windows x64 自包含单文件候选为 72,615,421 字节、文件版本 `1.1.0.0`、SHA-256 `ABEE493E235D23FCEA0A0C15F111368A75C31DC8C822A1740DE7A4893423A072`，位于 `C:\Users\121103qwq\Desktop\DSH Launcher\release-v1.1.0-management-suite-20260905-001649\DSH.Launcher.exe`。候选程序实际创建 1770×1080 主窗口并保持响应，第二进程命令可转发后正常退出；使用 Windows UI Automation 实际点击“任务”并抓取渲染结果，任务中心及完整顶栏显示正常，测试窗口正常关闭且无残留。
 - 本轮修复：启动/关闭阶段的 UI 未处理异常不再被吞掉，避免 Launcher 无窗口驻留并继续占用单实例锁；Managed 进程收编改为校验 PID、启动时间、端口和实际宿主路径，支持 ElectronBootstrap 封装桌面宿主且拒绝 PID 复用。旧时间戳会话导入会标记为当前重新创建，不再被旧删除标记吞掉；目录式 Skill 删除会连同其伴随文件清理。`.dshpack` 与 ModPack 现保留常见文本脚本并继续脱敏，顶层 Skill/Preset 摘要不会把伴随文件误计为独立条目。
@@ -173,7 +180,6 @@
 
 - DSH Desktop 安装入口的 Release 解析、下载和文件校验已由伪造 HTTP 响应自动测试；本轮没有实际运行第三方 NSIS 安装程序，也没有修改本机已安装的 DSH Desktop。真实安装窗口和安装结束后的自动导入仍需由后续无依赖安装包任务在隔离环境验收。
 - Launcher Release 目录、下载校验、helper 参数和临时 EXE 原子替换已完成自动测试；真实从已发布版本更新或回退并重启仍需在独立测试副本上做一次 Windows UI 验收，不能用当前开发工作区进程直接覆盖验证。
-- DeepSeek 独立任务栏分组已通过代码和回归测试，仍需在 Windows Shell 中实际打开一次 Chat 窗口确认视觉分组；本轮按默认规则未使用 Computer Use。
 - Source 项目的 `.dsh/skills` 和 `.agents/skills` 是 DSh 项目级共享只读资源；实例 `DSH_HOME` 内的 Skill 才是版本私有。
 - Provider 自动同步按停止版本中 `settings.yaml` 的最新写入时间选择单一来源，没有三方合并；运行中的版本会等停止后参与同步。
 - 官方 DSh 当前没有 workspace 默认模型 RPC/namespace；Launcher 的 DSh 工作区规则只在从 Launcher 打开对应会话时自动调用 `session.selectModel`。该选择要等下一次模型请求写入 session `request/header` 才成为日志中的持久状态；切换后未发送消息就重启 DSh 时会再次由 Launcher 应用。Provider 页绿色“在线”表示运行中的 DSh 已激活该 route，不等同于远端模型 API 已完成真实对话请求。
@@ -185,7 +191,7 @@
 - dsh-market Plugin 热加载已经在隔离实例上实机通过；主题应用和自动快照回滚仍需在测试实例中完成实机验证。
 - GitHub Topic 发现仍未做分页加载；真实第三方 Plugin CLI 对 node_modules 的副作用不能由配置快照完全回滚，失败时仍以官方 CLI 输出和 web profile 自动恢复为准。
 - Plugin CLI 没有稳定的总下载字节数，因此界面显示 pnpm 实际解析、复用、下载和添加数量，其他无法量化的阶段保持不确定进度；只有可取得 `Content-Length` 的 Skill ZIP 下载显示字节百分比。
-- `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；它是本地回滚点，不是可分享格式，分享继续使用脱敏 `.dshpack`。
+- `.dshsnapshot` 使用 Windows DPAPI CurrentUser，只能由创建它的同一 Windows 用户在本机解密；跨电脑私密迁移使用密码加密 `.dshpsnapshot`，公开分享继续使用脱敏 `.dshpack`。
 - 官方已安装 DSh 的 package metadata 当前未声明 `engines.node` 时，Node 兼容性只能显示“未声明/Unknown”，不会凭空套用固定版本限制。
 - 一键运行环境准备的端到端链路（真实无 Node 机器上：下载、UAC 授权、msiexec 安装、自动重检测）仍需实机人工验证。
 - DeepSeek Desktop / DSH Desktop 自定义安装位置优先依赖卸载注册表；用户手工移动目录或删除注册表记录后，需要在设置中使用“扫描自定义目录”。上游 DSH Desktop 的 `desktop-cli` 属于私有打包入口，因此 Launcher 只在官方宿主、bootstrap、DSh package/CLI 和 pnpm 全部存在且版本命令通过时启用；上游改变封装结构后会安全降级为未识别并要求重新扫描。
@@ -197,10 +203,9 @@
 
 ## 尚未完成内容
 
-- 实机打开一个 Launcher Chat，确认任务栏同时出现相互独立的 Launcher 与黑色 DeepSeek 图标。
 - 通过 UI 实际下载并创建一个本机尚未安装的 DSh 版本；本轮只验证了官方版本列表、精确安装代码路径和自测，没有触发外部软件安装。
 - 在安装 dsh-market 的测试实例上应用一个主题，并确认主题状态刷新和自动快照可回滚。
-- 本轮新增设置、工作区、备份恢复、市场筛选及首次运行引导的实机 UI 验收。
+- 首次运行引导、真实 GitHub Token 保存/清除，以及实际执行跨电脑密码快照导出/导入的实机 UI 验收。
 - 版本检查、修复按钮，以及版本控制/版本设置两处快照选择与回滚确认的实机 UI 验收。
 - 一键运行环境准备的实机端到端验证与后续打磨。
 - 官方 Session deep link。

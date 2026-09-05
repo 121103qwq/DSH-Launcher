@@ -38,11 +38,14 @@ public sealed class SkillMarketService
     private readonly ExtensionService _extensionService;
     private readonly LauncherPaths _paths;
     private readonly HttpClient _httpClient;
+    private readonly GitHubApiService _githubApi;
 
     public SkillMarketService(
         ExtensionService extensionService,
         LauncherPaths? paths = null,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        GitHubApiService? githubApi = null,
+        string? githubToken = null)
     {
         _extensionService = extensionService;
         _paths = paths ?? new LauncherPaths();
@@ -55,7 +58,13 @@ public sealed class SkillMarketService
         {
             _httpClient = httpClient;
         }
+
+        _githubApi = githubApi ?? new GitHubApiService(_httpClient, githubToken);
     }
+
+    public GitHubRateLimitInfo? LastGitHubRateLimit => _githubApi.LastRateLimit;
+
+    public GitHubApiStatus GitHubStatus => _githubApi.Status;
 
     private string CachePath => Path.Combine(_paths.RootDirectory, "skill-market-cache.json");
     public IReadOnlyList<SkillMarketItem> ReadCached()
@@ -377,12 +386,11 @@ public sealed class SkillMarketService
         var repositories = new Dictionary<string, SkillMarketItem>(StringComparer.OrdinalIgnoreCase);
         for (var page = 1; page <= MaxSearchPages; page++)
         {
-            using var response = await _httpClient.GetAsync(
+            var response = await _githubApi.GetAsync(
                 new Uri($"{SearchUrl}&page={page}"),
                 cancellationToken);
             response.EnsureSuccessStatusCode();
-            using var document = await JsonDocument.ParseAsync(
-                await response.Content.ReadAsStreamAsync(cancellationToken), options: default, cancellationToken);
+            using var document = JsonDocument.Parse(response.ReadAsString());
             if (!document.RootElement.TryGetProperty("items", out var items)
                 || items.ValueKind != JsonValueKind.Array)
             {
@@ -450,22 +458,20 @@ public sealed class SkillMarketService
             var escapedRepository = string.Join('/', repository.Repository
                 .Split('/', StringSplitOptions.RemoveEmptyEntries)
                 .Select(Uri.EscapeDataString));
-            using var response = await _httpClient.GetAsync(
+            var response = await _githubApi.GetAsync(
                 new Uri($"https://api.github.com/repos/{escapedRepository}/git/trees/{Uri.EscapeDataString(repository.DefaultBranch)}?recursive=1"),
-                HttpCompletionOption.ResponseHeadersRead,
                 scanCancellation.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return new RepositoryScanResult(Array.Empty<string>(), Succeeded: response.StatusCode == System.Net.HttpStatusCode.NotFound);
             }
 
-            if (response.Content.Headers.ContentLength is > MaxResponseBytes)
+            if (response.ContentLength is > MaxResponseBytes)
             {
                 return new RepositoryScanResult(Array.Empty<string>(), Succeeded: true);
             }
 
-            using var document = await JsonDocument.ParseAsync(
-                await response.Content.ReadAsStreamAsync(scanCancellation.Token), options: default, scanCancellation.Token);
+            using var document = JsonDocument.Parse(response.ReadAsString());
             if (!document.RootElement.TryGetProperty("tree", out var tree)
                 || tree.ValueKind != JsonValueKind.Array)
             {
@@ -506,9 +512,8 @@ public sealed class SkillMarketService
             var escapedPath = string.Join('/', candidate.SkillPath
                 .Split('/', StringSplitOptions.RemoveEmptyEntries)
                 .Select(Uri.EscapeDataString));
-            using var response = await _httpClient.GetAsync(
+            var response = await _githubApi.GetAsync(
                 new Uri($"https://raw.githubusercontent.com/{candidate.Repository.Repository}/{Uri.EscapeDataString(candidate.Repository.DefaultBranch)}/{escapedPath}"),
-                HttpCompletionOption.ResponseHeadersRead,
                 validationCancellation.Token);
             if (!response.IsSuccessStatusCode)
             {
@@ -517,12 +522,12 @@ public sealed class SkillMarketService
                     Cacheable: response.StatusCode == System.Net.HttpStatusCode.NotFound);
             }
 
-            if (response.Content.Headers.ContentLength is > MaxResponseBytes)
+            if (response.ContentLength is > MaxResponseBytes)
             {
                 return new SkillValidationResult(null, Cacheable: true);
             }
 
-            var content = await response.Content.ReadAsStringAsync(validationCancellation.Token);
+            var content = response.ReadAsString();
             if (Encoding.UTF8.GetByteCount(content) > MaxResponseBytes)
             {
                 return new SkillValidationResult(null, Cacheable: true);

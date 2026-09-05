@@ -26,7 +26,7 @@ public partial class ExtensionWindow : UserControl
     private readonly Func<ManagerInstance, string, Task<bool>>? _handoffPluginFailure;
     private readonly PluginFailureReportService _failureReportService = new();
     private readonly SkillMarketService? _skillMarketService;
-    private readonly DshMarketThemeService _themeService = new();
+    private readonly ThemeIntegrationController _themeIntegration = new();
     private readonly VersionSettingsService? _versionSettingsService;
     private readonly VersionSnapshotService? _versionSnapshotService;
     private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
@@ -41,7 +41,6 @@ public partial class ExtensionWindow : UserControl
     private bool _isMarketplaceLoading;
     private bool _isMarketplaceMutating;
     private bool _controlLoaded;
-    private DshMarketThemeState _themeState = DshMarketThemeState.Unavailable("尚未检测当前实例的 dsh-market。 ");
     private CancellationTokenSource? _marketplaceCancellation;
     private CancellationTokenSource? _searchDebounceCancellation;
     private CancellationTokenSource? _skillSearchDebounceCancellation;
@@ -51,9 +50,10 @@ public partial class ExtensionWindow : UserControl
     private readonly Dictionary<string, double> _skillMarketScrollOffsets = new(StringComparer.Ordinal);
     private string _activeMarketplaceCategoryKey = string.Empty;
     private string _activeSkillMarketCategoryKey = string.Empty;
-    private bool _useDshMarketHotReload = true;
     private bool _profileSelectionReady;
     private bool _isUnloaded;
+    private bool _chatWindowEventsAttached;
+    private bool _themeIntegrationDisposed;
 
     public ExtensionWindow(
         ManagerInstance instance,
@@ -80,8 +80,9 @@ public partial class ExtensionWindow : UserControl
         _versionSettingsService = versionSettingsService;
         _versionSnapshotService = versionSnapshotService;
         InitializeComponent();
-        _useDshMarketHotReload = _versionSettingsService?.Read(instance).UseDshMarketHotReload ?? true;
-        DshMarketHotReloadCheckBox.IsChecked = _useDshMarketHotReload;
+        _themeIntegration.SetUseDshMarketHotReload(
+            _versionSettingsService?.Read(instance).UseDshMarketHotReload ?? true);
+        DshMarketHotReloadCheckBox.IsChecked = _themeIntegration.UseDshMarketHotReload;
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
         SkillMarketCategoryList.Visibility = _agentOnly ? Visibility.Visible : Visibility.Collapsed;
         CurrentInstanceNameText.Text = instance.Name;
@@ -103,6 +104,9 @@ public partial class ExtensionWindow : UserControl
             InstallPluginButton.Visibility = Visibility.Collapsed;
             AddMcpButton.Visibility = Visibility.Collapsed;
             DshMarketHotReloadCheckBox.Visibility = Visibility.Collapsed;
+            ChatThemeSyncCheckBox.Visibility = Visibility.Collapsed;
+            ChatThemeSyncButton.Visibility = Visibility.Collapsed;
+            ChatThemeCapabilityText.Visibility = Visibility.Collapsed;
             EnableButton.Visibility = Visibility.Collapsed;
             DisableButton.Visibility = Visibility.Collapsed;
             UpdateButton.Visibility = Visibility.Collapsed;
@@ -148,6 +152,8 @@ public partial class ExtensionWindow : UserControl
 
         try
         {
+            var profileGeneration = _themeIntegration.BeginProfileSelection(profileName);
+            UpdateChatThemeControls();
             if (_versionSettingsService is not null)
             {
                 var settings = _versionSettingsService.Read(_instance);
@@ -157,9 +163,22 @@ public partial class ExtensionWindow : UserControl
 
             StatusText.Text = $"已切换 Plugin 管理 Profile：{profileName}。";
             await RefreshAsync();
-            if (_marketplaceSnapshot.Count > 0)
+            if (_themeIntegration.IsCurrentProfile(profileGeneration)
+                && string.Equals(profileName, "web", StringComparison.OrdinalIgnoreCase))
             {
-                RenderMarketplaceItems();
+                await _themeIntegration.ProbeChatCapabilityAsync(
+                    _instance,
+                    profileGeneration: profileGeneration);
+            }
+
+            if (_themeIntegration.IsCurrentProfile(profileGeneration))
+            {
+                if (_marketplaceSnapshot.Count > 0)
+                {
+                    RenderMarketplaceItems();
+                }
+
+                UpdateChatThemeControls();
             }
         }
         catch (Exception ex)
@@ -417,6 +436,12 @@ public partial class ExtensionWindow : UserControl
     {
         _isUnloaded = false;
         _controlLoaded = true;
+        if (!_chatWindowEventsAttached)
+        {
+            ChatWindow.OpenChatWindowsChanged += ChatWindow_OpenChatWindowsChanged;
+            _chatWindowEventsAttached = true;
+        }
+        UpdateChatThemeControls();
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
         AttachAgentLayoutOwner();
@@ -438,14 +463,28 @@ public partial class ExtensionWindow : UserControl
     {
         _isUnloaded = true;
         _controlLoaded = false;
+        if (_chatWindowEventsAttached)
+        {
+            ChatWindow.OpenChatWindowsChanged -= ChatWindow_OpenChatWindowsChanged;
+            _chatWindowEventsAttached = false;
+        }
         _skillMarketCancellation?.Cancel();
         _skillMarketCancellation?.Dispose();
         _skillMarketCancellation = null;
+        _marketplaceCancellation?.Cancel();
+        _marketplaceCancellation?.Dispose();
+        _marketplaceCancellation = null;
         _skillSearchDebounceCancellation?.Cancel();
         if (_agentLayoutOwner is not null)
         {
             _agentLayoutOwner.SizeChanged -= AgentLayoutOwner_SizeChanged;
             _agentLayoutOwner = null;
+        }
+
+        if (!_themeIntegrationDisposed)
+        {
+            _themeIntegration.Dispose();
+            _themeIntegrationDisposed = true;
         }
     }
 
@@ -549,6 +588,43 @@ public partial class ExtensionWindow : UserControl
         {
             await RefreshMarketplaceAsync();
         }
+    }
+
+    private void ChatWindow_OpenChatWindowsChanged(object? sender, EventArgs e)
+    {
+        if (!_isUnloaded && !_agentOnly)
+        {
+            UpdateChatThemeControls();
+        }
+    }
+
+    private void UpdateChatThemeControls()
+    {
+        if (_agentOnly)
+        {
+            return;
+        }
+
+        var capability = _themeIntegration.ChatCapability;
+        var isWebProfile = string.Equals(
+            GetSelectedProfileName(),
+            "web",
+            StringComparison.OrdinalIgnoreCase);
+        var hasOpenChat = isWebProfile
+            && ChatWindow.TryGetOpenChat(_instance.WebUrl, out _);
+        var reason = capability.Status switch
+        {
+            _ when !isWebProfile => "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 ",
+            ThemeCapabilityStatus.Supported when hasOpenChat => "已探测到上游 ui-theme.preference，Chat 主题联动可用。 ",
+            ThemeCapabilityStatus.Supported => "已探测到上游 ui-theme.preference，但当前没有打开的 Chat 窗口。 ",
+            _ => capability.Reason
+        };
+        var canSync = isWebProfile && capability.IsSupported && hasOpenChat;
+        ChatThemeSyncCheckBox.IsEnabled = canSync;
+        ChatThemeSyncButton.IsEnabled = canSync;
+        ChatThemeSyncCheckBox.ToolTip = reason;
+        ChatThemeSyncButton.ToolTip = reason;
+        ChatThemeCapabilityText.Text = $"Chat 主题联动：{reason}";
     }
 
     private async void MarketplaceUpdateAll_Click(object sender, RoutedEventArgs e)
@@ -863,25 +939,44 @@ public partial class ExtensionWindow : UserControl
     {
         _marketplaceSnapshot = result.Items;
         var selectedProfileName = GetSelectedProfileName();
-        var useThemeHotReload = _useDshMarketHotReload
-            && string.Equals(selectedProfileName, "web", StringComparison.OrdinalIgnoreCase);
-        var (installed, themeState) = await Task.Run(async () =>
+        var isWebProfile = string.Equals(selectedProfileName, "web", StringComparison.OrdinalIgnoreCase);
+        var useThemeHotReload = _themeIntegration.UseDshMarketHotReload && isWebProfile;
+        var profileGeneration = _themeIntegration.ProfileGeneration;
+        var installed = await Task.Run(
+            () => _service.ListAsync(_instance, cancellationToken),
+            cancellationToken);
+        if (useThemeHotReload)
         {
-            var scanned = await _service.ListAsync(_instance, cancellationToken);
-            var theme = useThemeHotReload
-                ? await _themeService.ReadAsync(_instance, cancellationToken)
-                : DshMarketThemeState.Unavailable("dsh-market 主题热加载只作用于 web profile。 ");
-            return (scanned, theme);
-        }, cancellationToken);
+            await _themeIntegration.ReadMarketAsync(_instance, cancellationToken);
+        }
+        else
+        {
+            _themeIntegration.MarkMarketUnavailable("dsh-market 主题热加载只作用于 web profile。 ");
+        }
+
+        if (isWebProfile)
+        {
+            await _themeIntegration.ProbeChatCapabilityAsync(
+                _instance,
+                cancellationToken,
+                profileGeneration);
+        }
+        else
+        {
+            _themeIntegration.SetChatCapability(
+                ThemeCapabilityProbeResult.Unsupported(
+                    "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 "),
+                profileGeneration);
+        }
         _installedPlugins = installed
             .Where(entry => entry.Kind == ExtensionKind.Plugin)
             .ToArray();
-        _themeState = themeState;
         _marketplaceCanMutate = !_isMarketplaceMutating
             && _instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
             && _instance.RuntimeStatus != InstanceRuntimeStatus.Running;
         UpdateMarketplaceUpdateAllButton();
         RenderMarketplaceItems();
+        UpdateChatThemeControls();
         MarketplaceSummaryText.Text = $"找到 {_marketplaceSnapshot.Count} 个候选插件 · 已检查 {result.SourcesChecked} 个来源"
             + (fromCache ? " · 本地缓存" : string.Empty);
         if (fromCache)
@@ -916,7 +1011,7 @@ public partial class ExtensionWindow : UserControl
         }
         var installedPlugins = _installedPlugins;
         var canMutate = _marketplaceCanMutate;
-        var themeState = _themeState;
+        var themeState = _themeIntegration.MarketState;
         var instanceRunning = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
             && string.Equals(GetSelectedProfileName(), "web", StringComparison.OrdinalIgnoreCase);
         var instanceAttached = _instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached;
@@ -1230,7 +1325,7 @@ public partial class ExtensionWindow : UserControl
             progressWindow.SetIndeterminate(initialStatus);
             if (useDshMarket)
             {
-                if (!_useDshMarketHotReload)
+                if (!_themeIntegration.UseDshMarketHotReload)
                 {
                     const string message = "当前实例已关闭 dsh-market 热加载。请先停止实例，再点击“安装”或使用“手动安装 Plugin”。";
                     MarketplaceStatusText.Text = message;
@@ -1244,10 +1339,12 @@ public partial class ExtensionWindow : UserControl
                     return;
                 }
 
-                _themeState = await _themeService.ReadAsync(_instance, operationCancellation.Token);
-                if (!_themeState.IsAvailable)
+                var themeState = await _themeIntegration.ReadMarketAsync(
+                    _instance,
+                    operationCancellation.Token);
+                if (!themeState.IsAvailable)
                 {
-                    var message = $"当前实例没有可用的 dsh-market，运行中不能热加载。请先停止实例，再点击“安装”或使用“手动安装 Plugin”。\n\n{_themeState.Error}";
+                    var message = $"当前实例没有可用的 dsh-market，运行中不能热加载。请先停止实例，再点击“安装”或使用“手动安装 Plugin”。\n\n{themeState.Error}";
                     MarketplaceStatusText.Text = message;
                     progressWindow.Fail(message);
                     System.Windows.MessageBox.Show(
@@ -1365,11 +1462,11 @@ public partial class ExtensionWindow : UserControl
                         ? "正在通过 dsh-market 更新 Plugin…"
                         : "正在通过 dsh-market 安装并热加载 Plugin…");
                     var result = item.IsInstalled
-                        ? await _themeService.UpdatePluginAsync(
+                        ? await _themeIntegration.UpdatePluginAsync(
                             _instance,
                             installedEntry?.Name ?? verification.PackageName ?? item.PackageName ?? packageSpec,
                             operationCancellation.Token)
-                        : await _themeService.InstallPluginAsync(
+                        : await _themeIntegration.InstallPluginAsync(
                             _instance,
                             item.DshMarketUrl!,
                             operationCancellation.Token);
@@ -1587,7 +1684,7 @@ public partial class ExtensionWindow : UserControl
                 throw new InvalidOperationException("当前实例连接的是外部 DSh 服务，Launcher 不会修改外部实例主题。 ");
             }
 
-            if (!_useDshMarketHotReload)
+            if (!_themeIntegration.UseDshMarketHotReload)
             {
                 throw new InvalidOperationException("当前实例已关闭 dsh-market 热加载，请先在扩展页左侧开启。 ");
             }
@@ -1596,16 +1693,24 @@ public partial class ExtensionWindow : UserControl
             var snapshot = _versionSnapshotService?.CreateLivePluginSnapshot(
                 _instance,
                 $"dsh-market 应用主题：{item.Name}");
-            var result = await _themeService.ApplyAsync(_instance, item.ThemePackageName);
+            var result = await _themeIntegration.ApplyThemeAsync(_instance, item.ThemePackageName);
             if (!result.IsSuccess)
             {
                 throw new InvalidOperationException(result.Error ?? "dsh-market 应用主题失败。 ");
             }
 
-            _themeState = _themeState with { LiveNames = result.LiveNames };
             MarketplaceStatusText.Text = snapshot is null
                 ? $"主题已交给 dsh-market 应用：{item.Name}。"
                 : $"主题已交给 dsh-market 应用：{item.Name}；已创建自动存档。";
+            if (string.Equals(GetSelectedProfileName(), "web", StringComparison.OrdinalIgnoreCase)
+                && ChatThemeSyncCheckBox.IsChecked == true
+                && _themeIntegration.ChatCapability.IsSupported)
+            {
+                var sync = await _themeIntegration.SyncChatThemeAsync(_instance.WebUrl);
+                MarketplaceStatusText.Text += sync.IsSuccess
+                    ? $"{sync.Reason}"
+                    : $"Chat 主题未同步：{sync.Reason}";
+            }
             RenderMarketplaceItems();
         }
         catch (Exception ex)
@@ -1728,24 +1833,66 @@ public partial class ExtensionWindow : UserControl
             return;
         }
 
-        _useDshMarketHotReload = DshMarketHotReloadCheckBox.IsChecked == true;
+        _themeIntegration.SetUseDshMarketHotReload(DshMarketHotReloadCheckBox.IsChecked == true);
+        var profileGeneration = _themeIntegration.ProfileGeneration;
         try
         {
             var settings = _versionSettingsService.Read(_instance);
-            settings.UseDshMarketHotReload = _useDshMarketHotReload;
+            settings.UseDshMarketHotReload = _themeIntegration.UseDshMarketHotReload;
             _versionSettingsService.Save(_instance, settings);
-            _themeState = _useDshMarketHotReload
-                ? await _themeService.ReadAsync(_instance)
-                : DshMarketThemeState.Unavailable("当前实例已关闭 dsh-market 热加载。 ");
-            MarketplaceStatusText.Text = _useDshMarketHotReload
+            if (_themeIntegration.UseDshMarketHotReload)
+            {
+                await _themeIntegration.ReadMarketAsync(_instance);
+            }
+            else
+            {
+                _themeIntegration.MarkMarketUnavailable("当前实例已关闭 dsh-market 热加载。 ");
+            }
+
+            if (string.Equals(GetSelectedProfileName(), "web", StringComparison.OrdinalIgnoreCase))
+            {
+                await _themeIntegration.ProbeChatCapabilityAsync(
+                    _instance,
+                    profileGeneration: profileGeneration);
+            }
+            else
+            {
+                _themeIntegration.SetChatCapability(
+                    ThemeCapabilityProbeResult.Unsupported(
+                        "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 "),
+                    profileGeneration);
+            }
+            if (!_themeIntegration.IsCurrentProfile(profileGeneration))
+            {
+                return;
+            }
+            MarketplaceStatusText.Text = _themeIntegration.UseDshMarketHotReload
                 ? "已开启 dsh-market 热加载；应用主题前会创建自动存档。"
                 : "已关闭 dsh-market 热加载；Plugin 仍可正常安装和管理。";
+            UpdateChatThemeControls();
             RenderMarketplaceItems();
         }
         catch (Exception ex)
         {
             ShowError(ex);
         }
+    }
+
+    private async void ChatThemeSyncButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_agentOnly
+            || !string.Equals(GetSelectedProfileName(), "web", StringComparison.OrdinalIgnoreCase)
+            || !_themeIntegration.ChatCapability.IsSupported)
+        {
+            UpdateChatThemeControls();
+            return;
+        }
+
+        var result = await _themeIntegration.SyncChatThemeAsync(_instance.WebUrl);
+        MarketplaceStatusText.Text = result.IsSuccess
+            ? result.Reason
+            : $"Chat 主题未同步：{result.Reason}";
+        UpdateChatThemeControls();
     }
 
     private static string BuildDshFailurePrompt(

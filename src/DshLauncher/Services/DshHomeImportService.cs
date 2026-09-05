@@ -119,6 +119,7 @@ public sealed class DshHomeImportService
         try
         {
             CopyDirectory(source, destination, relativePath: string.Empty, state, cancellationToken);
+            NormalizeCredentialStore(Path.Combine(destination, ".credentials.yaml"));
             RestoreProfilePackages(source, destination, cancellationToken);
             return state.FileCount == 0
                 ? DshHomeImportResult.NoData(source)
@@ -232,6 +233,7 @@ public sealed class DshHomeImportService
 
         var state = new CopyState();
         CopyDirectoryOverwrite(source, destination, relativePath: string.Empty, state, cancellationToken);
+        NormalizeCredentialStore(Path.Combine(destination, ".credentials.yaml"));
         var restoredPackages = RestoreProfilePackages(
             source,
             destination,
@@ -768,17 +770,27 @@ public sealed class DshHomeImportService
             return;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        var sourceText = File.ReadAllText(source, Encoding.UTF8);
+        var normalizedSource = DshCredentialStoreNormalizer.NormalizeForCurrentDsh(sourceText);
+
         if (!File.Exists(destination))
         {
-            CopyFile(source, destination, cancellationToken);
-            var file = new FileInfo(source);
+            WriteTextAtomically(destination, normalizedSource);
             state.FileCount++;
-            state.TotalBytes += file.Length;
+            state.TotalBytes += Encoding.UTF8.GetByteCount(normalizedSource);
             return;
         }
 
+        var normalizedDestination = NormalizeCredentialStore(destination);
+        if (normalizedDestination)
+        {
+            state.FileCount++;
+            state.TotalBytes += new FileInfo(destination).Length;
+        }
+
         var existingKeys = ReadTopLevelYamlKeys(destination);
-        var additions = File.ReadAllLines(source, Encoding.UTF8)
+        var additions = normalizedSource.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')
             .Where(line => TryReadTopLevelYamlKey(line, out var key) && !existingKeys.Contains(key))
             .ToArray();
         if (additions.Length == 0)
@@ -791,8 +803,30 @@ public sealed class DshHomeImportService
         var separator = current.Length == 0 || current.EndsWith('\n') ? string.Empty : Environment.NewLine;
         var merged = current + separator + string.Join(Environment.NewLine, additions) + Environment.NewLine;
         WriteTextAtomically(destination, merged);
-        state.FileCount++;
+        if (!normalizedDestination)
+        {
+            state.FileCount++;
+        }
+
         state.TotalBytes += Encoding.UTF8.GetByteCount(string.Join(Environment.NewLine, additions));
+    }
+
+    private static bool NormalizeCredentialStore(string path)
+    {
+        if (!File.Exists(path) || IsReparsePoint(path))
+        {
+            return false;
+        }
+
+        var current = File.ReadAllText(path, Encoding.UTF8);
+        var normalized = DshCredentialStoreNormalizer.NormalizeForCurrentDsh(current);
+        if (ReferenceEquals(current, normalized))
+        {
+            return false;
+        }
+
+        WriteTextAtomically(path, normalized);
+        return true;
     }
 
     private static HashSet<string> ReadTopLevelYamlKeys(string path)

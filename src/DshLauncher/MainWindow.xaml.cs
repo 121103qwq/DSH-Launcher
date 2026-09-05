@@ -13,6 +13,7 @@ using System.Windows.Threading;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Net.Http;
+using System.Security.Cryptography;
 using WpfBrush = System.Windows.Media.Brush;
 using WpfBrushes = System.Windows.Media.Brushes;
 using WpfColor = System.Windows.Media.Color;
@@ -46,6 +47,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
     private readonly DshInstanceRunner _instanceRunner;
     private readonly ExtensionService _extensionService;
+    private readonly GitHubApiService _githubApiService;
+    private readonly GitHubCredentialService _githubCredentialService;
     private readonly MarketplaceService _marketplaceService;
     private readonly SkillMarketService _skillMarketService;
     private readonly VersionPackageService _versionPackageService;
@@ -101,6 +104,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private HwndSource? _windowSource;
     private bool _instanceMonitorTickInProgress;
     private DateTimeOffset _lastAutomaticMaintenanceAt = DateTimeOffset.MinValue;
+    private string? _githubCredentialLoadError;
 
     public MainWindow()
     {
@@ -118,8 +122,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             id => _instanceRunner.IsRunning(id),
             snapshotService: _versionSnapshotService,
             profileProvider: instance => _versionSettingsService.Read(instance).ActiveProfileName);
-        _marketplaceService = new();
-        _skillMarketService = new(_extensionService);
+        _githubCredentialService = new GitHubCredentialService(_versionSettingsService);
+        string? githubToken = null;
+        try
+        {
+            githubToken = _githubCredentialService.ReadState().Token;
+        }
+        catch (InvalidDataException ex)
+        {
+            _githubCredentialLoadError = ex.Message;
+        }
+
+        _githubApiService = new GitHubApiService(accessToken: githubToken);
+        _marketplaceService = new(githubApi: _githubApiService);
+        _skillMarketService = new(_extensionService, githubApi: _githubApiService);
         _versionPackageService = new(_instanceRegistry);
         _detectedRuntimeRegistrationService = new(_instanceRegistry);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
@@ -169,6 +185,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         get => _selectedInstance;
         set
         {
+            // 仪表盘收起或列表项被替换时，WPF 可能短暂清空 SelectedItem。
+            // 实例仍存在就保留逻辑选择；删除和重新加载流程会先移除实例。
+            if (value is null
+                && _selectedInstance is { } current
+                && Instances.Any(instance => string.Equals(
+                    instance.Id,
+                    current.Id,
+                    StringComparison.Ordinal)))
+            {
+                return;
+            }
+
             if (ReferenceEquals(_selectedInstance, value))
             {
                 return;
@@ -1584,6 +1612,46 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         EmbeddedPageHost.Visibility = Visibility.Visible;
     }
 
+    private void ShowLogCenter()
+    {
+        _currentSection = "日志";
+        SetNavigationSelection("设置 / 诊断");
+        VersionSettingsBackButton.Visibility = Visibility.Collapsed;
+        StartupBrandText.Visibility = Visibility.Visible;
+        ContextInstanceSelector.Visibility = Visibility.Collapsed;
+        PageNoticeVisibility = Visibility.Collapsed;
+        PageTitle = "日志";
+        PageSubtitle = "查看最近 7 天的 Launcher 运行记录";
+        ShowEmbeddedPage(new LogCenterView(
+            _launcherLogService,
+            () => SwitchSection("设置 / 诊断")));
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageSubtitle));
+        OnPropertyChanged(nameof(PageNoticeVisibility));
+    }
+
+    private void ShowStorageManagement(
+        ManagerInstance instance,
+        InstanceStorageService storageService)
+    {
+        _currentSection = "空间管理";
+        SetNavigationSelection("设置 / 诊断");
+        VersionSettingsBackButton.Visibility = Visibility.Collapsed;
+        StartupBrandText.Visibility = Visibility.Visible;
+        ContextInstanceSelector.Visibility = Visibility.Collapsed;
+        PageNoticeVisibility = Visibility.Collapsed;
+        PageTitle = "空间管理";
+        PageSubtitle = $"查看 {instance.Name} 的存储占用和安全清理候选";
+        ShowEmbeddedPage(new StorageManagementView(
+            instance,
+            storageService,
+            () => SwitchSection("设置 / 诊断"),
+            _windowCancellation.Token));
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageSubtitle));
+        OnPropertyChanged(nameof(PageNoticeVisibility));
+    }
+
     private void VersionControl_Click(object sender, RoutedEventArgs e) => ShowVersionControl();
 
     private void VersionSettings_Click(object sender, RoutedEventArgs e) => ShowVersionSettings();
@@ -2494,12 +2562,218 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _runtimePanelUpdateStatus = UpdateStatus;
         UpdateStatus();
 
+        AddGitHubApiSection(panel);
         AddPluginInstallModeSection(panel);
         AddVersionSyncSection(panel);
         AddLauncherIntegrationSection(panel);
         AddStorageManagementSection(panel);
         AddDiagnosticsSection(panel);
         return panel;
+    }
+
+    private void AddGitHubApiSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "GitHub API",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "插件与 Skill 市场会使用 ETag 缓存，并显示 GitHub 剩余配额和恢复时间。Token 可选；保存后只写入当前 Windows 用户可解密的 DPAPI 密文，不会进入快照或整合包。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        var credentialStatus = new TextBlock
+        {
+            Margin = new Thickness(0, 12, 0, 0),
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        };
+        var quotaStatus = new TextBlock
+        {
+            Margin = new Thickness(0, 5, 0, 0),
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            TextWrapping = TextWrapping.Wrap
+        };
+        var tokenBox = new PasswordBox
+        {
+            MinHeight = 38,
+            Padding = new Thickness(9, 6, 9, 6),
+            Margin = new Thickness(0, 12, 0, 0),
+            ToolTip = "输入新的 GitHub fine-grained 或 classic personal access token；现有 Token 不会回显"
+        };
+        var actions = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+        var save = new System.Windows.Controls.Button
+        {
+            Content = "保存 Token",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var clear = new System.Windows.Controls.Button
+        {
+            Content = "清除 Token",
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        var refresh = new System.Windows.Controls.Button
+        {
+            Content = "刷新配额",
+            Padding = new Thickness(14, 8, 14, 8)
+        };
+        actions.Children.Add(save);
+        actions.Children.Add(clear);
+        actions.Children.Add(refresh);
+        content.Children.Add(credentialStatus);
+        content.Children.Add(quotaStatus);
+        content.Children.Add(tokenBox);
+        content.Children.Add(actions);
+
+        void RefreshCredentialStatus()
+        {
+            try
+            {
+                var state = _githubCredentialService.ReadState();
+                _githubCredentialLoadError = null;
+                credentialStatus.Text = state.IsConfigured
+                    ? $"Token：已配置（{state.Source}）"
+                    : "Token：未配置（使用 GitHub 匿名配额）";
+                credentialStatus.Foreground = state.IsConfigured
+                    ? (WpfBrush)FindResource("BlueBrush")
+                    : (WpfBrush)FindResource("MutedBrush");
+                clear.IsEnabled = !string.IsNullOrWhiteSpace(
+                    _versionSettingsService.ReadLauncherSettings().GitHubTokenCiphertext);
+            }
+            catch (InvalidDataException ex)
+            {
+                _githubCredentialLoadError = ex.Message;
+                credentialStatus.Text = $"Token：读取失败（{ex.Message}）";
+                credentialStatus.Foreground = WpfBrushes.IndianRed;
+                clear.IsEnabled = true;
+            }
+        }
+
+        void RefreshQuotaStatus()
+        {
+            var rateLimit = _githubApiService.LastRateLimit;
+            if (rateLimit is null)
+            {
+                quotaStatus.Text = "配额：尚未读取。点击“刷新配额”进行检查。";
+                return;
+            }
+
+            var remaining = rateLimit.Remaining?.ToString() ?? "未知";
+            var limit = rateLimit.Limit?.ToString() ?? "未知";
+            var recovery = rateLimit.RecoveryAt is { } recoveryAt
+                ? recoveryAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                : "未知";
+            quotaStatus.Text = $"配额：剩余 {remaining} / {limit}；恢复时间：{recovery}。";
+        }
+
+        async Task RefreshQuotaAsync()
+        {
+            refresh.IsEnabled = false;
+            quotaStatus.Text = "正在读取 GitHub 配额…";
+            try
+            {
+                var response = await _githubApiService.GetAsync(
+                    "https://api.github.com/rate_limit",
+                    _windowCancellation.Token);
+                response.EnsureSuccessStatusCode();
+                RefreshQuotaStatus();
+            }
+            catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+            {
+                quotaStatus.Text = "GitHub 配额检查已取消。";
+            }
+            catch (OperationCanceledException)
+            {
+                quotaStatus.Text = "读取 GitHub 配额超时，请检查网络后重试。";
+            }
+            catch (GitHubRateLimitException ex)
+            {
+                RefreshQuotaStatus();
+                quotaStatus.Text += $" {ex.Message}";
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException)
+            {
+                quotaStatus.Text = $"读取 GitHub 配额失败：{ex.Message}";
+            }
+            finally
+            {
+                refresh.IsEnabled = true;
+            }
+        }
+
+        save.Click += async (_, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(tokenBox.Password))
+            {
+                credentialStatus.Text = "请输入新的 Token；已保存的 Token 不会显示在输入框中。";
+                credentialStatus.Foreground = WpfBrushes.IndianRed;
+                return;
+            }
+
+            try
+            {
+                _githubCredentialService.Save(tokenBox.Password);
+                var state = _githubCredentialService.ReadState();
+                _githubApiService.UpdateAccessToken(state.Token);
+                tokenBox.Clear();
+                RefreshCredentialStatus();
+                await RefreshQuotaAsync();
+            }
+            catch (Exception ex) when (ex is IOException
+                or UnauthorizedAccessException
+                or CryptographicException
+                or InvalidDataException
+                or ArgumentException)
+            {
+                tokenBox.Clear();
+                credentialStatus.Text = $"保存 Token 失败：{ex.Message}";
+                credentialStatus.Foreground = WpfBrushes.IndianRed;
+            }
+        };
+        clear.Click += (_, _) =>
+        {
+            try
+            {
+                _githubCredentialService.Clear();
+                var state = _githubCredentialService.ReadState();
+                _githubApiService.UpdateAccessToken(state.Token);
+                tokenBox.Clear();
+                RefreshCredentialStatus();
+                quotaStatus.Text = state.IsConfigured
+                    ? "已清除 Launcher 保存的 Token；当前继续使用环境变量 Token。"
+                    : "已清除 Launcher 保存的 Token；后续使用 GitHub 匿名配额。";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                credentialStatus.Text = $"清除 Token 失败：{ex.Message}";
+                credentialStatus.Foreground = WpfBrushes.IndianRed;
+            }
+        };
+        refresh.Click += async (_, _) => await RefreshQuotaAsync();
+
+        RefreshCredentialStatus();
+        RefreshQuotaStatus();
     }
 
     private void AddStorageManagementSection(StackPanel panel)
@@ -2557,11 +2831,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            new StorageManagementWindow(
-                this,
+            ShowStorageManagement(
                 selected,
-                _instanceStorageService,
-                _windowCancellation.Token).ShowDialog();
+                _instanceStorageService);
         };
         content.Children.Add(open);
     }
@@ -2692,7 +2964,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 10, 0, 0)
         };
-        viewLogs.Click += (_, _) => new LogCenterWindow(this, _launcherLogService).ShowDialog();
+        viewLogs.Click += (_, _) => ShowLogCenter();
         export.Click += async (_, _) =>
         {
             using var dialog = new Forms.SaveFileDialog

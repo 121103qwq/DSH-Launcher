@@ -35,6 +35,7 @@ public sealed class VersionSnapshotService
     {
         "package.json",
         "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
         "package-lock.json",
         "yarn.lock",
         "cordis.patch.yml"
@@ -47,13 +48,16 @@ public sealed class VersionSnapshotService
 
     private readonly LauncherPaths _paths;
     private readonly Func<string, bool> _isRunning;
+    private readonly PasswordSnapshotEncryptionService _passwordSnapshotEncryption;
 
     public VersionSnapshotService(
         LauncherPaths? paths = null,
-        Func<string, bool>? isRunning = null)
+        Func<string, bool>? isRunning = null,
+        PasswordSnapshotEncryptionService? passwordSnapshotEncryption = null)
     {
         _paths = paths ?? new LauncherPaths();
         _isRunning = isRunning ?? (_ => false);
+        _passwordSnapshotEncryption = passwordSnapshotEncryption ?? new PasswordSnapshotEncryptionService();
     }
 
     public VersionSnapshotInfo CreateSnapshot(
@@ -63,6 +67,42 @@ public sealed class VersionSnapshotService
     {
         EnsureCanMutate(instance);
         return CreateSnapshotCore(instance, reason, automatic, BuildSnapshotFiles(instance, includeBaseFiles: true));
+    }
+
+    public PasswordSnapshotInfo ExportPasswordSnapshot(
+        ManagerInstance instance,
+        string outputPath,
+        string password)
+    {
+        EnsureCanMutate(instance);
+        EnsureSafeHome(instance);
+        var destination = NormalizePasswordSnapshotOutputPath(outputPath);
+        var createdAt = DateTimeOffset.UtcNow;
+        var plain = BuildSnapshotPayload(
+            instance,
+            reason: "跨电脑密码快照",
+            automatic: false,
+            managedFiles: BuildSnapshotFiles(instance, includeBaseFiles: true),
+            createdAt: createdAt);
+        byte[] encrypted;
+        try
+        {
+            encrypted = _passwordSnapshotEncryption.Encrypt(plain, password);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plain);
+        }
+
+        try
+        {
+            WriteSnapshotFile(destination, encrypted);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(encrypted);
+        }
+        return new PasswordSnapshotInfo(destination, createdAt, new FileInfo(destination).Length);
     }
 
     public VersionSnapshotInfo CreateLivePluginSnapshot(
@@ -86,8 +126,47 @@ public sealed class VersionSnapshotService
         EnsureSafeHome(instance);
         var normalizedReason = NormalizeReason(reason);
         var createdAt = DateTimeOffset.UtcNow;
-        var presentFiles = new List<string>();
+        var plain = BuildSnapshotPayload(instance, normalizedReason, automatic, managedFiles, createdAt);
+        byte[] encrypted;
+        try
+        {
+            encrypted = ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plain);
+        }
 
+        var directory = _paths.GetVersionSnapshotDirectory(instance.Id);
+        Directory.CreateDirectory(directory);
+        var fileName = $"{(automatic ? "auto" : "manual")}-{createdAt:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.dshsnapshot";
+        var path = Path.Combine(directory, fileName);
+        try
+        {
+            WriteSnapshotFile(path, encrypted, overwrite: false, prefix: Magic);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(encrypted);
+        }
+
+        if (automatic)
+        {
+            PruneAutomaticSnapshots(directory, path);
+        }
+
+        return new VersionSnapshotInfo(path, createdAt, normalizedReason, new FileInfo(path).Length);
+    }
+
+    private byte[] BuildSnapshotPayload(
+        ManagerInstance instance,
+        string reason,
+        bool automatic,
+        IReadOnlyList<string> managedFiles,
+        DateTimeOffset createdAt)
+    {
+        var normalizedReason = NormalizeReason(reason);
+        var presentFiles = new List<string>();
         using var plainStream = new MemoryStream();
         using (var archive = new ZipArchive(plainStream, ZipArchiveMode.Create, leaveOpen: true))
         {
@@ -136,37 +215,7 @@ public sealed class VersionSnapshotService
             throw new InvalidDataException("版本快照超过 64 MiB 安全上限。 ");
         }
 
-        var encrypted = ProtectedData.Protect(plainStream.ToArray(), Entropy, DataProtectionScope.CurrentUser);
-        var directory = _paths.GetVersionSnapshotDirectory(instance.Id);
-        Directory.CreateDirectory(directory);
-        var fileName = $"{(automatic ? "auto" : "manual")}-{createdAt:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.dshsnapshot";
-        var path = Path.Combine(directory, fileName);
-        var temporary = $"{path}.tmp";
-        try
-        {
-            using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-                output.Write(Magic);
-                output.Write(encrypted);
-                output.Flush(flushToDisk: true);
-            }
-
-            File.Move(temporary, path, overwrite: false);
-        }
-        finally
-        {
-            if (File.Exists(temporary))
-            {
-                File.Delete(temporary);
-            }
-        }
-
-        if (automatic)
-        {
-            PruneAutomaticSnapshots(directory, path);
-        }
-
-        return new VersionSnapshotInfo(path, createdAt, normalizedReason, new FileInfo(path).Length);
+        return plainStream.ToArray();
     }
 
     public IReadOnlyList<VersionSnapshotInfo> ListSnapshots(ManagerInstance instance)
@@ -182,7 +231,8 @@ public sealed class VersionSnapshotService
         {
             try
             {
-                var manifest = ReadSnapshot(path, instance.Id).Manifest;
+                using var payload = ReadSnapshot(path, instance.Id);
+                var manifest = payload.Manifest;
                 results.Add(new VersionSnapshotInfo(
                     path,
                     manifest.CreatedAt,
@@ -207,6 +257,25 @@ public sealed class VersionSnapshotService
         EnsureSafeHome(instance);
         var snapshot = NormalizeSnapshotPath(instance, snapshotPath);
         using var payload = ReadSnapshot(snapshot, instance.Id);
+        return RestoreSnapshotPayload(instance, payload);
+    }
+
+    public VersionSnapshotInfo RestorePasswordSnapshot(
+        ManagerInstance instance,
+        string snapshotPath,
+        string password)
+    {
+        EnsureCanMutate(instance);
+        EnsureSafeHome(instance);
+        var snapshot = NormalizePasswordSnapshotPath(snapshotPath);
+        using var payload = ReadPasswordSnapshot(snapshot, password);
+        return RestoreSnapshotPayload(instance, payload);
+    }
+
+    private VersionSnapshotInfo RestoreSnapshotPayload(
+        ManagerInstance instance,
+        SnapshotPayload payload)
+    {
         using var stagedTarget = StageSnapshot(instance, payload);
         var rollbackPoint = CreateSnapshot(instance, "回滚前自动快照", automatic: true);
         using var rollbackPayload = ReadSnapshot(rollbackPoint.FilePath, instance.Id);
@@ -394,6 +463,37 @@ public sealed class VersionSnapshotService
         }
     }
 
+    private static void WriteSnapshotFile(
+        string path,
+        byte[] payload,
+        bool overwrite = true,
+        byte[]? prefix = null)
+    {
+        var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                if (prefix is not null)
+                {
+                    output.Write(prefix);
+                }
+
+                output.Write(payload);
+                output.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporary, path, overwrite);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
     private SnapshotPayload ReadSnapshot(string snapshotPath, string expectedInstanceId)
     {
         var bytes = File.ReadAllBytes(snapshotPath);
@@ -403,14 +503,67 @@ public sealed class VersionSnapshotService
         }
 
         var encrypted = bytes.AsSpan(Magic.Length).ToArray();
-        var plain = ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.CurrentUser);
+        byte[] plain;
+        try
+        {
+            plain = ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.CurrentUser);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(encrypted);
+        }
         if (plain.LongLength > MaximumPayloadSize)
         {
+            CryptographicOperations.ZeroMemory(plain);
             throw new InvalidDataException("版本快照解密后超过安全上限。 ");
         }
 
+        return ReadSnapshotPayload(plain, expectedInstanceId);
+    }
+
+    private SnapshotPayload ReadPasswordSnapshot(string snapshotPath, string password)
+    {
+        var fileInfo = new FileInfo(snapshotPath);
+        if (fileInfo.Length > PasswordSnapshotEncryptionService.MaximumPlaintextBytes + 1024)
+        {
+            throw new InvalidDataException("跨电脑密码快照超过安全上限。 ");
+        }
+
+        var encrypted = File.ReadAllBytes(snapshotPath);
+        if (encrypted.LongLength > PasswordSnapshotEncryptionService.MaximumPlaintextBytes + 1024)
+        {
+            CryptographicOperations.ZeroMemory(encrypted);
+            throw new InvalidDataException("跨电脑密码快照超过安全上限。 ");
+        }
+
+        byte[] plain;
+        try
+        {
+            plain = _passwordSnapshotEncryption.Decrypt(encrypted, password);
+        }
+        catch (CryptographicException)
+        {
+            throw new InvalidDataException("跨电脑快照密码错误或文件已损坏。 ");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(encrypted);
+        }
+
+        if (plain.LongLength > MaximumPayloadSize)
+        {
+            CryptographicOperations.ZeroMemory(plain);
+            throw new InvalidDataException("跨电脑密码快照解密后超过安全上限。 ");
+        }
+
+        return ReadSnapshotPayload(plain, expectedInstanceId: null);
+    }
+
+    private SnapshotPayload ReadSnapshotPayload(byte[] plain, string? expectedInstanceId)
+    {
         var stream = new MemoryStream(plain, writable: false);
         ZipArchive? archive = null;
+        var transferredToPayload = false;
         try
         {
             archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false);
@@ -424,23 +577,26 @@ public sealed class VersionSnapshotService
             }
 
             if (manifest.FormatVersion != CurrentFormatVersion
-                || !string.Equals(manifest.InstanceId, expectedInstanceId, StringComparison.Ordinal)
+                || (expectedInstanceId is not null
+                    && !string.Equals(manifest.InstanceId, expectedInstanceId, StringComparison.Ordinal))
                 || manifest.ManagedFiles is null
                 || manifest.PresentFiles is null)
             {
                 throw new InvalidDataException("版本快照格式或实例归属不匹配。 ");
             }
 
-            var payload = new SnapshotPayload(manifest, archive);
+            var payload = new SnapshotPayload(manifest, archive, plain);
             archive = null;
+            transferredToPayload = true;
             return payload;
         }
         finally
         {
-            archive?.Dispose();
-            if (archive is not null)
+            if (!transferredToPayload)
             {
+                archive?.Dispose();
                 stream.Dispose();
+                CryptographicOperations.ZeroMemory(plain);
             }
         }
     }
@@ -465,6 +621,42 @@ public sealed class VersionSnapshotService
         }
 
         RejectReparsePoint(path, "版本快照");
+        return path;
+    }
+
+    private static string NormalizePasswordSnapshotPath(string snapshotPath)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotPath))
+        {
+            throw new ArgumentException("跨电脑快照路径不能为空。", nameof(snapshotPath));
+        }
+
+        var path = Path.GetFullPath(snapshotPath);
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException("找不到跨电脑密码快照。", path);
+        }
+
+        RejectReparsePoint(path, "跨电脑密码快照");
+        return path;
+    }
+
+    private static string NormalizePasswordSnapshotOutputPath(string outputPath)
+    {
+        if (string.IsNullOrWhiteSpace(outputPath))
+        {
+            throw new ArgumentException("跨电脑快照导出路径不能为空。", nameof(outputPath));
+        }
+
+        var path = Path.GetFullPath(outputPath);
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("跨电脑快照没有父目录。 ");
+        Directory.CreateDirectory(directory);
+        if (File.Exists(path))
+        {
+            RejectReparsePoint(path, "跨电脑密码快照");
+        }
+
         return path;
     }
 
@@ -630,16 +822,23 @@ public sealed class VersionSnapshotService
 
     private sealed class SnapshotPayload : IDisposable
     {
-        public SnapshotPayload(SnapshotManifest manifest, ZipArchive archive)
+        public SnapshotPayload(SnapshotManifest manifest, ZipArchive archive, byte[] plaintext)
         {
             Manifest = manifest;
             Archive = archive;
+            Plaintext = plaintext;
         }
 
         public SnapshotManifest Manifest { get; }
 
         public ZipArchive Archive { get; }
 
-        public void Dispose() => Archive.Dispose();
+        private byte[] Plaintext { get; }
+
+        public void Dispose()
+        {
+            Archive.Dispose();
+            CryptographicOperations.ZeroMemory(Plaintext);
+        }
     }
 }

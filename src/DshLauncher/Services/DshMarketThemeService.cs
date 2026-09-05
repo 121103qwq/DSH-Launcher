@@ -135,6 +135,128 @@ public sealed class DshMarketThemeService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Probes the upstream Host settings API for the ui-theme namespace. The
+    /// namespace and preference field are the observable contract exposed by
+    /// @deepseek-ai/dsh-client-ui-theme; no Launcher-private route is used.
+    /// </summary>
+    public async Task<ThemeCapabilityProbeResult> ProbeThemeCapabilityAsync(
+        ManagerInstance instance,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetBaseUri(instance, out var baseUri, out var reason))
+        {
+            return ThemeCapabilityProbeResult.Unknown(reason);
+        }
+
+        var rpcId = Guid.NewGuid().ToString("D");
+        try
+        {
+            using var timeout = CreateTimeout(cancellationToken, RequestTimeout);
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri(baseUri, "api/settings.describe"));
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(new
+                {
+                    type = "client-request",
+                    rpcId,
+                    method = "settings.describe",
+                    payload = new { }
+                }),
+                Encoding.UTF8,
+                "application/json");
+
+            using var response = await _client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token);
+            var body = await response.Content.ReadAsStringAsync(timeout.Token);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return ThemeCapabilityProbeResult.Unsupported(
+                    "当前实例没有上游 settings.describe 能力，无法确认 Chat 主题联动。 ");
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return ThemeCapabilityProbeResult.Unknown(
+                    $"主题能力探测接口返回 HTTP {(int)response.StatusCode}，暂不启用联动。 ");
+            }
+
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("type", out var type)
+                || type.ValueKind != JsonValueKind.String
+                || !string.Equals(type.GetString(), "server-response", StringComparison.Ordinal)
+                || !root.TryGetProperty("rpcId", out var responseRpcId)
+                || responseRpcId.ValueKind != JsonValueKind.String
+                || !string.Equals(responseRpcId.GetString(), rpcId, StringComparison.Ordinal)
+                || !root.TryGetProperty("result", out var result)
+                || result.ValueKind != JsonValueKind.Object)
+            {
+                return ThemeCapabilityProbeResult.Unknown(
+                    "主题能力探测返回的数据不是上游 settings.describe 响应，暂不启用联动。 ");
+            }
+
+            if (!result.TryGetProperty("ok", out var ok)
+                || ok.ValueKind != JsonValueKind.True)
+            {
+                return ThemeCapabilityProbeResult.Unsupported(
+                    $"当前实例拒绝 settings.describe：{ReadRpcError(result)}");
+            }
+
+            if (!result.TryGetProperty("value", out var value)
+                || value.ValueKind != JsonValueKind.Object
+                || !value.TryGetProperty("namespaces", out var namespaces)
+                || namespaces.ValueKind != JsonValueKind.Array)
+            {
+                return ThemeCapabilityProbeResult.Unknown(
+                    "settings.describe 未返回可识别的主题命名空间，暂不启用联动。 ");
+            }
+
+            foreach (var item in namespaces.EnumerateArray())
+            {
+                if (!item.TryGetProperty("ns", out var ns)
+                    || ns.ValueKind != JsonValueKind.String
+                    || !string.Equals(ns.GetString(), "ui-theme", StringComparison.Ordinal)
+                    || !item.TryGetProperty("value", out var settings)
+                    || settings.ValueKind != JsonValueKind.Object
+                    || !settings.TryGetProperty("preference", out var preference)
+                    || preference.ValueKind != JsonValueKind.String
+                    || !IsThemePreference(preference.GetString()))
+                {
+                    continue;
+                }
+
+                var revision = item.TryGetProperty("revision", out var revisionValue)
+                    && revisionValue.ValueKind == JsonValueKind.Number
+                    && revisionValue.TryGetInt32(out var parsedRevision)
+                    ? parsedRevision
+                    : (int?)null;
+                return ThemeCapabilityProbeResult.Supported(
+                    preference.GetString()!,
+                    revision,
+                    "已通过上游 settings.describe 探测到 ui-theme.preference；可启用 Chat 主题联动。 ");
+            }
+
+            return ThemeCapabilityProbeResult.Unsupported(
+                "当前实例的 settings.describe 未暴露 ui-theme.preference，无法确认 Chat 主题联动。 ");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return ThemeCapabilityProbeResult.Unknown("主题能力探测超时，暂不启用联动。 ");
+        }
+        catch (HttpRequestException ex)
+        {
+            return ThemeCapabilityProbeResult.Unknown($"当前实例无法访问上游主题能力接口：{ex.Message}");
+        }
+        catch (JsonException ex)
+        {
+            return ThemeCapabilityProbeResult.Unknown($"主题能力探测返回的数据格式无效：{ex.Message}");
+        }
+    }
+
     public Task<DshMarketPluginMutationResult> InstallPluginAsync(
         ManagerInstance instance,
         string catalogUrl,
@@ -280,6 +402,24 @@ public sealed class DshMarketThemeService : IDisposable
         root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? string.Empty
             : string.Empty;
+
+    private static string ReadRpcError(JsonElement result)
+    {
+        if (!result.TryGetProperty("error", out var error)
+            || error.ValueKind != JsonValueKind.Object)
+        {
+            return "未提供错误详情。 ";
+        }
+
+        var code = ReadString(error, "code");
+        var message = ReadString(error, "message");
+        return string.IsNullOrWhiteSpace(message)
+            ? string.IsNullOrWhiteSpace(code) ? "未提供错误详情。 " : code
+            : string.IsNullOrWhiteSpace(code) ? message : $"{code}：{message}";
+    }
+
+    private static bool IsThemePreference(string? preference) =>
+        preference is "light" or "dark" or "system";
 
     private static IReadOnlySet<string> ReadObjectNames(JsonElement root, string propertyName)
     {

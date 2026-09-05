@@ -386,8 +386,8 @@
                             CornerRadius="12"
                             Padding="20">
                         <StackPanel>
-                            <TextBlock Text="配置快照与回滚" FontSize="16" FontWeight="SemiBold" />
-                            <TextBlock Text="保存版本设置、Provider 凭据、MCP 与 Plugin 配置。快照仅限当前 Windows 用户读取，不包含会话和运行依赖。"
+                            <TextBlock Text="本机快照（Windows DPAPI）" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="保存版本设置、Provider 凭据、MCP 与 Plugin 配置。这个本机格式由 Windows DPAPI 保护，只能当前 Windows 用户读取，不包含会话和运行依赖。"
                                        Foreground="{StaticResource MutedBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,6,0,16" />
@@ -416,6 +416,42 @@
                                         Padding="14,8" />
                             </Grid>
                             <TextBlock x:Name="SnapshotStatusText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,14,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="20"
+                            Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="跨电脑密码快照" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="用于在另一台电脑导出或导入同一范围的版本配置。文件使用 PBKDF2-SHA256 高迭代派生密钥和 AES-GCM 完整性保护；密码只在本次操作中使用，不会保存到设置或日志。导入会先创建本机 DPAPI 回滚点，失败时自动恢复原状态。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,16" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="ExportPasswordSnapshotButton"
+                                        Content="导出密码快照"
+                                        Click="ExportPasswordSnapshot_Click"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Padding="14,8" />
+                                <Button x:Name="ImportPasswordSnapshotButton"
+                                        Grid.Column="1"
+                                        Content="导入并回滚密码快照"
+                                        Click="ImportPasswordSnapshot_Click"
+                                        Margin="8,0,0,0"
+                                        Padding="14,8" />
+                            </Grid>
+                            <TextBlock x:Name="PasswordSnapshotStatusText"
                                        Foreground="{StaticResource BlueBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,14,0,0" />

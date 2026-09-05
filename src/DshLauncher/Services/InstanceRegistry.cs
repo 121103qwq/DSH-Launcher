@@ -17,10 +17,12 @@ public sealed class InstanceRegistry
     };
 
     private readonly LauncherPaths _paths;
+    private readonly LauncherConfigMigrationService _migrationService;
 
     public InstanceRegistry(LauncherPaths? paths = null)
     {
         _paths = paths ?? new LauncherPaths();
+        _migrationService = new LauncherConfigMigrationService(_paths);
     }
 
     public string StoragePath => _paths.InstancesFilePath;
@@ -34,9 +36,16 @@ public sealed class InstanceRegistry
 
         try
         {
+            _migrationService.EnsureCurrent(StoragePath, LauncherConfigFileKind.InstanceRegistry);
             var json = File.ReadAllText(StoragePath, Encoding.UTF8);
-            var entries = JsonSerializer.Deserialize<List<ManagerInstance>>(json, JsonOptions)
-                ?? new List<ManagerInstance>();
+            var document = JsonSerializer.Deserialize<InstanceRegistryDocument>(json, JsonOptions)
+                ?? throw new InvalidDataException("实例注册文件为空。");
+            if (document.SchemaVersion != LauncherConfigSchema.CurrentVersion)
+            {
+                throw new InvalidDataException($"实例注册文件 schema 不受支持：{document.SchemaVersion}");
+            }
+
+            var entries = document.Instances ?? new List<ManagerInstance>();
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
             var validated = new List<ManagerInstance>(entries.Count);
             foreach (var entry in entries)
@@ -163,7 +172,10 @@ public sealed class InstanceRegistry
         var temporaryPath = $"{StoragePath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            var json = JsonSerializer.Serialize(entries, JsonOptions);
+            var json = JsonSerializer.Serialize(new InstanceRegistryDocument
+            {
+                Instances = entries.ToList()
+            }, JsonOptions);
             File.WriteAllText(temporaryPath, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             File.Move(temporaryPath, StoragePath, overwrite: true);
         }

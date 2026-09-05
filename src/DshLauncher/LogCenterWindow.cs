@@ -6,21 +6,14 @@ using DshLauncher.Services;
 
 namespace DshLauncher;
 
-public sealed class LogCenterWindow : Window
+public sealed class LogCenterView : System.Windows.Controls.UserControl
 {
     private readonly LauncherLogService _service;
     private readonly System.Windows.Controls.TextBox _content;
 
-    public LogCenterWindow(Window owner, LauncherLogService service)
+    public LogCenterView(LauncherLogService service, Action? returnToSettings = null)
     {
         _service = service;
-        Owner = owner;
-        Title = "DSH Launcher 日志";
-        Width = 900;
-        Height = 620;
-        MinWidth = 640;
-        MinHeight = 420;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var root = new DockPanel { Margin = new Thickness(18) };
         var actions = new StackPanel
@@ -30,6 +23,18 @@ public sealed class LogCenterWindow : Window
         };
         var refresh = new System.Windows.Controls.Button { Content = "刷新", Padding = new Thickness(14, 7, 14, 7) };
         refresh.Click += (_, _) => Refresh();
+        if (returnToSettings is not null)
+        {
+            var back = new System.Windows.Controls.Button
+            {
+                Content = "← 返回设置",
+                Padding = new Thickness(14, 7, 14, 7),
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            back.Click += (_, _) => returnToSettings();
+            actions.Children.Add(back);
+        }
+
         var open = new System.Windows.Controls.Button
         {
             Content = "打开日志目录",

@@ -91,6 +91,26 @@
                               Unchecked="DshMarketHotReloadCheckBox_Changed"
                               VerticalAlignment="Center"
                               Margin="2,4,7,7" />
+                    <CheckBox x:Name="ChatThemeSyncCheckBox"
+                              Content="应用主题后同步 Chat"
+                              IsChecked="True"
+                              IsEnabled="False"
+                              VerticalAlignment="Center"
+                              Margin="2,4,7,7"
+                              ToolTip="正在探测 Chat 主题能力…" />
+        <Button x:Name="ChatThemeSyncButton"
+                            Content="同步 Chat 主题"
+                            Click="ChatThemeSyncButton_Click"
+                            IsEnabled="False"
+                            Margin="0,0,7,7"
+                            Padding="12,7"
+                            ToolTip="正在探测 Chat 主题能力…" />
+                    <TextBlock x:Name="ChatThemeCapabilityText"
+                               Text="Chat 主题联动：正在探测…"
+                               Foreground="{StaticResource MutedBrush}"
+                               VerticalAlignment="Center"
+                               Margin="0,4,7,7"
+                               TextWrapping="Wrap" />
                 </WrapPanel>
 
                 <Border Grid.Row="2"

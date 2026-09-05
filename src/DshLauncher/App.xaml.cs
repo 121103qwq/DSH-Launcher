@@ -59,6 +59,27 @@ public partial class App : System.Windows.Application
         }
 
         _ownsSingleInstanceMutex = true;
+        var migrationLog = new LauncherLogService();
+        try
+        {
+            var migrationResults = new LauncherConfigMigrationService().MigrateExistingConfiguration();
+            foreach (var result in migrationResults)
+            {
+                if (result.Migrated)
+                {
+                    migrationLog.Write("Config", $"配置已迁移：{result.Path}；备份：{result.BackupPath}");
+                }
+                else if (!string.IsNullOrWhiteSpace(result.Error))
+                {
+                    migrationLog.Write("Config", $"配置迁移跳过：{result.Path}；{result.Error}");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            migrationLog.Write("Config", "启动配置迁移未完成；原文件保持不变。", ex);
+        }
+
         base.OnStartup(e);
         DispatcherUnhandledException += App_DispatcherUnhandledException;
         _activationChannel = new SingleInstanceActivationChannel(

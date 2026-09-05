@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace DshLauncher.Models;
 
 public enum ConversationSyncMode
@@ -22,6 +24,9 @@ public enum VersionOpenMode
 
 public sealed class VersionSettingsData
 {
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; set; } = LauncherConfigSchema.CurrentVersion;
+
     public string ActiveProfileName { get; set; } = "web";
 
     public bool SyncAllConfiguration { get; set; }
@@ -68,6 +73,9 @@ public sealed class VersionSettingsData
 /// </summary>
 public sealed class LauncherSettingsData
 {
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; set; } = LauncherConfigSchema.CurrentVersion;
+
     public bool SyncAllConfiguration { get; set; }
 
     public List<string> Workspaces { get; set; } = new();
@@ -79,6 +87,12 @@ public sealed class LauncherSettingsData
     /// Instance data remains isolated under each instance's DSH_HOME.
     /// </summary>
     public string? DshInstallDirectory { get; set; }
+
+    /// <summary>
+    /// Optional GitHub token protected with Windows DPAPI for the current user.
+    /// The plaintext token is never written to Launcher configuration.
+    /// </summary>
+    public string? GitHubTokenCiphertext { get; set; }
 }
 
 public sealed record VersionExportOptions(
