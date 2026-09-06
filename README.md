@@ -36,7 +36,7 @@ dsh-launcher-dev/
 | 17 | `Services/DshInstanceRunner.cs` 等 | **dsh 0.1.2-rc.1 浏览器 token 适配**：新版 web 应用要求 `?token=` 认证（裸地址 401），启动输出行 `dsh web: http://127.0.0.1:<port>/?token=…` 仅打印在进程 stdout。启动后从进程输出解析带 token 地址（事件捕获+缓冲扫描双通道，健康检查后最多等 5s），存入 `Instance.AuthenticatedWebUrl`（与 `WebUrl` 共存：后者保持裸地址语义，用于展示/校验/attach）；Chat 窗口与 Web 模式重开浏览器均优先使用带 token 地址（WebView2 首次导航即种 cookie，之后免 token）；停止/清空时同步清空；adopt 与 attach 场景无法取得 token 时回退裸地址（用户可自行粘贴带 token URL） |
 | 18 | `MainWindow.xaml.cs` | **启动崩溃修复**：`HandleWmGetMinMaxInfo` / `ClampMaximizedWindowPos` 对 `lParam==NULL` 的早期 `WM_GETMINMAXINFO`/`WM_WINDOWPOSCHANGING` 未防护，窗口初始化阶段触发 `NullReferenceException`（crash.log 实测抓到的启动崩溃）；两处均早退。修复后干净启动无新崩溃日志 |
 | 19 | `App.xaml` / `MainWindow.xaml(.cs)` | **PCL2 风 P0 打磨**：①配色升级为 PCL 式 10 级蓝渐变体系（`#0B5BCB→#1370F3→#4890F5→#96C0F9→#D5E6FD→#E0EAFD→#EAF2FE`）+ 灰阶/红绿强调色；②标题栏线性渐变（左深右亮的 PCL 式）+ 返回/实例胶囊改半透明白；③顶部导航胶囊化（圆角 10、hover `#55FFFFFF`、pressed `#B3FFFFFF`）；④窗控按钮改 34px 圆形（hover 半透明白、**关闭钮悬停红底**）；⑤启动面板右栏加 PCL 式渐变圆空态插画；⑥**窗口工作区自适应**（≤92% 工作区并居中，DPI 感知——修复 125% DPI 下窗控按钮被裁出屏幕右缘的长期问题）；⑦字体加雅黑回退 |
-| 20 | `src/DshLauncher.Watchdog/`（**新项目**）+ `Services/WatchdogSupervisor.cs` + `MainWindow.xaml.cs` + csproj | **实例守护进程（Watchdog）**：独立 `DSH Launcher.Watchdog.exe`（self-contained 单文件合并在 dist），由 Launcher 作为子进程拉起；职责：①实例台账（register/unregister/快照，落盘 `%LocalAppData%\DeepSeek\launcher\watchdog-state.json`）；②周期探测（3s）——**检测 dshmarket 自重启换 PID 的幽灵实例**：登记 PID 死 + 端口活 → 反查新 PID → 校验命令行含 DSH_HOME → 转正（新 PID 收编进 Launcher 管理，可从 market 重启日志提取新 token URL）→ 销毁旧残留（桌宠 electron/市场 helper）；③按 DSH_HOME 命令行匹配清理残留；④**生命周期严格受控**：Launcher 正常退出/崩溃 → 停止全部受托实例 + 清理 → 清账自退，绝不成常驻僵尸进程；⑤命名管道 JSON 协议 `DSH-Launcher-Watchdog-<session>`（与 Launcher 单实例激活同款模式）；主项目降级无感：watchdog 缺失/离线时全部操作 no-op。编译产物：dist 新增 `DSH Launcher.Watchdog.exe`（35.3MB） |
+| 20 | `src/DshLauncher/Watchdog/`（新目录）+ `MainWindow.xaml.cs` + `App.xaml.cs` | **实例守护（进程内版）**：无独立 watchdog 进程——监控循环内建于 Launcher（后台 5s 定时），零额外 exe/管道/Mutex。职责：①实例台账（注册/注销/快照，落盘 `%LocalAppData%\DeepSeek\launcher\watchdog-state.json`）；②周期探测——**识别 dshmarket 自重启换 PID 的幽灵实例**（登记 PID 死 + 端口活 → 反查新 PID → 身份校验（DSH_HOME 命令行或 dsh web 特征）→ 转正）；③**接管重启**：用户决策——非启动器重启的实例不收养，Launcher 追加一次标准重启（杀无主实例连同 powershell/cmd 包装链→终端窗口消失，CreateNoWindow 重拉，完全受管）；④停止判定 15s 宽限（覆盖市场重启窗口）+ 5 分钟重生观察窗；⑤残留清理（桌宠 electron/市场 helper 按 DSH_HOME 命令行 + 端口）；⑥正常退出全量收尾清账；崩溃兜底=下次启动台账恢复 + 孤儿检测提示 |
 
 其余文件与上游逐字节一致。构建 0 警告 0 错误；功能全部实测通过（见 work-log 12-15、17）。
 
@@ -48,7 +48,7 @@ dsh-launcher-dev/
 4. **关闭主窗口时**（设置 / 诊断）：最小化到托盘 / 关闭启动器与实例（两选项）
 5. **窗口打磨**：标题栏三按钮统一（最大化 50×50 圆角方形）；最大化占满工作区 + 直角，还原恢复圆角；市场卡片撑满整行
 6. 旧设置值自动迁移（Launcher/Desktop→Desktop；Exit→ExitAndStopInstances）
-7. **实例守护（Watchdog）**：Launcher 启动实例时同时拉起同目录 `DSH Launcher.Watchdog.exe`；插件市场（dshmarket）「重启以生效」换掉 dsh 进程后，Watchdog 在 3s 内识别幽灵实例并转正；Launcher 界面每 5s 自动同步（转正/停止即时可见）；停止/退出时按真实 PID + DSH_HOME 关联进程清理（桌宠 electron 等全部关得掉）。Launcher 退出（含崩溃）后 Watchdog 自动收尾自退，永不常驻
+7. **实例守护（进程内）**：启动器同一个进程内跑 5s 监控循环；插件市场（dshmarket）「重启以生效」换掉 dsh 进程后，监控识别幽灵实例 → **Launcher 自动接管重启**（杀掉无主实例与包装链，用无窗口方式重拉，全程受管、无终端窗口）；停止/退出时清理关联残留（桌宠 electron 等）。监控随 Launcher 同生命同进退（无额外 exe、无常驻进程）
 
 ## 构建与发布（SOP）
 
@@ -63,11 +63,6 @@ dotnet build -c Release
 
 # 发布（单文件，输出到仓库 dist\）
 # ⚠️ 前置：先停止运行中的 DSH Launcher（dist exe 被锁定 → MSB4018）
-# 先发布 Watchdog（Launcher 按同目录文件查找，缺它则自动降级为无守护模式）
-dotnet publish ..\DshLauncher.Watchdog\DshLauncher.Watchdog.csproj -c Release -r win-x64 `
-  --self-contained true -p:PublishSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
-  -o ..\..\dist
 dotnet publish DshLauncher.csproj -c Release -r win-x64 `
   --self-contained true -p:PublishSingleFile=true `
   -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
@@ -79,17 +74,16 @@ dotnet publish DshLauncher.csproj -c Release -r win-x64 `
 - publish 前先停 Launcher；移动/删除 SDK 前先 `dotnet build-server shutdown`（Roslyn 目录占用）
 - 开发期 `dotnet "DSH Launcher.dll"` 会带 conhost 黑窗口且关黑窗口=杀进程——正式使用一律 `dist\DSH Launcher.exe`
 
-## Watchdog（实例守护）说明
+## 实例守护（进程内）说明
 
 ```
-dist/DSH Launcher.exe            # 主程序（72.5MB）
-dist/DSH Launcher.Watchdog.exe   # 实例守护（35.3MB，必须与主程序同目录）
+dist/DSH Launcher.exe   # 单文件：启动器 + 实例守护（同一个进程）
 ```
 
-- **拉起**：Launcher 加载时检查同目录 `DSH Launcher.Watchdog.exe`；缺失 → 静默降级（行为与旧版完全一致）
-- **协议**：命名管道 `DSH-Launcher-Watchdog-<SessionId>`，JSON 行（register/unregister/snapshot/cleanup/shutdown/ping + 事件推送）
-- **探测**：3s 周期——进程存活 + 端口反查（GetExtendedTcpTable，注意网络字节序）；幽灵 = 登记 PID 死 + 端口活，转正条件 = 新 PID 命令行含该实例 DSH_HOME
-- **收尾**：Launcher 正常退出（OnClosing 清理后发 shutdown）或崩溃（Watchdog 探测到父 PID 消失）→ 停止全部 Managed 实例 + 清理 DSH_HOME 关联进程（node/cmd/powershell/electron）→ 清台账 → 退出
+- **架构**：监控循环 = Launcher 内 5s 定时任务（后台 Task），无子进程、无管道、无额外 exe
+- **探测**：识别市场重启（登记 PID 死 + 端口活 + 身份校验）→ 触发接管重启（杀无主实例含包装链 + CreateNoWindow 重拉）
+- **停止判定**：15s 宽限（覆盖 market 重启窗口）+ 5 分钟重生观察窗
+- **崩溃兜底**：Launcher 异常退出后的残留实例由下次启动的台账恢复 + 孤儿检测提示
 - **日志**：`%LocalAppData%\DeepSeek\launcher\watchdog.log`（1MB 轮转）；台账 `watchdog-state.json`
 
 ## 上游同步

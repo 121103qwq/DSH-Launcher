@@ -86,8 +86,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private HwndSource? _windowSource;
     private Services.TrayIconService? _trayIconService;
     private bool _shutdownFromTray;
-    private readonly WatchdogSupervisor _watchdog;
-    private DispatcherTimer? _watchdogSyncTimer;
+    private readonly WatchdogRuntime _watchdog;
     private readonly Dictionary<string, DateTimeOffset> _lastReassertAt = new(StringComparer.Ordinal);
 
     public MainWindow()
@@ -104,8 +103,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             id => _instanceRunner!.IsRunning(id),
             snapshotService: _versionSnapshotService);
         _instanceRunner = new(extensionService: _extensionService);
-        _watchdog = new WatchdogSupervisor(Environment.ProcessId);
-        _watchdog.EventReceived += OnWatchdogEvent;
+        _watchdog = new WatchdogRuntime();
+        _watchdog.GhostAdopted += OnGhostAdopted;
+        _watchdog.InstanceStopped += OnInstanceStopped;
+        _watchdog.OrphanDetected += OnOrphanDetected;
         _marketplaceService = new();
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
@@ -435,8 +436,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             SwitchSection("启动");
             LoadCachedInstances();
             await Dispatcher.Yield(DispatcherPriority.Background);
-            _ = await _watchdog.EnsureStartedAsync(_windowCancellation.Token);
-            StartWatchdogSyncTimer();
+            _watchdog.Start();
             await ReconcileCachedInstanceStatesAsync();
             await RefreshDshAsync();
             await RefreshNodeAsync();
@@ -678,125 +678,78 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    // ---------- Watchdog 集成 ----------
+    // ---------- Watchdog 集成（进程内监控，事件驱动） ----------
 
-    private void StartWatchdogSyncTimer()
+    /// <summary>幽灵转正（market 自重启被识别）：由 Launcher 追加接管重启。</summary>
+    private void OnGhostAdopted(WatchdogInstanceDto instance)
     {
-        if (_watchdogSyncTimer is not null)
-        {
-            return;
-        }
-
-        _watchdogSyncTimer = new DispatcherTimer(DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromSeconds(5)
-        };
-        _watchdogSyncTimer.Tick += async (_, _) =>
-        {
-            if (_windowCancellation.IsCancellationRequested || !_watchdog.Connected)
-            {
-                return;
-            }
-
-            try
-            {
-                await SynchronizeWatchdogStateAsync(_windowCancellation.Token);
-            }
-            catch
-            {
-                // 同步失败下一轮重试；不打断 UI。
-            }
-        };
-        _watchdogSyncTimer.Start();
-    }
-
-    private void OnWatchdogEvent(WatchdogProtocol.Response payload)
-    {
-        // 事件回调在线程池上：转回 UI 线程处理。
+        // 事件可能来自后台循环线程：转回 UI 线程处理。
         Dispatcher.BeginInvoke(async () =>
         {
             try
             {
-                await SynchronizeWatchdogStateAsync(_windowCancellation.Token);
+                var current = ResolveInstanceById(Instances, instance.InstanceId);
+                if (current is not null)
+                {
+                    _instanceRunner.TryDropExitedProcess(current.Id);
+                    await ReassertManagedInstanceAsync(current);
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // 同步失败由下一轮定时器重试。
+                ShowNotice($"接管实例异常：{ex.Message}");
             }
         });
     }
 
-    /// <summary>
-    /// 把 Watchdog 台账对齐到内存/注册记录：
-    ///  - 转正（market 自重启换 PID）→ 更新实例为运行中 + 新 PID/Port/带 token 地址，
-    ///    并把新进程收编进 Runner（Managed），使停止/重启按钮立即可用；
-    ///  - 台账判定停止（端口也释放）但 Launcher 还显示运行 → 收敛为 Stopped。
-    /// </summary>
-    private async Task SynchronizeWatchdogStateAsync(CancellationToken cancellationToken)
+    /// <summary>watchdog 判定实例停止（端口已释放）：把界面收敛为 Stopped。</summary>
+    private void OnInstanceStopped(WatchdogInstanceDto instance)
     {
-        var snapshot = await _watchdog.SnapshotAsync(cancellationToken);
-        foreach (var entry in snapshot)
+        Dispatcher.BeginInvoke(() =>
         {
-            var current = Instances.FirstOrDefault(instance => instance.Id == entry.InstanceId);
+            try
+            {
+                var current = ResolveInstanceById(Instances, instance.InstanceId);
+                if (current is not null
+                    && current.RuntimeStatus == InstanceRuntimeStatus.Running
+                    && !_instanceRunner.IsRunning(current.Id)
+                    && !_instanceRunner.IsAttached(current.Id))
+                {
+                    UpdateInstance(current with
+                    {
+                        RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                        RuntimeOwnership = InstanceRuntimeOwnership.None,
+                        ProcessId = null,
+                        Port = null,
+                        WebUrl = null,
+                        AuthenticatedWebUrl = null,
+                        LastError = null
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"同步实例状态异常：{ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>检测到未登记进程占用实例端口（残留/异常启动）：提示用户，不自动处置。</summary>
+    private void OnOrphanDetected(WatchdogInstanceDto instance)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            var current = ResolveInstanceById(Instances, instance.InstanceId);
             if (current is null)
             {
-                continue;
+                return;
             }
 
-            if (entry.ProcessId > 0 && current.ProcessId != entry.ProcessId)
-            {
-                // market 自重启后旧进程已死：其运行条目仍握着实例锁，不先清账
-                // 的话无法接管。用户的决策：不收养市场实例，而是追加一次
-                // Launcher 接管重启——杀掉无主实例（连同 powershell/cmd 包装链，
-                // 终端窗口随之消失），用 Launcher 标准方式（CreateNoWindow）重拉，
-                // 全程无窗口、完全受管。
-                _instanceRunner.TryDropExitedProcess(current.Id);
-                await ReassertManagedInstanceAsync(current);
-            }
-            else if (current.RuntimeStatus != InstanceRuntimeStatus.Running
-                     && current.ProcessId == entry.ProcessId
-                     && entry.ProcessId > 0)
-            {
-                // 台账认为在运行而 Launcher 记录不一致（例如 Launcher 崩溃前未落盘）：
-                // 更新到台账记录的运行参数，交由 Runner 探活判定归属。
-                var revived = current with
-                {
-                    ProcessId = entry.ProcessId,
-                    Port = entry.Port,
-                    WebUrl = entry.WebUrl,
-                    AuthenticatedWebUrl = entry.AuthenticatedWebUrl
-                };
-                await _instanceRunner.TryAdoptRunningProcessAsync(revived, cancellationToken);
-            }
-        }
-
-        // 台账里已没有、而 Launcher 仍显示运行的实例：Watchdog 已判定停止（端口释放），
-        // 或 Launcher 崩溃前的陈旧记录——收敛为 Stopped（Attached 除外，交给原逻辑）。
-        foreach (var current in Instances
-                     .Where(instance => instance.RuntimeStatus == InstanceRuntimeStatus.Running)
-                     .ToArray())
-        {
-            if (snapshot.Any(entry => entry.InstanceId == current.Id))
-            {
-                continue;
-            }
-
-            if (_instanceRunner.IsRunning(current.Id) || _instanceRunner.IsAttached(current.Id))
-            {
-                continue;
-            }
-
-            UpdateInstance(current with
-            {
-                RuntimeStatus = InstanceRuntimeStatus.Stopped,
-                RuntimeOwnership = InstanceRuntimeOwnership.None,
-                ProcessId = null,
-                Port = null,
-                WebUrl = null,
-                AuthenticatedWebUrl = null,
-                LastError = null
-            });
-        }
+            ShowNotice(
+                $"检测到未受管进程占用实例 {current.Name} 的端口 {instance.Port}" +
+                "（可能来自插件市场重启或上次异常退出残留）。" +
+                "若该实例未被 Launcher 接管，可先「停止实例」清理，再重新启动。");
+        });
     }
 
     /// <summary>
@@ -830,7 +783,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // 1) 杀掉无主实例（市场重启的进程 + 包装链 + 桌宠残留），台账出账。
             try
             {
-                await _watchdog.CleanupAsync(instance.Id, _windowCancellation.Token);
+                _watchdog.Cleanup(instance.Id);
             }
             catch
             {
@@ -839,7 +792,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             try
             {
-                await _watchdog.UnregisterAsync(instance.Id, _windowCancellation.Token);
+                _watchdog.Unregister(instance.Id);
             }
             catch
             {
@@ -899,21 +852,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     /// <summary>停止成功后：注销台账 + 清理该实例残留（桌宠/市场 helper 等）。</summary>
-    private async Task ReportInstanceStoppedAsync(string instanceId)
+    private void ReportInstanceStoppedAsync(string instanceId)
     {
         try
         {
-            await _watchdog.UnregisterAsync(instanceId, _windowCancellation.Token);
-            await _watchdog.CleanupAsync(instanceId, _windowCancellation.Token);
+            _watchdog.Unregister(instanceId);
+            _watchdog.Cleanup(instanceId);
         }
         catch
         {
-            // 清理失败不阻塞停止流程；残留由 Watchdog 收尾兜底。
+            // 清理失败不阻塞停止流程；残留由收尾清理兜底。
         }
     }
 
     /// <summary>启动成功后：登记到 Watchdog 台账。</summary>
-    private async Task ReportInstanceStartedAsync(
+    private void ReportInstanceStartedAsync(
         ManagerInstance instance,
         int processId,
         int port,
@@ -922,7 +875,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
-            await _watchdog.RegisterAsync(
+            _watchdog.Register(
                 instance.Id,
                 instance.Name,
                 instance.DshHome,
@@ -930,8 +883,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 processId,
                 port,
                 webUrl,
-                authenticatedWebUrl,
-                _windowCancellation.Token);
+                authenticatedWebUrl);
         }
         catch
         {
@@ -941,22 +893,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task ReconcileCachedInstanceStatesAsync()
     {
-        // Watchdog 台账优先：launcher 崩溃/重启后，台账里记录的才是权威的
-        // 真实 PID/端口（含市场自重启转正后的新进程）。
+        // Watchdog 台账优先（进程内，始终可用）：launcher 崩溃/重启后，
+        // 台账里记录的才是权威的真实 PID/端口（含市场自重启转正后的新进程）。
         var watchdogSnapshot = new Dictionary<string, WatchdogInstanceDto>(StringComparer.Ordinal);
-        if (_watchdog.Connected)
+        foreach (var entry in _watchdog.Snapshot())
         {
-            try
-            {
-                foreach (var entry in await _watchdog.SnapshotAsync(_windowCancellation.Token))
-                {
-                    watchdogSnapshot[entry.InstanceId] = entry;
-                }
-            }
-            catch
-            {
-                // 取不到台账时回退原逻辑（adopt/attach/停止）。
-            }
+            watchdogSnapshot[entry.InstanceId] = entry;
         }
 
         foreach (var storedInstance in Instances
@@ -3303,7 +3245,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             };
             UpdateInstance(stopped);
             await SynchronizeConversationsAsync(stopped);
-            await ReportInstanceStoppedAsync(instance.Id);
+            ReportInstanceStoppedAsync(instance.Id);
             ShowNotice($"实例已停止，正在继续安装 Plugin：{instance.Name}。");
             return true;
         }
@@ -3413,7 +3355,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 AuthenticatedWebUrl = null,
                 LastError = null
             });
-            await ReportInstanceStoppedAsync(selected.Id);
+            ReportInstanceStoppedAsync(selected.Id);
             ShowNotice($"实例已停止：{selected.Name}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -3473,7 +3415,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 };
                 UpdateInstance(selected);
                 await SynchronizeConversationsAsync(selected);
-                await ReportInstanceStoppedAsync(selected.Id);
+                ReportInstanceStoppedAsync(selected.Id);
             }
 
             // 停止完成后与 Start 一致：先做 runtime readiness（运行期间 Node 或
@@ -3742,7 +3684,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             LastError = null,
             LastUsedAt = DateTimeOffset.UtcNow
         });
-        await ReportInstanceStartedAsync(
+        ReportInstanceStartedAsync(
             instance,
             result.ProcessId.Value,
             result.Port.Value,
@@ -4120,7 +4062,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             _shutdownCleanupCompleted = true;
-            await _watchdog.ShutdownAsync(_windowCancellation.Token);
+            _watchdog.TerminateAllAndClear();
             _ = Dispatcher.BeginInvoke(Close, DispatcherPriority.Background);
             return;
         }
@@ -4691,8 +4633,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     protected override void OnClosed(EventArgs e)
     {
-        _watchdogSyncTimer?.Stop();
-        _watchdogSyncTimer = null;
         _windowSource?.RemoveHook(WindowProcedure);
         _windowSource = null;
         CloseAllChatWindows();

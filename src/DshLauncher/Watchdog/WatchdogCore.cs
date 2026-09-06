@@ -1,85 +1,69 @@
+using System.IO;
 using System.Text.RegularExpressions;
 
 namespace DshLauncher.Watchdog;
 
 /// <summary>
-/// Watchdog 核心：
+/// 进程内实例监控核心（与 Launcher 同进程，后台定时循环驱动）：
 ///  1. 台账管理（register/unregister/snapshot/落盘）；
 ///  2. 周期探测：登记实例是否会「死而复生」——dshmarket 自重启会杀掉原进程、
 ///     用同端口拉起新进程（新 PID）。发现「登记的 PID 已死，但端口仍有服务」即
-///     判定幽灵：反查新 PID → 校验 DSH_HOME → 销毁旧残留 → 转正新进程；
-///  3. 残留清理：按 DSH_HOME 命令行匹配杀掉桌宠 electron / 市场重启 helper 等；
-///  4. 收尾自灭：Launcher 退出（正常关机或崩溃）→ 停止全部关联实例 → 清理 → 退出，
-///     绝不变成用户关不掉的常驻进程。
+///     判定幽灵：反查新 PID → 校验身份（DSH_HOME 命令行或 dsh web 特征）→
+///     销毁旧残留 → 转正新进程（GhostAdopted 事件）；
+///  3. 停止判定带宽限期（覆盖 market 重启「杀-等-起」窗口），宽限后转 ZOMBIE
+///     观察窗，期间端口复活仍可转正（ZombieRevived 事件）；
+///  4. 残留清理：按 DSH_HOME 命令行 + 端口杀桌宠 electron / 市场 helper 等；
+///  5. 清账（正常退出）与崩溃恢复：台账落盘，下次启动可据此提示残留实例。
 /// </summary>
 public sealed class WatchdogCore
 {
-    private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(3);
-
-    /// <summary>PID 死 + 端口沉默持续该时长才判"停止"（覆盖 dshmarket 重启
-    /// 的"杀进程→等端口释放→拉起新进程"窗口期，该窗口实测最长可达 30s+）。</summary>
+    /// <summary>PID 死 + 端口沉默持续该时长才判"停止"（覆盖 dshmarket 重启的
+    /// "杀进程→等端口释放→拉起新进程"窗口期，该窗口实测最长可达 30s+）。</summary>
     private static readonly TimeSpan SuspectGrace = TimeSpan.FromSeconds(15);
 
     /// <summary>判停止后仍保留"重生观察"窗口：期间端口复活（市场重启晚于宽限）
     /// 立即按幽灵重新转正。</summary>
     private static readonly TimeSpan ZombieWindow = TimeSpan.FromMinutes(5);
 
-    /// <summary>隐藏 market 重启包装链（powershell/cmd）的控制台窗口（只藏不杀）。</summary>
-    private static void HideMarketWrapperWindows(int mainPid)
-    {
-        try
-        {
-            ProcessQuery.HideTopLevelWindows(ProcessQuery.GetAncestorPids(mainPid));
-        }
-        catch
-        {
-            // 窗口隐藏失败不影响实例管理。
-        }
-    }
-
-    /// <summary>市场重启日志里的带 token 地址行：dsh web: http://127.0.0.1:&lt;port&gt;/?token=…</summary>
+    /// <summary>market 重启日志里的带 token 地址行：dsh web: http://127.0.0.1:&lt;port&gt;/?token=…</summary>
     private static readonly Regex MarketLogTokenPattern = new(
         @"dsh\s+web:\s*(https?://127\.0\.0\.1:\d+/\?token=[^\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly WatchdogStateStore _store;
     private readonly WatchdogLog _log;
-    private readonly int _launcherPid;
     private readonly object _gate = new();
     private readonly WatchdogState _state;
-    private readonly List<Action<WatchdogProtocol.Response>> _eventSinks = new();
-
-    /// <summary>疑似停止中的实例（PID 死 + 端口沉默但未过宽限期）：id → 首次疑似时间。</summary>
     private readonly Dictionary<string, DateTimeOffset> _suspectSince = new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// 已判停止但仍在重生观察窗口内的实例（保留 DSH_HOME/端口以识别复活）。
-    /// market 重启的 helper 可能晚于宽限期才拉起新进程——窗口期内必须接住。
-    /// </summary>
     private readonly Dictionary<string, ZombieRecord> _zombies = new(StringComparer.Ordinal);
 
     private sealed record ZombieRecord(WatchdogInstanceDto Instance, DateTimeOffset Since);
 
-    public WatchdogCore(string stateDirectory, int launcherPid, WatchdogLog log)
+    /// <summary>发现非启动器进程接管了实例（market 重启转正完成）：实例 = 转正后的新台账条目。</summary>
+    public event Action<WatchdogInstanceDto>? GhostAdopted;
+
+    /// <summary>实例被判定停止（宽限期后端口仍未复活）。</summary>
+    public event Action<WatchdogInstanceDto>? InstanceStopped;
+
+    /// <summary>发现未登记进程占用实例端口（孤儿），由 UI 决定清理/接管。</summary>
+    public event Action<WatchdogInstanceDto>? OrphanDetected;
+
+    public WatchdogCore(string stateDirectory, WatchdogLog? log = null)
     {
         _store = new WatchdogStateStore(stateDirectory);
-        _log = log;
-        _launcherPid = launcherPid;
+        _log = log ?? new WatchdogLog(stateDirectory);
         _state = _store.Load();
-        _state.LauncherPid = launcherPid;
-        _state.LauncherStartedAt = DateTimeOffset.UtcNow;
-        _store.Save(_state);
-        _log.Info($"watchdog started (launcher pid={launcherPid}, tracking {_state.Instances.Count} instance(s))");
+        _log.Info($"watchdog core started (tracking {_state.Instances.Count} instance(s) from ledger)");
     }
 
-    // ---------- 台账 API（Launcher 经管道调用） ----------
+    // ---------- 台账 API ----------
 
     public void RegisterInstance(WatchdogInstanceDto instance)
     {
         lock (_gate)
         {
             _state.Instances.RemoveAll(item => item.InstanceId == instance.InstanceId);
-            _state.Instances.Add(instance);
+            _state.Instances.Add(Clone(instance));
             _store.Save(_state);
         }
 
@@ -107,131 +91,51 @@ public sealed class WatchdogCore
     {
         lock (_gate)
         {
-            return _state.Instances
-                .Select(item => Clone(item))
-                .ToArray();
+            return _state.Instances.Select(Clone).ToArray();
         }
     }
 
-    public void Subscribe(Action<WatchdogProtocol.Response> sink)
-    {
-        lock (_eventSinks)
-        {
-            _eventSinks.Add(sink);
-        }
-    }
-
-    private void PublishEvent(string eventName, WatchdogInstanceDto? instance = null, string? instanceId = null)
-    {
-        var payload = new WatchdogProtocol.Response
-        {
-            T = "event",
-            Event = eventName,
-            Instance = instance is null ? null : Clone(instance),
-            InstanceId = instanceId
-        };
-
-        Action<WatchdogProtocol.Response>[] sinks;
-        lock (_eventSinks)
-        {
-            sinks = _eventSinks.ToArray();
-        }
-
-        foreach (var sink in sinks)
-        {
-            try
-            {
-                sink(payload);
-            }
-            catch
-            {
-                // 单个订阅者异常不影响其余。
-            }
-        }
-    }
-
-    // ---------- 周期探测 ----------
-
-    public async Task RunLoopAsync(CancellationToken cancellationToken)
-    {
-        _log.Info("watchdog monitoring loop started");
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                if (!ProcessQuery.IsAlive(_launcherPid))
-                {
-                    _log.Warn($"launcher (pid={_launcherPid}) is gone; watchdog performing final cleanup and exiting");
-                    StopAllAndCleanup();
-                    return;
-                }
-
-                DetectAndReconcileAll();
-            }
-            catch (Exception ex)
-            {
-                _log.Error($"probe iteration failed: {ex}");
-            }
-
-            try
-            {
-                await Task.Delay(ProbeInterval, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-        }
-    }
+    // ---------- 周期探测（由 WatchdogRuntime 定时调用） ----------
 
     /// <summary>
-    /// 逐实例核对：
+    /// 单轮探测：逐实例核对——
     ///  - PID 活：正常；
-    ///  - PID 死 + 端口活：幽灵/被替换 → 转正（新 PID 入账、销毁旧残留）；
-    ///  - PID 死 + 端口沉默：进入宽限期（15s，覆盖市场重启的"杀-等-起"窗口）
-    ///    ——宽限内端口复活走转正；超时仍沉默才判停止（移入重生观察窗口）；
-    ///  - 重生观察窗口内端口复活：立即按幽灵重新转正（市场重启晚于宽限的极端情况）。
+    ///  - PID 死 + 端口活：幽灵/被替换 → 转正（GhostAdopted）；\n
+    ///  - PID 死 + 端口沉默：宽限期（覆盖市场重启窗口）→ 超时判停（InstanceStopped，转 ZOMBIE）；\n
+    ///  - ZOMBIE 观察窗内端口复活：重新转正；\n
+    ///  - 未登记进程占用实例端口：OrphanDetected。
     /// </summary>
-    private void DetectAndReconcileAll()
+    public void ProbeOnce()
     {
         foreach (var instance in Snapshot())
         {
-            var registered = instance;
-            if (ProcessQuery.IsAlive(registered.ProcessId))
+            if (ProcessQuery.IsAlive(instance.ProcessId))
             {
-                ForgetSuspect(registered.InstanceId);
+                ForgetSuspect(instance.InstanceId);
                 continue;
             }
 
-            var listenerPid = registered.Port > 0
-                ? ProcessQuery.FindPidByListeningPort(registered.Port)
+            var listenerPid = instance.Port > 0
+                ? ProcessQuery.FindPidByListeningPort(instance.Port)
                 : 0;
-            if (listenerPid > 0 && listenerPid != registered.ProcessId)
+            if (listenerPid > 0 && listenerPid != instance.ProcessId)
             {
-                // 端口仍有服务 —— 幽灵：市场自重启把主进程换人了。
-                AdoptGhost(registered, listenerPid);
+                AdoptGhost(instance, listenerPid);
                 continue;
             }
 
-            // PID 死 + 端口沉默：先宽限，避免把市场重启的等待窗口误判成停止。
-            if (TryEnterSuspect(registered.InstanceId))
+            if (TryEnterSuspect(instance.InstanceId))
             {
                 continue;
             }
 
-            // 宽限期已过：确认为停止。移除台账，移入重生观察窗口。
-            RemoveAndZombie(registered);
+            RemoveAndZombie(instance);
         }
 
         ReviveZombies();
-        DetectUnregisteredOrphans();
+        DetectOrphans();
     }
 
-    /// <summary>首次疑似：记时间并放行；宽限期内重复探测返回 true（继续等待）。</summary>
-    /// <summary>
-    /// 幽灵转正：端口有服务的替换进程（新 PID）替换登记 PID。
-    /// 校验替换进程命令行含实例 DSH_HOME，防误收无关监听；成功后销毁旧残留。
-    /// </summary>
     private void AdoptGhost(WatchdogInstanceDto registered, int listenerPid)
     {
         var replacement = ProcessQuery.GetSnapshot()
@@ -256,7 +160,7 @@ public sealed class WatchdogCore
             WebUrl = registered.WebUrl,
             AuthenticatedWebUrl = TryExtractMarketTokenUrl(registered.Port)
                 ?? registered.AuthenticatedWebUrl,
-            Managed = registered.Managed,
+            Managed = true,
             LastTransition = $"ghost adopted: pid {oldPid} -> {listenerPid}"
         };
 
@@ -289,34 +193,12 @@ public sealed class WatchdogCore
             listenerPid
         };
         var cleaned = CleanupDshHomeProcesses(adopted.DshHome, adopted.Port, keepPids);
-        // market 重启的 powershell/cmd 包装链会带一个可见控制台窗口（-WindowStyle
-        // Hidden 对无控制台父进程 spawn 经常失效）：转正后从外部藏掉，不杀进程。
-        HideMarketWrapperWindows(listenerPid);
         _log.Warn(
             $"instance {adopted.InstanceId} GHOST adopted: old pid {oldPid} -> new pid {listenerPid} " +
             $"(market self-restart), cleaned {cleaned} stale process(es)");
-        PublishEvent(WatchdogProtocol.EventGhostAdopted, instance: adopted);
+        GhostAdopted?.Invoke(Clone(adopted));
     }
 
-    /// <summary>
-    /// 替换进程身份校验：命令行含实例 DSH_HOME（Launcher 直启场景），
-    /// 或满足 dsh web 主进程特征且监听同端口（market 自重启场景——DSH_HOME
-    /// 只作为环境变量传递，命令行里没有！）。
-    /// </summary>
-    private static bool IsReplacementFor(WatchdogInstanceDto instance, ProcessSnapshot replacement)
-    {
-        var homeHit = replacement.CommandLineUpper.Contains(instance.DshHome.ToUpperInvariant(), StringComparison.Ordinal);
-        var mainHit = ProcessQuery.LooksLikeDshWebMain(replacement, instance.Port);
-        if (!homeHit && !mainHit)
-        {
-            var cmd = replacement.CommandLine;
-            Console.Error.WriteLine($"[watchdog] IsReplacementFor miss: pid={replacement.ProcessId} name={replacement.Name} cmdIsEmpty={string.IsNullOrWhiteSpace(cmd)} cmd=[{cmd}]");
-        }
-
-        return homeHit || mainHit;
-    }
-
-    /// <summary>首次疑似：记时间并放行；宽限期内重复探测返回 true（继续等待）。</summary>
     private bool TryEnterSuspect(string instanceId)
     {
         lock (_zombies)
@@ -340,7 +222,6 @@ public sealed class WatchdogCore
         }
     }
 
-    /// <summary>宽限期后确认停止：移出台账 → 记入重生观察窗口（保留 DSH_HOME/端口）。</summary>
     private void RemoveAndZombie(WatchdogInstanceDto instance)
     {
         lock (_zombies)
@@ -360,13 +241,9 @@ public sealed class WatchdogCore
         }
 
         _log.Info($"instance {instance.InstanceId} stopped (pid={instance.ProcessId}, port {instance.Port} released)");
-        PublishEvent(WatchdogProtocol.EventInstanceStopped, instanceId: instance.InstanceId);
+        InstanceStopped?.Invoke(Clone(instance));
     }
 
-    /// <summary>
-    /// 重生检测：停判后 ZombieWindow 内，端口复活且新 PID 命令行含该实例 DSH_HOME
-    /// → 按幽灵重新转正（市场 helper 晚于宽限期拉起的极端情况也被接住）。
-    /// </summary>
     private void ReviveZombies()
     {
         ZombieRecord[] candidates;
@@ -404,7 +281,7 @@ public sealed class WatchdogCore
                 WebUrl = zombie.Instance.WebUrl,
                 AuthenticatedWebUrl = TryExtractMarketTokenUrl(zombie.Instance.Port)
                     ?? zombie.Instance.AuthenticatedWebUrl,
-                Managed = zombie.Instance.Managed,
+                Managed = true,
                 LastTransition = $"zombie revived: pid {zombie.Instance.ProcessId} -> {listenerPid}"
             };
 
@@ -426,14 +303,12 @@ public sealed class WatchdogCore
                 listenerPid
             };
             var cleaned = CleanupDshHomeProcesses(revived.DshHome, revived.Port, keepPids);
-            HideMarketWrapperWindows(listenerPid);
             _log.Warn(
                 $"instance {revived.InstanceId} ZOMBIE revived: stale pid {zombie.Instance.ProcessId} -> new pid {listenerPid}, cleaned {cleaned} stale process(es)");
-            PublishEvent(WatchdogProtocol.EventGhostAdopted, instance: revived);
+            GhostAdopted?.Invoke(Clone(revived));
         }
     }
 
-    /// <summary>清理过期重生记录（超出 ZombieWindow 的才真忘掉；防内存无限增长）。</summary>
     private void SweepZombies()
     {
         var cutoff = DateTimeOffset.UtcNow - ZombieWindow;
@@ -444,12 +319,7 @@ public sealed class WatchdogCore
         }
     }
 
-    /// <summary>
-    /// 兜底：扫描「命令行包含任一登记 DSH_HOME 且像 dsh web 主进程」但不在台账中的进程
-    /// （例如 Launcher 登记前实例已被市场重启、或 Launcher 崩溃瞬间的窗口期），记为孤儿
-    /// 事件（不自动转正——需要 Launcher 决定归属；但会留档便于人工清理）。
-    /// </summary>
-    private void DetectUnregisteredOrphans()
+    private void DetectOrphans()
     {
         IReadOnlyList<WatchdogInstanceDto> known;
         lock (_gate)
@@ -462,8 +332,6 @@ public sealed class WatchdogCore
             return;
         }
 
-        // 按端口找"非登记进程监听实例端口"：不依赖命令行（market 进程命令行
-        // 不含 DSH_HOME），也不需要 WMI 全量枚举——只查端口表，轻且可靠。
         foreach (var instance in known)
         {
             if (instance.Port <= 0)
@@ -480,17 +348,27 @@ public sealed class WatchdogCore
             _log.Warn(
                 $"orphan dsh web listener pid={listenerPid} detected on port {instance.Port} for instance {instance.InstanceId} " +
                 "while not registered — reported to launcher");
-            PublishEvent(WatchdogProtocol.EventGhostOrphan, instance: Clone(instance));
+            OrphanDetected?.Invoke(Clone(instance));
         }
+    }
+
+    /// <summary>
+    /// 替换进程身份校验：命令行含实例 DSH_HOME（Launcher 直启场景），
+    /// 或满足 dsh web 主进程特征且监听同端口（market 自重启场景——DSH_HOME
+    /// 只作为环境变量传递，命令行里没有！）。
+    /// </summary>
+    private static bool IsReplacementFor(WatchdogInstanceDto instance, ProcessSnapshot replacement)
+    {
+        return replacement.CommandLineUpper.Contains(instance.DshHome.ToUpperInvariant(), StringComparison.Ordinal)
+               || ProcessQuery.LooksLikeDshWebMain(replacement, instance.Port);
     }
 
     // ---------- 清理 / 收尾 ----------
 
     /// <summary>
     /// 清理一个实例的关联进程（保持 keepPids 存活）：
-    ///  - 监听该实例端口的主进程（market 重启的无主进程——命令行不含 DSH_HOME，
-    ///    必须按端口识别；keepPids 覆盖转正后的新主进程所以不会误杀）；
-    ///  - 命令行含该实例 DSH_HOME 的全部进程（桌宠 electron、市场重启包装链等）。
+    ///  - 监听该实例端口的主进程（market 重启的无主进程——命令行不含 DSH_HOME，按端口识别）；\n
+    ///  - 命令行含该实例 DSH_HOME 的全部进程（桌宠 electron、市场重启包装链等）。\n
     /// 返回实际发起的清理个数。
     /// </summary>
     public int CleanupInstance(string instanceId, int? keepPid = null)
@@ -498,18 +376,10 @@ public sealed class WatchdogCore
         WatchdogInstanceDto? instance;
         lock (_gate)
         {
-            instance = _state.Instances.FirstOrDefault(item => item.InstanceId == instanceId);
-        }
-
-        if (instance is null)
-        {
-            lock (_zombies)
-            {
-                if (_zombies.TryGetValue(instanceId, out var zombie))
-                {
-                    instance = zombie.Instance;
-                }
-            }
+            instance = _state.Instances.FirstOrDefault(item => item.InstanceId == instanceId)
+                ?? _zombies.Values
+                    .FirstOrDefault(zombie => zombie.Instance.InstanceId == instanceId)
+                    ?.Instance;
         }
 
         if (instance is null)
@@ -537,10 +407,10 @@ public sealed class WatchdogCore
     }
 
     /// <summary>
-    /// 收尾：按用户决策「Launcher 完全关闭 → 实例强制关闭」，停止台账里全部实例
-    /// （Managed 标记的；孤儿不加）并清掉 DSH_HOME 残留，然后清空台账。
+    /// 全量收尾清理（Launcher 正常退出前调用）：停掉台账里全部受管实例（按端口/树），
+    /// 清掉 DSH_HOME 残留，然后清空台账落盘。幂等。
     /// </summary>
-    public void StopAllAndCleanup()
+    public void CleanupAllAndClear()
     {
         IReadOnlyList<WatchdogInstanceDto> instances;
         lock (_gate)
@@ -548,7 +418,6 @@ public sealed class WatchdogCore
             instances = _state.Instances.Where(item => item.Managed).ToArray();
         }
 
-        // 重生观察窗口内的"已停判"实例同样是真实例：收尾一并杀掉。
         lock (_zombies)
         {
             SweepZombies();
@@ -574,7 +443,6 @@ public sealed class WatchdogCore
                     if (listenerPid > 0 && listenerPid != instance.ProcessId
                         && ProcessQuery.IsAlive(listenerPid))
                     {
-                        // 转正后的进程：台账 PID 可能滞后，按端口补刀。
                         ProcessQuery.KillTree(listenerPid);
                     }
                 }
@@ -600,14 +468,12 @@ public sealed class WatchdogCore
             _zombies.Clear();
         }
 
-        _log.Info("watchdog final cleanup complete; exiting");
+        _log.Info("watchdog final cleanup complete; ledger cleared");
     }
 
     /// <summary>
     /// 按 DSH_HOME 匹配杀进程 + 按端口杀无主主进程（除 keepPids 及其子树外全部）。
-    /// 返回处理数目。顺序：先杀包装/残留（桌宠 electron、powershell、cmd），最后才轮到
-    /// 主进程类——但这里不区分，逐个 KillTree 幂等执行；taskkill /T 会自动带出整树，
-    /// 重复无害。
+    /// 返回处理数目。逐个 KillTree 幂等执行；taskkill /T 会自动带出整树，重复无害。
     /// </summary>
     private int CleanupDshHomeProcesses(string dshHome, int port, IReadOnlyCollection<int> keepPids)
     {
@@ -622,7 +488,6 @@ public sealed class WatchdogCore
 
         var killed = 0;
 
-        // 1) 按端口杀无主主进程（market 重启的无主 dsh web 命令行不含 DSH_HOME）。
         if (port > 0)
         {
             var listenerPid = ProcessQuery.FindPidByListeningPort(port);
@@ -635,7 +500,6 @@ public sealed class WatchdogCore
             }
         }
 
-        // 2) 按 DSH_HOME 命令行匹配杀残留（桌宠/包装链）。
         var candidates = ProcessQuery.FindProcessesForDshHome(
             dshHome, keepAlivePids: keep, excludePids: null);
         foreach (var candidate in candidates)

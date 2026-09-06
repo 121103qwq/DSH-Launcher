@@ -21,8 +21,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 与 DshLauncher.Watchdog 项目共享的协议契约（单一来源，两边编译同一文件） -->
-    <Compile Include="..\DshLauncher.Watchdog\WatchdogProtocol.cs" Link="Watchdog\WatchdogProtocol.cs" />
     <None Remove="Assets\DSHLauncher.ico" />
     <None Remove="Assets\DeepSeek.ico" />
     <None Remove="Assets\DeepSeekOpenPlatform.ico" />

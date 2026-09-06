@@ -1,0 +1,123 @@
+using System.IO;
+
+namespace DshLauncher.Watchdog;
+
+/// <summary>
+/// 进程内实例监控协调器：Launcher 同一个进程里的后台循环（无子进程、无管道）。
+///
+/// 职责：
+///  - 每 5s 驱动一次 WatchdogCore.ProbeOnce（幽灵识别/转正/停止收敛/孤儿报告）；
+///  - 把核心事件转成托管事件（GhostAdopted / InstanceStopped / OrphanDetected），
+///    由 UI 层（MainWindow）分发到界面线程；
+///  - 生命周期与 Launcher 完全一致：Launcher 存活即监控，Launcher 退出即停止
+///    （正常退出前调用 TerminateAllAndClear 清账收尾）。
+///
+/// 与旧独立 watchdog 进程的取舍：Launcher 崩溃（异常/强杀）时不再有跨进程收尾，
+/// 由「下次启动时的台账恢复 + 孤儿检测提示」兜底（台账已落盘 watchdog-state.json）。
+/// </summary>
+public sealed class WatchdogRuntime : IDisposable
+{
+    private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
+
+    private readonly WatchdogCore _core;
+    private readonly CancellationTokenSource _cancellation = new();
+    private Task? _loop;
+
+    public event Action<WatchdogInstanceDto>? GhostAdopted;
+    public event Action<WatchdogInstanceDto>? InstanceStopped;
+    public event Action<WatchdogInstanceDto>? OrphanDetected;
+
+    public WatchdogRuntime()
+    {
+        var stateDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DeepSeek", "launcher");
+        _core = new WatchdogCore(stateDirectory);
+        _core.GhostAdopted += instance => GhostAdopted?.Invoke(instance);
+        _core.InstanceStopped += instance => InstanceStopped?.Invoke(instance);
+        _core.OrphanDetected += instance => OrphanDetected?.Invoke(instance);
+    }
+
+    /// <summary>启动后台监控循环（幂等）。</summary>
+    public void Start()
+    {
+        if (_loop is not null)
+        {
+            return;
+        }
+
+        _loop = Task.Run(() => LoopAsync(_cancellation.Token));
+    }
+
+    private async Task LoopAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                _core.ProbeOnce();
+            }
+            catch (Exception)
+            {
+                // 单轮探测异常不终止循环（与 UI 隔离）。
+            }
+
+            try
+            {
+                await Task.Delay(ProbeInterval, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    // ---------- 台账操作（进程内直连） ----------
+
+    public void Register(
+        string instanceId,
+        string name,
+        string dshHome,
+        string? rootPath,
+        int processId,
+        int port,
+        string webUrl,
+        string? authenticatedWebUrl)
+    {
+        _core.RegisterInstance(new WatchdogInstanceDto
+        {
+            InstanceId = instanceId,
+            Name = name,
+            DshHome = dshHome,
+            RootPath = rootPath,
+            ProcessId = processId,
+            Port = port,
+            WebUrl = webUrl,
+            AuthenticatedWebUrl = authenticatedWebUrl,
+            Managed = true
+        });
+    }
+
+    public void Unregister(string instanceId) => _core.UnregisterInstance(instanceId);
+
+    public int Cleanup(string instanceId, int? keepPid = null) => _core.CleanupInstance(instanceId, keepPid);
+
+    public IReadOnlyList<WatchdogInstanceDto> Snapshot() => _core.Snapshot();
+
+    /// <summary>启动时（Reconcile 前）拉台账：恢复崩溃前记录的实例（用于提示残留）。</summary>
+    public IReadOnlyList<WatchdogInstanceDto> LoadLedger() => _core.Snapshot();
+
+    /// <summary>
+    /// 正常退出前的全量收尾：杀净全部受管实例相关进程（幂等）+ 清空台账。
+    /// 调用时机：MainWindow.OnClosing 停止实例之后。
+    /// </summary>
+    public void TerminateAllAndClear() => _core.CleanupAllAndClear();
+
+    /// <summary>停止监控循环（不清理台账——进程退出时由调用方决定）。</summary>
+    public void Dispose()
+    {
+        _cancellation.Cancel();
+        _cancellation.Dispose();
+    }
+}
