@@ -58,11 +58,29 @@ public sealed class WatchdogPipeServer : IAsyncDisposable
             }
             catch (IOException)
             {
-                // 客户端断开/重连间隙：继续等待下一个连接。
+                // maxNumberOfServerInstances=1 时：已有活动连接期间再建实例会立即
+                // 抛“所有管道实例均忙”。绝不能忙循环重试（曾导致 watchdog 占满
+                // 一个核）——退避半秒再等下一个连接。
+                try
+                {
+                    await Task.Delay(500, _cancellation.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
             }
             catch (Exception ex)
             {
                 _coreLog(ex.ToString());
+                try
+                {
+                    await Task.Delay(500, _cancellation.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
             }
             finally
             {

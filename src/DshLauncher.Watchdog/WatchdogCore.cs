@@ -223,12 +223,11 @@ public sealed class WatchdogCore
     {
         var replacement = ProcessQuery.GetSnapshot()
             .FirstOrDefault(process => process.ProcessId == listenerPid);
-        if (replacement is null
-            || !replacement.CommandLineUpper.Contains(registered.DshHome.ToUpperInvariant(), StringComparison.Ordinal))
+        if (replacement is null || !IsReplacementFor(registered, replacement))
         {
             _log.Warn(
                 $"instance {registered.InstanceId}: port {registered.Port} served by pid {listenerPid} " +
-                "but its command line does not reference the instance DSH_HOME; NOT adopting (possible unrelated listener)");
+                "but it is not a dsh web process for this instance; NOT adopting (possible unrelated listener)");
             return;
         }
 
@@ -276,11 +275,29 @@ public sealed class WatchdogCore
         {
             listenerPid
         };
-        var cleaned = CleanupDshHomeProcesses(adopted.DshHome, keepPids);
+        var cleaned = CleanupDshHomeProcesses(adopted.DshHome, adopted.Port, keepPids);
         _log.Warn(
             $"instance {adopted.InstanceId} GHOST adopted: old pid {oldPid} -> new pid {listenerPid} " +
             $"(market self-restart), cleaned {cleaned} stale process(es)");
         PublishEvent(WatchdogProtocol.EventGhostAdopted, instance: adopted);
+    }
+
+    /// <summary>
+    /// 替换进程身份校验：命令行含实例 DSH_HOME（Launcher 直启场景），
+    /// 或满足 dsh web 主进程特征且监听同端口（market 自重启场景——DSH_HOME
+    /// 只作为环境变量传递，命令行里没有！）。
+    /// </summary>
+    private static bool IsReplacementFor(WatchdogInstanceDto instance, ProcessSnapshot replacement)
+    {
+        var homeHit = replacement.CommandLineUpper.Contains(instance.DshHome.ToUpperInvariant(), StringComparison.Ordinal);
+        var mainHit = ProcessQuery.LooksLikeDshWebMain(replacement, instance.Port);
+        if (!homeHit && !mainHit)
+        {
+            var cmd = replacement.CommandLine;
+            Console.Error.WriteLine($"[watchdog] IsReplacementFor miss: pid={replacement.ProcessId} name={replacement.Name} cmdIsEmpty={string.IsNullOrWhiteSpace(cmd)} cmd=[{cmd}]");
+        }
+
+        return homeHit || mainHit;
     }
 
     /// <summary>首次疑似：记时间并放行；宽限期内重复探测返回 true（继续等待）。</summary>
@@ -355,8 +372,7 @@ public sealed class WatchdogCore
 
             var replacement = ProcessQuery.GetSnapshot()
                 .FirstOrDefault(process => process.ProcessId == listenerPid);
-            if (replacement is null
-                || !replacement.CommandLineUpper.Contains(zombie.Instance.DshHome.ToUpperInvariant(), StringComparison.Ordinal))
+            if (replacement is null || !IsReplacementFor(zombie.Instance, replacement))
             {
                 continue;
             }
@@ -393,7 +409,7 @@ public sealed class WatchdogCore
             {
                 listenerPid
             };
-            var cleaned = CleanupDshHomeProcesses(revived.DshHome, keepPids);
+            var cleaned = CleanupDshHomeProcesses(revived.DshHome, revived.Port, keepPids);
             _log.Warn(
                 $"instance {revived.InstanceId} ZOMBIE revived: stale pid {zombie.Instance.ProcessId} -> new pid {listenerPid}, cleaned {cleaned} stale process(es)");
             PublishEvent(WatchdogProtocol.EventGhostAdopted, instance: revived);
@@ -429,37 +445,35 @@ public sealed class WatchdogCore
             return;
         }
 
-        var snapshot = ProcessQuery.GetSnapshot();
-        var registeredPids = known.Select(item => item.ProcessId).ToHashSet();
-        foreach (var process in snapshot)
+        // 按端口找"非登记进程监听实例端口"：不依赖命令行（market 进程命令行
+        // 不含 DSH_HOME），也不需要 WMI 全量枚举——只查端口表，轻且可靠。
+        foreach (var instance in known)
         {
-            if (registeredPids.Contains(process.ProcessId)
-                || !process.Name.Equals("node", StringComparison.OrdinalIgnoreCase)
-                || !process.CommandLineUpper.Contains("BIN.JS", StringComparison.Ordinal))
+            if (instance.Port <= 0)
             {
                 continue;
             }
 
-            var home = known.FirstOrDefault(
-                item => process.CommandLineUpper.Contains(item.DshHome.ToUpperInvariant(), StringComparison.Ordinal));
-            if (home is null)
+            var listenerPid = ProcessQuery.FindPidByListeningPort(instance.Port);
+            if (listenerPid <= 0 || listenerPid == instance.ProcessId)
             {
                 continue;
             }
 
             _log.Warn(
-                $"orphan dsh web process pid={process.ProcessId} detected for instance {home.InstanceId} " +
+                $"orphan dsh web listener pid={listenerPid} detected on port {instance.Port} for instance {instance.InstanceId} " +
                 "while not registered — reported to launcher");
-            PublishEvent(WatchdogProtocol.EventGhostOrphan, instance: Clone(home));
+            PublishEvent(WatchdogProtocol.EventGhostOrphan, instance: Clone(instance));
         }
     }
 
     // ---------- 清理 / 收尾 ----------
 
     /// <summary>
-    /// 清理一个实例的残留（保持 keepPids 存活）：
-    /// - 登记 PID 的进程树；
-    /// - 命令行含该实例 DSH_HOME 的全部进程（桌宠 electron、市场重启包装链等）。
+    /// 清理一个实例的关联进程（保持 keepPids 存活）：
+    ///  - 监听该实例端口的主进程（market 重启的无主进程——命令行不含 DSH_HOME，
+    ///    必须按端口识别；keepPids 覆盖转正后的新主进程所以不会误杀）；
+    ///  - 命令行含该实例 DSH_HOME 的全部进程（桌宠 electron、市场重启包装链等）。
     /// 返回实际发起的清理个数。
     /// </summary>
     public int CleanupInstance(string instanceId, int? keepPid = null)
@@ -496,7 +510,7 @@ public sealed class WatchdogCore
             }
         }
 
-        var cleaned = CleanupDshHomeProcesses(instance.DshHome, keepPids);
+        var cleaned = CleanupDshHomeProcesses(instance.DshHome, instance.Port, keepPids);
         if (cleaned > 0)
         {
             _log.Info($"cleanup for instance {instanceId}: killed {cleaned} process(es)");
@@ -548,7 +562,7 @@ public sealed class WatchdogCore
                     }
                 }
 
-                var cleaned = CleanupDshHomeProcesses(instance.DshHome, new HashSet<int>());
+                var cleaned = CleanupDshHomeProcesses(instance.DshHome, instance.Port, new HashSet<int>());
                 _log.Info($"final cleanup for instance {instance.InstanceId}: tree killed, {cleaned} stale process(es) removed");
             }
             catch (Exception ex)
@@ -573,11 +587,12 @@ public sealed class WatchdogCore
     }
 
     /// <summary>
-    /// 按 DSH_HOME 匹配杀进程（除 keepPids 及其子树外全部）。返回处理数目。
-    /// 顺序：先杀包装/残留（桌宠 electron、powershell、cmd），最后才轮到主进程类——但
-    /// 这里不区分，逐个 KillTree 幂等执行；taskkill /T 会自动带出整树，重复无害。
+    /// 按 DSH_HOME 匹配杀进程 + 按端口杀无主主进程（除 keepPids 及其子树外全部）。
+    /// 返回处理数目。顺序：先杀包装/残留（桌宠 electron、powershell、cmd），最后才轮到
+    /// 主进程类——但这里不区分，逐个 KillTree 幂等执行；taskkill /T 会自动带出整树，
+    /// 重复无害。
     /// </summary>
-    private int CleanupDshHomeProcesses(string dshHome, IReadOnlyCollection<int> keepPids)
+    private int CleanupDshHomeProcesses(string dshHome, int port, IReadOnlyCollection<int> keepPids)
     {
         var keep = new HashSet<int>(keepPids);
         foreach (var descender in keepPids.Select(pid => ProcessQuery.GetDescendants(pid)))
@@ -588,15 +603,30 @@ public sealed class WatchdogCore
             }
         }
 
-        var candidates = ProcessQuery.FindProcessesForDshHome(
-            string.Empty, dshHome, keepAlivePids: keep, excludePids: null);
         var killed = 0;
+
+        // 1) 按端口杀无主主进程（market 重启的无主 dsh web 命令行不含 DSH_HOME）。
+        if (port > 0)
+        {
+            var listenerPid = ProcessQuery.FindPidByListeningPort(port);
+            if (listenerPid > 0 && !keep.Contains(listenerPid) && ProcessQuery.IsAlive(listenerPid))
+            {
+                if (ProcessQuery.KillTree(listenerPid))
+                {
+                    killed++;
+                }
+            }
+        }
+
+        // 2) 按 DSH_HOME 命令行匹配杀残留（桌宠/包装链）。
+        var candidates = ProcessQuery.FindProcessesForDshHome(
+            dshHome, keepAlivePids: keep, excludePids: null);
         foreach (var candidate in candidates)
         {
-            if (candidate.Name.Equals("powershell", StringComparison.OrdinalIgnoreCase)
-                || candidate.Name.Equals("cmd", StringComparison.OrdinalIgnoreCase)
-                || candidate.Name.Equals("electron", StringComparison.OrdinalIgnoreCase)
-                || candidate.Name.Equals("node", StringComparison.OrdinalIgnoreCase))
+            if (ProcessQuery.IsProcessName(candidate, "powershell")
+                || ProcessQuery.IsProcessName(candidate, "cmd")
+                || ProcessQuery.IsProcessName(candidate, "electron")
+                || ProcessQuery.IsProcessName(candidate, "node"))
             {
                 if (ProcessQuery.IsAlive(candidate.ProcessId) && ProcessQuery.KillTree(candidate.ProcessId))
                 {

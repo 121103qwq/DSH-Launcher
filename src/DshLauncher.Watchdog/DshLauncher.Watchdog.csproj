@@ -22,7 +22,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="8.0.0" />
+    <!-- 命令行获取走 PEB 读取（纯 P/Invoke），不再依赖 WMI：实测 WMI 全量/单查
+         在探测循环里会挂起，导致 watchdog 假死与高 CPU。 -->
   </ItemGroup>
 
 </Project>

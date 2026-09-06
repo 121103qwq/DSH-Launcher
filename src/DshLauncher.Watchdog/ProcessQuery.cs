@@ -2,28 +2,29 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
-using System.Management;
+using System.Collections.Concurrent;
 
 namespace DshLauncher.Watchdog;
 
 /// <summary>
-/// 进程查询原语（Watchdog 专用，独立于 Launcher 进程上下文）：
-/// - 全量进程快照（WMI：PID/ParentPID/Name/CommandLine）
-/// - 按监听端口反查 PID（GetExtendedTcpTable P/Invoke，不依赖 netstat 本地化输出）
-/// - 按子树/命令行匹配 kill
-/// 所有匹配的第一原则：只杀「命令行包含实例 DSH_HOME 完整路径」或「登记 PID 的进程树」，
-/// 并始终排除自身、Launcher 与"转正后应保留的新主进程"。
+/// 进程查询原语（Watchdog 专用，独立于 Launcher 进程上下文）。
+///
+/// 性能与可靠性原则（实战教训）：
+///  - 探测循环主路径（每 3s）**只走 Toolhelp32 快照**（CreateToolhelp32Snapshot，
+///    毫秒级、不受 WMI 服务状态影响），绝不碰 WMI；
+///  - WMI 仅用于按需获取**单进程命令行**（WHERE ProcessId=N，Task.Run + 超时，
+///    失败返回 null）和清理场景的一次性全量查询（带超时）；
+///  - 端口反查走 GetExtendedTcpTable（P/Invoke），端口字节序用无符号位运算转换
+///    （(short) 强转会让 >32767 的高位端口溢出为负 → 反查永远失配）。
 /// </summary>
 public sealed class ProcessSnapshot
 {
     public required int ProcessId { get; init; }
     public required int ParentProcessId { get; init; }
     public required string Name { get; init; } = string.Empty;
-    public required string CommandLine { get; init; } = string.Empty;
+    public string CommandLine { get; set; } = string.Empty;
 
     public string CommandLineUpper => CommandLine.ToUpperInvariant();
-
-    public bool IsDead { get; set; }
 }
 
 public static class ProcessQuery
@@ -31,89 +32,199 @@ public static class ProcessQuery
     private const int TcpTableOwnerPidAll = 5;
     private const uint MibTcpStateListen = 2;
 
+    private static readonly ConcurrentDictionary<int, string> CommandLineCache = new();
     private static readonly object Gate = new();
     private static DateTimeOffset _snapshotAt;
     private static List<ProcessSnapshot> _snapshot = new();
 
+    // ---------- Toolhelp32 快照（探测主路径，无 WMI） ----------
+
     /// <summary>
-    /// 取进程快照（≤1.5s 缓存，WMI 查询较贵）。失败时降级为 Process.GetProcesses
-    /// 基础视图（无命令行）——幽灵判定依赖命令行，降级时宁可不判也不错杀。
+    /// 进程快照（PID/父 PID/进程名；≤3s 缓存）。命令行不在快照内——需要时按 PID
+    /// 单独查询（TryGetCommandLine）。绝不因 WMI 挂起阻塞探测循环。
     /// </summary>
     public static IReadOnlyList<ProcessSnapshot> GetSnapshot()
     {
         lock (Gate)
         {
-            if ((DateTimeOffset.UtcNow - _snapshotAt).TotalSeconds < 1.5)
+            if ((DateTimeOffset.UtcNow - _snapshotAt).TotalSeconds < 3)
             {
                 return _snapshot;
             }
 
-            _snapshot = QueryCore();
+            _snapshot = QuerySnapshotCore();
             _snapshotAt = DateTimeOffset.UtcNow;
             return _snapshot;
         }
     }
 
-    private static List<ProcessSnapshot> QueryCore()
+    private static List<ProcessSnapshot> QuerySnapshotCore()
     {
         var result = new List<ProcessSnapshot>();
+        var snapshotHandle = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+        if (snapshotHandle == IntPtr.Zero || snapshotHandle == new IntPtr(-1))
+        {
+            return result;
+        }
+
         try
         {
-            using var searcher = new ManagementObjectSearcher(
-                "SELECT ProcessId, ParentProcessId, Name, CommandLine FROM Win32_Process");
-            using var collection = searcher.Get();
-            foreach (ManagementObject item in collection)
+            var entry = new ProcessEntry32 { dwSize = (uint)Marshal.SizeOf<ProcessEntry32>() };
+            if (!Process32First(snapshotHandle, ref entry))
             {
-                var pid = GetInt(item, "ProcessId");
-                if (pid <= 0)
-                {
-                    continue;
-                }
+                return result;
+            }
 
+            do
+            {
                 result.Add(new ProcessSnapshot
                 {
-                    ProcessId = pid,
-                    ParentProcessId = GetInt(item, "ParentProcessId"),
-                    Name = GetString(item, "Name"),
-                    CommandLine = GetString(item, "CommandLine")
+                    ProcessId = (int)entry.th32ProcessID,
+                    ParentProcessId = (int)entry.th32ParentProcessID,
+                    Name = entry.szExeFile
                 });
-            }
+            } while (Process32Next(snapshotHandle, ref entry));
         }
-        catch
+        finally
         {
-            // WMI 不可用时不允许幽灵判定悄悄变成"全部死亡"——返回空并让调用方
-            // 走保守分支（只信登记 PID 的 Process.HasExited）。
+            CloseHandle(snapshotHandle);
         }
 
         return result;
     }
 
-    private static int GetInt(ManagementObject item, string name)
+    /// <summary>按 PID 单进程查命令行（PEB 内存读取，非 WMI：无服务依赖、毫秒级、不挂）。</summary>
+    public static string? TryGetCommandLine(int processId)
     {
+        if (processId <= 0)
+        {
+            return null;
+        }
+
+        if (CommandLineCache.TryGetValue(processId, out var cached))
+        {
+            return cached;
+        }
+
         try
         {
-            var value = item[name];
-            return value is null ? 0 : Convert.ToInt32(value);
+            var commandLine = ReadCommandLineFromPeb(processId);
+            if (!string.IsNullOrWhiteSpace(commandLine))
+            {
+                CommandLineCache[processId] = commandLine;
+            }
+
+            return commandLine;
         }
         catch
         {
-            return 0;
+            return null;
         }
     }
 
-    private static string GetString(ManagementObject item, string name)
+    /// <summary>
+    /// 读进程 PEB 的 RTL_USER_PROCESS_PARAMETERS.CommandLine（x64 布局）。
+    /// OpenProcess + NtQueryInformationProcess(ProcessBasicInformation) →
+    /// PebBaseAddress → PEB.ProcessParameters(0x20) → CommandLine（0x70 首选，0x68 兜底）。
+    /// 权限不足/进程退出返回 null。
+    /// </summary>
+    private static string? ReadCommandLineFromPeb(int processId)
     {
+        var handle = OpenProcess(
+            ProcessQueryInformation | ProcessVmRead,
+            false,
+            processId);
+        if (handle == IntPtr.Zero)
+        {
+            return null;
+        }
+
         try
         {
-            return item[name]?.ToString() ?? string.Empty;
+            var basicInfo = new ProcessBasicInformation();
+            var status = NtQueryInformationProcess(
+                handle,
+                ProcessBasicInformationClass,
+                ref basicInfo,
+                (uint)Marshal.SizeOf<ProcessBasicInformation>(),
+                out _);
+            if (status != 0 || basicInfo.PebBaseAddress == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            // PEB.ProcessParameters @ 0x20（x64）
+            if (!TryReadPointer(handle, basicInfo.PebBaseAddress + 0x20, out var parameters)
+                || parameters == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            // RTL_USER_PROCESS_PARAMETERS.CommandLine：主流 x64 布局 @ 0x70（部分实现 @ 0x68）
+            foreach (var offset in new[] { 0x70, 0x68 })
+            {
+                if (!TryReadUnicodeString(handle, parameters + offset, out var text)
+                    || string.IsNullOrWhiteSpace(text))
+                {
+                    continue;
+                }
+
+                return text;
+            }
         }
-        catch
+        finally
         {
-            return string.Empty;
+            CloseHandle(handle);
         }
+
+        return null;
     }
 
-    /// <summary>进程是否还活着（Process.HasExited，快照仅供参考）。</summary>
+    private static bool TryReadPointer(IntPtr handle, IntPtr source, out IntPtr value)
+    {
+        value = IntPtr.Zero;
+        var bytes = new byte[IntPtr.Size];
+        if (!ReadProcessMemory(handle, source, bytes, (nuint)bytes.Length, out _))
+        {
+            return false;
+        }
+
+        value = IntPtr.Size == 8
+            ? new IntPtr(BitConverter.ToInt64(bytes, 0))
+            : new IntPtr(BitConverter.ToInt32(bytes, 0));
+        return true;
+    }
+
+    private static bool TryReadUnicodeString(IntPtr handle, IntPtr unicodeStringAddress, out string text)
+    {
+        text = string.Empty;
+        // UNICODE_STRING：USHORT Length + USHORT MaximumLength + PWSTR Buffer（x64 16 字节）
+        var header = new byte[IntPtr.Size == 8 ? 16 : 8];
+        if (!ReadProcessMemory(handle, unicodeStringAddress, header, (nuint)header.Length, out _))
+        {
+            return false;
+        }
+
+        var length = BitConverter.ToUInt16(header, 0);
+        var bufferAddress = IntPtr.Size == 8
+            ? new IntPtr(BitConverter.ToInt64(header, 8))
+            : new IntPtr(BitConverter.ToInt32(header, 4));
+        if (length == 0 || bufferAddress == IntPtr.Zero || length > 32_768)
+        {
+            return false;
+        }
+
+        var buffer = new byte[length];
+        if (!ReadProcessMemory(handle, bufferAddress, buffer, (nuint)length, out _))
+        {
+            return false;
+        }
+
+        text = System.Text.Encoding.Unicode.GetString(buffer);
+        return true;
+    }
+
+    /// <summary>进程是否还活着（Process.HasExited）。</summary>
     public static bool IsAlive(int processId)
     {
         if (processId <= 0)
@@ -140,10 +251,8 @@ public static class ProcessQuery
         }
     }
 
-    /// <summary>
-    /// 按监听端口反查 PID。取 LISTEN 状态行中与本机地址（127.0.0.1/*）匹配的条目；
-    /// 返回 0 表示未找到。
-    /// </summary>
+    // ---------- 端口反查（GetExtendedTcpTable） ----------
+
     public static int FindPidByListeningPort(int port)
     {
         try
@@ -161,8 +270,6 @@ public static class ProcessQuery
                     continue;
                 }
 
-                // 只认 loopback 或通配监听（实例固定 127.0.0.1；通配也接受，
-                // 防止 --host 变化后收集不到）。
                 var address = new IPAddress(new[]
                 {
                     (byte)(row.LocalAddress & 0xFF),
@@ -170,8 +277,7 @@ public static class ProcessQuery
                     (byte)((row.LocalAddress >> 16) & 0xFF),
                     (byte)((row.LocalAddress >> 24) & 0xFF)
                 });
-                if (address.Equals(IPAddress.Loopback)
-                    || address.Equals(IPAddress.Any))
+                if (address.Equals(IPAddress.Loopback) || address.Equals(IPAddress.Any))
                 {
                     return row.OwningPid;
                 }
@@ -188,8 +294,6 @@ public static class ProcessQuery
     private static List<TcpRow>? GetTcpTable()
     {
         var size = 0;
-        // 第一次调用：只用来查询所需缓冲区大小（必然返回 ERROR_INSUFFICIENT_BUFFER，
-        // 这是正常流程，不是失败）。
         _ = GetExtendedTcpTable(
             IntPtr.Zero, ref size, false, (int)AddressFamily.AfInet, TcpTableOwnerPidAll, 0);
         if (size <= 0)
@@ -214,12 +318,10 @@ public static class ProcessQuery
             for (var i = 0; i < rows; i++)
             {
                 var row = Marshal.PtrToStructure<MibTcpRowOwnerPid>(rowsPtr + i * rowSize);
-                // MIB 表内端口/地址皆为网络字节序：先转主机序再比对。
-                list.Add(new TcpRow(
-                    row.State,
-                    row.LocalAddr,
-                    IPAddress.NetworkToHostOrder((short)row.LocalPort),
-                    (int)row.OwningPid));
+                // MIB 表内端口为网络字节序。不能 (short) 强转：端口 >32767
+                // （launcher 随机分配的高位端口全在此范围）会溢出为负数。
+                var port = (int)(((row.LocalPort & 0xFF) << 8) | ((row.LocalPort >> 8) & 0xFF));
+                list.Add(new TcpRow(row.State, row.LocalAddr, port, (int)row.OwningPid));
             }
 
             return list;
@@ -257,7 +359,9 @@ public static class ProcessQuery
         AfInet = 2
     }
 
-    /// <summary>pid 的整棵后代树（按快照 ParentProcessId 构建）。</summary>
+    // ---------- 树 / 清理 ----------
+
+    /// <summary>pid 的整棵后代树（按 Toolhelp32 快照 ParentProcessId 构建）。</summary>
     public static IReadOnlyList<ProcessSnapshot> GetDescendants(int rootPid)
     {
         var snapshot = GetSnapshot();
@@ -305,12 +409,7 @@ public static class ProcessQuery
         return result;
     }
 
-    private static readonly string[] ProtectedProcessNames = { "DSH LAUNCHER", "DSH LAUNCHER.WATCHDOG" };
-
-    /// <summary>
-    /// 无条件杀一个进程的整棵树（taskkill /T /F，Windows 自带、幂等）。
-    /// 返回 false 表示进程已经不在了。
-    /// </summary>
+    /// <summary>无条件杀一个进程的整棵树（taskkill /T /F，Windows 自带、幂等）。</summary>
     public static bool KillTree(int processId)
     {
         if (processId <= 0)
@@ -348,11 +447,10 @@ public static class ProcessQuery
 
     /// <summary>
     /// 收集一个实例的"残留进程"候选：命令行包含该实例 DSH_HOME 完整路径的所有进程
-    /// （node/cmd/powershell/electron 等），排除自身进程与保留 PID（如转正后的新主进程）。
-    /// 匹配前先把路径归一成大写，避免大小写/斜杠差异漏检。
+    /// （node/cmd/powershell/electron 等）。一次性 WMI 查询（清理场景专用，带超时），
+    /// 失败返回空数组（宁可漏清也不阻塞/误杀）。
     /// </summary>
     public static IReadOnlyList<ProcessSnapshot> FindProcessesForDshHome(
-        string instanceId,
         string dshHome,
         IReadOnlyCollection<int>? keepAlivePids = null,
         IReadOnlyCollection<int>? excludePids = null)
@@ -362,31 +460,140 @@ public static class ProcessQuery
         var exclude = excludePids?.ToHashSet() ?? new HashSet<int>();
         exclude.Add(Environment.ProcessId);
 
-        return GetSnapshot()
-            .Where(process => !keep.Contains(process.ProcessId)
-                              && !exclude.Contains(process.ProcessId)
-                              && process.CommandLineUpper.Contains(normalized, StringComparison.Ordinal))
-            .ToArray();
+        try
+        {
+            var task = Task.Run(() => QueryCommandLineAll());
+            if (!task.Wait(TimeSpan.FromSeconds(8)))
+            {
+                return Array.Empty<ProcessSnapshot>();
+            }
+
+            return task.Result
+                .Where(process => !keep.Contains(process.ProcessId)
+                                  && !exclude.Contains(process.ProcessId)
+                                  && process.CommandLineUpper.Contains(normalized, StringComparison.Ordinal))
+                .Where(process => process.Name.Equals("node", StringComparison.OrdinalIgnoreCase)
+                                  || process.Name.Equals("cmd", StringComparison.OrdinalIgnoreCase)
+                                  || process.Name.Equals("powershell", StringComparison.OrdinalIgnoreCase)
+                                  || process.Name.Equals("electron", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+        catch
+        {
+            return Array.Empty<ProcessSnapshot>();
+        }
     }
 
-    /// <summary>候选进程是否像"实例主进程"（dsh web 服务：node + bin.js + --port）。</summary>
-    public static bool LooksLikeDshWebMain(ProcessSnapshot process, int port, string dshHome)
+    private static IReadOnlyList<ProcessSnapshot> QueryCommandLineAll()
     {
-        if (!process.Name.Equals("node", StringComparison.OrdinalIgnoreCase))
+        // 清理场景的一次性枚举：Toolhelp32 全量 + 逐个 PEB 命令行（无 WMI 依赖）。
+        var result = new List<ProcessSnapshot>();
+        foreach (var process in GetSnapshot())
+        {
+            result.Add(new ProcessSnapshot
+            {
+                ProcessId = process.ProcessId,
+                ParentProcessId = process.ParentProcessId,
+                Name = process.Name,
+                CommandLine = TryGetCommandLine(process.ProcessId) ?? string.Empty
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>进程名去扩展名比较（Toolhelp32 的 szExeFile 带 .exe，如 "node.exe"）。</summary>
+    public static bool IsProcessName(ProcessSnapshot process, string baseName) =>
+        string.Equals(
+            System.IO.Path.GetFileNameWithoutExtension(process.Name),
+            baseName,
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>候选进程是否像"实例主进程"（node + bin.js + web + 该端口）。
+    /// market 自重启的进程命令行**不含 DSH_HOME**（它只继承环境变量），因此按端口+特征识别。</summary>
+    public static bool LooksLikeDshWebMain(ProcessSnapshot process, int port)
+    {
+        if (!IsProcessName(process, "node"))
         {
             return false;
         }
 
-        var commandLine = process.CommandLineUpper;
-        return commandLine.Contains("BIN.JS")
-               && commandLine.Contains("WEB")
-               && commandLine.Contains($"--PORT {port}");
+        var commandLine = process.CommandLine;
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            commandLine = TryGetCommandLine(process.ProcessId) ?? string.Empty;
+        }
+
+        var upper = commandLine.ToUpperInvariant();
+        return upper.Contains("BIN.JS")
+               && upper.Contains("WEB")
+               && upper.Contains($"--PORT {port}");
     }
 
-    /// <summary>候选进程是否像"市场自重启的启动包装"（powershell hidden 包装链的 head）。</summary>
-    public static bool LooksLikeMarketRespawnWrapper(ProcessSnapshot process, string dshHome)
+    // ---------- Toolhelp32 P/Invoke ----------
+
+    private const uint Th32csSnapProcess = 0x00000002;
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32
     {
-        return process.Name.Equals("powershell", StringComparison.OrdinalIgnoreCase)
-               || process.Name.Equals("cmd", StringComparison.OrdinalIgnoreCase);
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
     }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32First(IntPtr hSnapshot, ref ProcessEntry32 lppe);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32Next(IntPtr hSnapshot, ref ProcessEntry32 lppe);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    // ---------- PEB 命令行读取 P/Invoke（x64 布局，无 WMI 依赖） ----------
+
+    private const uint ProcessQueryInformation = 0x0400;
+    private const uint ProcessVmRead = 0x0010;
+    private const int ProcessBasicInformationClass = 0;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2_0;
+        public IntPtr Reserved2_1;
+        public IntPtr UniqueProcessId;
+        public IntPtr Reserved3;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        ref ProcessBasicInformation processInformation,
+        uint processInformationLength,
+        out uint returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadProcessMemory(
+        IntPtr hProcess,
+        IntPtr lpBaseAddress,
+        byte[] lpBuffer,
+        nuint nSize,
+        out nuint lpNumberOfBytesRead);
 }
