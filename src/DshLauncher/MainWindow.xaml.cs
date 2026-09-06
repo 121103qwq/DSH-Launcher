@@ -103,7 +103,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             id => _instanceRunner!.IsRunning(id),
             snapshotService: _versionSnapshotService);
         _instanceRunner = new(extensionService: _extensionService);
-        _watchdog = new WatchdogRuntime();
+        _watchdog = new WatchdogRuntime(ReadWatchdogProbeSeconds());
         _watchdog.GhostAdopted += OnGhostAdopted;
         _watchdog.InstanceStopped += OnInstanceStopped;
         _watchdog.OrphanDetected += OnOrphanDetected;
@@ -126,6 +126,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         InitializeComponent();
         WindowSizeHelper.FitInitialSize(this);
         DataContext = this;
+    }
+
+    /// <summary>读取设置页配置的实例守护监控间隔（秒，越界回落默认 5）。</summary>
+    private int ReadWatchdogProbeSeconds()
+    {
+        try
+        {
+            return _versionSettingsService.ReadLauncherSettings().WatchdogProbeSeconds;
+        }
+        catch
+        {
+            return 5;
+        }
     }
 
     public string PageTitle { get; private set; } = "启动";
@@ -1799,6 +1812,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         AddPluginInstallModeSection(panel);
         AddCloseBehaviorSection(panel);
+        AddWatchdogSection(panel);
         AddVersionSyncSection(panel);
         // 宿主内容区已把页面限制在视口内；设置页内容较长，改为页内滚动。
         return new ScrollViewer
@@ -1991,6 +2005,141 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         minimize.Checked += (_, _) => SaveBehavior(CloseBehavior.MinimizeToTray);
         exitAndStop.Checked += (_, _) => SaveBehavior(CloseBehavior.ExitAndStopInstances);
+    }
+
+    private void AddWatchdogSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "实例守护",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        var card = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        };
+
+        var current = 5;
+        try
+        {
+            current = _versionSettingsService.ReadLauncherSettings().WatchdogProbeSeconds;
+        }
+        catch
+        {
+        }
+
+        var intervalBox = new System.Windows.Controls.TextBox
+        {
+            Text = current.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Width = 80,
+            FontSize = 15,
+            Padding = new Thickness(8, 5, 8, 5),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        // 只允许数字输入
+        intervalBox.PreviewTextInput += (_, args) =>
+        {
+            args.Handled = args.Text.Any(char.IsDigit) == false;
+        };
+        intervalBox.PreviewKeyDown += (_, args) =>
+        {
+            if (args.Key == Key.Space)
+            {
+                args.Handled = true;
+            }
+        };
+
+        var row = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+        row.Children.Add(new TextBlock
+        {
+            Text = "每（秒）检查一次实例存活",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        row.Children.Add(new System.Windows.Controls.Border
+        {
+            Width = 8
+        });
+        row.Children.Add(intervalBox);
+        row.Children.Add(new TextBlock
+        {
+            Text = "秒",
+            FontSize = 15,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0)
+        });
+        content.Children.Add(row);
+        content.Children.Add(new TextBlock
+        {
+            Text = "启动器每 N 秒探测一次实例（插件市场的「重启以生效」会把 dsh 进程换成新实例，更短的间隔能更快发现并接管；范围 2–120 秒，默认 5）。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 8)
+        });
+
+        var buttons = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left
+        };
+        var saveButton = new System.Windows.Controls.Button
+        {
+            Content = "保存",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(14, 9, 14, 9)
+        };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 0, 0)
+        };
+        buttons.Children.Add(saveButton);
+        buttons.Children.Add(status);
+        content.Children.Add(buttons);
+        panel.Children.Add(card);
+
+        saveButton.Click += (_, _) =>
+        {
+            try
+            {
+                if (!int.TryParse(intervalBox.Text.Trim(), out var seconds)
+                    || seconds is < 2 or > 120)
+                {
+                    status.Text = "请输入 2–120 之间的整数";
+                    return;
+                }
+
+                var settings = _versionSettingsService.ReadLauncherSettings();
+                settings.WatchdogProbeSeconds = seconds;
+                _versionSettingsService.SaveLauncherSettings(settings);
+                _watchdog.SetProbeInterval(seconds);   // 即时生效
+                status.Text = $"已保存：每 {seconds} 秒检查一次";
+                ShowNotice($"实例守护探测间隔已设为 {seconds} 秒，立即生效。");
+            }
+            catch (Exception ex)
+            {
+                status.Text = "保存失败";
+                ShowNotice($"保存实例守护设置失败：{ex.Message}");
+            }
+        };
     }
 
     private void AddVersionSyncSection(StackPanel panel)

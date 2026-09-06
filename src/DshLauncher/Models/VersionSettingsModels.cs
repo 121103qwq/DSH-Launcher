@@ -127,6 +127,9 @@ public sealed class LauncherSettingsData
     /// Instance data remains isolated under each instance's DSH_HOME.
     /// </summary>
     public string? DshInstallDirectory { get; set; }
+
+    /// <summary>实例守护监控轮询间隔（秒，2–120；默认 5）。</summary>
+    public int WatchdogProbeSeconds { get; set; } = 5;
 }
 
 public sealed record VersionExportOptions(

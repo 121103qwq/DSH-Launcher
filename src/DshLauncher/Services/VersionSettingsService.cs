@@ -382,6 +382,10 @@ public sealed class VersionSettingsService
             .OrderBy(workspace => workspace, StringComparer.OrdinalIgnoreCase)
             .ToList();
         settings.DshInstallDirectory = NormalizePath(settings.DshInstallDirectory);
+        if (settings.WatchdogProbeSeconds is < 2 or > 120)
+        {
+            settings.WatchdogProbeSeconds = 5;
+        }
     }
 
     private static string? NormalizePath(string? value)

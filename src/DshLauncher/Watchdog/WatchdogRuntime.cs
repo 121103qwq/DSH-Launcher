@@ -17,18 +17,20 @@ namespace DshLauncher.Watchdog;
 /// </summary>
 public sealed class WatchdogRuntime : IDisposable
 {
-    private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
-
     private readonly WatchdogCore _core;
     private readonly CancellationTokenSource _cancellation = new();
     private Task? _loop;
+    private TimeSpan _probeInterval = TimeSpan.FromSeconds(5);
+    private readonly object _intervalLock = new();
 
     public event Action<WatchdogInstanceDto>? GhostAdopted;
     public event Action<WatchdogInstanceDto>? InstanceStopped;
     public event Action<WatchdogInstanceDto>? OrphanDetected;
 
-    public WatchdogRuntime()
+    /// <param name="probeSeconds">监控轮询间隔（秒，2–120 范围内截断，默认 5）。</param>
+    public WatchdogRuntime(int probeSeconds = 5)
     {
+        _probeInterval = TimeSpan.FromSeconds(Math.Clamp(probeSeconds, 2, 120));
         var stateDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "DeepSeek", "launcher");
@@ -36,6 +38,15 @@ public sealed class WatchdogRuntime : IDisposable
         _core.GhostAdopted += instance => GhostAdopted?.Invoke(instance);
         _core.InstanceStopped += instance => InstanceStopped?.Invoke(instance);
         _core.OrphanDetected += instance => OrphanDetected?.Invoke(instance);
+    }
+
+    /// <summary>设置页保存后即时生效（2–120 秒，越界截断）。</summary>
+    public void SetProbeInterval(int probeSeconds)
+    {
+        lock (_intervalLock)
+        {
+            _probeInterval = TimeSpan.FromSeconds(Math.Clamp(probeSeconds, 2, 120));
+        }
     }
 
     /// <summary>启动后台监控循环（幂等）。</summary>
@@ -64,12 +75,20 @@ public sealed class WatchdogRuntime : IDisposable
 
             try
             {
-                await Task.Delay(ProbeInterval, cancellationToken);
+                await Task.Delay(GetProbeInterval(), cancellationToken);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
+        }
+    }
+
+    private TimeSpan GetProbeInterval()
+    {
+        lock (_intervalLock)
+        {
+            return _probeInterval;
         }
     }
 
