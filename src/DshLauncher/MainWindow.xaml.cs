@@ -88,6 +88,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _shutdownFromTray;
     private readonly WatchdogSupervisor _watchdog;
     private DispatcherTimer? _watchdogSyncTimer;
+    private readonly Dictionary<string, DateTimeOffset> _lastReassertAt = new(StringComparer.Ordinal);
 
     public MainWindow()
     {
@@ -745,33 +746,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (entry.ProcessId > 0 && current.ProcessId != entry.ProcessId)
             {
                 // market 自重启后旧进程已死：其运行条目仍握着实例锁，不先清账
-                // 的话 adopt 取锁必败、新进程只会退化为只读 Attached（无法停止/重启）。
+                // 的话无法接管。用户的决策：不收养市场实例，而是追加一次
+                // Launcher 接管重启——杀掉无主实例（连同 powershell/cmd 包装链，
+                // 终端窗口随之消失），用 Launcher 标准方式（CreateNoWindow）重拉，
+                // 全程无窗口、完全受管。
                 _instanceRunner.TryDropExitedProcess(current.Id);
-                var adopted = current with
-                {
-                    RuntimeStatus = InstanceRuntimeStatus.Running,
-                    RuntimeOwnership = InstanceRuntimeOwnership.Managed,
-                    ProcessId = entry.ProcessId,
-                    Port = entry.Port,
-                    WebUrl = entry.WebUrl,
-                    AuthenticatedWebUrl = entry.AuthenticatedWebUrl,
-                    LastError = null,
-                    LastUsedAt = DateTimeOffset.UtcNow
-                };
-                if (await _instanceRunner.TryAdoptRunningProcessAsync(adopted, cancellationToken))
-                {
-                    adopted = adopted with { RuntimeOwnership = InstanceRuntimeOwnership.Managed };
-                }
-                else if (await _instanceRunner.TryAttachAsync(adopted, cancellationToken))
-                {
-                    adopted = adopted with { RuntimeOwnership = InstanceRuntimeOwnership.Attached };
-                }
-
-                UpdateInstance(adopted);
-                RefreshRunningInstances();
-                ShowNotice(
-                    $"实例 {adopted.Name} 已被重建（插件市场重启），Launcher 已接管新进程" +
-                    $"（PID {adopted.ProcessId}，端口 {adopted.Port}）。");
+                await ReassertManagedInstanceAsync(current);
             }
             else if (current.RuntimeStatus != InstanceRuntimeStatus.Running
                      && current.ProcessId == entry.ProcessId
@@ -816,6 +796,105 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 AuthenticatedWebUrl = null,
                 LastError = null
             });
+        }
+    }
+
+    /// <summary>
+    /// 接管重启：检测到实例被非启动器方式（插件市场自重启）重建后，由 Launcher
+    /// 追加一次标准重启——杀掉无主实例（连同 powershell/cmd 包装链，终端窗口随之
+    /// 消失），用 Launcher 的 CreateNoWindow 方式重新拉起：完全受管、全程无窗口。
+    /// </summary>
+    private async Task ReassertManagedInstanceAsync(ManagerInstance instance)
+    {
+        if (instance is null
+            || instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+        {
+            return;
+        }
+
+        if (!TryBeginLifecycleOperation())
+        {
+            return;
+        }
+
+        // 防重入：同步循环每 5s 可能重复检测到"市场实例仍在台账"，接管重启只需一次。
+        if (_lastReassertAt.TryGetValue(instance.Id, out var lastReassert)
+            && DateTimeOffset.UtcNow - lastReassert < TimeSpan.FromMinutes(1))
+        {
+            EndLifecycleOperation();
+            return;
+        }
+
+        try
+        {
+            // 1) 杀掉无主实例（市场重启的进程 + 包装链 + 桌宠残留），台账出账。
+            try
+            {
+                await _watchdog.CleanupAsync(instance.Id, _windowCancellation.Token);
+            }
+            catch
+            {
+                // 清理失败不阻塞接管；后述启动前 Worker 仍会取得锁。
+            }
+
+            try
+            {
+                await _watchdog.UnregisterAsync(instance.Id, _windowCancellation.Token);
+            }
+            catch
+            {
+                // 台账注销失败由 watchdog 自身状态收敛兜底。
+            }
+
+            if (_instanceRunner.IsRunning(instance.Id))
+            {
+                await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token);
+            }
+
+            CloseChatWindow(instance.Id);
+
+            // 2) Launcher 标准启动（CreateNoWindow）重新拉起。
+            if (!await EnsureRuntimeReadyAsync(instance))
+            {
+                return;
+            }
+
+            var resolved = ResolveInstanceById(Instances, instance.Id) ?? instance;
+            var openBrowser = GetSelectedOpenMode() == VersionOpenMode.Web;
+            var result = await StartManagedInstanceAsync(resolved, openBrowser);
+            if (result is null || !result.IsSuccess || result.ProcessId is null || result.WebUrl is null)
+            {
+                ShowStartFailure(result?.Error, "接管重启失败：实例已被插件市场重启，Launcher 重新拉起失败。");
+                return;
+            }
+
+            _lastReassertAt[instance.Id] = DateTimeOffset.UtcNow;
+
+            // 3) 开窗（Web 模式浏览器 / Desktop 模式 Chat）并提示。
+            if (openBrowser)
+            {
+                OpenWebUrlInBrowser(result.AuthenticatedWebUrl ?? result.WebUrl);
+            }
+            else
+            {
+                OpenChatWindow(resolved.Id, result.AuthenticatedWebUrl ?? result.WebUrl);
+            }
+
+            ShowNotice(
+                $"实例 {resolved.Name} 曾被插件市场重启：Launcher 已接管并整理，" +
+                $"新运行地址 {result.WebUrl}（使用无窗口方式运行）。");
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, ex.ToString());
+            ShowNotice($"接管实例重启失败：{ex.Message}");
+        }
+        finally
+        {
+            EndLifecycleOperation();
         }
     }
 
