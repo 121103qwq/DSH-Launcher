@@ -744,6 +744,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             if (entry.ProcessId > 0 && current.ProcessId != entry.ProcessId)
             {
+                // market 自重启后旧进程已死：其运行条目仍握着实例锁，不先清账
+                // 的话 adopt 取锁必败、新进程只会退化为只读 Attached（无法停止/重启）。
+                _instanceRunner.TryDropExitedProcess(current.Id);
                 var adopted = current with
                 {
                     RuntimeStatus = InstanceRuntimeStatus.Running,

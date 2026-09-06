@@ -469,6 +469,13 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         "该实例由外部 DSh 服务提供，Launcher 不会停止外部进程。");
                 }
 
+                // 陈旧条目（进程已死但实例锁仍被句柄占用，如 market 自重启后）：
+                // 清账即视为已停止，让界面收敛为 Stopped 而不是报错。
+                if (TryDropExitedProcess(instanceId))
+                {
+                    return DshInstanceRunResult.Success(0, 0, string.Empty);
+                }
+
                 return DshInstanceRunResult.Failure("实例当前没有由 Launcher 管理的运行进程。");
             }
 
@@ -847,6 +854,30 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             _running.Remove(instanceId);
             running.InstanceLock.Dispose();
             running.Process.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 清理已退出的陈旧运行条目并释放其实例锁。
+    /// 场景：dshmarket 自重启杀死旧进程后，条目仍留在 _running 里并**继续持有
+    /// 实例锁**（文件句柄在 Launcher 进程内、不会因子进程死亡自动释放），导致
+    /// 后续 TryAdoptRunningProcessAsync 取锁失败、新进程只能退化为只读 Attached
+    /// （无法停止/重启）。转正/停止前必须先清账。
+    /// </summary>
+    public bool TryDropExitedProcess(string instanceId)
+    {
+        lock (_running)
+        {
+            if (!_running.TryGetValue(instanceId, out var running)
+                || !HasExited(running.Process))
+            {
+                return false;
+            }
+
+            _running.Remove(instanceId);
+            running.InstanceLock.Dispose();
+            running.Process.Dispose();
+            return true;
         }
     }
 
