@@ -24,7 +24,20 @@ public sealed class WatchdogCore
     /// 立即按幽灵重新转正。</summary>
     private static readonly TimeSpan ZombieWindow = TimeSpan.FromMinutes(5);
 
-    /// <summary>market 重启日志里的带 token 地址行：dsh web: http://127.0.0.1:&lt;port&gt;/?token=…</summary>
+    /// <summary>隐藏 market 重启包装链（powershell/cmd）的控制台窗口（只藏不杀）。</summary>
+    private static void HideMarketWrapperWindows(int mainPid)
+    {
+        try
+        {
+            ProcessQuery.HideTopLevelWindows(ProcessQuery.GetAncestorPids(mainPid));
+        }
+        catch
+        {
+            // 窗口隐藏失败不影响实例管理。
+        }
+    }
+
+    /// <summary>市场重启日志里的带 token 地址行：dsh web: http://127.0.0.1:&lt;port&gt;/?token=…</summary>
     private static readonly Regex MarketLogTokenPattern = new(
         @"dsh\s+web:\s*(https?://127\.0\.0\.1:\d+/\?token=[^\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -276,6 +289,9 @@ public sealed class WatchdogCore
             listenerPid
         };
         var cleaned = CleanupDshHomeProcesses(adopted.DshHome, adopted.Port, keepPids);
+        // market 重启的 powershell/cmd 包装链会带一个可见控制台窗口（-WindowStyle
+        // Hidden 对无控制台父进程 spawn 经常失效）：转正后从外部藏掉，不杀进程。
+        HideMarketWrapperWindows(listenerPid);
         _log.Warn(
             $"instance {adopted.InstanceId} GHOST adopted: old pid {oldPid} -> new pid {listenerPid} " +
             $"(market self-restart), cleaned {cleaned} stale process(es)");
@@ -410,6 +426,7 @@ public sealed class WatchdogCore
                 listenerPid
             };
             var cleaned = CleanupDshHomeProcesses(revived.DshHome, revived.Port, keepPids);
+            HideMarketWrapperWindows(listenerPid);
             _log.Warn(
                 $"instance {revived.InstanceId} ZOMBIE revived: stale pid {zombie.Instance.ProcessId} -> new pid {listenerPid}, cleaned {cleaned} stale process(es)");
             PublishEvent(WatchdogProtocol.EventGhostAdopted, instance: revived);

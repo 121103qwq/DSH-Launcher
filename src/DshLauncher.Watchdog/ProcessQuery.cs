@@ -509,6 +509,59 @@ public static class ProcessQuery
             baseName,
             StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// 沿 ParentProcessId 链收集进程的祖先集合（含自身）。
+    /// 用于定位 market 自重启的包装链（powershell → cmd → node）以隐藏其控制台窗口。
+    /// </summary>
+    public static IReadOnlyList<int> GetAncestorPids(int processId)
+    {
+        var snapshot = GetSnapshot();
+        var byId = snapshot.ToDictionary(process => process.ProcessId);
+        var result = new List<int>();
+        var current = processId;
+        var seen = new HashSet<int>();
+        while (current > 0 && seen.Add(current) && byId.TryGetValue(current, out var process))
+        {
+            result.Add(current);
+            current = process.ParentProcessId;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 隐藏属于指定进程集合的全部顶层窗口（ShowWindow SW_HIDE，只藏不杀）。
+    /// 用途：market 自重启的 powershell 包装链会弹出一个可见控制台窗口
+    /// （-WindowStyle Hidden 在无控制台父进程 spawn 时经常失效），转正后从
+    /// 外部把它藏掉——不修改 dshmarket 源码、不影响进程生命周期。
+    /// </summary>
+    public static void HideTopLevelWindows(IReadOnlyCollection<int> processIds)
+    {
+        if (processIds.Count == 0)
+        {
+            return;
+        }
+
+        var match = processIds.ToHashSet();
+        try
+        {
+            EnumWindows((hWnd, _) =>
+            {
+                GetWindowThreadProcessId(hWnd, out var windowPid);
+                if (match.Contains((int)windowPid))
+                {
+                    ShowWindow(hWnd, SwHide);
+                }
+
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch
+        {
+            // 隐藏失败影响面仅为「窗口可能仍可见」，不影响进程管理。
+        }
+    }
+
     /// <summary>候选进程是否像"实例主进程"（node + bin.js + web + 该端口）。
     /// market 自重启的进程命令行**不含 DSH_HOME**（它只继承环境变量），因此按端口+特征识别。</summary>
     public static bool LooksLikeDshWebMain(ProcessSnapshot process, int port)
@@ -596,4 +649,19 @@ public static class ProcessQuery
         byte[] lpBuffer,
         nuint nSize,
         out nuint lpNumberOfBytesRead);
+
+    // ---------- 窗口隐藏 P/Invoke（market 包装链控制台窗口） ----------
+
+    private const int SwHide = 0;
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 }
