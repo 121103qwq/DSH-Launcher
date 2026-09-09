@@ -174,6 +174,16 @@ public sealed class DiagnoseExportService
 
             var entryName = $"instances/{Path.GetFileName(instanceDirectory)}/version-settings.json";
             AddText(archive, entryName, Sanitize(ReadFileOrPlaceholder(settingsPath)));
+
+            // 启动证据（跨 Launcher 重启保留的启动/崩溃现场），只取最近 200 行。
+            var evidencePath = Path.Combine(instanceDirectory, "dsh-home", ".dsh-launcher", "startup-evidence.jsonl");
+            if (File.Exists(evidencePath))
+            {
+                AddText(
+                    archive,
+                    $"instances/{Path.GetFileName(instanceDirectory)}/startup-evidence.jsonl",
+                    ReadLogTail(evidencePath, 200));
+            }
         }
     }
 

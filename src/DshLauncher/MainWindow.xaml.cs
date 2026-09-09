@@ -89,7 +89,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _shutdownFromTray;
     private readonly SafeProfileService _safeProfileService = new();
     private readonly HashSet<string> _safeModeAsked = new(StringComparer.Ordinal);
-    private readonly StartupEvidenceStore _startupEvidence = new();
+    private readonly StartupEvidenceStore _startupEvidence;
     private readonly InstanceIdleTracker _idleTracker = new();
 
     private readonly WatchdogRuntime _watchdog;
@@ -111,6 +111,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             nameof(ManagerInstance.RecentSortAt),
             ListSortDirection.Descending));
         _versionSnapshotService = new(isRunning: id => _instanceRunner!.IsRunning(id));
+        _startupEvidence = new StartupEvidenceStore(
+            dshHomeResolver: id => ResolveInstanceById(Instances, id)?.DshHome);
         _extensionService = new(
             id => _instanceRunner!.IsRunning(id),
             snapshotService: _versionSnapshotService);
@@ -1799,7 +1801,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     return _watchdog.Cleanup(instance.Id, keepPid > 0 ? keepPid : null);
                 },
                 instance => _startupEvidence.Snapshot(instance.Id),
-                instance => _idleTracker.GetLastActivity(instance.Id))));
+                instance => _idleTracker.GetLastActivity(instance.Id),
+                instance => _startupEvidence.Clear(instance.Id))));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }

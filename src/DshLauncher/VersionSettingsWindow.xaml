@@ -649,10 +649,22 @@
                             Margin="0,16,0,0">
                         <StackPanel>
                             <TextBlock Text="启动证据" FontSize="16" FontWeight="SemiBold" />
-                            <TextBlock Text="最近 60 条启动判定与四层证据（进程 / 日志 / HTTP / 页面），最新的在最上面。"
-                                       Foreground="{StaticResource MutedBrush}"
-                                       FontSize="11"
-                                       Margin="0,6,0,10" />
+                            <Grid Margin="0,6,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="最近 60 条启动判定与四层证据（进程 / 日志 / HTTP / 页面），最新的在最上面；同时落盘保留最近 200 条，重启 Launcher 后仍可回看。"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,12,0" />
+                                <Button Grid.Column="1"
+                                        Content="清空启动证据"
+                                        Click="ClearStartupEvidence_Click"
+                                        VerticalAlignment="Center" />
+                            </Grid>
                             <ListView x:Name="HealthEvidenceList"
                                       Height="160"
                                       BorderThickness="0"

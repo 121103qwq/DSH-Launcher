@@ -14,4 +14,5 @@ public sealed record InstanceHealthProviders(
     Action<ManagerInstance>? ClearLogs = null,
     Func<ManagerInstance, int>? CleanupProcesses = null,
     Func<ManagerInstance, IReadOnlyList<StartupEvidence>>? StartupEvidence = null,
-    Func<ManagerInstance, InstanceActivity?>? LastActivity = null);
+    Func<ManagerInstance, InstanceActivity?>? LastActivity = null,
+    Action<ManagerInstance>? ClearStartupEvidence = null);

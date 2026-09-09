@@ -470,6 +470,30 @@ public partial class VersionSettingsWindow : UserControl
             : $"已开启（{minutes} 分钟）；最近活动：{lastActivity.At:HH:mm:ss}（{lastActivity.Source}）。";
     }
 
+    private void ClearStartupEvidence_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        var owner = Window.GetWindow(this);
+        var message = $"清空实例 {_instance.Name} 的启动证据？\n\n将同时删除内存记录与落盘文件（.dsh-launcher/startup-evidence.jsonl）。";
+        var confirmed = owner is null
+            ? System.Windows.MessageBox.Show(
+                message, "清空启动证据", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK
+            : System.Windows.MessageBox.Show(
+                owner, message, "清空启动证据", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _healthProviders?.ClearStartupEvidence?.Invoke(_instance);
+        HealthEvidenceList.ItemsSource = Array.Empty<object>();
+        HealthActionText.Text = "启动证据已清空。";
+    }
+
     private void SaveAutoStop_Click(object sender, RoutedEventArgs e)
     {
         if (_instance is null)
