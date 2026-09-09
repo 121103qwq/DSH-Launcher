@@ -344,9 +344,14 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             return;
         }
 
+        // 删除前预扫描：attachments 对象存储带只读属性，提前告知用户会被自动清除。
+        var readOnlyCount = FileSystemCleanup.CountReadOnlyFiles(version.DshHome);
+        var readOnlyNotice = readOnlyCount > 0
+            ? $"\n\n该版本的 attachments 等目录含 {readOnlyCount} 个只读文件，删除时会自动清除只读属性。"
+            : string.Empty;
         var result = System.Windows.MessageBox.Show(
             Window.GetWindow(this),
-            $"确定删除版本“{version.Name}”？\n\n这会删除该版本的 DSH_HOME、Launcher 备份和注册记录，操作无法恢复。不会删除共享的 DSh 运行目录。\n\n如果要保留配置，请先导出整合包。",
+            $"确定删除版本“{version.Name}”？\n\n这会删除该版本的 DSH_HOME、Launcher 备份和注册记录，操作无法恢复。不会删除共享的 DSh 运行目录。\n\n如果要保留配置，请先导出整合包。{readOnlyNotice}",
             "确认删除版本",
             System.Windows.MessageBoxButton.YesNo,
             System.Windows.MessageBoxImage.Warning);

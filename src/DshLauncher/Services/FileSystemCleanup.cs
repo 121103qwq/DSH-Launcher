@@ -84,6 +84,55 @@ internal static class FileSystemCleanup
         }
     }
 
+    /// <summary>统计目录下带只读属性的文件数（删除前提示用）。</summary>
+    public static int CountReadOnlyFiles(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            return 0;
+        }
+
+        var count = 0;
+        var stack = new Stack<string>();
+        stack.Push(path);
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            string[] files;
+            string[] directories;
+            try
+            {
+                files = Directory.GetFiles(current);
+                directories = Directory.GetDirectories(current);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                try
+                {
+                    if ((File.GetAttributes(file) & FileAttributes.ReadOnly) != 0)
+                    {
+                        count++;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+
+            foreach (var directory in directories)
+            {
+                stack.Push(directory);
+            }
+        }
+
+        return count;
+    }
+
     private static void ClearReadOnlyAttribute(string path)
     {
         try

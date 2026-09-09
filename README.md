@@ -71,6 +71,8 @@ dsh-launcher-dev/
 
 | 45 | `Services/FileSystemCleanup.cs`（新）+ 11 处删除点 + `DshInstallMoveService` + `VersionSnapshotService` | 修复“删除版本 Access denied”：dsh 的 attachments 对象存储带 ReadOnly，递归删除前先清属性（11 处统一收口）；「移动已有安装」改为以**当前选中实例的运行时**为源（回退配置目录）；新增快照单文件恢复 `TryExtractSnapshotFile` |
 
+| 46 | `Services/FileSystemCleanup.cs` + `VersionControlWindow.xaml.cs` | 删除版本确认框预扫描并提示“含 N 个只读文件，删除时会自动清除只读属性”（`CountReadOnlyFiles`） |
+
 ## 行为变化（相对上游）
 
 1. **插件依赖自愈**：导入/扫描已有实例启动前自动 `pnpm install` 恢复插件（修复"健康检查前退出"）
@@ -98,6 +100,7 @@ dsh-launcher-dev/
 23. **窗口尺寸**：最小可调尺寸提升到与启动尺寸一致（1180×720，小屏自动收缩）；创建版本不再报“调用线程无法访问此对象”（对话框属性改在 UI 线程读取）；删除版本顺手清理空目录
 24. **修复非最大化窗口裁切**：删除了对工作区尺寸的二次 DPI 除法（WPF 的 `SystemParameters.WorkArea` 本身就是逻辑单位），右侧/底部内容不再被裁；启动时日志新增一行窗口尺寸诊断
 25. **移动已有安装**：设置 → 运行环境新增「移动已有安装」，把已装好的 DSh 运行目录整体搬到新位置并自动更新引用它的实例（同盘秒级、跨盘复制校验；失败回滚）
+26. **删除版本修复**：attachments 对象存储的只读文件不再导致“Access denied”（递归删除前自动清除只读属性，11 处统一处理）；删除确认框先统计并提示将清除的只读文件数；「移动已有安装」以当前选中实例的运行时为源；快照支持单文件精确恢复
 
 ## 构建与发布（SOP）
 
