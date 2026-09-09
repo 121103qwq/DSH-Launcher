@@ -1762,24 +1762,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 6, 0, 0)
         });
 
-        // “要移动的运行时”选择框：不再依赖启动页选中的实例，在设置页里直接选。
-        runtimePanel.Children.Add(new TextBlock
-        {
-            Text = "要移动的运行时",
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 14, 0, 0)
-        });
-        var moveSourceBox = new System.Windows.Controls.ComboBox
-        {
-            Name = "MoveSourceBox",
-            Height = 36,
-            Margin = new Thickness(0, 6, 0, 0),
-            DisplayMemberPath = "Label",
-            ToolTip = "选择要搬走的 DSh 运行时：可以是配置的安装位置，也可以是某个实例正在用的运行时"
-        };
-        runtimePanel.Children.Add(moveSourceBox);
-
-        var buttons = new WrapPanel { Margin = new Thickness(0, 18, 0, 0) };
+        // 重新检测 / 扫描自定义目录上移到“要移动的运行时”卡片之上。
         var refreshButton = new System.Windows.Controls.Button
         {
             Content = "重新检测",
@@ -1796,6 +1779,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
             ToolTip = "只扫描你选择的目录；适用于手动解压或自定义位置安装的 DSH Desktop / DeepSeek Harness"
         };
+        var detectionButtons = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
+        detectionButtons.Children.Add(refreshButton);
+        detectionButtons.Children.Add(scanDirectoryButton);
+        runtimePanel.Children.Add(detectionButtons);
+
+        // “要移动的运行时”：圆角卡片 + 复选框行（标签 + 当前完整位置）。
+        runtimePanel.Children.Add(new TextBlock
+        {
+            Text = "要移动的运行时",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 18, 0, 0)
+        });
+        var moveSourceList = new StackPanel();
+        var moveSourceCard = new Border
+        {
+            Name = "MoveSourceCard",
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(14, 10, 14, 12),
+            Margin = new Thickness(0, 6, 0, 0),
+            Child = moveSourceList
+        };
+        runtimePanel.Children.Add(moveSourceCard);
+
+        MoveSourceItem? selectedMoveSource = null;
+
         var prepareButton = new System.Windows.Controls.Button
         {
             Content = "准备运行环境（官方源）",
@@ -1810,6 +1821,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Padding = new Thickness(14, 9, 14, 9),
             Margin = new Thickness(0, 0, 8, 0)
         };
+        var prepareButtons = new WrapPanel { Margin = new Thickness(0, 18, 0, 0) };
+        prepareButtons.Children.Add(prepareButton);
+        prepareButtons.Children.Add(prepareMirrorButton);
+        runtimePanel.Children.Add(prepareButtons);
         var hint = new TextBlock
         {
             Text = "准备运行环境会下载 Node.js 官方安装程序并按系统授权安装，再通过 npm 安装 @deepseek-ai/dsh；Launcher 启动时不会自动下载或安装任何内容。",
@@ -1818,11 +1833,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0)
         };
-        buttons.Children.Add(refreshButton);
-        buttons.Children.Add(scanDirectoryButton);
-        buttons.Children.Add(prepareButton);
-        buttons.Children.Add(prepareMirrorButton);
-        runtimePanel.Children.Add(buttons);
         runtimePanel.Children.Add(hint);
 
         void UpdateStatus()
@@ -1916,7 +1926,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 settings: _versionSettingsService);
             // 源优先取设置页里明确选择的“要移动的运行时”；没有选时回退到启动页
             // 选中的实例，再回退到配置的安装目录。
-            var current = (moveSourceBox.SelectedItem as MoveSourceItem)?.Directory
+            var current = selectedMoveSource?.Directory
                 ?? ResolveMovableRuntimeDirectory(SelectedInstance)
                 ?? mover.ResolveCurrentInstallDirectory();
             if (current is null)
@@ -2101,7 +2111,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var configuredDirectory = _versionSettingsService.ResolveDshInstallDirectory();
             if (DshInstallMoveService.LooksLikeInstall(configuredDirectory))
             {
-                Add($"配置的安装位置 · {ShortRuntimePath(configuredDirectory)}", configuredDirectory);
+                Add("配置的安装位置", configuredDirectory);
             }
 
             foreach (var instance in Instances)
@@ -2112,25 +2122,69 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     var name = string.Equals(instance.Name, instance.DshVersionText, StringComparison.OrdinalIgnoreCase)
                         ? instance.Name
                         : $"{instance.Name} · {instance.DshVersionText}";
-                    Add($"{name} · {ShortRuntimePath(directory)}", directory);
+                    Add(name, directory);
                 }
             }
 
-            var previous = (moveSourceBox.SelectedItem as MoveSourceItem)?.Directory;
-            var preferred = ResolveMovableRuntimeDirectory(SelectedInstance);
-            moveSourceBox.ItemsSource = items;
-            moveSourceBox.SelectedItem = items.FirstOrDefault(item =>
-                    string.Equals(item.Directory, previous, StringComparison.OrdinalIgnoreCase))
-                ?? items.FirstOrDefault(item =>
-                    string.Equals(item.Directory, preferred, StringComparison.OrdinalIgnoreCase))
-                ?? items.FirstOrDefault();
-        }
+            var preferred = selectedMoveSource?.Directory
+                ?? ResolveMovableRuntimeDirectory(SelectedInstance)
+                ?? items.FirstOrDefault()?.Directory;
+            moveSourceList.Children.Clear();
+            selectedMoveSource = null;
+            foreach (var item in items)
+            {
+                var row = new System.Windows.Controls.CheckBox
+                {
+                    Content = new StackPanel
+                    {
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Text = item.Label,
+                                FontWeight = FontWeights.SemiBold,
+                                FontSize = 13
+                            },
+                            new TextBlock
+                            {
+                                Text = item.Directory,
+                                Foreground = (WpfBrush)FindResource("MutedBrush"),
+                                FontSize = 11,
+                                TextTrimming = TextTrimming.CharacterEllipsis,
+                                ToolTip = item.Directory,
+                                Margin = new Thickness(0, 2, 0, 0)
+                            }
+                        }
+                    },
+                    IsChecked = string.Equals(item.Directory, preferred, StringComparison.OrdinalIgnoreCase),
+                    Margin = new Thickness(0, 5, 0, 5)
+                };
+                var captured = item;
+                row.Checked += (_, _) =>
+                {
+                    selectedMoveSource = captured;
+                    foreach (var sibling in moveSourceList.Children.OfType<System.Windows.Controls.CheckBox>())
+                    {
+                        if (!ReferenceEquals(sibling, row))
+                        {
+                            sibling.IsChecked = false;
+                        }
+                    }
+                };
+                row.Unchecked += (_, _) =>
+                {
+                    if (ReferenceEquals(selectedMoveSource, captured))
+                    {
+                        selectedMoveSource = null;
+                    }
+                };
+                if (row.IsChecked == true)
+                {
+                    selectedMoveSource = item;
+                }
 
-        static string ShortRuntimePath(string path)
-        {
-            var name = Path.GetFileName(path);
-            var parent = Path.GetFileName(Path.GetDirectoryName(path) ?? string.Empty);
-            return string.IsNullOrEmpty(parent) ? name : $"…\\{parent}\\{name}";
+                moveSourceList.Children.Add(row);
+            }
         }
 
         RefreshMoveSources();
