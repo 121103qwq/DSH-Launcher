@@ -6,54 +6,6 @@
              HorizontalAlignment="Stretch"
              VerticalAlignment="Stretch"
              Loaded="Window_OnLoaded">
-    <UserControl.Resources>
-        <!-- 路径链接：像超链接一样可点（复制），悬停出悬浮卡片 -->
-        <Style x:Key="PathLinkButton" TargetType="Button">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="FontSize" Value="11" />
-            <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-            <Setter Property="HorizontalContentAlignment" Value="Left" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <TextBlock x:Name="LinkText"
-                                   Text="{TemplateBinding Content}"
-                                   Foreground="{TemplateBinding Foreground}"
-                                   FontSize="{TemplateBinding FontSize}"
-                                   TextTrimming="CharacterEllipsis"
-                                   HorizontalAlignment="Left" />
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="LinkText" Property="TextDecorations" Value="Underline" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <!-- 路径悬浮卡片（独立浮层，不占原界面布局） -->
-        <Style x:Key="PathCardToolTip" TargetType="ToolTip">
-            <Setter Property="HasDropShadow" Value="True" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ToolTip">
-                        <Border Background="{StaticResource CardBrush}"
-                                BorderBrush="{StaticResource LineBrush}"
-                                BorderThickness="1"
-                                CornerRadius="{StaticResource ItemCornerRadius}"
-                                Padding="10,8"
-                                MaxWidth="420">
-                            <ContentPresenter />
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </UserControl.Resources>
     <Grid Margin="0">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="340" />

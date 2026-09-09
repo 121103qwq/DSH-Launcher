@@ -103,10 +103,10 @@ public partial class ExtensionWindow : UserControl
             new[] { instance.DshVersionText, instance.KindText }
                 .Where(part => !string.IsNullOrWhiteSpace(part)));
         // 路径太长会挤占左栏：链接化（点击复制，悬停出悬浮卡片，不占界面布局）。
-        CurrentInstanceRootPathLink.Content = "目录：" + TailPath(instance.RootPath);
+        CurrentInstanceRootPathLink.Content = "目录：" + PathDisplay.Tail(instance.RootPath);
         CurrentInstanceRootPathLink.Tag = instance.RootPath;
         CurrentInstanceRootPathLink.ToolTip = CreatePathCard("实例目录", instance.RootPath);
-        CurrentInstanceDshHomeLink.Content = "DSH_HOME：" + TailPath(instance.DshHome);
+        CurrentInstanceDshHomeLink.Content = "DSH_HOME：" + PathDisplay.Tail(instance.DshHome);
         CurrentInstanceDshHomeLink.Tag = instance.DshHome;
         CurrentInstanceDshHomeLink.ToolTip = CreatePathCard("DSH_HOME", instance.DshHome);
 
@@ -495,12 +495,6 @@ public partial class ExtensionWindow : UserControl
         });
         return new System.Windows.Controls.ToolTip { Style = (Style)FindResource("PathCardToolTip"), Content = panel };
     }
-
-    /// <summary>只保留路径尾部（前面的目录层级对定位帮助不大，完整值在 Tooltip 与复制按钮里）。</summary>
-    private static string TailPath(string? path, int maxChars = 42) =>
-        string.IsNullOrEmpty(path) || path.Length <= maxChars
-            ? path ?? string.Empty
-            : "…" + path[^(maxChars - 1)..];
 
     private async Task RefreshAsync()
     {
@@ -1879,7 +1873,7 @@ public partial class ExtensionWindow : UserControl
         SelectedMeta.Text = $"类型：{entry.Kind}　状态：{(entry.Enabled ? "已启用" : "已禁用")}";
         SelectedDescription.Text = string.IsNullOrWhiteSpace(entry.Description) ? "没有描述" : entry.Description;
         SelectedDescription.ToolTip = string.IsNullOrWhiteSpace(entry.Description) ? null : entry.Description;
-        SelectedLocationLink.Content = TailPath(entry.Location, 40);
+        SelectedLocationLink.Content = PathDisplay.Tail(entry.Location, 40);
         SelectedLocationLink.Tag = entry.Location;
         SelectedLocationLink.ToolTip = CreatePluginDetailCard(entry);
         var protectedBuiltIn = entry.Kind == ExtensionKind.Plugin

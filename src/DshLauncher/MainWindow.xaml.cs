@@ -193,7 +193,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ApplySelectedVersionSettings(_selectedInstance);
             OnPropertyChanged(nameof(SelectedInstance));
             OnPropertyChanged(nameof(SelectedInstanceName));
-            OnPropertyChanged(nameof(SelectedInstanceSummary));
+            OnPropertyChanged(nameof(SelectedInstanceKindText));
+            OnPropertyChanged(nameof(SelectedInstancePathVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceRootPath));
+            OnPropertyChanged(nameof(SelectedInstanceRootPathText));
+            OnPropertyChanged(nameof(SelectedInstanceDshHome));
+            OnPropertyChanged(nameof(SelectedInstanceDshHomeText));
             OnPropertyChanged(nameof(SelectedInstanceStatus));
             OnPropertyChanged(nameof(SelectedInstanceStatusBrush));
             OnPropertyChanged(nameof(SelectedInstanceStatusBackgroundBrush));
@@ -231,9 +236,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string SelectedInstanceName => SelectedInstance?.Name ?? "尚未创建版本";
 
-    public string SelectedInstanceSummary => SelectedInstance is null
-        ? "按首次运行引导准备环境并创建第一个版本。"
-        : $"{SelectedInstance.KindText} · {SelectedInstance.RootPath}";
+    public string SelectedInstanceKindText => SelectedInstance?.KindText ?? "尚未选择版本";
+
+    public Visibility SelectedInstancePathVisibility =>
+        SelectedInstance is null ? Visibility.Collapsed : Visibility.Visible;
+
+    public string SelectedInstanceRootPath => SelectedInstance?.RootPath ?? string.Empty;
+
+    public string SelectedInstanceRootPathText => SelectedInstance is null
+        ? string.Empty
+        : "目录：" + PathDisplay.Tail(SelectedInstance.RootPath);
+
+    public string SelectedInstanceDshHome => SelectedInstance?.DshHome ?? string.Empty;
+
+    public string SelectedInstanceDshHomeText => SelectedInstance is null
+        ? string.Empty
+        : "DSH_HOME：" + PathDisplay.Tail(SelectedInstance.DshHome);
 
     public string SelectedInstanceStatus => SelectedInstance?.StatusText ?? "未选择";
 
@@ -634,6 +652,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         await RefreshDshAsync(forceRefresh: true);
         await RefreshNodeAsync();
+    }
+
+    private void PathLink_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not string text || string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(text);
+            ShowNotice("已复制路径：" + text);
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"复制失败：{ex.Message}");
+        }
     }
 
     private string GetConfiguredDshInstallDirectory() =>

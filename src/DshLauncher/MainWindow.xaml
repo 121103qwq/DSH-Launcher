@@ -359,11 +359,58 @@
                                                        FontSize="24"
                                                        FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding SelectedInstanceSummary}"
+                                            <TextBlock Text="{Binding SelectedInstanceKindText}"
                                                        Foreground="{StaticResource MutedBrush}"
                                                        FontSize="12"
-                                                       TextWrapping="Wrap"
                                                        Margin="0,8,0,0" />
+                                            <Button x:Name="InstanceRootPathLink"
+                                                    Style="{StaticResource PathLinkButton}"
+                                                    Click="PathLink_Click"
+                                                    Content="{Binding SelectedInstanceRootPathText}"
+                                                    Tag="{Binding SelectedInstanceRootPath}"
+                                                    Visibility="{Binding SelectedInstancePathVisibility}"
+                                                    Margin="0,4,0,0">
+                                                <Button.ToolTip>
+                                                    <ToolTip Style="{StaticResource PathCardToolTip}">
+                                                        <StackPanel>
+                                                            <TextBlock Text="实例目录" FontWeight="SemiBold" FontSize="12" />
+                                                            <TextBlock Text="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType=ToolTip}}"
+                                                                       FontSize="11"
+                                                                       TextWrapping="Wrap"
+                                                                       MaxWidth="380"
+                                                                       Margin="0,4,0,0" />
+                                                            <TextBlock Text="点击即可复制"
+                                                                       Foreground="{StaticResource MutedBrush}"
+                                                                       FontSize="11"
+                                                                       Margin="0,8,0,0" />
+                                                        </StackPanel>
+                                                    </ToolTip>
+                                                </Button.ToolTip>
+                                            </Button>
+                                            <Button x:Name="InstanceDshHomeLink"
+                                                    Style="{StaticResource PathLinkButton}"
+                                                    Click="PathLink_Click"
+                                                    Content="{Binding SelectedInstanceDshHomeText}"
+                                                    Tag="{Binding SelectedInstanceDshHome}"
+                                                    Visibility="{Binding SelectedInstancePathVisibility}"
+                                                    Margin="0,3,0,0">
+                                                <Button.ToolTip>
+                                                    <ToolTip Style="{StaticResource PathCardToolTip}">
+                                                        <StackPanel>
+                                                            <TextBlock Text="DSH_HOME" FontWeight="SemiBold" FontSize="12" />
+                                                            <TextBlock Text="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType=ToolTip}}"
+                                                                       FontSize="11"
+                                                                       TextWrapping="Wrap"
+                                                                       MaxWidth="380"
+                                                                       Margin="0,4,0,0" />
+                                                            <TextBlock Text="点击即可复制"
+                                                                       Foreground="{StaticResource MutedBrush}"
+                                                                       FontSize="11"
+                                                                       Margin="0,8,0,0" />
+                                                        </StackPanel>
+                                                    </ToolTip>
+                                                </Button.ToolTip>
+                                            </Button>
                                             <TextBlock Text="{Binding InstanceEndpointText}"
                                                        Foreground="{StaticResource BlueBrush}"
                                                        FontSize="12"
