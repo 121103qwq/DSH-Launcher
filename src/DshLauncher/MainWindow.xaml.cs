@@ -1784,7 +1784,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Height = 38,
             VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
             Text = GetConfiguredDshInstallDirectory(),
-            ToolTip = $"留空时恢复 Launcher 默认位置：{_versionSettingsService.DefaultDshInstallDirectory}"
+            ToolTip = $"留空时恢复 Launcher 默认位置（exe 同目录的 run_time）：{_versionSettingsService.DefaultDshInstallDirectory}"
         };
         var browseDshInstallButton = new System.Windows.Controls.Button
         {
@@ -1817,7 +1817,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         runtimePanel.Children.Add(dshInstallRow);
         runtimePanel.Children.Add(new TextBlock
         {
-            Text = $"Launcher 默认把 @deepseek-ai/dsh 安装到 {_versionSettingsService.DefaultDshInstallDirectory}；可以在这里改为其它目录（改动只影响后续安装，想连同已安装的一起搬走请点「移动已有安装」）。实例的 Plugin、Skill、Provider、设置和对话仍保存在各自独立的 DSH_HOME。",
+            Text = $"Launcher 默认把 @deepseek-ai/dsh 安装到 {_versionSettingsService.DefaultDshInstallDirectory}（exe 同目录的 run_time，可整个文件夹拷走做成便携版）；可以在这里改为其它目录（改动只影响后续安装，想连同已安装的一起搬走请点「移动已有安装」）。实例的 Plugin、Skill、Provider、设置和对话仍保存在各自独立的 DSH_HOME。",
             Foreground = (WpfBrush)FindResource("MutedBrush"),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,

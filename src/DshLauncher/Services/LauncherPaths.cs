@@ -8,12 +8,16 @@ public sealed class LauncherPaths
     private const string TestRootVariable = "DSH_LAUNCHER_TEST_ROOT";
 #endif
 
-    public LauncherPaths(string? rootDirectory = null)
+    public LauncherPaths(string? rootDirectory = null, string? executableDirectory = null)
     {
         RootDirectory = Path.GetFullPath(rootDirectory ?? GetDefaultRoot());
+        ExecutableDirectory = Path.GetFullPath(executableDirectory ?? AppContext.BaseDirectory);
     }
 
     public string RootDirectory { get; }
+
+    /// <summary>Launcher 可执行文件所在目录（默认安装位置以此为基准，便于做成便携版）。</summary>
+    public string ExecutableDirectory { get; }
 
     public string InstancesFilePath => Path.Combine(RootDirectory, "instances.json");
 
@@ -29,6 +33,10 @@ public sealed class LauncherPaths
 
     public string RuntimeCachePath => Path.Combine(RootDirectory, "runtime-cache.json");
 
+    /// <summary>默认安装位置：exe 同目录下的 run_time（便携优先，不依赖用户文档目录）。</summary>
+    public string PortableRuntimeDirectory => Path.Combine(ExecutableDirectory, "run_time");
+
+    /// <summary>旧默认安装位置（&lt;数据根&gt;\runtime\dsh），exe 同目录不可写时兜底。</summary>
     public string ManagedDshRuntimeDirectory => Path.Combine(RootDirectory, "runtime", "dsh");
 
     /// <summary>便携版 Node.js 的安装目录（免管理员，不写系统 PATH）。</summary>

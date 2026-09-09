@@ -27,14 +27,43 @@ public sealed class VersionSettingsService
 
     public string LauncherSettingsPath => Path.Combine(_paths.RootDirectory, "launcher-settings.json");
 
-    public string DefaultDshInstallDirectory => _paths.ManagedDshRuntimeDirectory;
+    public string DefaultDshInstallDirectory => _paths.PortableRuntimeDirectory;
 
     public string ResolveDshInstallDirectory()
     {
         var configured = ReadLauncherSettings().DshInstallDirectory;
-        return string.IsNullOrWhiteSpace(configured)
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured;
+        }
+
+        return IsDirectoryWritable(DefaultDshInstallDirectory)
             ? DefaultDshInstallDirectory
-            : configured;
+            : _paths.ManagedDshRuntimeDirectory;
+    }
+
+    /// <summary>
+    /// exe 同目录可能不可写（如程序被放在 Program Files）。不可写时回退旧默认目录，
+    /// 避免安装/更新时才报错。
+    /// </summary>
+    private bool IsDirectoryWritable(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probe = Path.Combine(directory, ".dsh-write-probe");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            LauncherLog.Warn(
+                $"exe 同目录不可写，默认安装位置回退到 {_paths.ManagedDshRuntimeDirectory}",
+                ErrorCodes.E1009,
+                new { directory, error = ex.Message });
+            return false;
+        }
     }
 
     public VersionSettingsData Read(ManagerInstance instance)
