@@ -131,6 +131,14 @@ public sealed class WatchdogRuntime : IDisposable
     /// <summary>实例最近一次资源快照（未运行/未登记时为 null）。</summary>
     public InstanceResourceSnapshot? GetResource(string instanceId) => _core.GetResource(instanceId);
 
+    /// <summary>实例资源历史（折线图数据源）。</summary>
+    public IReadOnlyList<InstanceResourceSnapshot> GetResourceHistory(string instanceId) =>
+        _core.GetResourceHistory(instanceId);
+
+    /// <summary>台账里登记的实例根 PID（未登记时为 0）。</summary>
+    public int GetProcessId(string instanceId) =>
+        _core.Snapshot().FirstOrDefault(item => item.InstanceId == instanceId)?.ProcessId ?? 0;
+
     /// <summary>启动时（Reconcile 前）拉台账：恢复崩溃前记录的实例（用于提示残留）。</summary>
     public IReadOnlyList<WatchdogInstanceDto> LoadLedger() => _core.Snapshot();
 

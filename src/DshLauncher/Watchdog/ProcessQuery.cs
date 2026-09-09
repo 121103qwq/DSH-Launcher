@@ -473,10 +473,12 @@ public static class ProcessQuery
                 .Where(process => !keep.Contains(process.ProcessId)
                                   && !exclude.Contains(process.ProcessId)
                                   && process.CommandLineUpper.Contains(normalized, StringComparison.Ordinal))
-                .Where(process => process.Name.Equals("node", StringComparison.OrdinalIgnoreCase)
-                                  || process.Name.Equals("cmd", StringComparison.OrdinalIgnoreCase)
-                                  || process.Name.Equals("powershell", StringComparison.OrdinalIgnoreCase)
-                                  || process.Name.Equals("electron", StringComparison.OrdinalIgnoreCase))
+                // Toolhelp32 返回的 Name 带扩展名（cmd.exe），必须用 IsProcessName 比较；
+                // 旧写法 Name.Equals("cmd") 永不匹配，导致按 DSH_HOME 的清理一直静默失效。
+                .Where(process => IsProcessName(process, "node")
+                                  || IsProcessName(process, "cmd")
+                                  || IsProcessName(process, "powershell")
+                                  || IsProcessName(process, "electron"))
                 .ToArray();
         }
         catch

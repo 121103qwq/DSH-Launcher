@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using DshLauncher.Models;
 using DshLauncher.Services;
+using DshLauncher.Watchdog;
 using Forms = System.Windows.Forms;
 using WpfButton = System.Windows.Controls.Button;
 using WpfBrush = System.Windows.Media.Brush;
@@ -24,6 +25,9 @@ public partial class VersionSettingsWindow : UserControl
     private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
     private readonly Action _settingsSaved;
     private readonly bool _openPluginPage;
+    private readonly InstanceHealthProviders? _healthProviders;
+    private System.Windows.Threading.DispatcherTimer? _healthTimer;
+    private int _healthLogLineCount = -1;
     private const string EnvironmentNameTag = "EnvironmentName";
     private const string EnvironmentValueTag = "EnvironmentValue";
     private VersionSettingsData _settings = new();
@@ -38,8 +42,10 @@ public partial class VersionSettingsWindow : UserControl
         VersionSnapshotService snapshotService,
         Func<ManagerInstance, string, ManagerInstance> renameVersion,
         Action settingsSaved,
-        bool openPluginPage = false)
+        bool openPluginPage = false,
+        InstanceHealthProviders? healthProviders = null)
     {
+        _healthProviders = healthProviders;
         _instance = instance;
         _versions = versions.ToArray();
         _settingsService = settingsService;
@@ -288,6 +294,187 @@ public partial class VersionSettingsWindow : UserControl
 
     private void Personalization_Click(object sender, RoutedEventArgs e) => ShowPage(PersonalizationButton);
 
+    private void Health_Click(object sender, RoutedEventArgs e) => ShowPage(HealthButton);
+
+    // ---------- 运行状况页 ----------
+
+    private void StartHealthRefresh()
+    {
+        if (_healthTimer is null)
+        {
+            _healthTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _healthTimer.Tick += (_, _) =>
+            {
+                if (HealthAutoRefreshCheckBox.IsChecked == true)
+                {
+                    RefreshHealthPage();
+                }
+            };
+        }
+
+        _healthTimer.Start();
+    }
+
+    private void StopHealthRefresh() => _healthTimer?.Stop();
+
+    private void Window_OnUnloaded(object sender, RoutedEventArgs e) => StopHealthRefresh();
+
+    private void RefreshHealth_Click(object sender, RoutedEventArgs e) => RefreshHealthPage();
+
+    private void RefreshHealthPage()
+    {
+        if (_instance is null)
+        {
+            HealthSummaryText.Text = "尚未选择版本。";
+            HealthDetailText.Text = string.Empty;
+            HealthCpuChart.SetSeries(Array.Empty<double>());
+            HealthMemoryChart.SetSeries(Array.Empty<double>());
+            HealthProcessList.ItemsSource = null;
+            HealthLogBox.Text = string.Empty;
+            return;
+        }
+
+        var providers = _healthProviders;
+        var current = providers?.CurrentResource(_instance);
+        var history = providers is null
+            ? (IReadOnlyList<InstanceResourceSnapshot>)Array.Empty<InstanceResourceSnapshot>()
+            : providers.ResourceHistory(_instance);
+        IReadOnlyList<ProcessResourceLine> processes = Array.Empty<ProcessResourceLine>();
+        if (providers is not null)
+        {
+            processes = providers.Processes(_instance);
+        }
+        var running = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            || _instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached;
+        HealthSummaryText.Text = current is null
+            ? $"{(running ? "运行中" : "未运行")} · 暂无实时数据（实例运行后每 5 秒采样）"
+            : $"{(running ? "运行中" : "已停止")} · 已运行 {FormatHealthDuration(current.Uptime)} · {current.ProcessCount} 个进程 · 最近采样 {current.SampledAt:HH:mm:ss}";
+        HealthDetailText.Text = $"{_instance.Name} · {_instance.KindText} · {(_instance.WebUrl ?? "未启动")}";
+
+        HealthCpuChart.LineBrush = (WpfBrush)FindResource("BlueBrush");
+        HealthCpuChart.MutedBrush = (WpfBrush)FindResource("MutedBrush");
+        HealthCpuChart.GridBrush = (WpfBrush)FindResource("LineBrush");
+        HealthCpuChart.Caption = "CPU 占用（%）";
+        HealthCpuChart.FixedMaximum = 100;
+        HealthCpuChart.FormatValue = value => value.ToString("0.#") + "%";
+        HealthCpuChart.SetSeries(history.Select(snapshot => snapshot.CpuPercent).ToArray());
+
+        HealthMemoryChart.LineBrush = (WpfBrush)FindResource("SuccessTextBrush");
+        HealthMemoryChart.MutedBrush = (WpfBrush)FindResource("MutedBrush");
+        HealthMemoryChart.GridBrush = (WpfBrush)FindResource("LineBrush");
+        HealthMemoryChart.Caption = "内存占用（MB）";
+        HealthMemoryChart.FixedMaximum = 0;
+        HealthMemoryChart.FormatValue = value => value.ToString("0.#") + " MB";
+        HealthMemoryChart.SetSeries(
+            history.Select(snapshot => snapshot.WorkingSetBytes / 1024.0 / 1024).ToArray());
+
+        var processesRows = processes
+            .Select(line => new
+            {
+                line.ProcessId,
+                line.Name,
+                MemoryText = MainWindow.FormatBytes(line.WorkingSetBytes),
+                CpuText = FormatHealthDuration(line.CpuTime)
+            })
+            .ToArray();
+        HealthProcessList.ItemsSource = processesRows;
+
+        var logs = providers?.Logs(_instance) ?? Array.Empty<InstanceLogLine>();
+        if (logs.Count != _healthLogLineCount)
+        {
+            _healthLogLineCount = logs.Count;
+            HealthLogBox.Text = string.Join(
+                Environment.NewLine,
+                logs.TakeLast(500).Select(line => $"{line.At:HH:mm:ss} [{line.Source}] {line.Text}"));
+            HealthLogBox.ScrollToEnd();
+        }
+    }
+
+    private static string FormatHealthDuration(TimeSpan duration) => duration switch
+    {
+        { TotalHours: >= 1 } => $"{(int)duration.TotalHours} 小时 {duration.Minutes} 分",
+        { TotalMinutes: >= 1 } => $"{(int)duration.TotalMinutes} 分 {duration.Seconds} 秒",
+        _ => $"{Math.Max(0, (int)duration.TotalSeconds)} 秒"
+    };
+
+    private void ClearHealthLog_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        _healthProviders?.ClearLogs?.Invoke(_instance);
+        _healthLogLineCount = -1;
+        HealthActionText.Text = "已清空该实例的日志缓冲。";
+        RefreshHealthPage();
+    }
+
+    private void CopyHealthLog_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (HealthLogBox.Text.Length == 0)
+            {
+                HealthActionText.Text = "日志为空。";
+                return;
+            }
+
+            System.Windows.Clipboard.SetText(HealthLogBox.Text);
+            HealthActionText.Text = "日志已复制到剪贴板。";
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or ArgumentException)
+        {
+            HealthActionText.Text = $"复制失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// 清理该实例的残留进程（桌宠 / 市场 helper / 上次异常退出遗留）。
+    /// 实例运行中时把当前 dsh 根进程作为 keepPid 保留，不会误杀实例本体。
+    /// </summary>
+    private void CleanupHealth_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null || _healthProviders?.CleanupProcesses is null)
+        {
+            HealthActionText.Text = "当前没有可用的清理入口。";
+            return;
+        }
+
+        var running = _instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            || _instance.RuntimeOwnership == InstanceRuntimeOwnership.Attached;
+        var message = running
+            ? $"将清理实例 {_instance.Name} 的残留进程（桌宠、插件市场 helper、上次异常退出的旧进程等）。\n\n当前运行的 dsh 主进程会保留。继续？"
+            : $"实例 {_instance.Name} 未运行，将清理它遗留的全部进程（可能来自上次异常退出）。\n\n继续？";
+        var owner = Window.GetWindow(this);
+        var confirmed = owner is null
+            ? System.Windows.MessageBox.Show(
+                message, "清理残留进程", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes
+            : System.Windows.MessageBox.Show(
+                owner, message, "清理残留进程", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+        if (!confirmed)
+        {
+            return;
+        }
+
+        try
+        {
+            var cleaned = _healthProviders.CleanupProcesses(_instance);
+            HealthActionText.Text = cleaned == 0
+                ? "没有发现需要清理的残留进程。"
+                : $"已清理 {cleaned} 个残留进程。";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            HealthActionText.Text = $"清理失败：{ex.Message}";
+        }
+
+        RefreshHealthPage();
+    }
+
     private void Configuration_Click(object sender, RoutedEventArgs e) => ShowPage(ConfigurationButton);
 
     private void Plugins_Click(object sender, RoutedEventArgs e) => ShowPage(PluginsButton);
@@ -317,6 +504,19 @@ public partial class VersionSettingsWindow : UserControl
         ExportPage.Visibility = ReferenceEquals(activeButton, ExportButton)
             ? Visibility.Visible
             : Visibility.Collapsed;
+        HealthPage.Visibility = ReferenceEquals(activeButton, HealthButton)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        if (ReferenceEquals(activeButton, HealthButton))
+        {
+            StartHealthRefresh();
+            RefreshHealthPage();
+        }
+        else
+        {
+            StopHealthRefresh();
+        }
 
         PageHeaderText.Text = activeButton == ConfigurationButton
             ? "配置"
@@ -324,6 +524,8 @@ public partial class VersionSettingsWindow : UserControl
                 ? "插件管理"
                 : activeButton == SnapshotsButton
                     ? "快照回滚"
+                : activeButton == HealthButton
+                    ? "运行状况"
                 : activeButton == ExportButton
                     ? "导出"
                     : "个性化";
@@ -335,9 +537,11 @@ public partial class VersionSettingsWindow : UserControl
                     ? "创建加密配置快照，或把当前版本恢复到先前状态。"
                 : activeButton == ExportButton
                     ? "导出可以分享的版本设计，不带隐私内容和会话。"
-                    : "查看当前版本和它自己的 DSH_HOME。";
+                    : activeButton == HealthButton
+                        ? "实时查看这个实例的 CPU/内存曲线、进程树与运行日志。"
+                        : "查看当前版本和它自己的 DSH_HOME。";
 
-        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, SnapshotsButton, ExportButton })
+        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, SnapshotsButton, HealthButton, ExportButton })
         {
             button.Background = ReferenceEquals(button, activeButton)
                 ? new System.Windows.Media.SolidColorBrush(WpfColor.FromRgb(227, 240, 253))

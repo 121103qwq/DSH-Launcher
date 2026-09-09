@@ -36,6 +36,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly ExtensionService? _extensionService;
     private readonly Func<ProxySettings?>? _proxySettings;
     private readonly VersionSettingsService _settingsService;
+    private readonly InstanceLogBuffer _logs;
     private bool _disposed;
 
     public DshInstanceRunner(
@@ -43,14 +44,21 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         DshHomeImportService? homeImporter = null,
         ExtensionService? extensionService = null,
         Func<ProxySettings?>? proxySettings = null,
-        VersionSettingsService? settingsService = null)
+        VersionSettingsService? settingsService = null,
+        InstanceLogBuffer? logs = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
         _extensionService = extensionService;
         _proxySettings = proxySettings;
         _settingsService = settingsService ?? new VersionSettingsService();
+        _logs = logs ?? new InstanceLogBuffer();
     }
+
+    /// <summary>实例运行日志（dsh 输出 + Launcher 生命周期事件）。</summary>
+    public IReadOnlyList<InstanceLogLine> GetLogs(string? instanceId) => _logs.Snapshot(instanceId);
+
+    public void ClearLogs(string? instanceId) => _logs.Clear(instanceId);
 
     public bool IsRunning(string instanceId)
     {
@@ -369,9 +377,14 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         process.OutputDataReceived += (_, args) =>
                         {
                             AppendOutput(output, args.Data);
+                            _logs.Append(instance.Id, "dsh", args.Data);
                             TryCaptureAuthenticatedUrl(instance.Id, args.Data);
                         };
-                        process.ErrorDataReceived += (_, args) => AppendOutput(output, args.Data);
+                        process.ErrorDataReceived += (_, args) =>
+                        {
+                            AppendOutput(output, args.Data);
+                            _logs.Append(instance.Id, "stderr", args.Data);
+                        };
 
                         if (!process.Start())
                         {
@@ -385,6 +398,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         {
                             _running[instance.Id] = running;
                         }
+
+                        _logs.Append(
+                            instance.Id,
+                            "launcher",
+                            $"启动进程 pid={process.Id}，端口 {port}，地址 {webUrl}");
                         process = null;
 
                         var health = await WaitForHealthAsync(running, cancellationToken);
@@ -393,6 +411,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                             // 0.1.2-rc.1 起 web 页面需要 launch token；地址行在 Loader
                             // 树落定后才打印（可能晚于健康检查通过），再等一小段窗口。
                             await WaitForAuthenticatedUrlAsync(running, cancellationToken);
+                            _logs.Append(instance.Id, "launcher", $"健康检查通过：{webUrl}");
                             instanceLock = null;
                             return DshInstanceRunResult.Success(
                                 running.Process.Id,
@@ -805,6 +824,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 _running.Remove(instanceId);
             }
         }
+
+        _logs.Append(instanceId, "launcher", $"已停止进程 pid={running.Process.Id}");
 
         if (releaseInstanceLock)
         {

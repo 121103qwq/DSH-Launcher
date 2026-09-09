@@ -13,6 +13,13 @@ public sealed record InstanceResourceSnapshot(
     int ProcessCount,
     DateTimeOffset SampledAt);
 
+/// <summary>进程树里单个进程的资源行（运行状况页的进程表用）。</summary>
+public sealed record ProcessResourceLine(
+    int ProcessId,
+    string Name,
+    long WorkingSetBytes,
+    TimeSpan CpuTime);
+
 /// <summary>
 /// 进程树资源采样（由 Watchdog 的既有 5s 循环驱动，不额外起定时器）。
 ///
@@ -105,4 +112,48 @@ public sealed class InstanceResourceSampler
 
     /// <summary>实例停止/注销时清理增量基线。</summary>
     public void Forget(int rootProcessId) => _previous.Remove(rootProcessId);
+
+    /// <summary>进程树明细（按内存降序）；仅访问权限内的进程。</summary>
+    public static IReadOnlyList<ProcessResourceLine> SampleProcesses(int rootProcessId)
+    {
+        if (rootProcessId <= 0)
+        {
+            return Array.Empty<ProcessResourceLine>();
+        }
+
+        var pids = new List<int> { rootProcessId };
+        try
+        {
+            pids.AddRange(ProcessQuery.GetDescendants(rootProcessId).Select(process => process.ProcessId));
+        }
+        catch
+        {
+            // 快照失败时至少保留根进程。
+        }
+
+        var lines = new List<ProcessResourceLine>();
+        foreach (var pid in pids.Distinct())
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                lines.Add(new ProcessResourceLine(
+                    pid,
+                    process.ProcessName,
+                    process.WorkingSet64,
+                    process.TotalProcessorTime));
+            }
+            catch (Exception ex) when (ex is ArgumentException
+                or InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or NotSupportedException)
+            {
+                // 进程刚退出或无权访问。
+            }
+        }
+
+        return lines
+            .OrderByDescending(line => line.WorkingSetBytes)
+            .ToArray();
+    }
 }

@@ -38,6 +38,10 @@ public sealed class WatchdogCore
     private readonly Dictionary<string, DateTimeOffset> _suspectSince = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ZombieRecord> _zombies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, InstanceResourceSnapshot> _resources = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Queue<InstanceResourceSnapshot>> _resourceHistory = new(StringComparer.Ordinal);
+
+    /// <summary>资源历史保留的采样点数（5s 间隔 → 约 20 分钟）。</summary>
+    private const int HistoryCapacity = 240;
 
     private sealed record ZombieRecord(WatchdogInstanceDto Instance, DateTimeOffset Since);
 
@@ -82,6 +86,7 @@ public sealed class WatchdogCore
             _state.Instances.RemoveAll(item => item.InstanceId == instanceId);
             _store.Save(_state);
             _resources.Remove(instanceId);
+            _resourceHistory.Remove(instanceId);
         }
 
         if (processId > 0)
@@ -104,6 +109,17 @@ public sealed class WatchdogCore
         lock (_gate)
         {
             return _resources.TryGetValue(instanceId, out var snapshot) ? snapshot : null;
+        }
+    }
+
+    /// <summary>实例的资源历史（按时间升序；环形缓冲，最多 <see cref="HistoryCapacity"/> 个点）。</summary>
+    public IReadOnlyList<InstanceResourceSnapshot> GetResourceHistory(string instanceId)
+    {
+        lock (_gate)
+        {
+            return _resourceHistory.TryGetValue(instanceId, out var history)
+                ? history.ToArray()
+                : Array.Empty<InstanceResourceSnapshot>();
         }
     }
 
@@ -143,6 +159,17 @@ public sealed class WatchdogCore
                     else
                     {
                         _resources[instance.InstanceId] = snapshot;
+                        if (!_resourceHistory.TryGetValue(instance.InstanceId, out var history))
+                        {
+                            history = new Queue<InstanceResourceSnapshot>();
+                            _resourceHistory[instance.InstanceId] = history;
+                        }
+
+                        history.Enqueue(snapshot);
+                        while (history.Count > HistoryCapacity)
+                        {
+                            history.Dequeue();
+                        }
                     }
                 }
 
@@ -268,6 +295,7 @@ public sealed class WatchdogCore
             _state.Instances.RemoveAll(item => item.InstanceId == instance.InstanceId);
             _store.Save(_state);
             _resources.Remove(instance.InstanceId);
+            _resourceHistory.Remove(instance.InstanceId);
         }
 
         _resourceSampler.Forget(instance.ProcessId);
@@ -507,6 +535,7 @@ public sealed class WatchdogCore
         {
             _state.Instances.Clear();
             _resources.Clear();
+            _resourceHistory.Clear();
             _store.Clear();
         }
 

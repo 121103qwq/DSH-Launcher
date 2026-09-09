@@ -1639,7 +1639,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     _ = SynchronizeConversationsAsync(current);
                 }
             },
-            openPluginPage));
+            openPluginPage,
+            new InstanceHealthProviders(
+                instance => _watchdog.GetResource(instance.Id),
+                instance => _watchdog.GetResourceHistory(instance.Id),
+                instance => InstanceResourceSampler.SampleProcesses(_watchdog.GetProcessId(instance.Id)),
+                instance => _instanceRunner.GetLogs(instance.Id),
+                instance => _instanceRunner.ClearLogs(instance.Id),
+                instance =>
+                {
+                    var keepPid = _watchdog.GetProcessId(instance.Id);
+                    return _watchdog.Cleanup(instance.Id, keepPid > 0 ? keepPid : null);
+                })));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
