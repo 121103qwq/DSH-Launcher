@@ -161,8 +161,7 @@ ClearType 会被系统降级为灰度抗锯齿，**11px 以下小字会明显发
 11px，且所有 Window/UserControl 继承全局 `UseLayoutRounding` +
 `TextFormattingMode=Display`。
 
-默认启动尺寸 = **最小可调尺寸**（`MainWindow` 880×520）；用户放大后由窗口记忆持久化，
-下次启动恢复用户尺寸。
+默认启动尺寸与**最小可调尺寸一致**（`MainWindow` 1180×720，小屏上自动收缩）；用户放大后由窗口记忆持久化，下次启动恢复用户尺寸。
 
 ## 四、审查清单（提交前逐项）
 

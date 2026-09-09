@@ -466,9 +466,13 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         SetBusy(true);
         try
         {
-            var runtimeTemplate = await PrepareRuntimeTemplateAsync(template, dialog.DshVersion);
+            // 先在本线程读取对话框属性：NameBox 是 WPF 控件，后台线程读取会
+            // 抛“调用线程无法访问此对象”（Task.Run 里不能再碰 dialog）。
+            var requestedVersion = dialog.DshVersion;
+            var versionName = dialog.VersionName;
+            var runtimeTemplate = await PrepareRuntimeTemplateAsync(template, requestedVersion);
             var created = await Task.Run(
-                () => _packageService.CreateCleanVersion(runtimeTemplate, dialog.VersionName),
+                () => _packageService.CreateCleanVersion(runtimeTemplate, versionName),
                 _lifetimeCancellation.Token);
             Versions.Add(created);
             SelectedVersion = created;

@@ -121,6 +121,22 @@ public sealed class VersionPackageService
         }
 
         DeleteGeneratedDirectory(expectedHome, "版本 DSH_HOME");
+        // dsh-home 删掉后，instances/<id> 往往只剩空壳；顺手清理，避免删除版本后留空目录。
+        var instanceRoot = Path.GetDirectoryName(expectedHome);
+        if (!string.IsNullOrWhiteSpace(instanceRoot)
+            && Directory.Exists(instanceRoot)
+            && !Directory.EnumerateFileSystemEntries(instanceRoot).Any())
+        {
+            try
+            {
+                Directory.Delete(instanceRoot);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 空目录删不掉不影响删除结果。
+            }
+        }
+
         DeleteGeneratedDirectory(_paths.GetInstanceBackupDirectory(instance.Id), "版本备份目录");
         if (!_registry.Unregister(instance.Id))
         {
