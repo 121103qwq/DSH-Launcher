@@ -705,15 +705,41 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var parent = Path.GetDirectoryName(directory);
         if (parent is not null
-            && string.Equals(Path.GetFileName(directory), "versions", StringComparison.OrdinalIgnoreCase))
+            && string.Equals(Path.GetFileName(parent), "versions", StringComparison.OrdinalIgnoreCase))
         {
-            directory = parent;
+            // <root>\versions\<ver>\dsh.cmd → <root>
+            directory = Path.GetDirectoryName(parent) ?? directory;
         }
 
-        var launcherRoot = new LauncherPaths().RootDirectory;
-        var insideLauncherRoot = string.Equals(directory, launcherRoot, StringComparison.OrdinalIgnoreCase)
-            || directory.StartsWith(launcherRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-        return insideLauncherRoot && DshInstallMoveService.LooksLikeInstall(directory) ? directory : null;
+        return DshInstallMoveService.LooksLikeInstall(directory) && !IsSystemPackageDirectory(directory)
+            ? directory
+            : null;
+    }
+
+    /// <summary>系统包管理器目录（npm 全局前缀 / nodejs 安装目录）不允许搬动。</summary>
+    private static bool IsSystemPackageDirectory(string directory)
+    {
+        foreach (var candidate in new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "nodejs")
+        })
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidate));
+            if (string.Equals(directory, normalized, StringComparison.OrdinalIgnoreCase)
+                || directory.StartsWith(normalized + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private enum TestRuntimeKind
@@ -2158,17 +2184,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
-            // 按“实例”列出（用户视角：移动的是某个实例在用的运行时）。
+            // 按运行时目录聚合所有实例：同一目录被多个实例共用时合并为一行
+            // （移动该目录会同时更新这些实例）。
+            var runtimeInstances = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var instance in Instances)
             {
                 var directory = ResolveMovableRuntimeDirectory(instance);
-                if (directory is not null)
+                if (directory is null)
                 {
-                    var name = string.Equals(instance.Name, instance.DshVersionText, StringComparison.OrdinalIgnoreCase)
-                        ? instance.Name
-                        : $"{instance.Name} · {instance.DshVersionText}";
-                    Add(name, directory);
+                    continue;
                 }
+
+                if (!runtimeInstances.TryGetValue(directory, out var names))
+                {
+                    names = new List<string>();
+                    runtimeInstances[directory] = names;
+                }
+
+                names.Add(instance.Name);
+            }
+
+            foreach (var pair in runtimeInstances)
+            {
+                Add(string.Join("、", pair.Value), pair.Key);
             }
 
             // 卡片只列“实例”；没有任何实例运行时可用时给一行提示。

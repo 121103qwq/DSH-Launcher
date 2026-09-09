@@ -77,6 +77,7 @@ dsh-launcher-dev/
 | 49 | `App.xaml` + `MainWindow.xaml(.cs)` + `Services/PathDisplay.cs`（新）+ `ExtensionWindow.xaml(.cs)` | 路径链接样式提升为全局；启动页「实例状态」卡片的 目录/DSH_HOME 改为链接（点击复制、悬停悬浮卡片、未选实例隐藏）；`Tail` 尾部显示逻辑收口到 `PathDisplay` |
 | 50 | `MainWindow.xaml.cs` + `Services/DshInstallMoveService.cs` | 运行时复选框改为**独立多选**（不再互相取消）；新增 `MoveManyAsync`：勾选多个时每个运行时分别搬入目标目录下的同名子文件夹，安装位置指向目标根 |
 | 51 | `MainWindow.xaml.cs` | 「要移动的运行时」卡片**只列实例**（每行：实例名 + 其运行时路径）；配置的安装位置无实例关联时不再显示（无实例时卡片给提示） |
+| 52 | `MainWindow.xaml.cs` | 卡片**列出全部已登记实例**（不再限于 Launcher 数据根；仅排除系统 npm/nodejs 目录）；`<root>\versions\<ver>` 正确归一到 `<root>`；共用同一运行时的多个实例合并为一行（标签用、分隔） |
 
 ## 行为变化（相对上游）
 
@@ -111,6 +112,7 @@ dsh-launcher-dev/
 29. **启动页路径链接化**：实例状态卡片的 目录 / DSH_HOME 改为链接（点击复制、悬停出悬浮卡片），与扩展页一致
 30. **运行时多选移动**：卡片复选框可同时勾选多个；勾多个时分别搬入目标目录下的同名子文件夹（避免互相覆盖），安装位置指向目标根
 31. **运行时卡片只列实例**：每行是「实例名 + 该实例的运行时路径」；没有实例关联的安装位置不再出现（无实例时卡片显示提示）
+32. **卡片列出全部实例**：不再限于 Launcher 数据根（仅排除系统 npm/nodejs 目录）；`versions/<版本>` 自动归一到安装根；多个实例共用同一运行时合并为一行
 
 ## 构建与发布（SOP）
 
