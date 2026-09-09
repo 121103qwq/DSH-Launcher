@@ -91,6 +91,14 @@
 - 内容层的 Border 若有 `Visibility` 切换，阴影层要绑定它：
   `Visibility="{Binding Visibility, ElementName=<内容层名>}"`。
 
+### 窗口尺寸计算
+- `SystemParameters.WorkArea` **已经是 DIP**（125% 缩放下 1920×1020 物理 → 1536×816）；
+  **禁止再除以 `DpiScale`**——否则 `Width` 小于 `MinWidth`，原生窗口按偏小值创建、
+  布局按 `MinWidth` 排，右侧/底部内容会被裁掉。
+- 尺寸适配与居中统一走 `WindowSizeHelper.FitInitialSize`（构造函数），
+  `Window_OnLoaded` 不再重复计算。
+- 启动时写一行“窗口尺寸诊断”日志（dpi/workArea/width/height/actual/min），便于排查。
+
 ## 三、组件规范
 
 ### 卡片（Card）
