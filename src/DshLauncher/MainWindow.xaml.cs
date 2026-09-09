@@ -45,6 +45,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SourceProjectInspector _sourceInspector = new();
     private readonly InstanceRegistry _instanceRegistry = new();
     private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
+    private readonly DshEnvironmentScanner _environmentScanner = new();
+    private readonly ScannedHomeImportService _scannedHomeImporter;
     private readonly DshInstanceRunner _instanceRunner;
     private readonly ExtensionService _extensionService;
     private readonly MarketplaceService _marketplaceService;
@@ -134,6 +136,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
         _detectedRuntimeRegistrationService = new(_instanceRegistry);
+        _scannedHomeImporter = new(_instanceRegistry);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _conversationSyncService = new(_versionSettingsService, id => _instanceRunner.IsRunning(id));
         _modelService = new(id => _instanceRunner.IsRunning(id));
@@ -2152,6 +2155,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 MarkInstanceUsed(version.Id);
             },
             ScanAndRegisterRuntimeDirectoryAsync,
+            ShowEnvironmentScanPage,
+            ImportSourceProject,
             _versionHealthService,
             _versionSnapshotService,
             () => _nodeRuntime,
@@ -4680,7 +4685,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void ImportSource_Click(object sender, RoutedEventArgs e)
+    /// <summary>内嵌页：扫描本机/WSL 的 DSH home 并按 home 导入实例（work-log/50）。</summary>
+    private void ShowEnvironmentScanPage()
+    {
+        ShowEmbeddedPage(new EnvironmentScanWindow(
+            _environmentScanner,
+            () => Instances.ToArray(),
+            () => SelectedInstance,
+            _scannedHomeImporter,
+            OnScannedHomeImported,
+            () => ShowVersionControl(),
+            _windowCancellation.Token));
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageSubtitle));
+    }
+
+    private void OnScannedHomeImported(ManagerInstance instance)
+    {
+        if (Instances.All(existing => !string.Equals(existing.Id, instance.Id, StringComparison.Ordinal)))
+        {
+            Instances.Add(instance);
+        }
+
+        SelectedInstance = instance;
+        MarkInstanceUsed(instance.Id);
+        RefreshRecentInstances();
+        OnPropertyChanged(nameof(InstanceCountText));
+        OnPropertyChanged(nameof(NoInstancesVisibility));
+        OnPropertyChanged(nameof(InstancesVisibility));
+        RefreshRunningInstances();
+    }
+
+    /// <summary>从源码目录导入（版本控制 → 导入实例菜单）；旧 ImportSource_Click 是死代码，本次接上入口。</summary>
+    private void ImportSourceProject()
     {
         var selectedDirectory = PickFolder("选择 DeepSeek Harness Source 项目");
         if (selectedDirectory is null)

@@ -20,6 +20,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly Action<ManagerInstance> _versionDeleted;
     private readonly Action<ManagerInstance> _versionSelected;
     private readonly Func<string, Task<IReadOnlyList<ManagerInstance>>> _scanAndRegisterRuntimeDirectory;
+    private readonly Action _openEnvironmentScan;
+    private readonly Action _importSourceProject;
     private readonly VersionHealthService _healthService;
     private readonly VersionSnapshotService _snapshotService;
     private readonly Func<NodeRuntimeInfo> _nodeRuntimeProvider;
@@ -43,6 +45,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Action<ManagerInstance> versionDeleted,
         Action<ManagerInstance> versionSelected,
         Func<string, Task<IReadOnlyList<ManagerInstance>>> scanAndRegisterRuntimeDirectory,
+        Action openEnvironmentScan,
+        Action importSourceProject,
         VersionHealthService healthService,
         VersionSnapshotService snapshotService,
         Func<NodeRuntimeInfo> nodeRuntimeProvider,
@@ -58,6 +62,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _versionDeleted = versionDeleted;
         _versionSelected = versionSelected;
         _scanAndRegisterRuntimeDirectory = scanAndRegisterRuntimeDirectory;
+        _openEnvironmentScan = openEnvironmentScan;
+        _importSourceProject = importSourceProject;
         _healthService = healthService;
         _snapshotService = snapshotService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
@@ -281,6 +287,10 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             SetStatus($"无法读取快捷方式：{ex.Message}");
         }
     }
+
+    private void ScanEnvironment_Click(object sender, RoutedEventArgs e) => _openEnvironmentScan();
+
+    private void ImportSourceProject_Click(object sender, RoutedEventArgs e) => _importSourceProject();
 
     private async Task AddInstanceFromDirectoryAsync(string directory, string source)
     {
