@@ -406,7 +406,8 @@ public sealed class MarketplaceService
 
     public async Task<MarketplaceVerificationResult> VerifyAsync(
         MarketplaceItem item,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ManagerInstance? instance = null)
     {
         if (item.SourceKind == MarketplaceSourceKind.Official
             && item.VerificationStatus == MarketplaceVerificationStatus.Verified)
@@ -424,12 +425,12 @@ public sealed class MarketplaceService
                 && !string.IsNullOrWhiteSpace(item.RepositoryUrl));
         if (installTargetsGitHub)
         {
-            return await VerifyGitHubRepositoryAsync(item, cancellationToken);
+            return await VerifyGitHubRepositoryAsync(item, cancellationToken, instance);
         }
 
         if (!string.IsNullOrWhiteSpace(item.PackageName))
         {
-            return await VerifyNpmPackageAsync(item, cancellationToken);
+            return await VerifyNpmPackageAsync(item, cancellationToken, instance: instance);
         }
 
         return new MarketplaceVerificationResult(
@@ -449,7 +450,8 @@ public sealed class MarketplaceService
     /// </summary>
     public async Task<MarketplaceVerificationResult> VerifyManualInstallAsync(
         string installSpec,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ManagerInstance? instance = null)
     {
         var text = installSpec?.Trim() ?? string.Empty;
         if (text.Length == 0)
@@ -473,7 +475,8 @@ public sealed class MarketplaceService
                     document.RootElement,
                     ReadString(document.RootElement, "name"),
                     ReadString(document.RootElement, "version"),
-                    text);
+                    text,
+                    instance);
             }
 
             if (TrySplitNpmSpec(text, out var packageName, out var version))
@@ -490,7 +493,7 @@ public sealed class MarketplaceService
                 {
                     try
                     {
-                        return await VerifyNpmPackageAsync(item, cancellationToken, registryBase);
+                        return await VerifyNpmPackageAsync(item, cancellationToken, registryBase, instance);
                     }
                     catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
@@ -527,7 +530,7 @@ public sealed class MarketplaceService
             if (TryGetGitHubRepository(text, out _))
             {
                 var item = CreateManualItem(text, null, null) with { RepositoryUrl = text };
-                return await VerifyAsync(item, cancellationToken);
+                return await VerifyAsync(item, cancellationToken, instance);
             }
 
             return new MarketplaceVerificationResult(
@@ -553,6 +556,44 @@ public sealed class MarketplaceService
                 null,
                 null,
                 text);
+        }
+    }
+
+    /// <summary>
+    /// 更新前兼容性检查：读 registry 最新版本的清单，只跑“是否 DSh 插件 + 核心 peerDependencies
+    /// 是否与实例运行时兼容”。返回 Incompatible 时调用方应警告/跳过。
+    /// </summary>
+    public async Task<MarketplaceVerificationResult> CheckPluginCompatibilityAsync(
+        string packageName,
+        ManagerInstance instance,
+        CancellationToken cancellationToken = default)
+    {
+        var name = packageName?.Trim() ?? string.Empty;
+        if (!IsSafePackageName(name))
+        {
+            return new MarketplaceVerificationResult(
+                MarketplaceVerificationStatus.Unverified,
+                "npm 包名格式不正确，无法检查兼容性。",
+                name,
+                null,
+                name);
+        }
+
+        try
+        {
+            return await VerifyNpmPackageAsync(CreateManualItem(name, name, null), cancellationToken, instance: instance);
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or TaskCanceledException
+            or JsonException
+            or IOException)
+        {
+            return new MarketplaceVerificationResult(
+                MarketplaceVerificationStatus.Unverified,
+                $"无法联网检查兼容性（{ex.Message}）。",
+                name,
+                null,
+                name);
         }
     }
 
@@ -746,7 +787,8 @@ public sealed class MarketplaceService
     private async Task<MarketplaceVerificationResult> VerifyNpmPackageAsync(
         MarketplaceItem item,
         CancellationToken cancellationToken,
-        string registryBase = "https://registry.npmjs.org")
+        string registryBase = "https://registry.npmjs.org",
+        ManagerInstance? instance = null)
     {
         var packageName = item.PackageName!.Trim();
         if (!IsSafePackageName(packageName))
@@ -776,12 +818,13 @@ public sealed class MarketplaceService
             return Rejected(item, "npm 仓库没有找到可读取的版本信息。");
         }
 
-        return VerifyManifest(packageManifest, packageName, version, packageName);
+        return VerifyManifest(packageManifest, packageName, version, packageName, instance);
     }
 
     private async Task<MarketplaceVerificationResult> VerifyGitHubRepositoryAsync(
         MarketplaceItem item,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ManagerInstance? instance = null)
     {
         var normalizedInstallSpec = NormalizeInstallSpec(item.InstallSpec);
         var githubSource = normalizedInstallSpec.StartsWith("github:", StringComparison.OrdinalIgnoreCase)
@@ -876,7 +919,8 @@ public sealed class MarketplaceService
                 var discovered = await FindPluginInRepositoryTreeAsync(
                     repository,
                     discoveryBranch,
-                    cancellationToken);
+                    cancellationToken,
+                    instance);
                 if (discovered is not null)
                 {
                     return discovered;
@@ -1112,7 +1156,8 @@ public sealed class MarketplaceService
     private async Task<MarketplaceVerificationResult?> FindPluginInRepositoryTreeAsync(
         GitHubRepository repository,
         string branch,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ManagerInstance? instance = null)
     {
         try
         {
@@ -1164,7 +1209,8 @@ public sealed class MarketplaceService
                         manifest,
                         ReadString(manifest, "name"),
                         ReadString(manifest, "version"),
-                        installSpec);
+                        installSpec,
+                        instance);
                     if (verification.Status == MarketplaceVerificationStatus.Verified)
                     {
                         return verification with
@@ -1215,7 +1261,8 @@ public sealed class MarketplaceService
         JsonElement manifest,
         string? packageName,
         string? version,
-        string? installSpec)
+        string? installSpec,
+        ManagerInstance? instance = null)
     {
         if (!HasDshBundlePatch(manifest))
         {
@@ -1239,6 +1286,23 @@ public sealed class MarketplaceService
                 packageName,
                 version,
                 installSpec);
+        }
+
+        // 兼容性预检（借鉴上游 v1.1.2 F-06）：核心 peerDependencies 与实例实际版本不符时
+        // 明确警告——“装得上、一启动就崩”的插件（如 computer-user 依赖已被移除的 dsh-settings 导出）
+        // 正是靠这一层拦住。
+        if (instance is not null)
+        {
+            var issues = PluginCompatibility.Check(manifest.GetRawText(), instance);
+            if (issues.Count > 0)
+            {
+                return new MarketplaceVerificationResult(
+                    MarketplaceVerificationStatus.Incompatible,
+                    $"声明的核心依赖与当前实例的 DSh 运行时不兼容：{PluginCompatibility.Describe(issues)}。安装/更新后可能导致实例无法启动。",
+                    packageName,
+                    version,
+                    installSpec);
+            }
         }
 
         return new MarketplaceVerificationResult(

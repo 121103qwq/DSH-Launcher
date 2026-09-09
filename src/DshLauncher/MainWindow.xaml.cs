@@ -1538,7 +1538,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             if (_instanceRunner.IsRunning(instance.Id))
             {
-                await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token);
+                await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token, instance.Name);
             }
 
             CloseChatWindow(instance.Id);
@@ -4882,7 +4882,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
                 _windowCancellation.Token);
-            var result = await _instanceRunner.StopAsync(instance.Id, linkedCancellation.Token);
+            var result = await _instanceRunner.StopAsync(instance.Id, linkedCancellation.Token, instance.Name);
             if (!result.IsSuccess)
             {
                 UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, result.Error);
@@ -5010,7 +5010,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            var result = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
+            var result = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token, selected.Name);
             if (!result.IsSuccess)
             {
                 UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, result.Error);
@@ -5079,7 +5079,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (_instanceRunner.IsRunning(selected.Id))
             {
-                var stopped = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token);
+                var stopped = await _instanceRunner.StopAsync(selected.Id, _windowCancellation.Token, selected.Name);
                 if (!stopped.IsSuccess)
                 {
                     UpdateInstanceStatus(selected, InstanceRuntimeStatus.Error, stopped.Error);
@@ -5501,7 +5501,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 _crashRecovery.NoteIntentionalStop(instance.Id);
                 CancelPendingCrashRestart(instance.Id);
-                await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token);
+                await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token, instance.Name);
             }
 
             CloseChatWindow(instance.Id);

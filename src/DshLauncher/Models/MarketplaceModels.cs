@@ -15,7 +15,10 @@ public enum MarketplaceVerificationStatus
 {
     Verified,
     Unverified,
-    Rejected
+    Rejected,
+
+    /// <summary>确实是 DSh 插件，但声明的核心依赖与当前实例运行时不一致（安装后可能起不来）。</summary>
+    Incompatible
 }
 
 public enum MarketplaceSortOrder

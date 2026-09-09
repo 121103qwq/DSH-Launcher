@@ -14,18 +14,18 @@ namespace DshLauncher.Services;
 public sealed class PluginMatrixService
 {
     /// <summary>内置核心与运行时依赖：不进矩阵。</summary>
-    private static readonly HashSet<string> ExcludedNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app",
-        "schemastery",
-        "cosmokit",
-        "cordis",
-        "@cordisjs/core",
-        "@cordisjs/loader",
-        "@cordisjs/plugin-http",
-        "@cordisjs/plugin-server"
-    };
+    private static readonly HashSet<string> ExcludedNames = new(
+        DshCoreBundles.Minimal.Concat(new[]
+        {
+            "schemastery",
+            "cosmokit",
+            "cordis",
+            "@cordisjs/core",
+            "@cordisjs/loader",
+            "@cordisjs/plugin-http",
+            "@cordisjs/plugin-server"
+        }),
+        StringComparer.OrdinalIgnoreCase);
 
     private readonly ExtensionService _extensions;
 

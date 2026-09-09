@@ -95,6 +95,7 @@ dsh-launcher-dev/
 | 67 | `ExtensionWindow.xaml` + `docs/UI-DESIGN.md` | **扩展页工具条按钮紧凑化**：当前实例卡内 9 个按钮改 `CompactToolbarButton`（12px / Padding 9,4 / Margin 0,0,6,6），主操作同理；实测 44→33 设备像素、3 行→2 行 |
 | 68 | `Services/DshInstanceRunner.cs` + `MainWindow.xaml.cs` | **外部连接（Attached）失效收敛**：修 `_attached` 只加不删（没开实例却提示“请先停止实例”）；按 PID/端口活性校验并自动摘除；外部实例也登记 watchdog；5s 周期收敛 + 停止守卫区分死活 |
 | 69 | `Services/StartupHealthEvidence.cs` + `Services/DshInstanceRunner.cs` + `Services/DialogText.cs`（新）+ `MainWindow.xaml.cs` | **启动健康检查日志基线 + 对话框文本收敛**（work-log/47）：① 健康检查只扫本次进程启动后的新增日志行（`logBaselineAt` + `StartupLogClassifier.Since`），修复“旧失败签名行让本会话内后续启动/安全模式/自动重启瞬间假失败”（清空日志才恢复）；② 新增 `DialogText.ForMessageBox`（每行 ≤120 字符硬折 + 总长 ≤1200 + 截断提示），安全模式询问改用 `FormatStartFailure` 摘要 + 证据 + 插件清单 + 指向运行日志（原来原样塞 ~5.3KB 输出，弹窗实测 1584×1182、是/否按钮出屏），「启动详情」弹窗同步收敛 |
+| 70 | `Services/PluginCompatibility.cs`（新）+ `Models/DshCoreBundles.cs`（新）+ `Services/MarketplaceService.cs` + `Models/MarketplaceModels.cs` + `ExtensionWindow.xaml.cs` + `Services/DshInstanceRunner.cs` + `Models/ManagerInstance.cs` + `Services/ExtensionService.cs` + `Services/PluginMatrixService.cs` + `Services/SafeProfileService.cs` + `MainWindow.xaml.cs` | **46 号遗留 4 项（work-log/48 验证、49 实施）**：① **装前/更新前兼容性预检**——新增 `PluginCompatibility`（npm 语义化范围匹配含预发布规则 + 实例内实际版本解析），手动安装/市场安装/单条更新/批量更新均检查 `@deepseek-ai/*` peerDependencies，不兼容返回 `Incompatible` 并警告（computer-user 这类“装完就崩”会被拦住；批量更新自动跳过）；② **生命周期日志**——启动/停止写 `launcher.log`（实例名/端口/PID/normal|safe）；③ **核心包口径统一**——新增 `DshCoreBundles`（计数/列表/矩阵/安全模式共用），实例卡片不再把核心算成插件、插件管理/扩展页不再列核心；④ **harness 隔离**——`ExtensionWindow.UiStateStore` 可注入，UI 冒烟用临时目录，不再污染真实 `ui-state.json` |
 
 ## 行为变化（相对上游）
 
@@ -170,6 +171,10 @@ dsh-launcher-dev/
 70. **外部服务失效收敛**：接管的外部 dsh 进程退出后，Launcher 最多 5 秒把实例收敛为“已停止”（不再残留“运行中”），插件/技能/MCP 修改恢复可用；外部服务仍存活时仍拒绝停止
 71. **启动日志基线**：健康检查只认本次进程启动后新增的日志行；上一次尝试留下的失败签名不再让后续启动（含安全模式与自动重启）瞬间假失败（运行状况页的历史日志仍保留）
 72. **长文本弹窗**：安全模式询问与「启动详情」不再直接显示原始日志/堆栈（每行 ≤120 字符、总长 ≤1200 字符，超出提示“完整内容见运行状况 → 运行日志”），避免按钮被撑出屏幕
+73. **插件兼容性预检**：手动安装 / 市场安装 / 更新前读取插件清单的 `@deepseek-ai/*` peerDependencies 与实例实际版本比对（含预发布规则）；不兼容时弹窗说明并默认不继续，批量更新自动跳过不兼容项；非插件仍按原逻辑拦截
+74. **实例生命周期日志**：启动与停止各写一条 `launcher.log`（含实例名、端口、PID、normal/safe 模式），不必再去 watchdog.log 查
+75. **核心包口径统一**：`@deepseek-ai/dsh-base` / `dsh-web-app` 不计入实例卡片「N Plugins」，也不出现在插件管理页与扩展页已装列表（与矩阵/doctor/安全模式同一份定义）
+76. **harness 隔离**：UI 冒烟注入临时 `UiStateStore`，不再写入真实 `ui-state.json`
 
 ## 待办（功能完成后统一处理）
 

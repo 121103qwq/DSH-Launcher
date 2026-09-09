@@ -111,7 +111,11 @@ public sealed record ManagerInstance(
             {
                 foreach (var dependency in dependencies.EnumerateObject())
                 {
-                    names.Add(dependency.Name);
+                    // 核心 bundle 不是用户插件，不计入「N Plugins」（与矩阵/doctor 同口径）。
+                    if (!DshCoreBundles.IsCore(dependency.Name))
+                    {
+                        names.Add(dependency.Name);
+                    }
                 }
             }
 
@@ -125,7 +129,8 @@ public sealed record ManagerInstance(
                 foreach (var bundle in bundles.EnumerateArray())
                 {
                     if (bundle.ValueKind == JsonValueKind.String
-                        && !string.IsNullOrWhiteSpace(bundle.GetString()))
+                        && !string.IsNullOrWhiteSpace(bundle.GetString())
+                        && !DshCoreBundles.IsCore(bundle.GetString()))
                     {
                         names.Add(bundle.GetString()!);
                     }

@@ -41,11 +41,7 @@ public sealed class SafeProfileService
     public const string BisectProfileName = ".dsh-bisect";
 
     /// <summary>dsh 官方 web profile 模板核心。</summary>
-    public static readonly IReadOnlyList<string> WebCoreMinimal = new[]
-    {
-        "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app"
-    };
+    public static readonly IReadOnlyList<string> WebCoreMinimal = DshCoreBundles.Minimal;
 
     private const string DeepSeekScope = "@deepseek-ai/";
     private const long MaximumHashFileBytes = 4 * 1024 * 1024;

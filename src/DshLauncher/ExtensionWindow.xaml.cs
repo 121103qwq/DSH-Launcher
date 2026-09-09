@@ -53,7 +53,7 @@ public partial class ExtensionWindow : UserControl
     private string _activeMarketplaceCategoryKey = string.Empty;
     private string _activeSkillMarketCategoryKey = string.Empty;
     private bool _useDshMarketHotReload = true;
-    private readonly UiStateStore _uiStateStore = new();
+    private readonly UiStateStore _uiStateStore;
     private readonly DispatcherTimer _uiStateSaveTimer;
     private IReadOnlyDictionary<string, PluginUpdateInfo> _pluginUpdateInfos =
         new Dictionary<string, PluginUpdateInfo>(StringComparer.OrdinalIgnoreCase);
@@ -70,7 +70,8 @@ public partial class ExtensionWindow : UserControl
         Func<ManagerInstance, string, Task<bool>>? handoffPluginFailure = null,
         VersionSettingsService? versionSettingsService = null,
         VersionSnapshotService? versionSnapshotService = null,
-        Action? openPluginMatrix = null)
+        Action? openPluginMatrix = null,
+        UiStateStore? uiStateStore = null)
     {
         _instance = instance;
         _service = service;
@@ -84,6 +85,8 @@ public partial class ExtensionWindow : UserControl
         _versionSettingsService = versionSettingsService;
         _versionSnapshotService = versionSnapshotService;
         _openPluginMatrix = openPluginMatrix;
+        // 默认用真实数据根；测试/冒烟可注入临时目录，避免污染用户 ui-state.json。
+        _uiStateStore = uiStateStore ?? new UiStateStore();
         InitializeComponent();
         _uiStateSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _uiStateSaveTimer.Tick += (_, _) =>
@@ -1093,12 +1096,28 @@ public partial class ExtensionWindow : UserControl
                 }
             }
 
-            var verification = await _marketplaceService.VerifyAsync(item, operationCancellation.Token);
+            var verification = await _marketplaceService.VerifyAsync(item, operationCancellation.Token, _instance);
             if (verification.Status == MarketplaceVerificationStatus.Rejected)
             {
                 MarketplaceStatusText.Text = verification.Message;
                 progressWindow.Fail(verification.Message);
                 return;
+            }
+
+            if (verification.Status == MarketplaceVerificationStatus.Incompatible)
+            {
+                var proceed = System.Windows.MessageBox.Show(
+                    Window.GetWindow(this),
+                    $"该插件与当前实例的 DSh 运行时不兼容：\n\n{verification.Message}\n\n继续{(item.IsInstalled ? "更新" : "安装")}后实例可能无法启动（可用安全模式或「逐插件定位」恢复）。仍要继续吗？",
+                    "插件依赖不兼容",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) == MessageBoxResult.Yes;
+                if (!proceed)
+                {
+                    MarketplaceStatusText.Text = verification.Message;
+                    progressWindow.Fail(verification.Message);
+                    return;
+                }
             }
 
             progressWindow.SetIndeterminate("Plugin 校验通过，正在保存当前配置…");
@@ -1639,13 +1658,27 @@ public partial class ExtensionWindow : UserControl
             {
                 var verdict = await _marketplaceService.VerifyManualInstallAsync(
                     source,
-                    operationCancellation.Token);
+                    operationCancellation.Token,
+                    _instance);
                 if (verdict.Status == MarketplaceVerificationStatus.Rejected)
                 {
                     var proceed = System.Windows.MessageBox.Show(
                         Window.GetWindow(this),
                         $"这个目标不是可用的 DSH 插件：\n\n{verdict.Message}\n\n继续安装的话，它只会出现在「已安装（默认禁用）」里，DSh 不会加载它。仍要继续吗？",
                         "不是 DSH 插件",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning) == MessageBoxResult.Yes;
+                    if (!proceed)
+                    {
+                        throw new InvalidOperationException(verdict.Message);
+                    }
+                }
+                else if (verdict.Status == MarketplaceVerificationStatus.Incompatible)
+                {
+                    var proceed = System.Windows.MessageBox.Show(
+                        Window.GetWindow(this),
+                        $"该插件与当前实例的 DSh 运行时不兼容：\n\n{verdict.Message}\n\n安装后实例可能无法启动（可用安全模式或「逐插件定位」恢复）。仍要继续吗？",
+                        "插件依赖不兼容",
                         MessageBoxButton.YesNo,
                         MessageBoxImage.Warning) == MessageBoxResult.Yes;
                     if (!proceed)
@@ -1819,6 +1852,23 @@ public partial class ExtensionWindow : UserControl
         if (ExtensionList.SelectedItem is not ExtensionEntry entry || entry.Kind != ExtensionKind.Plugin || !entry.Managed) return;
         try
         {
+            // 更新前兼容性预检：最新版本声明的核心 peerDependencies 与实例运行时不符时先警告。
+            if (_marketplaceService is not null)
+            {
+                var verdict = await _marketplaceService.CheckPluginCompatibilityAsync(entry.Name, _instance);
+                if (verdict.Status == MarketplaceVerificationStatus.Incompatible
+                    && System.Windows.MessageBox.Show(
+                        Window.GetWindow(this),
+                        $"“{entry.Name}”的最新版本与当前实例的 DSh 运行时不兼容：\n\n{verdict.Message}\n\n更新后实例可能无法启动。仍要继续吗？",
+                        "插件依赖不兼容",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                {
+                    StatusText.Text = "已取消更新：插件依赖不兼容。";
+                    return;
+                }
+            }
+
             var output = await _service.UpdatePluginAsync(_instance, entry.Name, _nodeRuntime());
             StatusText.Text = string.IsNullOrWhiteSpace(output) ? "Plugin 更新完成。" : $"Plugin 更新完成：{output}";
             await RefreshAsync();
@@ -1962,6 +2012,46 @@ public partial class ExtensionWindow : UserControl
         }
 
         UpdateAllButton.IsEnabled = false;
+
+        // 兼容性预检：不兼容的直接跳过（批量更新不适合逐个弹窗确认）。检查失败时保守放行。
+        var skipped = new List<string>();
+        if (_marketplaceService is not null && pending.Length > 0)
+        {
+            try
+            {
+                var compatible = new List<string>();
+                foreach (var name in pending)
+                {
+                    var verdict = await _marketplaceService.CheckPluginCompatibilityAsync(name, _instance);
+                    if (verdict.Status == MarketplaceVerificationStatus.Incompatible)
+                    {
+                        skipped.Add(name);
+                    }
+                    else
+                    {
+                        compatible.Add(name);
+                    }
+                }
+
+                if (skipped.Count > 0)
+                {
+                    pending = compatible.ToArray();
+                }
+
+                if (pending.Length == 0)
+                {
+                    StatusText.Text = $"没有可安全更新的插件：{string.Join("、", skipped)} 与当前 DSh 运行时不兼容，已跳过。";
+                    UpdateAllButton.IsEnabled = true;
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                skipped.Clear();
+                StatusText.Text = $"兼容性检查失败（{ex.Message}），继续批量更新。";
+            }
+        }
+
         var progress = new Progress<PluginBatchProgress>(item =>
         {
             StatusText.Text = $"正在更新（{item.Index}/{item.Total}）：{item.Name}" +
@@ -1975,7 +2065,9 @@ public partial class ExtensionWindow : UserControl
                 _nodeRuntime(),
                 _pluginInstallMode(),
                 progress);
-            StatusText.Text = summary;
+            StatusText.Text = skipped.Count > 0
+                ? $"{summary}（已跳过不兼容：{string.Join("、", skipped)}）"
+                : summary;
             await RefreshAsync();
             _pluginUpdateInfos = new Dictionary<string, PluginUpdateInfo>(StringComparer.OrdinalIgnoreCase);
             UpdateAllButton.Visibility = Visibility.Collapsed;

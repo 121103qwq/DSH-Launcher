@@ -18,8 +18,8 @@ public sealed partial class ExtensionService
 {
     private const string ProfileName = "web";
     private const string McpPackage = "@deepseek-ai/dsh-mcp-client";
-    private const string BuiltInBase = "@deepseek-ai/dsh-base";
-    private const string BuiltInWeb = "@deepseek-ai/dsh-web-app";
+    private const string BuiltInBase = DshCoreBundles.Base;
+    private const string BuiltInWeb = DshCoreBundles.WebApp;
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromMinutes(10);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -559,14 +559,14 @@ public sealed partial class ExtensionService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var packageName = GetString(bundle);
-            if (string.IsNullOrWhiteSpace(packageName) || !names.Add(packageName))
+            if (string.IsNullOrWhiteSpace(packageName)
+                || DshCoreBundles.IsCore(packageName)
+                || !names.Add(packageName))
             {
                 continue;
             }
 
             var manifest = TryReadPackageManifest(profilePath, packageName);
-            var builtIn = string.Equals(packageName, BuiltInBase, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(packageName, BuiltInWeb, StringComparison.OrdinalIgnoreCase);
             result.Add(new ExtensionEntry(
                 $"plugin:{packageName}",
                 ExtensionKind.Plugin,
@@ -575,7 +575,7 @@ public sealed partial class ExtensionService
                 GetString(manifest, "description"),
                 profilePath,
                 true,
-                !builtIn));
+                true));
         }
 
         if (dependencies is null)

@@ -135,7 +135,7 @@ public sealed class PluginBisectService
                 {
                     try
                     {
-                        await _runner.StopAsync(instance.Id, cancellationToken);
+                        await _runner.StopAsync(instance.Id, cancellationToken, instance.Name);
                     }
                     catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException)
                     {

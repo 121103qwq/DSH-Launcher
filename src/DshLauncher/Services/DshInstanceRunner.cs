@@ -536,6 +536,14 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                             // 树落定后才打印（可能晚于健康检查通过），再等一小段窗口。
                             await WaitForAuthenticatedUrlAsync(running, cancellationToken);
                             _logs.Append(instance.Id, "launcher", $"健康检查通过：{webUrl}");
+                            // 生命周期落主日志（work-log/46 P2-6）：按“实例”排查时不必再去 watchdog.log。
+                            LauncherLog.Info("实例已启动。", null, new
+                            {
+                                instance = instance.Name,
+                                pid = running.Process.Id,
+                                port,
+                                mode = safeProfile is null ? "normal" : "safe"
+                            });
                             instanceLock = null;
                             if (safeProfile is { } usedTier)
                             {
@@ -574,7 +582,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         }
 
                         var retryPort = attempt < PortStartAttempts && IsPortConflict(health.Summary);
-                        if (!await StopCoreAsync(instance.Id, running, releaseInstanceLock: !retryPort))
+                        if (!await StopCoreAsync(instance.Id, running, releaseInstanceLock: !retryPort, instanceName: instance.Name))
                         {
                             // The running entry still owns the lock and process.
                             // Do not let the outer finally release it while the
@@ -599,7 +607,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     {
                         if (running is not null)
                         {
-                            if (!await StopCoreAsync(instance.Id, running, releaseInstanceLock: false))
+                            if (!await StopCoreAsync(instance.Id, running, releaseInstanceLock: false, instanceName: instance.Name))
                             {
                                 instanceLock = null;
                             }
@@ -636,7 +644,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
 
     public async Task<DshInstanceRunResult> StopAsync(
         string instanceId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? instanceName = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         await _operationGate.WaitAsync(cancellationToken);
@@ -660,7 +669,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 return DshInstanceRunResult.Failure("实例当前没有由 Launcher 管理的运行进程。");
             }
 
-            if (!await StopCoreAsync(instanceId, running))
+            if (!await StopCoreAsync(instanceId, running, instanceName: instanceName))
             {
                 return DshInstanceRunResult.Failure(
                     $"无法终止 DSh 进程 {running.Process.Id}；实例仍按运行中保留，未释放实例锁。");
@@ -1001,7 +1010,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private async Task<bool> StopCoreAsync(
         string instanceId,
         RunningDshProcess running,
-        bool releaseInstanceLock = true)
+        bool releaseInstanceLock = true,
+        string? instanceName = null)
     {
         try
         {
@@ -1042,6 +1052,13 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
 
         _logs.Append(instanceId, "launcher", $"已停止进程 pid={running.Process.Id}");
+        LauncherLog.Info("实例已停止。", null, new
+        {
+            instance = instanceName ?? instanceId,
+            instanceId,
+            pid = running.Process.Id,
+            port = running.Port
+        });
 
         if (releaseInstanceLock)
         {
