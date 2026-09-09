@@ -98,7 +98,12 @@ public partial class ExtensionWindow : UserControl
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
         SkillMarketCategoryList.Visibility = _agentOnly ? Visibility.Visible : Visibility.Collapsed;
         CurrentInstanceNameText.Text = instance.Name;
-        CurrentInstanceDetailsText.Text = $"{instance.DshVersionText}\n{instance.KindText} · {instance.RootPath}\nDSH_HOME：{instance.DshHome}";
+        CurrentInstanceDetailsText.Text = $"{instance.DshVersionText}\n{instance.KindText}";
+        // 路径太长会挤占左栏，只显示尾部，完整路径放 Tooltip / 复制按钮。
+        CurrentInstanceRootPathText.Text = "目录：" + TailPath(instance.RootPath);
+        CurrentInstanceRootPathText.ToolTip = instance.RootPath;
+        CurrentInstanceDshHomeText.Text = "DSH_HOME：" + TailPath(instance.DshHome);
+        CurrentInstanceDshHomeText.ToolTip = instance.DshHome;
 
         if (_agentOnly)
         {
@@ -389,6 +394,26 @@ public partial class ExtensionWindow : UserControl
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+
+    private void CopyInstancePaths_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(
+                $"实例目录：{_instance.RootPath}{Environment.NewLine}DSH_HOME：{_instance.DshHome}");
+            StatusText.Text = "已复制实例路径。";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"复制失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>只保留路径尾部（前面的目录层级对定位帮助不大，完整值在 Tooltip 与复制按钮里）。</summary>
+    private static string TailPath(string? path, int maxChars = 42) =>
+        string.IsNullOrEmpty(path) || path.Length <= maxChars
+            ? path ?? string.Empty
+            : "…" + path[^(maxChars - 1)..];
 
     private async Task RefreshAsync()
     {

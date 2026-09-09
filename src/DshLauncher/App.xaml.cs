@@ -20,6 +20,15 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // 验证 harness 专用开关：只加载资源与窗口，不执行单实例互斥/代理/激活管道，
+        // 避免验证进程被当成第二实例而自杀（生产环境不会设置该变量）。
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("DSH_LAUNCHER_VERIFY"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
         // 诊断模式：只导出脱敏诊断包后退出，不创建任何窗口（借鉴 Ruler4396 的 --diagnose，MIT）。
         if (e.Args.Any(argument => string.Equals(argument, "--diagnose", StringComparison.OrdinalIgnoreCase)))
         {

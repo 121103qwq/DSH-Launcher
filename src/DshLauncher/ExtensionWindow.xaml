@@ -42,6 +42,32 @@
                                FontSize="11"
                                TextWrapping="Wrap"
                                Margin="0,4,0,0" />
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock x:Name="CurrentInstanceRootPathText"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="CurrentInstanceDshHomeText"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextTrimming="CharacterEllipsis"
+                                       Margin="0,2,0,0" />
+                        </StackPanel>
+                        <Button x:Name="CopyInstancePathsButton"
+                                Grid.Column="1"
+                                Content="复制"
+                                Click="CopyInstancePaths_Click"
+                                Padding="8,3"
+                                Margin="6,0,0,0"
+                                FontSize="11"
+                                VerticalAlignment="Center"
+                                ToolTip="复制实例目录与 DSH_HOME 路径" />
+                    </Grid>
                 </StackPanel>
 
                 <WrapPanel Grid.Row="1" Margin="0,14,0,8">
