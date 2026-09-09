@@ -78,6 +78,7 @@ dsh-launcher-dev/
 | 50 | `MainWindow.xaml.cs` + `Services/DshInstallMoveService.cs` | 运行时复选框改为**独立多选**（不再互相取消）；新增 `MoveManyAsync`：勾选多个时每个运行时分别搬入目标目录下的同名子文件夹，安装位置指向目标根 |
 | 51 | `MainWindow.xaml.cs` | 「要移动的运行时」卡片**只列实例**（每行：实例名 + 其运行时路径）；配置的安装位置无实例关联时不再显示（无实例时卡片给提示） |
 | 52 | `MainWindow.xaml.cs` | 卡片**列出全部已登记实例**（不再限于 Launcher 数据根；仅排除系统 npm/nodejs 目录）；`<root>\versions\<ver>` 正确归一到 `<root>`；共用同一运行时的多个实例合并为一行（标签用、分隔） |
+| 53 | `Services/LauncherPaths.cs` + `Services/VersionSettingsService.cs` + `Services/ErrorCodes.cs` | **默认安装位置改为 `<exe 同目录>\run_time`**（便携优先）；exe 同目录不可写时自动回退旧默认 `<数据根>\runtime\dsh` 并记 E1009；设置页文案同步 |
 
 ## 行为变化（相对上游）
 
@@ -113,6 +114,7 @@ dsh-launcher-dev/
 30. **运行时多选移动**：卡片复选框可同时勾选多个；勾多个时分别搬入目标目录下的同名子文件夹（避免互相覆盖），安装位置指向目标根
 31. **运行时卡片只列实例**：每行是「实例名 + 该实例的运行时路径」；没有实例关联的安装位置不再出现（无实例时卡片显示提示）
 32. **卡片列出全部实例**：不再限于 Launcher 数据根（仅排除系统 npm/nodejs 目录）；`versions/<版本>` 自动归一到安装根；多个实例共用同一运行时合并为一行
+33. **默认安装位置**：exe 同目录的 `run_time`（便携优先）；exe 同目录不可写时回退 `<数据根>\runtime\dsh`；已显式配置的路径优先，不受影响
 
 ## 构建与发布（SOP）
 
