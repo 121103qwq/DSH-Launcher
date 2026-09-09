@@ -291,7 +291,7 @@ public sealed class DshInstallService
         {
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(path);
             }
         }
         catch

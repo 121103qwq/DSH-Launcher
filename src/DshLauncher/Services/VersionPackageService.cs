@@ -964,7 +964,7 @@ public sealed class VersionPackageService
         {
             if (Directory.Exists(path) && !IsReparsePoint(path))
             {
-                Directory.Delete(path, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(path);
             }
         }
         catch
@@ -995,7 +995,8 @@ public sealed class VersionPackageService
             }
             else
             {
-                File.Delete(entry);
+                // attachments 等对象存储文件带只读属性，直接 File.Delete 会 Access denied。
+                FileSystemCleanup.DeleteFile(entry);
             }
         }
 

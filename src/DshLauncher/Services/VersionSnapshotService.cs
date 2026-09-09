@@ -61,6 +61,49 @@ public sealed class VersionSnapshotService
         _isRunning = isRunning ?? (_ => false);
     }
 
+    /// <summary>
+    /// 从快照里只取出一个文件（用于误删后的精确恢复，不影响其它配置）。
+    /// 快照为当前 Windows 用户 DPAPI 加密，同一用户才能解开。
+    /// </summary>
+    internal static bool TryExtractSnapshotFile(string snapshotPath, string relativePath, out byte[]? content)
+    {
+        content = null;
+        try
+        {
+            var bytes = File.ReadAllBytes(snapshotPath);
+            if (bytes.Length <= Magic.Length
+                || !bytes.AsSpan(0, Magic.Length).SequenceEqual(Magic))
+            {
+                return false;
+            }
+
+            var plain = ProtectedData.Unprotect(
+                bytes.AsSpan(Magic.Length).ToArray(),
+                Entropy,
+                DataProtectionScope.CurrentUser);
+            using var stream = new MemoryStream(plain);
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+            var entry = archive.GetEntry($"files/{relativePath.Replace('\\', '/')}");
+            if (entry is null)
+            {
+                return false;
+            }
+
+            using var entryStream = entry.Open();
+            using var memory = new MemoryStream();
+            entryStream.CopyTo(memory);
+            content = memory.ToArray();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException
+            or InvalidDataException
+            or CryptographicException
+            or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     public VersionSnapshotInfo CreateSnapshot(
         ManagerInstance instance,
         string reason,

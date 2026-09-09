@@ -307,7 +307,7 @@ public sealed class PortableNodeService
         {
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(path);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

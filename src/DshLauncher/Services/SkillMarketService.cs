@@ -409,7 +409,7 @@ public sealed class SkillMarketService
         {
             try
             {
-                Directory.Delete(temporaryRoot, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(temporaryRoot);
             }
             catch (IOException)
             {

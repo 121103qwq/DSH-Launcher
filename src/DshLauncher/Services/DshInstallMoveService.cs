@@ -64,7 +64,8 @@ public sealed class DshInstallMoveService
     public async Task<DshInstallMoveResult> MoveAsync(
         string targetDirectory,
         Func<string, bool> isInstanceRunning,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? sourceDirectory = null)
     {
         string? source = null;
         string? target = null;
@@ -76,7 +77,10 @@ public sealed class DshInstallMoveService
                 return DshInstallMoveResult.Failure("请先填写目标安装位置。");
             }
 
-            source = ResolveCurrentInstallDirectory();
+            // 显式指定源（如“当前选中实例的运行时”）优先；未指定时用配置的安装目录。
+            source = !string.IsNullOrWhiteSpace(sourceDirectory) && LooksLikeInstall(sourceDirectory)
+                ? Path.GetFullPath(sourceDirectory)
+                : ResolveCurrentInstallDirectory();
             if (source is null)
             {
                 return DshInstallMoveResult.Failure("没有找到可移动的 DSh 安装目录（可能尚未安装）。", null, target);
@@ -289,7 +293,7 @@ public sealed class DshInstallMoveService
             throw new IOException("跨盘复制后的目录不完整，已回滚（原目录未删除）。");
         }
 
-        Directory.Delete(source, recursive: true);
+        FileSystemCleanup.DeleteDirectoryRecursive(source);
     }
 
     private static void CopyDirectory(string source, string target)
@@ -322,7 +326,7 @@ public sealed class DshInstallMoveService
         {
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(path);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

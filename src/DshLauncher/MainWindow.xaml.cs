@@ -639,6 +639,45 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string GetConfiguredDshInstallDirectory() =>
         _versionSettingsService.ResolveDshInstallDirectory();
 
+    /// <summary>
+    /// 当前选中实例可移动的运行时根目录：只允许 Launcher 数据根之下的运行时，
+    /// 避免把系统 npm 全局安装搬走；<root>ersions\<ver>\dsh.cmd 归一到 <root>。
+    /// </summary>
+    private static string? ResolveMovableRuntimeDirectory(ManagerInstance? instance)
+    {
+        if (instance?.DshExecutablePath is not { Length: > 0 } executable)
+        {
+            return null;
+        }
+
+        string directory;
+        try
+        {
+            directory = Path.GetDirectoryName(Path.GetFullPath(executable)) ?? string.Empty;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
+        if (directory.Length == 0)
+        {
+            return null;
+        }
+
+        var parent = Path.GetDirectoryName(directory);
+        if (parent is not null
+            && string.Equals(Path.GetFileName(directory), "versions", StringComparison.OrdinalIgnoreCase))
+        {
+            directory = parent;
+        }
+
+        var launcherRoot = new LauncherPaths().RootDirectory;
+        var insideLauncherRoot = string.Equals(directory, launcherRoot, StringComparison.OrdinalIgnoreCase)
+            || directory.StartsWith(launcherRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        return insideLauncherRoot && DshInstallMoveService.LooksLikeInstall(directory) ? directory : null;
+    }
+
     private enum TestRuntimeKind
     {
         Node,
@@ -1701,7 +1740,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Content = "移动已有安装",
             Padding = new Thickness(12, 7, 12, 7),
             Margin = new Thickness(8, 0, 0, 0),
-            ToolTip = "把当前已安装的 DSh 运行目录（含各版本）整体搬到上面填写的新位置，并自动更新引用它的实例"
+            ToolTip = "把当前选中实例正在使用的 DSh 运行目录（含各版本）整体搬到上面填写的新位置，并自动更新引用它的实例"
         };
         Grid.SetColumn(browseDshInstallButton, 1);
         Grid.SetColumn(saveDshInstallButton, 2);
@@ -1856,7 +1895,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var mover = new DshInstallMoveService(
                 registry: _instanceRegistry,
                 settings: _versionSettingsService);
-            var current = mover.ResolveCurrentInstallDirectory();
+            // 优先搬“当前选中实例正在用的运行时”（用户直觉：“移动这个实例”）；
+            // 没有选中/不属于 Launcher 管理时回退到设置里配置的安装目录。
+            var current = ResolveMovableRuntimeDirectory(SelectedInstance)
+                ?? mover.ResolveCurrentInstallDirectory();
             if (current is null)
             {
                 ShowNotice("没有找到可移动的 DSh 安装目录（可能尚未安装）。");
@@ -1893,7 +1935,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var result = await mover.MoveAsync(
                     target,
                     id => _instanceRunner.IsRunning(id),
-                    _windowCancellation.Token);
+                    _windowCancellation.Token,
+                    sourceDirectory: current);
                 ShowNotice(result.Message);
                 if (result.Ok)
                 {

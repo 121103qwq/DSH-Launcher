@@ -69,6 +69,8 @@ dsh-launcher-dev/
 | 43 | `MainWindow.xaml.cs` | 修复非最大化下右侧/底部内容被裁切：`Window_OnLoaded` 对 `SystemParameters.WorkArea`（本就是 DIP）**二次除以 DpiScale** → Width 小于 MinWidth，原生窗口偏小、布局偏大；删除该冗余块（`WindowSizeHelper.FitInitialSize` 已正确处理），并新增启动尺寸诊断日志 |
 | 44 | `Services/DshInstallMoveService.cs`（新）+ `MainWindow.xaml.cs` | 「移动已有安装」：把已安装的 DSh 运行目录（含 `versions/`）整体搬到新位置——同盘原子重命名、跨盘复制+校验+删源；同步重写实例的 RootPath/Exe/LaunchSpec 与 `DshInstallDirectory`；目标非空/实例运行中/嵌套目录均拒绝，失败尽力回滚（E1008） |
 
+| 45 | `Services/FileSystemCleanup.cs`（新）+ 11 处删除点 + `DshInstallMoveService` + `VersionSnapshotService` | 修复“删除版本 Access denied”：dsh 的 attachments 对象存储带 ReadOnly，递归删除前先清属性（11 处统一收口）；「移动已有安装」改为以**当前选中实例的运行时**为源（回退配置目录）；新增快照单文件恢复 `TryExtractSnapshotFile` |
+
 ## 行为变化（相对上游）
 
 1. **插件依赖自愈**：导入/扫描已有实例启动前自动 `pnpm install` 恢复插件（修复"健康检查前退出"）

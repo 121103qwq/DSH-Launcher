@@ -143,7 +143,7 @@ public sealed class WebCacheVersionLedger
 
                 try
                 {
-                    Directory.Delete(target, recursive: true);
+                    FileSystemCleanup.DeleteDirectoryRecursive(target);
                     removed++;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

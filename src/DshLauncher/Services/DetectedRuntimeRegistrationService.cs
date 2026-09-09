@@ -229,7 +229,7 @@ public sealed class DetectedRuntimeRegistrationService
             if (Directory.Exists(instance.DshHome)
                 && (File.GetAttributes(instance.DshHome) & FileAttributes.ReparsePoint) == 0)
             {
-                Directory.Delete(instance.DshHome, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(instance.DshHome);
             }
         }
         catch

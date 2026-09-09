@@ -321,7 +321,7 @@ internal sealed class PluginProfileResidue
         {
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(path);
             }
             else if (File.Exists(path))
             {

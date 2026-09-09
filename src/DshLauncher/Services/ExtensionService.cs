@@ -1235,7 +1235,7 @@ public sealed partial class ExtensionService
         {
             if (Directory.Exists(path))
             {
-                Directory.Delete(path, recursive: true);
+                FileSystemCleanup.DeleteDirectoryRecursive(path);
             }
         }
         catch
@@ -1786,7 +1786,7 @@ public sealed partial class ExtensionService
             throw new InvalidOperationException("不能删除实例生态根目录。");
         }
 
-        Directory.Delete(directory, recursive: true);
+        FileSystemCleanup.DeleteDirectoryRecursive(directory);
     }
 
     private static SkillMetadata? ParseSkillFrontmatter(string path)
