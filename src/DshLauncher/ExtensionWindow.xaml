@@ -6,6 +6,54 @@
              HorizontalAlignment="Stretch"
              VerticalAlignment="Stretch"
              Loaded="Window_OnLoaded">
+    <UserControl.Resources>
+        <!-- 路径链接：像超链接一样可点（复制），悬停出悬浮卡片 -->
+        <Style x:Key="PathLinkButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <TextBlock x:Name="LinkText"
+                                   Text="{TemplateBinding Content}"
+                                   Foreground="{TemplateBinding Foreground}"
+                                   FontSize="{TemplateBinding FontSize}"
+                                   TextTrimming="CharacterEllipsis"
+                                   HorizontalAlignment="Left" />
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="LinkText" Property="TextDecorations" Value="Underline" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 路径悬浮卡片（独立浮层，不占原界面布局） -->
+        <Style x:Key="PathCardToolTip" TargetType="ToolTip">
+            <Setter Property="HasDropShadow" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{StaticResource CardBrush}"
+                                BorderBrush="{StaticResource LineBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="10,8"
+                                MaxWidth="420">
+                            <ContentPresenter />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
     <Grid Margin="0">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="340" />
@@ -42,35 +90,19 @@
                                FontSize="11"
                                TextWrapping="Wrap"
                                Margin="0,4,0,0" />
-                    <Grid Margin="0,4,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock x:Name="CurrentInstanceRootPathText"
-                                       Foreground="{StaticResource MutedBrush}"
-                                       FontSize="11"
-                                       TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="CurrentInstanceDshHomeText"
-                                       Foreground="{StaticResource MutedBrush}"
-                                       FontSize="11"
-                                       TextTrimming="CharacterEllipsis"
-                                       Margin="0,2,0,0" />
-                        </StackPanel>
-                        <Button x:Name="CopyInstancePathsButton"
-                                Grid.Column="1"
-                                Content="复制"
-                                Click="CopyInstancePaths_Click"
-                                Padding="8,3"
-                                Margin="6,0,0,0"
-                                FontSize="11"
-                                VerticalAlignment="Center"
-                                ToolTip="复制实例目录与 DSH_HOME 路径" />
-                    </Grid>
+                    <StackPanel Margin="0,4,0,0">
+                        <Button x:Name="CurrentInstanceRootPathLink"
+                                Style="{StaticResource PathLinkButton}"
+                                Click="PathLink_Click" />
+                        <Button x:Name="CurrentInstanceDshHomeLink"
+                                Style="{StaticResource PathLinkButton}"
+                                Click="PathLink_Click"
+                                Margin="0,3,0,0" />
+                    </StackPanel>
                 </StackPanel>
 
-                <WrapPanel Grid.Row="1" Margin="0,14,0,8">
+                <StackPanel Grid.Row="1" Margin="0,14,0,8">
+                    <WrapPanel>
                     <Button Content="刷新" Click="Refresh_Click" Margin="0,0,7,7" Padding="12,7" />
                     <Button x:Name="CheckUpdatesButton"
                             Content="检查更新"
@@ -112,13 +144,14 @@
                             Click="ImportPreset_Click"
                             Margin="0,0,7,7"
                             Padding="12,7" />
+                    </WrapPanel>
                     <CheckBox x:Name="DshMarketHotReloadCheckBox"
                               Content="使用 dsh-market 热加载主题"
                               Checked="DshMarketHotReloadCheckBox_Changed"
                               Unchecked="DshMarketHotReloadCheckBox_Changed"
                               VerticalAlignment="Center"
-                              Margin="2,4,7,7" />
-                </WrapPanel>
+                              Margin="2,2,0,0" />
+                </StackPanel>
 
                 <Border Grid.Row="2"
                         Background="#F8FBFE"
@@ -158,14 +191,12 @@
                                             <TextBlock Text="{Binding Name}"
                                                        FontWeight="SemiBold"
                                                        HorizontalAlignment="Stretch"
-                                                       MaxWidth="184"
                                                        TextTrimming="CharacterEllipsis"
                                                        ToolTip="{Binding Name}" />
                                             <TextBlock Text="{Binding Description, TargetNullValue=没有描述}"
                                                        Foreground="{StaticResource MutedBrush}"
                                                        FontSize="11"
                                                        HorizontalAlignment="Stretch"
-                                                       MaxWidth="184"
                                                        TextWrapping="NoWrap"
                                                        TextTrimming="CharacterEllipsis"
                                                        ToolTip="{Binding Description}"
@@ -206,12 +237,25 @@
                                    FontSize="14"
                                    TextWrapping="Wrap"
                                    Margin="0,8,0,0" />
-                        <TextBlock x:Name="SelectedDetails"
+                        <TextBlock x:Name="SelectedMeta"
                                    Foreground="{StaticResource MutedBrush}"
                                    FontSize="11"
-                                   TextWrapping="Wrap"
-                                   MaxHeight="56"
                                    Margin="0,5,0,0" />
+                        <TextBlock x:Name="SelectedDescription"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   FontSize="11"
+                                   TextWrapping="NoWrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,3,0,0" />
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                            <TextBlock Text="来源："
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center" />
+                            <Button x:Name="SelectedLocationLink"
+                                    Style="{StaticResource PathLinkButton}"
+                                    Click="PathLink_Click" />
+                        </StackPanel>
                         <WrapPanel Margin="0,10,0,0">
                             <Button x:Name="EnableButton" Content="启用" Click="Enable_Click" Margin="0,0,6,6" Padding="10,6" />
                             <Button x:Name="DisableButton" Content="禁用" Click="Disable_Click" Margin="0,0,6,6" Padding="10,6" />

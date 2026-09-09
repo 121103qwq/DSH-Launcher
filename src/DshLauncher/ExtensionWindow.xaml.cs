@@ -99,11 +99,13 @@ public partial class ExtensionWindow : UserControl
         SkillMarketCategoryList.Visibility = _agentOnly ? Visibility.Visible : Visibility.Collapsed;
         CurrentInstanceNameText.Text = instance.Name;
         CurrentInstanceDetailsText.Text = $"{instance.DshVersionText}\n{instance.KindText}";
-        // 路径太长会挤占左栏，只显示尾部，完整路径放 Tooltip / 复制按钮。
-        CurrentInstanceRootPathText.Text = "目录：" + TailPath(instance.RootPath);
-        CurrentInstanceRootPathText.ToolTip = instance.RootPath;
-        CurrentInstanceDshHomeText.Text = "DSH_HOME：" + TailPath(instance.DshHome);
-        CurrentInstanceDshHomeText.ToolTip = instance.DshHome;
+        // 路径太长会挤占左栏：链接化（点击复制，悬停出悬浮卡片，不占界面布局）。
+        CurrentInstanceRootPathLink.Content = "目录：" + TailPath(instance.RootPath);
+        CurrentInstanceRootPathLink.Tag = instance.RootPath;
+        CurrentInstanceRootPathLink.ToolTip = CreatePathCard("实例目录", instance.RootPath);
+        CurrentInstanceDshHomeLink.Content = "DSH_HOME：" + TailPath(instance.DshHome);
+        CurrentInstanceDshHomeLink.Tag = instance.DshHome;
+        CurrentInstanceDshHomeLink.ToolTip = CreatePathCard("DSH_HOME", instance.DshHome);
 
         if (_agentOnly)
         {
@@ -395,18 +397,100 @@ public partial class ExtensionWindow : UserControl
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
-    private void CopyInstancePaths_Click(object sender, RoutedEventArgs e)
+    private void PathLink_Click(object sender, RoutedEventArgs e)
     {
+        if ((sender as FrameworkElement)?.Tag is not string text || string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
         try
         {
-            System.Windows.Clipboard.SetText(
-                $"实例目录：{_instance.RootPath}{Environment.NewLine}DSH_HOME：{_instance.DshHome}");
-            StatusText.Text = "已复制实例路径。";
+            System.Windows.Clipboard.SetText(text);
+            StatusText.Text = "已复制路径：" + text;
         }
         catch (Exception ex)
         {
             StatusText.Text = $"复制失败：{ex.Message}";
         }
+    }
+
+    /// <summary>悬浮卡片：独立浮层显示完整路径，不占原界面布局。</summary>
+    private System.Windows.Controls.ToolTip CreatePathCard(string title, string fullPath)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = title,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 12
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = fullPath,
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 380,
+            Margin = new Thickness(0, 4, 0, 0)
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "点击即可复制",
+            FontSize = 11,
+            Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush"),
+            Margin = new Thickness(0, 8, 0, 0)
+        });
+        return new System.Windows.Controls.ToolTip { Style = (Style)FindResource("PathCardToolTip"), Content = panel };
+    }
+
+    /// <summary>插件详情卡片：类型/状态/完整来源/描述，避免在左栏里堆文字。</summary>
+    private System.Windows.Controls.ToolTip CreatePluginDetailCard(ExtensionEntry entry)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(new TextBlock
+        {
+            Text = entry.Name,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 380
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"类型：{entry.Kind}　状态：{(entry.Enabled ? "已启用" : "已禁用")}",
+            FontSize = 11,
+            Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush"),
+            Margin = new Thickness(0, 4, 0, 0)
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = entry.Location,
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 380,
+            Margin = new Thickness(0, 6, 0, 0)
+        });
+        if (!string.IsNullOrWhiteSpace(entry.Description))
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = entry.Description,
+                FontSize = 11,
+                Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush"),
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = 380,
+                Margin = new Thickness(0, 6, 0, 0)
+            });
+        }
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "点击路径即可复制",
+            FontSize = 11,
+            Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush"),
+            Margin = new Thickness(0, 8, 0, 0)
+        });
+        return new System.Windows.Controls.ToolTip { Style = (Style)FindResource("PathCardToolTip"), Content = panel };
     }
 
     /// <summary>只保留路径尾部（前面的目录层级对定位帮助不大，完整值在 Tooltip 与复制按钮里）。</summary>
@@ -1779,12 +1863,22 @@ public partial class ExtensionWindow : UserControl
         if (ExtensionList.SelectedItem is not ExtensionEntry entry)
         {
             SelectedName.Text = "未选择条目";
-            SelectedDetails.Text = string.Empty;
+            SelectedMeta.Text = string.Empty;
+            SelectedDescription.Text = string.Empty;
+            SelectedDescription.ToolTip = null;
+            SelectedLocationLink.Content = string.Empty;
+            SelectedLocationLink.Tag = null;
+            SelectedLocationLink.ToolTip = null;
             return;
         }
 
         SelectedName.Text = entry.Name;
-        SelectedDetails.Text = $"类型：{entry.Kind}\n状态：{(entry.Enabled ? "已启用" : "已禁用")}\n来源：{entry.Location}\n{entry.Description}";
+        SelectedMeta.Text = $"类型：{entry.Kind}　状态：{(entry.Enabled ? "已启用" : "已禁用")}";
+        SelectedDescription.Text = string.IsNullOrWhiteSpace(entry.Description) ? "没有描述" : entry.Description;
+        SelectedDescription.ToolTip = string.IsNullOrWhiteSpace(entry.Description) ? null : entry.Description;
+        SelectedLocationLink.Content = TailPath(entry.Location, 40);
+        SelectedLocationLink.Tag = entry.Location;
+        SelectedLocationLink.ToolTip = CreatePluginDetailCard(entry);
         var protectedBuiltIn = entry.Kind == ExtensionKind.Plugin
             && ExtensionService.IsProtectedBuiltInPlugin(entry.Name);
         if (protectedBuiltIn)
