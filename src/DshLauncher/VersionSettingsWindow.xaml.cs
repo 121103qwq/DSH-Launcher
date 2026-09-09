@@ -320,7 +320,18 @@ public partial class VersionSettingsWindow : UserControl
 
     private void StopHealthRefresh() => _healthTimer?.Stop();
 
-    private void Window_OnUnloaded(object sender, RoutedEventArgs e) => StopHealthRefresh();
+    private void Window_OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        StopHealthRefresh();
+        try
+        {
+            _bisectCancellation?.Cancel();
+        }
+        catch
+        {
+            // 已释放/已取消都无所谓。
+        }
+    }
 
     private void RefreshHealth_Click(object sender, RoutedEventArgs e) => RefreshHealthPage();
 
@@ -411,6 +422,7 @@ public partial class VersionSettingsWindow : UserControl
 
         LoadAutoStopControls();
         LoadCrashControls();
+        UpdateBisectControls();
     }
 
     private bool _autoStopControlsInitialized;
@@ -454,6 +466,112 @@ public partial class VersionSettingsWindow : UserControl
     }
 
     private bool _crashControlsInitialized;
+    private System.Threading.CancellationTokenSource? _bisectCancellation;
+    private string? _bisectCulprit;
+
+    /// <summary>插件排查：状态文案 + 按钮可用性（每次刷新更新）。</summary>
+    private void UpdateBisectControls()
+    {
+        var thirdParty = _healthProviders?.ThirdPartyPlugins?.Invoke(_instance!) ?? Array.Empty<string>();
+        var running = _healthProviders?.IsInstanceRunning?.Invoke(_instance!) ?? false;
+        var busy = _bisectCancellation is not null;
+        BisectButton.IsEnabled = !busy && thirdParty.Count > 0 && !running;
+        if (busy)
+        {
+            return;
+        }
+
+        if (_bisectCulprit is { } culprit)
+        {
+            DisableCulpritButton.Visibility = Visibility.Visible;
+            return;
+        }
+
+        DisableCulpritButton.Visibility = Visibility.Collapsed;
+        if (thirdParty.Count == 0)
+        {
+            BisectStatusText.Text = "该实例没有第三方插件，无需定位。";
+            return;
+        }
+
+        BisectStatusText.Text = running
+            ? $"当前有 {thirdParty.Count} 个第三方插件；请先停止实例再定位。"
+            : $"当前有 {thirdParty.Count} 个第三方插件：{string.Join("、", thirdParty)}";
+    }
+
+    private async void BisectPlugins_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null || _healthProviders?.RunPluginBisect is null)
+        {
+            return;
+        }
+
+        if (_healthProviders.IsInstanceRunning?.Invoke(_instance) == true)
+        {
+            BisectStatusText.Text = "请先停止实例，再开始定位。";
+            return;
+        }
+
+        _bisectCulprit = null;
+        DisableCulpritButton.Visibility = Visibility.Collapsed;
+        _bisectCancellation = new System.Threading.CancellationTokenSource();
+        BisectButton.IsEnabled = false;
+        BisectStatusText.Text = "正在定位…（每轮会启动一次实例，请稍候）";
+        var progress = new Progress<string>(text => BisectStatusText.Text = text);
+        try
+        {
+            var result = await _healthProviders.RunPluginBisect(_instance, _bisectCancellation.Token, progress);
+            _bisectCulprit = result.Culprit;
+            BisectStatusText.Text = result.Trace.Count > 0
+                ? $"{result.Summary}\n{string.Join("\n", result.Trace)}"
+                : result.Summary;
+            if (result.Culprit is { } culprit)
+            {
+                DisableCulpritButton.Content = $"禁用 {culprit} 并正常启动";
+                DisableCulpritButton.Visibility = Visibility.Visible;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            BisectStatusText.Text = $"定位失败：{ex.Message}";
+        }
+        finally
+        {
+            _bisectCancellation?.Dispose();
+            _bisectCancellation = null;
+            BisectButton.IsEnabled = true;
+        }
+    }
+
+    private async void DisableCulprit_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null || _bisectCulprit is null || _healthProviders?.DisablePlugin is null)
+        {
+            return;
+        }
+
+        var culprit = _bisectCulprit;
+        var owner = Window.GetWindow(this);
+        var message = $"禁用插件 {culprit} 并正常启动实例？\n\n会先把当前配置存成回滚点，可随时恢复。";
+        var confirmed = owner is null
+            ? System.Windows.MessageBox.Show(message, "禁用插件", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes
+            : System.Windows.MessageBox.Show(owner, message, "禁用插件", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+        if (!confirmed)
+        {
+            return;
+        }
+
+        DisableCulpritButton.IsEnabled = false;
+        try
+        {
+            await _healthProviders.DisablePlugin(_instance, culprit);
+            BisectStatusText.Text = $"已禁用 {culprit}，正在正常启动…";
+        }
+        finally
+        {
+            DisableCulpritButton.IsEnabled = true;
+        }
+    }
 
     /// <summary>崩溃恢复控件：只初始化一次，刷新时只更新状态/列表（不覆盖用户选择）。</summary>
     private void LoadCrashControls()

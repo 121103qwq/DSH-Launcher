@@ -92,6 +92,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly StartupEvidenceStore _startupEvidence;
     private readonly InstanceIdleTracker _idleTracker = new();
     private readonly CrashRecoveryService _crashRecovery;
+    private readonly PluginBisectService _pluginBisect;
     private readonly Dictionary<string, CancellationTokenSource> _crashRestartTokens = new(StringComparer.Ordinal);
 
     private readonly WatchdogRuntime _watchdog;
@@ -122,6 +123,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _instanceRunner = new(
             extensionService: _extensionService,
             proxySettings: () => ProxySettings.From(_versionSettingsService.ReadLauncherSettings()));
+        _pluginBisect = new PluginBisectService(_instanceRunner, _safeProfileService);
         _watchdog = new WatchdogRuntime(ReadWatchdogProbeSeconds());
         _watchdog.GhostAdopted += OnGhostAdopted;
         _watchdog.InstanceStopped += OnInstanceStopped;
@@ -1239,6 +1241,90 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
     }
 
+    /// <summary>逐插件定位（隔离 profile 二分试验，不改用户文件）。</summary>
+    private async Task<PluginBisectResult> RunPluginBisectAsync(
+        ManagerInstance instance,
+        CancellationToken cancellationToken,
+        IProgress<string> progress)
+    {
+        var current = ResolveInstanceById(Instances, instance.Id) ?? instance;
+        return await _pluginBisect.RunAsync(current, _nodeRuntime, progress, cancellationToken);
+    }
+
+    /// <summary>定位到肇事插件后：禁用（自动存回滚点）并正常启动。</summary>
+    private async Task DisablePluginAndStartAsync(ManagerInstance instance, string pluginName)
+    {
+        var current = ResolveInstanceById(Instances, instance.Id);
+        if (current is null)
+        {
+            return;
+        }
+
+        if (_instanceRunner.IsRunning(current.Id))
+        {
+            ShowNotice("请先停止实例，再禁用插件。");
+            return;
+        }
+
+        try
+        {
+            var entry = new ExtensionEntry(
+                Id: pluginName,
+                Kind: ExtensionKind.Plugin,
+                Name: pluginName,
+                Version: null,
+                Description: null,
+                Location: string.Empty,
+                Enabled: true,
+                Managed: true);
+            await _extensionService.SetPluginEnabledAsync(current, entry, enabled: false);
+            LauncherLog.Info("已禁用插件（逐插件定位结果）。", ErrorCodes.E1017,
+                new { instance = current.Name, plugin = pluginName });
+            ShowNotice($"已禁用 {pluginName}（已自动创建回滚点），正在正常启动…");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+            or InvalidDataException
+            or IOException
+            or FileNotFoundException
+            or UnauthorizedAccessException)
+        {
+            ShowNotice($"禁用插件失败：{ex.Message}");
+            return;
+        }
+
+        if (!TryBeginLifecycleOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            if (!await EnsureRuntimeReadyAsync(current))
+            {
+                return;
+            }
+
+            var resolved = ResolveInstanceById(Instances, current.Id);
+            if (resolved is null)
+            {
+                return;
+            }
+
+            await StartPreparedInstanceAndOpenAsync(resolved);
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"启动失败：{ex.Message}");
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
+    }
+
     private void CancelPendingCrashRestart(string? instanceId)
     {
         if (string.IsNullOrWhiteSpace(instanceId))
@@ -2046,7 +2132,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 instance => _startupEvidence.Clear(instance.Id),
                 instance => _crashRecovery.GetStatus(instance.Id),
                 instance => _crashRecovery.GetRecords(instance.Id),
-                ClearCrashCooldownAndRestart)));
+                ClearCrashCooldownAndRestart,
+                instance => _safeProfileService.HasThirdPartyBundles(instance, out var thirdParty)
+                    ? thirdParty
+                    : Array.Empty<string>(),
+                instance => _instanceRunner.IsRunning(instance.Id),
+                RunPluginBisectAsync,
+                DisablePluginAndStartAsync)));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }

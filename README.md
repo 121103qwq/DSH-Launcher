@@ -89,6 +89,7 @@ dsh-launcher-dev/
 | 61 | `Services/InstanceIdleTracker.cs`（新）+ `Services/DshInstanceRunner.cs` + `Watchdog/ProcessQuery.cs` + `MainWindow.xaml.cs` + `VersionSettingsWindow.xaml(.cs)` + `Models/VersionSettingsModels.cs` | **空闲自动停止（可开关）**：每实例开关 + 5–240 分钟阈值；后台任务不算空闲（进程树外部连接/CPU≥1%/会话写入/dsh 输出/Launcher 忙）；停止复用既有链路并写证据；修两个真缺陷（活动信号漏接 CPU 与写入；运行状况页每秒刷新覆盖用户正在编辑的控件） |
 | 62 | `Services/StartupEvidenceStore.cs` + `MainWindow.xaml.cs` + `VersionSettingsWindow.xaml(.cs)` + `Services/DiagnoseExportService.cs` | **启动证据落盘**：内存环形 + `<DSH_HOME>/.dsh-launcher/startup-evidence.jsonl`（最近 200 条、每 25 次追加裁剪、损坏行容忍）；运行状况页「清空启动证据」；诊断包附带证据文件 |
 | 63 | `Models/CrashRecoveryModels.cs`（新）+ `Services/CrashRecoveryService.cs`（新）+ `Services/DshInstanceRunner.cs` + `MainWindow.xaml(.cs)` + `VersionSettingsWindow.xaml(.cs)` + `Models/VersionSettingsModels.cs` + `Services/ErrorCodes.cs` | **崩溃恢复策略**：每实例「仅通知 / 自动重启（退避 5s→15s→1m→5m，默认上限 5）/ 直接冷却关闭 / 重启后冷却」；主动停止不误判（手动/空闲/安全模式/更新/退出）；崩溃现场落盘（退出码/运行时长/日志尾部/证据/资源，最近 10 条）；冷却跨 Launcher 重启保留 + 「崩溃冷却」徽标 + 「清冷却并重启」；稳定运行 10 分钟重置计数；E1016 |
+| 64 | `Services/PluginBisectService.cs`（新）+ `Services/SafeProfileService.cs` + `Services/DshInstanceRunner.cs` + `MainWindow.xaml.cs` + `VersionSettingsWindow.xaml(.cs)` + `Services/ErrorCodes.cs` | **逐插件定位**：隔离 profile（复制清单 + 改写 bundles + node_modules 目录联接）二分禁用，2–4 轮锁定肇事插件；结果一键「禁用并正常启动」（自动存回滚点）；清理不跟随联接；E1017 |
 
 ## 行为变化（相对上游）
 
@@ -156,6 +157,8 @@ dsh-launcher-dev/
 62. **崩溃恢复**：实例设置 → 运行状况可设「仅通知（默认）/ 自动重启（退避 5s→15s→1m→5m，上限 1–10 次）/ 直接冷却关闭 / 自动重启后冷却」；稳定运行 10 分钟后再崩溃计数清零
 63. **主动停止不算崩溃**：手动停止、空闲自动停止、安全模式切换、插件重试、更新重启、退出 Launcher 都不触发自动重启
 64. **崩溃现场与冷却**：每次崩溃记录退出码/运行时长/日志尾部/启动证据/资源采样（最近 10 条，落盘）；达上限转「冷却中」，实例卡片显示“崩溃冷却”徽标（跨 Launcher 重启保留），运行状况页可「清冷却并重启」
+65. **逐插件定位**：运行状况 →「插件排查」→「定位肇事插件」；实例需先停止；隔离 profile 二分禁用（不动用户文件），2–4 轮给出肇事插件，可一键「禁用 X 并正常启动」（自动存回滚点）
+66. **定位的实现要点**：试验 profile 复制用户清单并改写 bundles，`node_modules` 用目录联接指向用户 web profile（否则第三方插件无法解析）；结束时先摘联接再删隔离目录，绝不跟随到用户依赖
 
 ## 待办（功能完成后统一处理）
 

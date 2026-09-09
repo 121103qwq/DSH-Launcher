@@ -37,6 +37,9 @@ public sealed class SafeProfileService
     /// <summary>隔离 profile 名（dsh 只接受不含分隔符的名字；"."/".."/"node_modules" 被 dsh 拒绝）。</summary>
     public const string SafeProfileName = ".dsh-safe";
 
+    /// <summary>逐插件定位用的隔离 profile 名（与安全模式分开，避免互相覆盖）。</summary>
+    public const string BisectProfileName = ".dsh-bisect";
+
     /// <summary>dsh 官方 web profile 模板核心。</summary>
     public static readonly IReadOnlyList<string> WebCoreMinimal = new[]
     {
@@ -57,6 +60,71 @@ public sealed class SafeProfileService
         Path.Combine(GetSafeProfileDirectory(instance), "package.json");
 
     public bool SafeProfileExists(ManagerInstance instance) => File.Exists(GetSafeProfilePackageJson(instance));
+
+    /// <summary>任意隔离 profile 的目录（逐插件定位用 <see cref="BisectProfileName"/>）。</summary>
+    public string GetProfileDirectory(ManagerInstance instance, string profileName) =>
+        Path.Combine(GetProfilesDirectory(instance), profileName);
+
+    public string GetProfilePackageJson(ManagerInstance instance, string profileName) =>
+        Path.Combine(GetProfileDirectory(instance, profileName), "package.json");
+
+    /// <summary>删除某个隔离 profile 目录（只删隔离目录，不碰用户文件）。</summary>
+    public void CleanupProfile(ManagerInstance instance, string profileName)
+    {
+        try
+        {
+            var directory = GetProfileDirectory(instance, profileName);
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LauncherLog.Warn("隔离 profile 清理失败。", ErrorCodes.E1014,
+                new { instance = instance.Name, profile = profileName, error = ex.Message });
+        }
+    }
+
+    /// <summary>用指定 bundles 写一个隔离 profile（逐插件定位：核心 + 未禁用的第三方）。</summary>
+    public SafeProfileBuildResult BuildWithBundles(
+        ManagerInstance instance,
+        string profileName,
+        IReadOnlyList<string> bundles)
+    {
+        var directory = GetProfileDirectory(instance, profileName);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var manifest = new Dictionary<string, object?>
+            {
+                ["name"] = $"dsh-profile-{profileName.TrimStart('.')}",
+                ["private"] = true,
+                ["dsh"] = new Dictionary<string, object?>
+                {
+                    ["profile"] = new Dictionary<string, object?>
+                    {
+                        ["bundles"] = bundles
+                    }
+                }
+            };
+            var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }) + "\n";
+            var path = GetProfilePackageJson(instance, profileName);
+            var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+            File.WriteAllText(temporary, json, new UTF8Encoding(false));
+            File.Move(temporary, path, overwrite: true);
+            return new SafeProfileBuildResult(true, SafeProfileTier.Tier1KeepDeepSeekCore, directory, bundles, null);
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            LauncherLog.Warn("隔离 profile 生成失败。", ErrorCodes.E1014,
+                new { instance = instance.Name, profile = profileName, error = ex.Message });
+            return new SafeProfileBuildResult(false, SafeProfileTier.Tier1KeepDeepSeekCore, directory, Array.Empty<string>(), ex.Message);
+        }
+    }
 
     /// <summary>构建（或重建）隔离 profile；幂等，用户文件只读。原子写 package.json。</summary>
     public SafeProfileBuildResult Build(ManagerInstance instance, SafeProfileTier tier)

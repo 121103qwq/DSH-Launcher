@@ -265,7 +265,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default,
         bool openBrowser = false,
-        SafeProfileTier? safeProfile = null)
+        SafeProfileTier? safeProfile = null,
+        string? profileOverride = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -415,7 +416,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         var webUrl = $"http://127.0.0.1:{port}/";
                         process = new Process
                         {
-                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint, openBrowser, safeProfile),
+                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint, openBrowser, safeProfile, profileOverride),
                             EnableRaisingEvents = true
                         };
                         var output = new StringBuilder();
@@ -1066,7 +1067,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         NodeRuntimeInfo? nodeRuntime,
         string? sourceEntrypoint,
         bool openBrowser,
-        SafeProfileTier? safeProfile)
+        SafeProfileTier? safeProfile,
+        string? profileOverride = null)
     {
         var spec = instance.Kind == InstanceKind.Source
             ? new DshRuntimeLaunchSpec(
@@ -1078,7 +1080,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 ?? throw new InvalidOperationException("实例没有可用的 DSh 启动描述。");
         var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
         var arguments = BuildStartArguments(
-            safeMode: safeProfile is not null,
+            profileName: profileOverride
+                ?? (safeProfile is not null ? SafeProfileService.SafeProfileName : null),
             supportsNoOpen: SupportsNoOpen(instance.DetectedVersion),
             patchPath: IsRegularFile(patchPath) ? patchPath : null,
             port: port);
@@ -1115,11 +1118,24 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         bool safeMode,
         bool supportsNoOpen,
         string? patchPath,
+        int port) => BuildStartArguments(
+            safeMode ? SafeProfileService.SafeProfileName : null,
+            supportsNoOpen,
+            patchPath,
+            port);
+
+    /// <summary>
+    /// 按指定 profile 名构造参数（null = 正常 web）。逐插件定位用 <c>--profile .dsh-bisect</c>。
+    /// </summary>
+    internal static List<string> BuildStartArguments(
+        string? profileName,
+        bool supportsNoOpen,
+        string? patchPath,
         int port)
     {
-        var arguments = safeMode
-            ? new List<string> { "--profile", SafeProfileService.SafeProfileName }
-            : new List<string> { "web" };
+        var arguments = string.IsNullOrWhiteSpace(profileName)
+            ? new List<string> { "web" }
+            : new List<string> { "--profile", profileName };
         if (!string.IsNullOrWhiteSpace(patchPath))
         {
             arguments.Add("--patch");

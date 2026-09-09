@@ -709,6 +709,38 @@
                             Padding="20"
                             Margin="0,16,0,0">
                         <StackPanel>
+                            <TextBlock Text="插件排查" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="安全模式能启动、但不确定是哪个插件坏了时，用二分法定位：每轮在隔离 profile 里禁用一部分第三方插件后启动（不改你的任何文件），通常 2–4 轮就能锁定。定位结束会删掉隔离 profile。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,10" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="BisectButton"
+                                        Content="定位肇事插件"
+                                        Click="BisectPlugins_Click"
+                                        Style="{StaticResource PrimaryButton}" />
+                                <Button x:Name="DisableCulpritButton"
+                                        Content="禁用该插件并正常启动"
+                                        Click="DisableCulprit_Click"
+                                        Visibility="Collapsed"
+                                        Margin="10,0,0,0" />
+                            </StackPanel>
+                            <TextBlock x:Name="BisectStatusText"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,10,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource CardCornerRadius}"
+                            Padding="20"
+                            Margin="0,16,0,0">
+                        <StackPanel>
                             <TextBlock Text="启动证据" FontSize="16" FontWeight="SemiBold" />
                             <Grid Margin="0,6,0,10">
                                 <Grid.ColumnDefinitions>
