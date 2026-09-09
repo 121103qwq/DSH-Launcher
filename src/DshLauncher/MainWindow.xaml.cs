@@ -1979,7 +1979,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         stopInstanceForPluginRetry: StopInstanceForPluginRetryAsync,
                         handoffPluginFailure: SendPluginFailureToCurrentInstanceAsync,
                         versionSettingsService: _versionSettingsService,
-                        versionSnapshotService: _versionSnapshotService),
+                        versionSnapshotService: _versionSnapshotService,
+                        openPluginMatrix: ShowPluginMatrix),
                     "Agent" => new ExtensionWindow(
                         instance,
                         _extensionService,
@@ -1988,7 +1989,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         marketplaceService: _marketplaceService,
                         skillMarketService: _skillMarketService,
                         versionSettingsService: _versionSettingsService,
-                        versionSnapshotService: _versionSnapshotService),
+                        versionSnapshotService: _versionSnapshotService,
+                        openPluginMatrix: ShowPluginMatrix),
                     _ => new ConversationWindow(
                         instance,
                         _conversationService,
@@ -2062,6 +2064,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private void VersionControl_Click(object sender, RoutedEventArgs e) => ShowVersionControl();
+
+    /// <summary>插件 × 实例矩阵（内嵌页，从「扩展 / Agent」页进入，可返回）。</summary>
+    private void ShowPluginMatrix()
+    {
+        _versionSettingsReturnSection = _currentSection is "扩展" or "Agent"
+            ? _currentSection
+            : "扩展";
+        VersionSettingsBackText.Text = $"返回{_versionSettingsReturnSection}";
+        VersionSettingsBackButton.Visibility = Visibility.Visible;
+        StartupBrandText.Visibility = Visibility.Collapsed;
+        ContextInstanceSelector.Visibility = Visibility.Collapsed;
+        PageTitle = "插件矩阵";
+        PageSubtitle = "行 = 插件，列 = 实例，单元格 = 已启用 / 已装未启用 / 未安装（只读）";
+        ShowEmbeddedPage(new PluginMatrixWindow(
+            _extensionService,
+            Instances,
+            id => _instanceRunner.IsRunning(id)));
+        OnPropertyChanged(nameof(PageTitle));
+        OnPropertyChanged(nameof(PageSubtitle));
+    }
 
     private void VersionSettings_Click(object sender, RoutedEventArgs e) => ShowVersionSettings();
 

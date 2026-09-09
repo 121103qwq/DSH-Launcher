@@ -1,0 +1,84 @@
+<UserControl x:Class="DshLauncher.PluginMatrixWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="{StaticResource UiFont}"
+             Loaded="Window_OnLoaded"
+             Unloaded="Window_OnUnloaded">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Background="{StaticResource CardBrush}"
+                BorderBrush="{StaticResource LineBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource CardCornerRadius}"
+                Padding="{StaticResource CardPadding}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <StackPanel>
+                        <TextBlock Text="插件 × 实例矩阵" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="行 = 插件（至少在一个实例启用），列 = 实例；用于对比同一插件在各实例的安装/启用状态。只读视图，启停请到「插件管理」。"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                        <Button Content="刷新" Click="Refresh_Click" Padding="12,7" Margin="0,0,7,0" />
+                        <Button Content="复制为文本" Click="Copy_Click" Padding="12,7" />
+                    </StackPanel>
+                </Grid>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
+                    <Border Background="#E7F6EC" BorderBrush="#2E7D32" BorderThickness="1" CornerRadius="3" Padding="7,2">
+                        <TextBlock Text="已启用" Foreground="#1B5E20" FontSize="11" />
+                    </Border>
+                    <Border Background="#FFF9EA" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="3" Padding="7,2" Margin="8,0,0,0">
+                        <TextBlock Text="已装未启用" Foreground="#8B5A12" FontSize="11" />
+                    </Border>
+                    <Border Background="#F4F5F7" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="3" Padding="7,2" Margin="8,0,0,0">
+                        <TextBlock Text="未安装" Foreground="{StaticResource MutedBrush}" FontSize="11" />
+                    </Border>
+                    <TextBlock x:Name="StatusText"
+                               Foreground="{StaticResource MutedBrush}"
+                               FontSize="11"
+                               VerticalAlignment="Center"
+                               Margin="14,0,0,0" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <Border Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}" />
+            <Border Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Padding="{StaticResource CardPadding}">
+                <Grid>
+                    <ListView x:Name="MatrixList"
+                              BorderThickness="0"
+                              Background="Transparent"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                    <TextBlock x:Name="EmptyText"
+                               Text="没有可对比的插件：至少有一个实例装有并启用了第三方插件后才会出现矩阵行。"
+                               Foreground="{StaticResource MutedBrush}"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Visibility="Collapsed" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

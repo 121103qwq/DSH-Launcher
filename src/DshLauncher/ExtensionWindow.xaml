@@ -83,6 +83,12 @@
                             Margin="0,0,7,7"
                             Padding="12,7"
                             ToolTip="检测 profile 中混入的核心包/缺失 bundle" />
+                    <Button x:Name="PluginMatrixButton"
+                            Content="插件矩阵"
+                            Click="PluginMatrix_Click"
+                            Margin="0,0,7,7"
+                            Padding="12,7"
+                            ToolTip="对比同一插件在各实例的安装/启用状态（只读）" />
                     <Button x:Name="InstallPluginButton"
                             Content="手动安装 Plugin"
                             Click="InstallPlugin_Click"

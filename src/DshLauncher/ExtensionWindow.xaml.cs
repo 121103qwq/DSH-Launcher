@@ -30,6 +30,7 @@ public partial class ExtensionWindow : UserControl
     private readonly DshMarketThemeService _themeService = new();
     private readonly VersionSettingsService? _versionSettingsService;
     private readonly VersionSnapshotService? _versionSnapshotService;
+    private readonly Action? _openPluginMatrix;
     private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
     private bool _isSkillMarketLoading;
     private bool _isSkillMarketMutating;
@@ -68,7 +69,8 @@ public partial class ExtensionWindow : UserControl
         Func<ManagerInstance, CancellationToken, Task<bool>>? stopInstanceForPluginRetry = null,
         Func<ManagerInstance, string, Task<bool>>? handoffPluginFailure = null,
         VersionSettingsService? versionSettingsService = null,
-        VersionSnapshotService? versionSnapshotService = null)
+        VersionSnapshotService? versionSnapshotService = null,
+        Action? openPluginMatrix = null)
     {
         _instance = instance;
         _service = service;
@@ -81,6 +83,7 @@ public partial class ExtensionWindow : UserControl
         _skillMarketService = skillMarketService;
         _versionSettingsService = versionSettingsService;
         _versionSnapshotService = versionSnapshotService;
+        _openPluginMatrix = openPluginMatrix;
         InitializeComponent();
         _uiStateSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _uiStateSaveTimer.Tick += (_, _) =>
@@ -1986,6 +1989,8 @@ public partial class ExtensionWindow : UserControl
             UpdateAllButton.IsEnabled = true;
         }
     }
+
+    private void PluginMatrix_Click(object sender, RoutedEventArgs e) => _openPluginMatrix?.Invoke();
 
     private async void Doctor_Click(object sender, RoutedEventArgs e)
     {
