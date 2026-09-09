@@ -16,6 +16,8 @@ public static class ErrorCodes
     public const string E1006 = "E1006"; // 便携版 Node.js 准备失败
     public const string E1008 = "E1008"; // DSh 安装位置移动失败
     public const string E1009 = "E1009"; // exe 同目录不可写，默认安装位置回退
+    public const string E1010 = "E1010"; // WebView2 数据目录回退
+    public const string E1011 = "E1011"; // 便携数据根不可写，回退默认数据根
 
     // E2xxx 插件 / 扩展
     public const string E2001 = "E2001"; // 插件依赖自检发现异常
@@ -45,6 +47,8 @@ public static class ErrorCodes
         E1006 => "便携版 Node.js 准备失败（下载/解压/校验/替换）。",
         E1008 => "DSh 安装位置移动失败（目录占用/跨盘复制/权限等）。",
         E1009 => "exe 同目录不可写，默认安装位置已回退到用户文档目录下的旧默认位置。",
+        E1010 => "exe 同目录不可写，WebView2 数据目录已回退到 %LocalAppData%\\DeepSeek\\launcher\\WebView2。",
+        E1011 => "便携数据根（exe 旁 launcher-data 或 DSH_LAUNCHER_DATA_ROOT）不可用，已回退默认数据根。",
         E2001 => "插件依赖自检发现异常（核心包混入 profile / 依赖缺失等）。",
         E2002 => "插件更新检查失败（registry 不可达或响应异常）。",
         E2003 => "批量更新部分插件失败（其余插件已更新）。",

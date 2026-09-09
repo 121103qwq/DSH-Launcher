@@ -126,6 +126,7 @@ public sealed class DiagnoseExportService
         builder.AppendLine($"arch={System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
         builder.AppendLine($"dotnet={Environment.Version}");
         builder.AppendLine($"webview2={ReadWebView2Version() ?? "(未检测到 Evergreen WebView2 注册表项)"}");
+        builder.AppendLine($"webview2_data={WebView2DataFolder.ResolveForCurrentProcess()}");
         builder.AppendLine($"proxy={ProxyConfigurator.Describe()}");
         builder.AppendLine($"node={RunCapture("node", "--version")}");
         builder.AppendLine();

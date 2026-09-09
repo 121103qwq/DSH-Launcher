@@ -123,34 +123,40 @@ public sealed class WebCacheVersionLedger
         var removed = 0;
         foreach (var userDataFolder in EnumerateWebView2UserDataFolders())
         {
-            var defaultFolder = Path.Combine(userDataFolder, "EBWebView", "Default");
-            foreach (var relative in new[]
+            foreach (var defaultFolder in new[]
                      {
-                         "Cache",
-                         "Code Cache",
-                         "GPUCache",
-                         "DawnGraphiteCache",
-                         "DawnWebGPUCache",
-                         "ShaderCache",
-                         "Service Worker"
+                         Path.Combine(userDataFolder, "EBWebView", "Default"),
+                         Path.Combine(userDataFolder, "Default")
                      })
             {
-                var target = Path.Combine(defaultFolder, relative);
-                if (!Directory.Exists(target))
+                foreach (var relative in new[]
+                         {
+                             "Cache",
+                             "Code Cache",
+                             "GPUCache",
+                             "DawnGraphiteCache",
+                             "DawnWebGPUCache",
+                             "ShaderCache",
+                             "Service Worker"
+                         })
                 {
-                    continue;
-                }
+                    var target = Path.Combine(defaultFolder, relative);
+                    if (!Directory.Exists(target))
+                    {
+                        continue;
+                    }
 
-                try
-                {
-                    FileSystemCleanup.DeleteDirectoryRecursive(target);
-                    removed++;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    // 缓存目录可能被残留 WebView2 进程占用：跳过，下次版本变化再清。
-                    LauncherLog.Warn("清理 WebView2 缓存目录失败（可能被占用）。", ErrorCodes.E1002,
-                        new { path = target, error = ex.Message });
+                    try
+                    {
+                        FileSystemCleanup.DeleteDirectoryRecursive(target);
+                        removed++;
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // 缓存目录可能被残留 WebView2 进程占用：跳过，下次版本变化再清。
+                        LauncherLog.Warn("清理 WebView2 缓存目录失败（可能被占用）。", ErrorCodes.E1002,
+                            new { path = target, error = ex.Message });
+                    }
                 }
             }
         }
@@ -186,6 +192,20 @@ public sealed class WebCacheVersionLedger
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
         {
             // 枚举失败无需处理。
+        }
+
+        // exe 同目录不可写时的回退位置（见 WebView2DataFolder）。
+        try
+        {
+            var fallback = WebView2DataFolder.FallbackDirectory();
+            if (Directory.Exists(fallback) && !results.Contains(fallback, StringComparer.OrdinalIgnoreCase))
+            {
+                results.Add(fallback);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            // 回退路径不可解析时忽略。
         }
 
         return results;

@@ -79,6 +79,7 @@ dsh-launcher-dev/
 | 51 | `MainWindow.xaml.cs` | 「要移动的运行时」卡片**只列实例**（每行：实例名 + 其运行时路径）；配置的安装位置无实例关联时不再显示（无实例时卡片给提示） |
 | 52 | `MainWindow.xaml.cs` | 卡片**列出全部已登记实例**（不再限于 Launcher 数据根；仅排除系统 npm/nodejs 目录）；`<root>\versions\<ver>` 正确归一到 `<root>`；共用同一运行时的多个实例合并为一行（标签用、分隔） |
 | 53 | `Services/LauncherPaths.cs` + `Services/VersionSettingsService.cs` + `Services/ErrorCodes.cs` | **默认安装位置改为 `<exe 同目录>\run_time`**（便携优先）；exe 同目录不可写时自动回退旧默认 `<数据根>\runtime\dsh` 并记 E1009；设置页文案同步 |
+| 54 | `DshLauncher.csproj` + `Services/WebView2DataFolder.cs`（新）+ `ChatWindow.xaml.cs` + `Services/WebCacheVersionLedger.cs` + `Services/LauncherPaths.cs` | **独立运行/便携化**：① 自包含单文件发布参数写进 csproj（裸 publish 即得 0 dll 单文件）；② WebView2 数据目录 exe 旁不可写 → 回退 `%LocalAppData%`（E1010，缓存账本同步双布局）；③ 便携数据根：exe 旁 `launcher-data` 或 `DSH_LAUNCHER_DATA_ROOT`（不可写回退 E1011）；诊断包新增 `webview2_data=` |
 
 ## 行为变化（相对上游）
 
@@ -115,6 +116,9 @@ dsh-launcher-dev/
 31. **运行时卡片只列实例**：每行是「实例名 + 该实例的运行时路径」；没有实例关联的安装位置不再出现（无实例时卡片显示提示）
 32. **卡片列出全部实例**：不再限于 Launcher 数据根（仅排除系统 npm/nodejs 目录）；`versions/<版本>` 自动归一到安装根；多个实例共用同一运行时合并为一行
 33. **默认安装位置**：exe 同目录的 `run_time`（便携优先）；exe 同目录不可写时回退 `<数据根>\runtime\dsh`；已显式配置的路径优先，不受影响
+34. **发布形态**：csproj 内置 `SelfContained/PublishSingleFile/IncludeNativeLibrariesForSelfExtract/EnableCompressionInSingleFile`，裸 `dotnet publish -c Release` 即得可独立运行的单文件（无需装 .NET）
+35. **WebView2 数据目录**：默认 exe 旁 `<exe 名>.WebView2`；exe 同目录不可写时回退 `%LocalAppData%\DeepSeek\launcher\WebView2`（Desktop 窗口仍可用）
+36. **便携数据根**：exe 旁存在 `launcher-data` 目录，或设置了 `DSH_LAUNCHER_DATA_ROOT` 环境变量时，数据根改到该处（实例/设置/缓存/便携 Node 全部随 exe 走）；不可写则回退 `%Documents%\DeepSeek\launcher`
 
 ## 构建与发布（SOP）
 
@@ -127,12 +131,9 @@ cd src\DshLauncher
 # 开发构建
 dotnet build -c Release
 
-# 发布（单文件，输出到仓库 dist\）
+# 发布（单文件自包含，输出到仓库 dist\；参数已内置 csproj，无需再手敲）
 # ⚠️ 前置：先停止运行中的 DSH Launcher（dist exe 被锁定 → MSB4018）
-dotnet publish DshLauncher.csproj -c Release -r win-x64 `
-  --self-contained true -p:PublishSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
-  -o ..\..\dist
+dotnet publish DshLauncher.csproj -c Release -o ..\..\dist
 ```
 
 **重要教训（踩过的坑）**：

@@ -18,6 +18,13 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <!-- 发布形态：自包含单文件（内含 .NET 8 运行时，免安装/免管理员）。
+         写在工程里，保证 `dotnet publish` 与 VS 发布都得到同样的可独立运行产物，
+         不会误发成需要另装 .NET 8 Desktop Runtime 的多文件版本。 -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>

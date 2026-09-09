@@ -42,7 +42,11 @@ public partial class ChatWindow : Window
     {
         try
         {
-            await Browser.EnsureCoreWebView2Async();
+            // exe 同目录不可写（如装在 Program Files）时回退到 %LocalAppData%，
+            // 否则 Desktop 窗口会直接失败。
+            var userDataFolder = Services.WebView2DataFolder.ResolveForCurrentProcess();
+            var environment = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+            await Browser.EnsureCoreWebView2Async(environment);
             Browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
             Browser.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             Browser.CoreWebView2.Settings.IsStatusBarEnabled = false;

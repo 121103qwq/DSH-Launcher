@@ -7,11 +7,15 @@ public sealed class LauncherPaths
 #if DEBUG
     private const string TestRootVariable = "DSH_LAUNCHER_TEST_ROOT";
 #endif
+    private const string DataRootOverrideVariable = "DSH_LAUNCHER_DATA_ROOT";
+
+    /// <summary>便携模式标记目录名：exe 旁存在该目录时，数据根改到 exe 同目录。</summary>
+    public const string PortableDataDirectoryName = "launcher-data";
 
     public LauncherPaths(string? rootDirectory = null, string? executableDirectory = null)
     {
-        RootDirectory = Path.GetFullPath(rootDirectory ?? GetDefaultRoot());
         ExecutableDirectory = Path.GetFullPath(executableDirectory ?? AppContext.BaseDirectory);
+        RootDirectory = Path.GetFullPath(rootDirectory ?? GetDefaultRoot(ExecutableDirectory));
     }
 
     public string RootDirectory { get; }
@@ -53,7 +57,7 @@ public sealed class LauncherPaths
     public string GetVersionSnapshotDirectory(string instanceId) =>
         Path.Combine(GetInstanceBackupDirectory(instanceId), "snapshots");
 
-    private static string GetDefaultRoot()
+    private static string GetDefaultRoot(string executableDirectory)
     {
 #if DEBUG
         var testRoot = Environment.GetEnvironmentVariable(TestRootVariable);
@@ -63,6 +67,34 @@ public sealed class LauncherPaths
         }
 #endif
 
+        // 1) 环境变量显式覆盖（自动化/高级用法）。
+        var overrideRoot = Environment.GetEnvironmentVariable(DataRootOverrideVariable);
+        if (!string.IsNullOrWhiteSpace(overrideRoot))
+        {
+            try
+            {
+                return Path.GetFullPath(overrideRoot.Trim());
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                LauncherLog.Warn("DSH_LAUNCHER_DATA_ROOT 不是有效路径，已忽略。", ErrorCodes.E1011,
+                    new { value = overrideRoot, error = ex.Message });
+            }
+        }
+
+        // 2) 便携模式：exe 旁存在 launcher-data 目录（用户手动创建即启用，整个文件夹可拷走）。
+        var portableRoot = Path.Combine(executableDirectory, PortableDataDirectoryName);
+        if (Directory.Exists(portableRoot))
+        {
+            if (IsWritable(portableRoot))
+            {
+                return portableRoot;
+            }
+
+            LauncherLog.Warn("便携数据目录不可写，已回退到用户文档下的默认数据根。", ErrorCodes.E1011,
+                new { path = portableRoot });
+        }
+
         var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         if (string.IsNullOrWhiteSpace(documents))
         {
@@ -70,5 +102,21 @@ public sealed class LauncherPaths
         }
 
         return Path.Combine(documents, "DeepSeek", "launcher");
+    }
+
+    private static bool IsWritable(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probe = Path.Combine(directory, ".dsh-write-probe");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return false;
+        }
     }
 }
