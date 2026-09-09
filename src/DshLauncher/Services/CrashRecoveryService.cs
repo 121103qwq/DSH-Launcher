@@ -48,6 +48,7 @@ public sealed class CrashRecoveryService
         public int? LastExitCode;
         public DateTimeOffset? LastCrashAt;
         public string? LastAction;
+        public string? LastCause;
     }
 
     private sealed record PersistedState(
@@ -57,7 +58,8 @@ public sealed class CrashRecoveryService
         DateTimeOffset? CooldownAt,
         int? LastExitCode,
         DateTimeOffset? LastCrashAt,
-        string? LastAction);
+        string? LastAction,
+        string? LastCause);
 
     private readonly object _gate = new();
     private readonly Func<string, string?>? _dshHomeResolver;
@@ -157,6 +159,7 @@ public sealed class CrashRecoveryService
                 CrashRecoveryDecision.CoolDown => "冷却关闭",
                 _ => "仅通知"
             };
+            state.LastCause = context.Cause;
             state.StartedAt = null;
 
             if (plan.Decision == CrashRecoveryDecision.Restart)
@@ -200,7 +203,8 @@ public sealed class CrashRecoveryService
                 state.Attempts,
                 state.LastCrashAt,
                 state.LastExitCode,
-                state.LastAction);
+                state.LastAction,
+                state.LastCause);
         }
     }
 
@@ -289,6 +293,7 @@ public sealed class CrashRecoveryService
                         state.LastExitCode = persisted.LastExitCode;
                         state.LastCrashAt = persisted.LastCrashAt;
                         state.LastAction = persisted.LastAction;
+                        state.LastCause = persisted.LastCause;
                     }
                 }
 
@@ -395,7 +400,8 @@ public sealed class CrashRecoveryService
                 state.CooldownAt,
                 state.LastExitCode,
                 state.LastCrashAt,
-                state.LastAction);
+                state.LastAction,
+                state.LastCause);
             var path = Path.Combine(directory, StateFileName);
             var temp = path + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(persisted, StateOptions), Utf8NoBom);

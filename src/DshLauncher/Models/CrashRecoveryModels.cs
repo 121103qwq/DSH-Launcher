@@ -62,6 +62,21 @@ public sealed record CrashRecord
     /// <summary>崩溃前最后一次资源采样摘要（CPU/内存/进程数）。</summary>
     public string? Resource { get; init; }
 
+    /// <summary>归类结果标签（低置信时为“未知原因”）。</summary>
+    public string? Cause { get; init; }
+
+    /// <summary>归类置信度（High/Medium/Low）。</summary>
+    public string? CauseConfidence { get; init; }
+
+    /// <summary>命中依据（签名行或探针信号）。</summary>
+    public string? CauseEvidence { get; init; }
+
+    /// <summary>处置建议。</summary>
+    public string? Advice { get; init; }
+
+    /// <summary>建议对应的可执行动作（cleanup-processes / bisect-plugins / node-settings）。</summary>
+    public string? ActionKey { get; init; }
+
     public string Describe()
     {
         var exit = ExitCode?.ToString() ?? "?";
@@ -84,7 +99,8 @@ public sealed record CrashRecoveryStatus(
     int Attempts,
     DateTimeOffset? LastCrashAt,
     int? LastExitCode,
-    string? LastAction)
+    string? LastAction,
+    string? LastCause = null)
 {
     public static readonly CrashRecoveryStatus Normal = new(false, 0, null, null, null);
 }

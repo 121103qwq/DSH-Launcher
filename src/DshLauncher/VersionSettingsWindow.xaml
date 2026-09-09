@@ -626,6 +626,7 @@
                                         <GridViewColumn Header="退出码" Width="70" DisplayMemberBinding="{Binding ExitText}" />
                                         <GridViewColumn Header="运行时长" Width="100" DisplayMemberBinding="{Binding UptimeText}" />
                                         <GridViewColumn Header="动作" Width="90" DisplayMemberBinding="{Binding Action}" />
+                                        <GridViewColumn Header="原因" Width="120" DisplayMemberBinding="{Binding Cause}" />
                                         <GridViewColumn Header="摘要" Width="420" DisplayMemberBinding="{Binding Summary}" />
                                     </GridView>
                                 </ListView.View>

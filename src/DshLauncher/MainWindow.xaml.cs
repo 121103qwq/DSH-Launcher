@@ -1106,15 +1106,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void HandleInstanceCrash(ManagerInstance instance, int? exitCode)
     {
         var settings = _versionSettingsService.Read(instance);
-        var logs = _instanceRunner.GetLogs(instance.Id)
-            .TakeLast(20)
+        var tailLog = _instanceRunner.GetLogs(instance.Id).TakeLast(20).ToArray();
+        var evidenceSnapshot = _startupEvidence.Snapshot(instance.Id).Take(5).ToArray();
+        var resourceSnapshot = _watchdog.GetResource(instance.Id);
+
+        // 归因：签名规则 + 轻量探针（端口占用 / Node 可用）；低置信一律标未知。
+        var cause = CrashCauseClassifier.Classify(new CrashCauseInput(
+            exitCode,
+            tailLog,
+            evidenceSnapshot,
+            resourceSnapshot,
+            instance.Port,
+            CrashCauseClassifier.ProbePortOccupied(instance.Port),
+            _nodeRuntime.IsAvailable));
+
+        var logs = tailLog
             .Select(line => $"{line.At:HH:mm:ss} [{line.Source}] {line.Text}")
             .ToArray();
-        var evidence = _startupEvidence.Snapshot(instance.Id)
-            .Take(5)
+        var evidence = evidenceSnapshot
             .Select(item => $"{item.At:HH:mm:ss} [{item.Layer}] {item.Summary}")
             .ToArray();
-        var resource = _watchdog.GetResource(instance.Id) is { } snapshot
+        var resource = resourceSnapshot is { } snapshot
             ? $"CPU {snapshot.CpuPercent:0.#}% / 内存 {FormatBytes(snapshot.WorkingSetBytes)} / {snapshot.ProcessCount} 个进程"
             : null;
 
@@ -1127,12 +1139,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ExitCode = exitCode,
                 TailLog = logs,
                 Evidence = evidence,
-                Resource = resource
+                Resource = resource,
+                Cause = cause.Label,
+                CauseConfidence = cause.Confidence.ToString(),
+                CauseEvidence = cause.Evidence,
+                Advice = cause.Advice,
+                ActionKey = cause.ActionKey
             });
         LauncherLog.Warn("实例崩溃。", ErrorCodes.E1016, new
         {
             instance = instance.Name ?? instance.Id,
             exitCode,
+            cause = cause.Kind.ToString(),
+            confidence = cause.Confidence.ToString(),
             decision = plan.Decision.ToString(),
             attempt = plan.Attempt,
             limit = plan.Limit
@@ -1140,21 +1159,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _startupEvidence.Record(instance.Id, new StartupEvidence(
             BootLayer.Process,
             "实例崩溃",
-            $"exitCode={exitCode?.ToString() ?? "?"}；{plan.Summary}"));
+            $"exitCode={exitCode?.ToString() ?? "?"}；原因：{cause.Label}；{plan.Summary}"));
         _idleTracker.Forget(instance.Id);
         OnPropertyChanged(nameof(SelectedInstanceCooldownVisibility));
 
         var exitText = exitCode is { } value ? $"（exitCode={value}）" : string.Empty;
+        var causeText = cause.IsConfident ? $"，原因：{cause.Label}" : string.Empty;
         if (plan.Decision == CrashRecoveryDecision.Restart)
         {
-            ShowNotice($"实例 {instance.Name} 已崩溃{exitText}，{plan.Summary}；现场已记录到「实例设置 → 运行状况」。");
+            // 端口被占用时先清残留（否则重启必再撞端口）。
+            if (cause.Kind == CrashCauseKind.PortInUse)
+            {
+                try
+                {
+                    var cleaned = _watchdog.Cleanup(instance.Id);
+                    if (cleaned > 0)
+                    {
+                        causeText += $"（已清理 {cleaned} 个残留进程）";
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException)
+                {
+                    // 清理失败不阻断重启尝试。
+                }
+            }
+
+            ShowNotice($"实例 {instance.Name} 已崩溃{exitText}{causeText}，{plan.Summary}；建议：{cause.Advice}");
             ScheduleCrashRestart(instance, plan);
             return;
         }
 
         ShowNotice(plan.Decision == CrashRecoveryDecision.CoolDown
-            ? $"实例 {instance.Name} 已崩溃{exitText}，{plan.Summary}；现场已保留，可在「实例设置 → 运行状况」查看并手动重启。"
-            : $"实例 {instance.Name} 已崩溃{exitText}（策略为仅通知）；现场已记录，可在「实例设置 → 运行状况」查看。");
+            ? $"实例 {instance.Name} 已崩溃{exitText}{causeText}，{plan.Summary}；建议：{cause.Advice}"
+            : $"实例 {instance.Name} 已崩溃{exitText}{causeText}（策略为仅通知）；建议：{cause.Advice}");
     }
 
     /// <summary>退避延时后自动重启（用户手动启动/停止、实例删除、退出 Launcher 都会取消）。</summary>

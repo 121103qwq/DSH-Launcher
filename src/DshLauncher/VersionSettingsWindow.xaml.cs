@@ -646,23 +646,25 @@ public partial class VersionSettingsWindow : UserControl
                 ExitText = record.ExitCode?.ToString() ?? "?",
                 UptimeText = FormatCrashUptime(record.Uptime),
                 record.Action,
+                Cause = record.Cause ?? "未知原因",
                 record.Summary
             })
             .ToArray();
 
         ClearCooldownButton.Visibility = status.Cooldown ? Visibility.Visible : Visibility.Collapsed;
+        var causeText = string.IsNullOrWhiteSpace(status.LastCause) ? "未知原因" : status.LastCause;
         if (status.Cooldown)
         {
             CrashStatusText.Text =
-                $"冷却中：上次崩溃 {status.LastCrashAt:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}，{status.LastAction}）；已停止自动重启，现场已保留。";
+                $"冷却中：上次崩溃 {status.LastCrashAt:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}，{status.LastAction}，原因：{causeText}）；已停止自动重启，现场已保留。";
             return;
         }
 
         if (status.LastCrashAt is { } lastCrash)
         {
             CrashStatusText.Text = status.Attempts > 0
-                ? $"最近崩溃 {lastCrash:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}），已自动重启 {status.Attempts} 次（上限见上方设置）。"
-                : $"最近崩溃 {lastCrash:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}，{status.LastAction}）。";
+                ? $"最近崩溃 {lastCrash:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}，原因：{causeText}），已自动重启 {status.Attempts} 次（上限见上方设置）。"
+                : $"最近崩溃 {lastCrash:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}，{status.LastAction}，原因：{causeText}）。";
             return;
         }
 
