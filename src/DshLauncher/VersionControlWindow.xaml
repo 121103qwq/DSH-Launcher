@@ -97,6 +97,7 @@
                                 Content="导入实例"
                                 Click="AddInstance_Click"
                                 IsEnabled="{Binding CanAddInstance}"
+                                ToolTip="点击选择：从文件夹导入 / 从快捷方式导入"
                                 Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,0,8">
                             <Button.ContextMenu>
@@ -106,7 +107,11 @@
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button Content="新建干净版本" Click="CreateCleanVersion_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,0,8" />
+                        <Button Content="新建干净版本"
+                                Click="CreateCleanVersion_Click"
+                                IsEnabled="{Binding CanCreateVersion}"
+                                Style="{StaticResource PrimaryButton}"
+                                Margin="0,0,0,8" />
                         <Button Content="导入整合包" Click="ImportPackage_Click" />
                     </StackPanel>
                 </Grid>

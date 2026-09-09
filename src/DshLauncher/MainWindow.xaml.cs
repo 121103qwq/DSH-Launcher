@@ -1871,12 +1871,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var navPanel = new StackPanel { Margin = new Thickness(10, 18, 10, 18) };
+        var navPanel = new StackPanel { Margin = new Thickness(0) };
         var navCard = new Border
         {
             Background = (WpfBrush)FindResource("CardBrush"),
             BorderBrush = (WpfBrush)FindResource("LineBrush"),
-            BorderThickness = new Thickness(0, 0, 1, 0),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(8, 10, 8, 10),
+            VerticalAlignment = VerticalAlignment.Top,
             Child = navPanel
         };
         Grid.SetColumn(navCard, 0);

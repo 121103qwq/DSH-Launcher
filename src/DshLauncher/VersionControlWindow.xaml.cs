@@ -152,6 +152,9 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
 
     public bool CanAddInstance => !_isBusy;
 
+    /// <summary>新建干净版本与导入实例共用忙碌态：避免连点弹出多个对话框。</summary>
+    public bool CanCreateVersion => !_isBusy;
+
     public string CloneButtonToolTip => SelectedVersion is null
         ? "请先在左侧选择一个版本。"
         : SelectedVersion.RuntimeStatus == InstanceRuntimeStatus.Running
@@ -428,6 +431,11 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
 
     private async Task CreateCleanVersionAsync()
     {
+        if (_isBusy)
+        {
+            return; // 防重复点击：一次只允许一个创建流程
+        }
+
         var template = SelectedVersion ?? _templateProvider();
         if (template is null)
         {
@@ -435,41 +443,23 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             return;
         }
 
-        IReadOnlyList<string> versions;
-        SetBusy(true);
-        SetStatus("正在读取官方 DSh 版本列表…");
-        try
-        {
-            versions = await _dshVersionCatalogService.ReadOfficialVersionsAsync(_lifetimeCancellation.Token);
-        }
-        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
-        {
-            return;
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidDataException)
-        {
-            versions = string.IsNullOrWhiteSpace(template.DetectedVersion)
-                ? Array.Empty<string>()
-                : new[] { template.DetectedVersion };
-            SetStatus($"官方版本列表暂时不可用：{ex.Message}。当前只能选择本机版本。 ");
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-
-        if (versions.Count == 0)
-        {
-            SetStatus("没有读到可创建的 DSh 版本，请检查网络或先导入本机运行时。 ");
-            return;
-        }
+        // 先用本机已知版本立刻弹窗，官方版本列表在弹窗打开后异步补全。
+        // npmjs 在本网络可能很慢，不能让按钮看起来“没反应”。
+        var localVersions = string.IsNullOrWhiteSpace(template.DetectedVersion)
+            ? new List<string>()
+            : new List<string> { template.DetectedVersion };
+        SetStatus(localVersions.Count == 0
+            ? "正在读取官方 DSh 版本列表…"
+            : "已打开新建版本窗口，正在补全官方版本列表…");
 
         var dialog = new NewVersionWindow(
             Window.GetWindow(this),
-            versions,
-            template.DetectedVersion ?? versions[0]);
+            localVersions,
+            template.DetectedVersion ?? string.Empty);
+        _ = LoadOfficialVersionsIntoDialogAsync(dialog);
         if (dialog.ShowDialog() != true)
         {
+            SetStatus("已取消创建版本。 ");
             return;
         }
 
@@ -496,6 +486,28 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         finally
         {
             SetBusy(false);
+        }
+    }
+
+    /// <summary>弹窗打开后补全官方版本列表；失败/超时保持本机版本，不打断创建流程。</summary>
+    private async Task LoadOfficialVersionsIntoDialogAsync(NewVersionWindow dialog)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCancellation.Token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(8));
+            var versions = await _dshVersionCatalogService.ReadOfficialVersionsAsync(timeout.Token);
+            if (versions.Count > 0 && dialog.IsVisible)
+            {
+                dialog.UpdateVersions(versions);
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or TaskCanceledException
+            or OperationCanceledException
+            or InvalidDataException)
+        {
+            // 官方列表不可用：保持本机版本。
         }
     }
 
@@ -844,6 +856,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     {
         _isBusy = busy;
         OnPropertyChanged(nameof(CanAddInstance));
+        OnPropertyChanged(nameof(CanCreateVersion));
         OnPropertyChanged(nameof(CanClone));
         OnPropertyChanged(nameof(CloneButtonToolTip));
         OnPropertyChanged(nameof(CanDelete));
