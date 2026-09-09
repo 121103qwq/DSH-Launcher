@@ -2158,12 +2158,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
-            var configuredDirectory = _versionSettingsService.ResolveDshInstallDirectory();
-            if (DshInstallMoveService.LooksLikeInstall(configuredDirectory))
-            {
-                Add("配置的安装位置", configuredDirectory);
-            }
-
+            // 按“实例”列出（用户视角：移动的是某个实例在用的运行时）。
             foreach (var instance in Instances)
             {
                 var directory = ResolveMovableRuntimeDirectory(instance);
@@ -2176,14 +2171,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
+            // 卡片只列“实例”；没有任何实例运行时可用时给一行提示。
+            if (items.Count == 0)
+            {
+                items.Add(new MoveSourceItem("没有可移动的实例运行时（先在启动页准备或导入实例）", string.Empty));
+            }
+
+            moveSourceList.Children.Clear();
             // 首次构建时默认勾选启动页选中的实例（或第一项）；之后保持用户勾选。
             var applyDefault = checkedMoveSources.Count == 0 && !moveSourcesInitialized;
+            moveSourcesInitialized = true;
+            if (items.Count > 0 && items[0].Directory.Length == 0)
+            {
+                moveSourceList.Children.Add(new TextBlock
+                {
+                    Text = items[0].Label,
+                    Foreground = (WpfBrush)FindResource("MutedBrush"),
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 4, 0, 4)
+                });
+                return;
+            }
+
             var defaultDirectory = applyDefault
                 ? ResolveMovableRuntimeDirectory(SelectedInstance) ?? items.FirstOrDefault()?.Directory
                 : null;
-            moveSourcesInitialized = true;
-            moveSourceList.Children.Clear();
-            foreach (var item in items)
+            foreach (var item in items.Where(item => item.Directory.Length > 0))
             {
                 var row = new System.Windows.Controls.CheckBox
                 {
