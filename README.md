@@ -60,6 +60,7 @@ dsh-launcher-dev/
 | 34 | `MarketplaceService.VerifyManualInstallAsync`（新）+ `ExtensionWindow.xaml.cs` | 手动安装「装前校验」：npm 包查 registry 清单（npmmirror→npmjs）、GitHub 查 raw package.json、本地路径直接读，要求 `dsh.bundle.patch` + 可加载入口（main/module/exports/dsh.client）；普通 npm 包默认拦截（可显式确认后继续）；无法联网/无法识别时放行但提示 |
 | 35 | `ExtensionWindow.xaml(.cs)` + `App.xaml.cs` | 扩展页左栏实例路径改为“尾部省略 + Tooltip + 复制按钮”（不再换行挤占列表）；`App.OnStartup` 增加仅验证用的 `DSH_LAUNCHER_VERIFY=1` 开关（不执行单实例/代理/激活管道） |
 | 36 | `ExtensionWindow.xaml(.cs)` | 路径交互升级为“超链接 + 悬浮卡片”：实例目录/DSH_HOME 与插件详情来源均显示尾部、点击即复制、悬停出独立浮层卡片（含完整路径/类型/状态/描述）；去掉单独的复制按钮；按钮区与选择面板重新排版（热加载开关独立一行） |
+| 37 | `ExtensionWindow.xaml(.cs)` | 实例头部压缩为一行：实例名 + 版本·类型紧跟（间距 8px、**下对齐**，名字超长省略，最大 190px），去掉原来版本/installed 各占一行的空白 |
 
 ## 行为变化（相对上游）
 
@@ -80,6 +81,7 @@ dsh-launcher-dev/
 15. **装前校验**：手动安装框先确认目标是 DSH 插件（`dsh.bundle.patch` + 可加载入口）——像 `abc`/`nothing` 这类普通 npm 包默认拦下（可选择继续），避免装进 profile 变成“已安装（默认禁用）”的幽灵依赖；联网不可达时放行但提示
 16. **扩展页左栏**：实例路径改为只显示尾部（鼠标悬停看完整路径，右侧「复制」按钮一键复制实例目录 + DSH_HOME），不再因长路径换行挤占插件列表
 17. **路径链接化**：实例目录/DSH_HOME 与插件详情的来源路径都变成链接样式——**点击即复制**，**悬停出独立悬浮卡片**（卡片里给完整路径、类型、状态、描述，不占原界面）；插件详情的类型/状态/描述改为紧凑单行，热加载开关独立成行，左栏不再拥挤
+18. **实例头部单行**：实例名（左）+ 版本·类型（右）合为一行，去掉原来三行占用的空白
 
 ## 构建与发布（SOP）
 

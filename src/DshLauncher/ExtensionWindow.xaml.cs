@@ -98,7 +98,10 @@ public partial class ExtensionWindow : UserControl
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
         SkillMarketCategoryList.Visibility = _agentOnly ? Visibility.Visible : Visibility.Collapsed;
         CurrentInstanceNameText.Text = instance.Name;
-        CurrentInstanceDetailsText.Text = $"{instance.DshVersionText}\n{instance.KindText}";
+        CurrentInstanceMetaText.Text = string.Join(
+            " · ",
+            new[] { instance.DshVersionText, instance.KindText }
+                .Where(part => !string.IsNullOrWhiteSpace(part)));
         // 路径太长会挤占左栏：链接化（点击复制，悬停出悬浮卡片，不占界面布局）。
         CurrentInstanceRootPathLink.Content = "目录：" + TailPath(instance.RootPath);
         CurrentInstanceRootPathLink.Tag = instance.RootPath;
