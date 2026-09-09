@@ -247,9 +247,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// <summary>状态胶囊底色（状态色 15% 透明度）。</summary>
     public WpfBrush SelectedInstanceStatusBackgroundBrush => SelectedInstance?.RuntimeStatus switch
     {
-        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromArgb(38, 46, 166, 107)),
-        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromArgb(38, 217, 74, 74)),
-        _ => new SolidColorBrush(WpfColor.FromArgb(30, 150, 163, 181))
+        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromArgb(52, 46, 166, 107)),
+        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromArgb(52, 217, 74, 74)),
+        _ => new SolidColorBrush(WpfColor.FromArgb(44, 150, 163, 181))
     };
 
     /// <summary>状态胶囊文字色（状态色深色调）。</summary>

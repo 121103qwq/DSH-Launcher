@@ -294,14 +294,20 @@
                                 <ColumnDefinition Width="18" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Border Grid.Column="0"
-                                    Background="{StaticResource CardBrush}"
-                                    CornerRadius="13"
-                                    Padding="18"
-                                    VerticalAlignment="Top"
-                                    BorderBrush="{StaticResource LineBrush}"
-                                    BorderThickness="1"
-                                    Effect="{StaticResource CardShadow}">
+                            <Grid Grid.Column="0" VerticalAlignment="Top">
+                                <!-- 阴影单独一层：避免 DropShadowEffect 把卡片内文字一起栅格化（小字发糊） -->
+                                <Border Background="{StaticResource CardBrush}"
+                                        CornerRadius="13"
+                                        BorderBrush="{StaticResource LineBrush}"
+                                        BorderThickness="1"
+                                        Effect="{StaticResource CardShadow}" />
+                                <Border Background="{StaticResource CardBrush}"
+                                        CornerRadius="13"
+                                        Padding="18"
+                                        BorderBrush="{StaticResource LineBrush}"
+                                        BorderThickness="1"
+                                        SnapsToDevicePixels="True"
+                                        UseLayoutRounding="True">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -309,10 +315,17 @@
                                     </Grid.RowDefinitions>
                                     <Grid>
                                         <TextBlock Text="实例状态" FontSize="18" FontWeight="SemiBold" />
-                                        <Border HorizontalAlignment="Right" Background="{Binding SelectedInstanceStatusBackgroundBrush}" CornerRadius="10" Padding="9,4">
+                                        <Border HorizontalAlignment="Right"
+                                                Background="{Binding SelectedInstanceStatusBackgroundBrush}"
+                                                BorderBrush="{Binding SelectedInstanceStatusBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="10"
+                                                Padding="9,3"
+                                                SnapsToDevicePixels="True"
+                                                UseLayoutRounding="True">
                                             <StackPanel Orientation="Horizontal">
                                                 <Ellipse Width="8" Height="8" Fill="{Binding SelectedInstanceStatusBrush}" Margin="0,0,6,0" />
-                                                <TextBlock Text="{Binding SelectedInstanceStatus}" Foreground="{Binding SelectedInstanceStatusTextBrush}" FontSize="11" />
+                                                <TextBlock Text="{Binding SelectedInstanceStatus}" Foreground="{Binding SelectedInstanceStatusTextBrush}" FontSize="12" FontWeight="SemiBold" />
                                             </StackPanel>
                                         </Border>
                                     </Grid>
@@ -415,7 +428,8 @@
                                         </StackPanel>
                                     </Grid>
                                 </Grid>
-                            </Border>
+                                </Border>
+                            </Grid>
 
                             <Border x:Name="InstanceWorkspacePanel"
                                     Grid.Column="2"
