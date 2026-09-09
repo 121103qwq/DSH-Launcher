@@ -327,9 +327,24 @@ public sealed class ModelProviderSyncService
         }
 
         var temporary = $"{targetPath}.{Guid.NewGuid():N}.tmp";
-        using (var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
-        using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        // 旧版包装（version/records/refs）在新版 dsh 会直接启动失败：同步时先做保守转换。
+        var original = File.ReadAllText(sourcePath, Encoding.UTF8);
+        var normalized = DshCredentialStoreNormalizer.Normalize(original);
+        if (!string.Equals(normalized, original, StringComparison.Ordinal))
         {
+            File.WriteAllText(temporary, normalized, new UTF8Encoding(false));
+            using (var normalizedStream = new FileStream(temporary, FileMode.Open, FileAccess.Write, FileShare.None))
+            {
+                normalizedStream.Flush(flushToDisk: true);
+            }
+
+            LauncherLog.Info("Provider 同步：旧格式凭据已转换为当前格式。", ErrorCodes.E1012,
+                new { source = source.Name, target = target.Name });
+        }
+        else
+        {
+            using var input = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            using var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             input.CopyTo(output);
             output.Flush(flushToDisk: true);
         }

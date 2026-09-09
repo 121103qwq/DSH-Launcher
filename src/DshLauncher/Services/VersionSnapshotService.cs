@@ -34,6 +34,7 @@ public sealed class VersionSnapshotService
         "profiles/web/pnpm-lock.yaml",
         "profiles/web/package-lock.json",
         "profiles/web/yarn.lock",
+        "profiles/web/pnpm-workspace.yaml",
         "profiles/web/cordis.patch.yml"
     };
     private static readonly string[] LivePluginSnapshotFiles =
@@ -42,6 +43,7 @@ public sealed class VersionSnapshotService
         "profiles/web/pnpm-lock.yaml",
         "profiles/web/package-lock.json",
         "profiles/web/yarn.lock",
+        "profiles/web/pnpm-workspace.yaml",
         "profiles/web/cordis.patch.yml"
     };
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -350,6 +352,7 @@ public sealed class VersionSnapshotService
 
             if (File.Exists(target) && FilesEqual(target, file.StagedPath))
             {
+                NormalizeRestoredCredentials(file.RelativePath, target);
                 continue;
             }
 
@@ -375,6 +378,17 @@ public sealed class VersionSnapshotService
                     File.Delete(temporary);
                 }
             }
+
+            NormalizeRestoredCredentials(file.RelativePath, target);
+        }
+    }
+
+    /// <summary>快照里的凭据可能是旧包装格式（version/records/refs）：恢复后转换一次。</summary>
+    private static void NormalizeRestoredCredentials(string relativePath, string target)
+    {
+        if (string.Equals(relativePath, ".credentials.yaml", StringComparison.OrdinalIgnoreCase))
+        {
+            DshCredentialStoreNormalizer.TryNormalizeFile(target, out _);
         }
     }
 

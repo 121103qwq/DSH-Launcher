@@ -189,6 +189,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
+            // WPF 在列表刷新 / 仪表盘收起 / 页面切换时会把 SelectedItem 瞬时写回 null：
+            // 只要当前实例仍在注册列表里，就忽略这次清空并回写绑定（否则列表仍高亮、
+            // 但“停止/重启”全灰，出现“实例被清空”的错觉）。真正删除实例后
+            // Instances 已不再包含它，null 会被正常接受。
+            if (value is null
+                && _selectedInstance is not null
+                && Instances.Any(candidate =>
+                    string.Equals(candidate.Id, _selectedInstance.Id, StringComparison.Ordinal)))
+            {
+                OnPropertyChanged(nameof(SelectedInstance));
+                return;
+            }
+
             _selectedInstance = value;
             ApplySelectedVersionSettings(_selectedInstance);
             OnPropertyChanged(nameof(SelectedInstance));

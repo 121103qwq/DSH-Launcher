@@ -120,6 +120,9 @@ public sealed class DshHomeImportService
         {
             CopyDirectory(source, destination, relativePath: string.Empty, state, cancellationToken);
             RestoreProfilePackages(source, destination, cancellationToken);
+            // 整目录复制会原样搬入旧版包装的凭据文件，新版 dsh 会直接启动失败：转换一次。
+            DshCredentialStoreNormalizer.TryNormalizeFile(
+                Path.Combine(destination, ".credentials.yaml"), out _);
             return state.FileCount == 0
                 ? DshHomeImportResult.NoData(source)
                 : new DshHomeImportResult(true, state.FileCount, state.TotalBytes, source);
@@ -237,6 +240,9 @@ public sealed class DshHomeImportService
             destination,
             cancellationToken,
             overwriteExisting: true);
+        // 覆盖式刷新同样会搬入旧版包装的凭据文件：转换一次。
+        DshCredentialStoreNormalizer.TryNormalizeFile(
+            Path.Combine(destination, ".credentials.yaml"), out _);
         return state.FileCount == 0 && restoredPackages == 0
             ? DshHomeImportResult.NoData(source)
             : new DshHomeImportResult(true, state.FileCount, state.TotalBytes, source);
@@ -749,15 +755,37 @@ public sealed class DshHomeImportService
 
         if (!File.Exists(destination))
         {
-            CopyFile(source, destination, cancellationToken);
-            var file = new FileInfo(source);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)
+                ?? throw new InvalidOperationException("导入文件没有父目录。 "));
+            // 旧版包装（version/records/refs）在新版 dsh 会直接启动失败：导入时先保守转换。
+            var sourceInfo = new FileInfo(source);
+            var sourceText = sourceInfo.Length <= DshCredentialStoreNormalizer.MaximumBytes
+                ? DshCredentialStoreNormalizer.Normalize(File.ReadAllText(source, Encoding.UTF8))
+                : string.Empty;
+            if (sourceText.Length > 0)
+            {
+                WriteTextAtomically(destination, sourceText);
+            }
+            else
+            {
+                CopyFile(source, destination, cancellationToken);
+            }
+
             state.FileCount++;
-            state.TotalBytes += file.Length;
+            state.TotalBytes += sourceInfo.Length;
             return;
         }
 
+        // 目标自身若是旧包装，先就地转换，否则合并进去的顶层键仍然是无效的。
+        DshCredentialStoreNormalizer.TryNormalizeFile(destination, out _);
+        var normalizedSource = new FileInfo(source).Length <= DshCredentialStoreNormalizer.MaximumBytes
+            ? DshCredentialStoreNormalizer.Normalize(File.ReadAllText(source, Encoding.UTF8))
+            : string.Empty;
         var existingKeys = ReadTopLevelYamlKeys(destination);
-        var additions = File.ReadAllLines(source, Encoding.UTF8)
+        var additions = (normalizedSource.Length > 0 ? normalizedSource : File.ReadAllText(source, Encoding.UTF8))
+            .Replace("\r\n", "\n")
+            .Replace('\r', '\n')
+            .Split('\n')
             .Where(line => TryReadTopLevelYamlKey(line, out var key) && !existingKeys.Contains(key))
             .ToArray();
         if (additions.Length == 0)

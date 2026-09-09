@@ -80,6 +80,7 @@ dsh-launcher-dev/
 | 52 | `MainWindow.xaml.cs` | 卡片**列出全部已登记实例**（不再限于 Launcher 数据根；仅排除系统 npm/nodejs 目录）；`<root>\versions\<ver>` 正确归一到 `<root>`；共用同一运行时的多个实例合并为一行（标签用、分隔） |
 | 53 | `Services/LauncherPaths.cs` + `Services/VersionSettingsService.cs` + `Services/ErrorCodes.cs` | **默认安装位置改为 `<exe 同目录>\run_time`**（便携优先）；exe 同目录不可写时自动回退旧默认 `<数据根>\runtime\dsh` 并记 E1009；设置页文案同步 |
 | 54 | `DshLauncher.csproj` + `Services/WebView2DataFolder.cs`（新）+ `ChatWindow.xaml.cs` + `Services/WebCacheVersionLedger.cs` + `Services/LauncherPaths.cs` | **独立运行/便携化**：① 自包含单文件发布参数写进 csproj（裸 publish 即得 0 dll 单文件）；② WebView2 数据目录 exe 旁不可写 → 回退 `%LocalAppData%`（E1010，缓存账本同步双布局）；③ 便携数据根：exe 旁 `launcher-data` 或 `DSH_LAUNCHER_DATA_ROOT`（不可写回退 E1011）；诊断包新增 `webview2_data=` |
+| 55 | `Services/DshCredentialStoreNormalizer.cs`（新）+ `Services/DshHomeImportService.cs` + `Services/ModelProviderSyncService.cs` + `Services/VersionSnapshotService.cs` + `MainWindow.xaml.cs` | **上游对照后的三个同源缺陷修复**：① 旧格式凭据（version/records/refs）保守归一化（E1012），接入导入/覆盖/合并/Provider 同步/快照恢复五处；② 快照补 `profiles/web/pnpm-workspace.yaml`（pnpm 构建许可）；③ 列表 `SelectedItem` 瞬时清空防护（实例仍在列表中则忽略并回写绑定） |
 
 ## 行为变化（相对上游）
 
@@ -119,6 +120,9 @@ dsh-launcher-dev/
 34. **发布形态**：csproj 内置 `SelfContained/PublishSingleFile/IncludeNativeLibrariesForSelfExtract/EnableCompressionInSingleFile`，裸 `dotnet publish -c Release` 即得可独立运行的单文件（无需装 .NET）
 35. **WebView2 数据目录**：默认 exe 旁 `<exe 名>.WebView2`；exe 同目录不可写时回退 `%LocalAppData%\DeepSeek\launcher\WebView2`（Desktop 窗口仍可用）
 36. **便携数据根**：exe 旁存在 `launcher-data` 目录，或设置了 `DSH_LAUNCHER_DATA_ROOT` 环境变量时，数据根改到该处（实例/设置/缓存/便携 Node 全部随 exe 走）；不可写则回退 `%Documents%\DeepSeek\launcher`
+37. **凭据格式**：导入/覆盖刷新/回填合并/Provider 同步/快照恢复遇到旧包装（`version: 1` + `records:` + `refs:`）的 `.credentials.yaml` 会保守转换为顶层键值映射；无法确认的格式保持原样（E1012）
+38. **快照内容**：版本快照与插件快照均包含 `profiles/web/pnpm-workspace.yaml`（pnpm `allowBuilds` 构建许可）；旧快照不含该文件时恢复不会删除它
+39. **实例选中**：列表刷新/页面切换导致的 `SelectedItem` 瞬时 `null` 会被忽略并回写绑定；真正删除实例后仍可正常清空
 
 ## 构建与发布（SOP）
 
