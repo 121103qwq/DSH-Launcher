@@ -9,12 +9,16 @@
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0"
-                Background="{StaticResource CardBrush}"
-                BorderBrush="{StaticResource LineBrush}"
-                BorderThickness="0,0,1,0"
-                Padding="10,18"
-                Effect="{StaticResource CardShadowSoft}">
+        <Grid Grid.Column="0">
+            <!-- 阴影单独一层：避免 DropShadowEffect 把导航文字一起栅格化 -->
+            <Border Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="0,0,1,0"
+                    Effect="{StaticResource CardShadowSoft}" />
+            <Border Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="0,0,1,0"
+                    Padding="10,18">
             <StackPanel>
                 <TextBlock x:Name="VersionSettingsHeaderText"
                            Text="版本设置"
@@ -49,7 +53,8 @@
                         Click="Export_Click"
                         Style="{StaticResource NavButton}" />
             </StackPanel>
-        </Border>
+            </Border>
+        </Grid>
 
         <ScrollViewer Grid.Column="1"
                       VerticalScrollBarVisibility="Auto"
@@ -71,7 +76,7 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="12"
+                            CornerRadius="{StaticResource CardCornerRadius}"
                             Padding="20">
                         <StackPanel>
                             <TextBlock Text="当前版本" FontSize="16" FontWeight="SemiBold" />
@@ -105,7 +110,7 @@
                                        Foreground="{StaticResource BlueBrush}"
                                        TextWrapping="Wrap"
                                        Margin="0,8,0,0" />
-                            <Border Background="#F5F9FD" CornerRadius="10" Padding="18" Margin="0,22,0,0">
+                            <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource CardPadding}" Margin="0,22,0,0">
                                 <StackPanel>
                                     <TextBlock Text="版本数据位置" FontWeight="SemiBold" />
                                     <TextBlock x:Name="DshHomeText"
@@ -119,7 +124,7 @@
                                                Margin="0,8,0,0" />
                                 </StackPanel>
                             </Border>
-                            <Border Background="#F5F9FD" CornerRadius="10" Padding="18" Margin="0,14,0,0">
+                            <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource CardPadding}" Margin="0,14,0,0">
                                 <StackPanel>
                                     <TextBlock Text="绑定打开方式" FontWeight="SemiBold" />
                                     <TextBlock Text="Web 启动：dsh 原生运行方式，由 dsh 在默认浏览器打开 WebUI；Desktop 启动：启动器所带的方式，用内部窗口承载 WebUI（不会重复弹浏览器）；或手动绑定 EXE/BAT/CMD/PowerShell 脚本和 LNK 快捷方式。"
@@ -171,7 +176,7 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="12"
+                            CornerRadius="{StaticResource CardCornerRadius}"
                             Padding="20">
                         <StackPanel>
                             <CheckBox x:Name="SyncAllConfigurationCheckBox"
@@ -234,7 +239,7 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="12"
+                            CornerRadius="{StaticResource CardCornerRadius}"
                             Padding="20">
                         <StackPanel>
                             <DockPanel>
@@ -262,7 +267,7 @@
                                 </ListBox.ItemContainerStyle>
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="#F5F9FD" CornerRadius="9" Padding="14">
+                                        <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="9" Padding="14">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -314,7 +319,7 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="12"
+                            CornerRadius="{StaticResource CardCornerRadius}"
                             Padding="20"
                             Margin="0,16,0,0">
                         <StackPanel>
@@ -353,7 +358,7 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="12"
+                            CornerRadius="{StaticResource CardCornerRadius}"
                             Padding="20">
                         <StackPanel>
                             <TextBlock Text="配置快照与回滚" FontSize="16" FontWeight="SemiBold" />
@@ -397,7 +402,7 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="12"
+                            CornerRadius="{StaticResource CardCornerRadius}"
                             Padding="20">
                         <StackPanel>
                             <TextBlock Text="导出版本整合包" FontSize="16" FontWeight="SemiBold" />
@@ -414,7 +419,7 @@
                                       IsChecked="False"
                                       IsEnabled="False"
                                       Margin="0,0,0,14" />
-                            <Border Background="#FFF9EA" BorderBrush="#F1C26B" BorderThickness="1" CornerRadius="9" Padding="12">
+                            <Border Background="{StaticResource WarningBackgroundBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="9" Padding="12">
                                 <TextBlock Text="不会导出 API Key、Token、密码、环境变量值、sessions/会话文件，也不导出模型提供商配置。"
                                            Foreground="{StaticResource MutedBrush}"
                                            TextWrapping="Wrap"
@@ -435,7 +440,7 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="12"
+                            CornerRadius="{StaticResource CardCornerRadius}"
                             Padding="20"
                             Margin="0,16,0,0">
                         <StackPanel>

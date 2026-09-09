@@ -64,7 +64,7 @@
                     <Border Grid.Row="1"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="10"
+                            CornerRadius="{StaticResource PanelCornerRadius}"
                             Background="White"
                             Padding="8"
                             ClipToBounds="True">
@@ -76,11 +76,11 @@
                                   ScrollViewer.HorizontalScrollBarVisibility="Auto">
                             <ListView.View>
                                 <GridView AllowsColumnReorder="False">
-                                    <GridViewColumn Header="名称" Width="280" DisplayMemberBinding="{Binding DisplayName}" />
-                                    <GridViewColumn Header="实例" Width="220" DisplayMemberBinding="{Binding InstanceName}" />
-                                    <GridViewColumn Header="更新时间" Width="180" DisplayMemberBinding="{Binding UpdatedAt}" />
-                                    <GridViewColumn Header="大小" Width="90" DisplayMemberBinding="{Binding SizeBytes}" />
-                                    <GridViewColumn Header="格式" Width="100" DisplayMemberBinding="{Binding IsCompressed}" />
+                                    <GridViewColumn Header="名称" Width="240" DisplayMemberBinding="{Binding DisplayName}" />
+                                    <GridViewColumn Header="实例" Width="180" DisplayMemberBinding="{Binding InstanceName}" />
+                                    <GridViewColumn Header="更新时间" Width="160" DisplayMemberBinding="{Binding UpdatedAt}" />
+                                    <GridViewColumn Header="大小" Width="80" DisplayMemberBinding="{Binding SizeBytes}" />
+                                    <GridViewColumn Header="格式" Width="90" DisplayMemberBinding="{Binding IsCompressed}" />
                                 </GridView>
                             </ListView.View>
                         </ListView>
@@ -110,7 +110,7 @@
                     <Border Grid.Row="2"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="10"
+                            CornerRadius="{StaticResource PanelCornerRadius}"
                             Background="White"
                             Padding="8"
                             ClipToBounds="True">
@@ -121,11 +121,11 @@
                                   ScrollViewer.HorizontalScrollBarVisibility="Auto">
                             <ListView.View>
                                 <GridView AllowsColumnReorder="False">
-                                    <GridViewColumn Header="名称" Width="300" DisplayMemberBinding="{Binding DisplayName}" />
-                                    <GridViewColumn Header="备份时间" Width="180" DisplayMemberBinding="{Binding BackedUpAt}" />
-                                    <GridViewColumn Header="实例" Width="220" DisplayMemberBinding="{Binding InstanceName}" />
-                                    <GridViewColumn Header="大小" Width="90" DisplayMemberBinding="{Binding SizeBytes}" />
-                                    <GridViewColumn Header="备份文件" Width="360" DisplayMemberBinding="{Binding FileName}" />
+                                    <GridViewColumn Header="名称" Width="260" DisplayMemberBinding="{Binding DisplayName}" />
+                                    <GridViewColumn Header="备份时间" Width="160" DisplayMemberBinding="{Binding BackedUpAt}" />
+                                    <GridViewColumn Header="实例" Width="170" DisplayMemberBinding="{Binding InstanceName}" />
+                                    <GridViewColumn Header="大小" Width="80" DisplayMemberBinding="{Binding SizeBytes}" />
+                                    <GridViewColumn Header="备份文件" Width="260" DisplayMemberBinding="{Binding FileName}" />
                                 </GridView>
                             </ListView.View>
                         </ListView>

@@ -23,6 +23,26 @@
         <SolidColorBrush x:Key="WhiteFaintBrush" Color="#55FFFFFF" />
         <SolidColorBrush x:Key="WhiteSoftBrush" Color="#80FFFFFF" />
         <SolidColorBrush x:Key="WhiteStrongBrush" Color="#B3FFFFFF" />
+
+        <!-- 语义色（开发历史中散落的硬编码收敛于此）：状态/危险/警告/信息底 -->
+        <SolidColorBrush x:Key="SuccessTextBrush" Color="#25875A" />
+        <SolidColorBrush x:Key="DangerTextBrush" Color="#A25A54" />
+        <SolidColorBrush x:Key="DangerBrush" Color="#B42318" />
+        <SolidColorBrush x:Key="WarningBrush" Color="#F1C26B" />
+        <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#FFF9EA" />
+        <SolidColorBrush x:Key="InfoBackgroundBrush" Color="#F5F9FD" />
+        <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#F8FBFE" />
+        <SolidColorBrush x:Key="HoverSurfaceBrush" Color="#F7FAFD" />
+
+        <!-- 圆角/间距 token（规范见 docs/UI-DESIGN.md） -->
+        <CornerRadius x:Key="CardCornerRadius">12</CornerRadius>
+        <CornerRadius x:Key="PanelCornerRadius">10</CornerRadius>
+        <CornerRadius x:Key="ItemCornerRadius">8</CornerRadius>
+        <CornerRadius x:Key="ChipCornerRadius">10</CornerRadius>
+        <Thickness x:Key="CardPadding">18</Thickness>
+        <Thickness x:Key="PanelPadding">16</Thickness>
+        <Thickness x:Key="SectionMargin">0,16,0,0</Thickness>
+        <Thickness x:Key="ItemMargin">0,0,0,8</Thickness>
         <LinearGradientBrush x:Key="TitleBarGradient" StartPoint="0,0" EndPoint="1,0">
             <GradientStop Color="#0B5BCB" Offset="0" />
             <GradientStop Color="#1370F3" Offset="1" />
@@ -369,7 +389,7 @@
         </Style>
         <Style TargetType="TabItem">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-            <Setter Property="Background" Value="#F7FAFD" />
+            <Setter Property="Background" Value="{StaticResource HoverSurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="Margin" Value="0,0,8,0" />
@@ -452,6 +472,96 @@
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- 复选框：圆角方框 + 蓝色对钩（默认 Aero2 样式与整体设计不一致） -->
+        <Style TargetType="CheckBox">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" Background="Transparent">
+                            <Border x:Name="Box"
+                                    Width="18"
+                                    Height="18"
+                                    CornerRadius="5"
+                                    Background="White"
+                                    BorderBrush="{StaticResource LineBrush}"
+                                    BorderThickness="1"
+                                    VerticalAlignment="Center"
+                                    SnapsToDevicePixels="True">
+                                <Path x:Name="Check"
+                                      Data="M 4,9 L 8,13 L 14,5"
+                                      Stroke="White"
+                                      StrokeThickness="2"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      Visibility="Collapsed" />
+                            </Border>
+                            <ContentPresenter Margin="8,0,0,0"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="{StaticResource BlueBrush}" />
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource BlueBrush}" />
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource BlueBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 进度条：蓝色圆角；不确定态用脉冲代替系统绿色块 -->
+        <Style TargetType="ProgressBar">
+            <Setter Property="Height" Value="6" />
+            <Setter Property="Background" Value="#E7F1FC" />
+            <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Border x:Name="PART_Track"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="3">
+                            <Border x:Name="PART_Indicator"
+                                    Background="{TemplateBinding Foreground}"
+                                    CornerRadius="3"
+                                    HorizontalAlignment="Left" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsIndeterminate" Value="True">
+                                <Setter TargetName="PART_Indicator" Property="HorizontalAlignment" Value="Stretch" />
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                            <DoubleAnimation Storyboard.TargetName="PART_Indicator"
+                                                             Storyboard.TargetProperty="Opacity"
+                                                             From="0.35"
+                                                             To="1.0"
+                                                             Duration="0:0:0.9" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

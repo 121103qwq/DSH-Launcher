@@ -11,13 +11,18 @@
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0"
-                    Background="{StaticResource CardBrush}"
-                    BorderBrush="{StaticResource LineBrush}"
-                    BorderThickness="1"
-                    CornerRadius="12"
-                    Padding="14"
-                    Effect="{StaticResource CardShadowSoft}">
+            <Grid Grid.Column="0">
+                <!-- 阴影单独一层：避免 DropShadowEffect 把列表文字一起栅格化 -->
+                <Border Background="{StaticResource CardBrush}"
+                        BorderBrush="{StaticResource LineBrush}"
+                        BorderThickness="1"
+                        CornerRadius="{StaticResource CardCornerRadius}"
+                        Effect="{StaticResource CardShadowSoft}" />
+                <Border Background="{StaticResource CardBrush}"
+                        BorderBrush="{StaticResource LineBrush}"
+                        BorderThickness="1"
+                        CornerRadius="{StaticResource CardCornerRadius}"
+                        Padding="14">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -45,7 +50,7 @@
                                 <Setter Property="Padding" Value="0" />
                                 <Setter Property="Margin" Value="0,0,0,7" />
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                <Setter Property="Background" Value="#F5F9FD" />
+                                <Setter Property="Background" Value="{StaticResource InfoBackgroundBrush}" />
                                 <Setter Property="BorderBrush" Value="Transparent" />
                                 <Setter Property="BorderThickness" Value="1" />
                                 <Style.Triggers>
@@ -68,7 +73,7 @@
                                             <ColumnDefinition Width="32" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <Border Width="26" Height="26" Background="#DCECFB" CornerRadius="8">
+                                        <Border Width="26" Height="26" Background="#DCECFB" CornerRadius="{StaticResource ItemCornerRadius}">
                                             <TextBlock Text="D" Foreground="{StaticResource BlueBrush}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="8,0,0,0">
@@ -105,13 +110,14 @@
                         <Button Content="导入整合包" Click="ImportPackage_Click" />
                     </StackPanel>
                 </Grid>
-            </Border>
+                </Border>
+            </Grid>
 
             <Border Grid.Column="2"
                     Background="{StaticResource CardBrush}"
                     BorderBrush="{StaticResource LineBrush}"
                     BorderThickness="1"
-                    CornerRadius="12"
+                    CornerRadius="{StaticResource CardCornerRadius}"
                     ClipToBounds="True">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
@@ -124,7 +130,7 @@
                                Foreground="{StaticResource MutedBrush}"
                                TextWrapping="Wrap"
                                Margin="0,6,0,22" />
-                    <Border Background="#F5F9FD" CornerRadius="10" Padding="16">
+                    <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource PanelPadding}">
                         <StackPanel>
                             <TextBlock Text="{Binding SelectedVersionName}" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap" />
                             <TextBlock Text="{Binding SelectedVersionDetails}" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,8,0,0" />
@@ -150,18 +156,18 @@
                                         Click="DeleteVersion_Click"
                                         IsEnabled="{Binding CanDelete}"
                                         ToolTip="{Binding DeleteButtonToolTip}"
-                                        Foreground="#B42318"
+                                        Foreground="{StaticResource DangerBrush}"
                                         Padding="16,9"
                                         Margin="0,0,8,8" />
                                 <Button Content="版本设置" Click="OpenSettings_Click" Padding="16,9" Margin="0,0,8,8" />
                             </WrapPanel>
                         </StackPanel>
                     </Border>
-                    <Border Background="#F5F9FD"
+                    <Border Background="{StaticResource InfoBackgroundBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="10"
-                            Padding="16"
+                            CornerRadius="{StaticResource PanelCornerRadius}"
+                            Padding="{StaticResource PanelPadding}"
                             Margin="0,16,0,0">
                         <StackPanel>
                             <TextBlock Text="版本检查" FontWeight="SemiBold" FontSize="15" />
@@ -175,7 +181,7 @@
                                         <Border Background="{StaticResource CardBrush}"
                                                 BorderBrush="{StaticResource LineBrush}"
                                                 BorderThickness="1"
-                                                CornerRadius="8"
+                                                CornerRadius="{StaticResource ItemCornerRadius}"
                                                 Padding="11"
                                                 Margin="0,0,0,7">
                                             <TextBlock Text="{Binding DisplayText}"
@@ -190,8 +196,8 @@
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
-                            CornerRadius="10"
-                            Padding="16"
+                            CornerRadius="{StaticResource PanelCornerRadius}"
+                            Padding="{StaticResource PanelPadding}"
                             Margin="0,16,0,0">
                         <StackPanel>
                             <TextBlock Text="配置快照与回滚" FontWeight="SemiBold" FontSize="15" />
@@ -226,7 +232,7 @@
                             </Grid>
                         </StackPanel>
                     </Border>
-                    <Border Background="#FFF9EA" BorderBrush="#F1C26B" BorderThickness="1" CornerRadius="10" Padding="14" Margin="0,16,0,0">
+                    <Border Background="{StaticResource WarningBackgroundBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="{StaticResource PanelCornerRadius}" Padding="14" Margin="0,16,0,0">
                         <StackPanel>
                             <TextBlock Text="整合包格式" FontWeight="SemiBold" />
                             <TextBlock Text="{Binding PackageFormatText}" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0" />

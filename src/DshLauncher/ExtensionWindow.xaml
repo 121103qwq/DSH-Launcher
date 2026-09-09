@@ -44,7 +44,7 @@
                         <Border Background="{StaticResource CardBrush}"
                                 BorderBrush="{StaticResource LineBrush}"
                                 BorderThickness="1"
-                                CornerRadius="8"
+                                CornerRadius="{StaticResource ItemCornerRadius}"
                                 Padding="10,8"
                                 MaxWidth="420">
                             <ContentPresenter />
@@ -66,8 +66,8 @@
                 Background="{StaticResource CardBrush}"
                 BorderBrush="{StaticResource LineBrush}"
                 BorderThickness="1"
-                CornerRadius="12"
-                Padding="16">
+                CornerRadius="{StaticResource CardCornerRadius}"
+                Padding="{StaticResource PanelPadding}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -162,10 +162,10 @@
                 </StackPanel>
 
                 <Border Grid.Row="2"
-                        Background="#F8FBFE"
+                        Background="{StaticResource PanelBackgroundBrush}"
                         BorderBrush="{StaticResource LineBrush}"
                         BorderThickness="1"
-                        CornerRadius="10"
+                        CornerRadius="{StaticResource PanelCornerRadius}"
                         Padding="8"
                         ClipToBounds="True">
                     <ListBox x:Name="ExtensionList"
@@ -184,7 +184,7 @@
                                         Background="{StaticResource CardBrush}"
                                         BorderBrush="{StaticResource LineBrush}"
                                         BorderThickness="1"
-                                        CornerRadius="8">
+                                        CornerRadius="{StaticResource ItemCornerRadius}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="62" />
@@ -217,11 +217,11 @@
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
                                                     <Setter Property="Text" Value="已禁用" />
-                                                    <Setter Property="Foreground" Value="#A25A54" />
+                                                    <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding Enabled}" Value="True">
                                                             <Setter Property="Text" Value="已启用" />
-                                                            <Setter Property="Foreground" Value="#25875A" />
+                                                            <Setter Property="Foreground" Value="{StaticResource SuccessTextBrush}" />
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
@@ -235,7 +235,7 @@
                 </Border>
 
                 <Border Grid.Row="3"
-                        Background="#F5F9FD"
+                        Background="{StaticResource InfoBackgroundBrush}"
                         CornerRadius="9"
                         Padding="10"
                         Margin="0,12,0,0">
@@ -292,8 +292,8 @@
                 Background="{StaticResource CardBrush}"
                 BorderBrush="{StaticResource LineBrush}"
                 BorderThickness="1"
-                CornerRadius="12"
-                Padding="18">
+                CornerRadius="{StaticResource CardCornerRadius}"
+                Padding="{StaticResource CardPadding}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -426,14 +426,13 @@
                 </StackPanel>
 
                 <Border Grid.Row="3"
-                        Background="#F8FBFE"
+                        Background="{StaticResource PanelBackgroundBrush}"
                         BorderBrush="{StaticResource LineBrush}"
                         BorderThickness="1"
-                        CornerRadius="10"
+                        CornerRadius="{StaticResource PanelCornerRadius}"
                         Padding="8"
                         ClipToBounds="True">
                     <ListBox x:Name="MarketplaceList"
-                             MaxHeight="700"
                              BorderThickness="0"
                              Background="Transparent"
                              Foreground="{StaticResource TextBrush}"
@@ -456,7 +455,7 @@
                                         Background="{StaticResource CardBrush}"
                                         BorderBrush="{StaticResource LineBrush}"
                                         BorderThickness="1"
-                                        CornerRadius="8">
+                                        CornerRadius="{StaticResource ItemCornerRadius}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="40" />
@@ -466,7 +465,7 @@
                                         <Border Width="36"
                                                 Height="36"
                                                 Background="#E2EFFB"
-                                                CornerRadius="8"
+                                                CornerRadius="{StaticResource ItemCornerRadius}"
                                                 VerticalAlignment="Top">
                                             <Grid>
                                                 <TextBlock Text="P"
@@ -504,7 +503,7 @@
                                                 <TextBlock Text="{Binding SourceText}" Foreground="{StaticResource BlueBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding Category}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding VersionStatusText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,12,0" />
-                                                <TextBlock Text="{Binding VerificationText}" Foreground="#25875A" FontSize="11" Margin="0,0,12,0" />
+                                                <TextBlock Text="{Binding VerificationText}" Foreground="{StaticResource SuccessTextBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding StarsText}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding PublishedText}" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                                             </WrapPanel>
@@ -581,16 +580,22 @@
             </Grid>
         </Border>
 
-        <Border x:Name="SkillMarketPanel"
-                Grid.Column="2"
-                Background="{StaticResource CardBrush}"
-                BorderBrush="{StaticResource LineBrush}"
-                BorderThickness="1"
-                CornerRadius="12"
-                Padding="18"
-                ClipToBounds="True"
-                Effect="{StaticResource CardShadowSoft}"
-                Visibility="Collapsed">
+        <Grid Grid.Column="2">
+            <!-- 阴影单独一层：避免 DropShadowEffect 把列表文字一起栅格化 -->
+            <Border Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Effect="{StaticResource CardShadowSoft}"
+                    Visibility="{Binding Visibility, ElementName=SkillMarketPanel}" />
+            <Border x:Name="SkillMarketPanel"
+                    Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Padding="{StaticResource CardPadding}"
+                    ClipToBounds="True"
+                    Visibility="Collapsed">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -688,10 +693,10 @@
                         <DataTemplate>
                             <Border Padding="12"
                                     Margin="0,0,0,8"
-                                    Background="#F7FAFD"
+                                    Background="{StaticResource HoverSurfaceBrush}"
                                     BorderBrush="{StaticResource LineBrush}"
                                     BorderThickness="1"
-                                    CornerRadius="10">
+                                    CornerRadius="{StaticResource PanelCornerRadius}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -739,6 +744,7 @@
                            TextWrapping="Wrap"
                            Margin="0,10,0,0" />
             </Grid>
-        </Border>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

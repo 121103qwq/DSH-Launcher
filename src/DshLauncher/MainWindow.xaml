@@ -122,7 +122,7 @@
                                         Background="{TemplateBinding Background}"
                                         BorderBrush="{TemplateBinding BorderBrush}"
                                         BorderThickness="{TemplateBinding BorderThickness}"
-                                        CornerRadius="10">
+                                        CornerRadius="{StaticResource PanelCornerRadius}">
                                     <ContentPresenter HorizontalAlignment="Left"
                                                       VerticalAlignment="Center"
                                                       Margin="13,0" />
@@ -153,7 +153,7 @@
                             Background="#55FFFFFF"
                             BorderBrush="#80FFFFFF"
                             BorderThickness="1"
-                            CornerRadius="10"
+                            CornerRadius="{StaticResource PanelCornerRadius}"
                             ClipToBounds="True"
                             Visibility="Collapsed">
                         <Grid>
@@ -264,7 +264,7 @@
                 </Grid.RowDefinitions>
                         <Border Visibility="{Binding PageNoticeVisibility}"
                                 Background="#FFF4DF"
-                                BorderBrush="#F1C26B"
+                                BorderBrush="{StaticResource WarningBrush}"
                                 BorderThickness="1"
                                 CornerRadius="9"
                                 Padding="14,10"
@@ -297,13 +297,13 @@
                             <Grid Grid.Column="0" VerticalAlignment="Top">
                                 <!-- 阴影单独一层：避免 DropShadowEffect 把卡片内文字一起栅格化（小字发糊） -->
                                 <Border Background="{StaticResource CardBrush}"
-                                        CornerRadius="13"
+                                        CornerRadius="{StaticResource CardCornerRadius}"
                                         BorderBrush="{StaticResource LineBrush}"
                                         BorderThickness="1"
                                         Effect="{StaticResource CardShadow}" />
                                 <Border Background="{StaticResource CardBrush}"
-                                        CornerRadius="13"
-                                        Padding="18"
+                                        CornerRadius="{StaticResource CardCornerRadius}"
+                                        Padding="{StaticResource CardPadding}"
                                         BorderBrush="{StaticResource LineBrush}"
                                         BorderThickness="1"
                                         SnapsToDevicePixels="True"
@@ -319,7 +319,7 @@
                                                 Background="{Binding SelectedInstanceStatusBackgroundBrush}"
                                                 BorderBrush="{Binding SelectedInstanceStatusBrush}"
                                                 BorderThickness="1"
-                                                CornerRadius="10"
+                                                CornerRadius="{StaticResource PanelCornerRadius}"
                                                 Padding="9,3"
                                                 SnapsToDevicePixels="True"
                                                 UseLayoutRounding="True">
@@ -329,7 +329,7 @@
                                             </StackPanel>
                                         </Border>
                                     </Grid>
-                                    <Grid Grid.Row="1" Margin="0,22,0,0">
+                                    <Grid Grid.Row="1" Margin="0,16,0,0">
                                         <StackPanel VerticalAlignment="Center" Visibility="{Binding NoInstancesVisibility}">
                                             <Border Width="58" Height="58" Background="#EAF2FE" CornerRadius="18" HorizontalAlignment="Center">
                                                 <TextBlock Text="＋" Foreground="{StaticResource BlueBrush}" FontSize="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -431,15 +431,20 @@
                                 </Border>
                             </Grid>
 
-                            <Border x:Name="InstanceWorkspacePanel"
-                                    Grid.Column="2"
-                                    Background="{StaticResource CardBrush}"
-                                    CornerRadius="13"
-                                    ClipToBounds="True"
-                                    Padding="18"
-                                    BorderBrush="{StaticResource LineBrush}"
-                                    BorderThickness="1"
-                                    Effect="{StaticResource CardShadow}">
+                            <Grid Grid.Column="2">
+                                <!-- 阴影单独一层：避免 DropShadowEffect 把卡片内文字一起栅格化 -->
+                                <Border Background="{StaticResource CardBrush}"
+                                        CornerRadius="{StaticResource CardCornerRadius}"
+                                        BorderBrush="{StaticResource LineBrush}"
+                                        BorderThickness="1"
+                                        Effect="{StaticResource CardShadow}" />
+                                <Border x:Name="InstanceWorkspacePanel"
+                                        Background="{StaticResource CardBrush}"
+                                        CornerRadius="{StaticResource CardCornerRadius}"
+                                        ClipToBounds="True"
+                                        Padding="{StaticResource CardPadding}"
+                                        BorderBrush="{StaticResource LineBrush}"
+                                        BorderThickness="1">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
@@ -468,7 +473,7 @@
                                                  Visibility="{Binding InstancesVisibility}"
                                                  BorderThickness="0"
                                                  Background="Transparent"
-                                                 Margin="0,18,0,0"
+                                                 Margin="0,14,0,0"
                                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
                                                  ScrollViewer.CanContentScroll="True"
@@ -483,7 +488,7 @@
                                             </ListBox.ItemContainerStyle>
                                             <ListBox.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Background="#F5F9FD" CornerRadius="9" Padding="12">
+                                                    <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="9" Padding="12">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="22" />
@@ -543,7 +548,8 @@
                                                        Margin="0,6,0,0" />
                                         </StackPanel>
                                     </Grid>
-                            </Border>
+                                </Border>
+                            </Grid>
                         </Grid>
                         <ContentControl x:Name="EmbeddedPageHost"
                                         Grid.Row="1"
