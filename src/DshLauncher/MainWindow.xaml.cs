@@ -1675,6 +1675,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         dshInstallRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         dshInstallRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         dshInstallRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        dshInstallRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         var dshInstallBox = new System.Windows.Controls.TextBox
         {
             Height = 38,
@@ -1694,16 +1695,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Padding = new Thickness(12, 7, 12, 7),
             Margin = new Thickness(8, 0, 0, 0)
         };
+        var moveDshInstallButton = new System.Windows.Controls.Button
+        {
+            Name = "MoveInstallButton",
+            Content = "移动已有安装",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(8, 0, 0, 0),
+            ToolTip = "把当前已安装的 DSh 运行目录（含各版本）整体搬到上面填写的新位置，并自动更新引用它的实例"
+        };
         Grid.SetColumn(browseDshInstallButton, 1);
         Grid.SetColumn(saveDshInstallButton, 2);
+        Grid.SetColumn(moveDshInstallButton, 3);
         dshInstallRow.Children.Add(dshInstallBox);
         dshInstallRow.Children.Add(browseDshInstallButton);
         dshInstallRow.Children.Add(saveDshInstallButton);
+        dshInstallRow.Children.Add(moveDshInstallButton);
         runtimePanel.Children.Add(dshInstallLabel);
         runtimePanel.Children.Add(dshInstallRow);
         runtimePanel.Children.Add(new TextBlock
         {
-            Text = $"Launcher 默认把 @deepseek-ai/dsh 安装到 {_versionSettingsService.DefaultDshInstallDirectory}；可以在这里改为其它目录。实例的 Plugin、Skill、Provider、设置和对话仍保存在各自独立的 DSH_HOME。",
+            Text = $"Launcher 默认把 @deepseek-ai/dsh 安装到 {_versionSettingsService.DefaultDshInstallDirectory}；可以在这里改为其它目录（改动只影响后续安装，想连同已安装的一起搬走请点「移动已有安装」）。实例的 Plugin、Skill、Provider、设置和对话仍保存在各自独立的 DSH_HOME。",
             Foreground = (WpfBrush)FindResource("MutedBrush"),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
@@ -1840,6 +1851,72 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         saveDshInstallButton.Click += async (_, _) =>
             await SaveDshInstallLocationAsync(showNotice: true);
+        moveDshInstallButton.Click += async (_, _) =>
+        {
+            var mover = new DshInstallMoveService(
+                registry: _instanceRegistry,
+                settings: _versionSettingsService);
+            var current = mover.ResolveCurrentInstallDirectory();
+            if (current is null)
+            {
+                ShowNotice("没有找到可移动的 DSh 安装目录（可能尚未安装）。");
+                return;
+            }
+
+            var target = DshInstallService.NormalizeInstallDirectory(dshInstallBox.Text)
+                ?? _versionSettingsService.DefaultDshInstallDirectory;
+            if (string.Equals(
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(current)),
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(target)),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                ShowNotice("目标位置与当前安装位置相同，无需移动。");
+                return;
+            }
+
+            var confirmed = System.Windows.MessageBox.Show(
+                this,
+                $"将当前 DSh 安装目录：\n{current}\n\n整体移动到：\n{target}\n\n会同步更新引用它的实例；请先停止正在运行的实例。继续吗？",
+                "移动 DSh 安装位置",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes;
+            if (!confirmed)
+            {
+                return;
+            }
+
+            moveDshInstallButton.IsEnabled = false;
+            var originalContent = moveDshInstallButton.Content;
+            moveDshInstallButton.Content = "正在移动…";
+            try
+            {
+                var result = await mover.MoveAsync(
+                    target,
+                    id => _instanceRunner.IsRunning(id),
+                    _windowCancellation.Token);
+                ShowNotice(result.Message);
+                if (result.Ok)
+                {
+                    // 移动后实例的运行时路径已被重写；内存列表必须重载，否则
+                    // 接下来的自动注册会按旧路径去重失败、多出一个重复实例。
+                    LoadCachedInstances();
+                }
+
+                if (result.OldDirectory is not null)
+                {
+                    dshInstallBox.Text = result.NewDirectory ?? target;
+                }
+
+                await RefreshDshAsync(forceRefresh: true);
+                await RefreshNodeAsync();
+                UpdateStatus();
+            }
+            finally
+            {
+                moveDshInstallButton.Content = originalContent;
+                moveDshInstallButton.IsEnabled = true;
+            }
+        };
         prepareButton.Click += async (_, _) =>
         {
             if (await SaveDshInstallLocationAsync(showNotice: false))

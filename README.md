@@ -67,6 +67,7 @@ dsh-launcher-dev/
 | 41 | `MainWindow.xaml(.cs)` + `VersionControlWindow.xaml(.cs)` + `NewVersionWindow.xaml.cs` | 设置页分类栏改为**圆角卡片**；「新建干净版本」**先弹窗再异步补全官方版本列表**（原来要等 npmjs 响应数秒，像按钮坏了）+ 忙碌态禁用/重入保护 |
 | 42 | `VersionControlWindow.xaml.cs` + `MainWindow.xaml` + `VersionPackageService.cs` | 修复创建版本失败（后台线程读对话框 WPF 控件 → 先在 UI 线程取值）；窗口尺寸语义纠正为“**最小尺寸 = 启动尺寸**”（1180×720）；删除版本后清理 `instances/<id>` 空壳目录 |
 | 43 | `MainWindow.xaml.cs` | 修复非最大化下右侧/底部内容被裁切：`Window_OnLoaded` 对 `SystemParameters.WorkArea`（本就是 DIP）**二次除以 DpiScale** → Width 小于 MinWidth，原生窗口偏小、布局偏大；删除该冗余块（`WindowSizeHelper.FitInitialSize` 已正确处理），并新增启动尺寸诊断日志 |
+| 44 | `Services/DshInstallMoveService.cs`（新）+ `MainWindow.xaml.cs` | 「移动已有安装」：把已安装的 DSh 运行目录（含 `versions/`）整体搬到新位置——同盘原子重命名、跨盘复制+校验+删源；同步重写实例的 RootPath/Exe/LaunchSpec 与 `DshInstallDirectory`；目标非空/实例运行中/嵌套目录均拒绝，失败尽力回滚（E1008） |
 
 ## 行为变化（相对上游）
 
@@ -94,6 +95,7 @@ dsh-launcher-dev/
 22. **分类栏圆角化 + 新建版本修复**：设置页分类栏改为圆角卡片；「新建干净版本」改为先弹窗（0.2 秒内出现）、官方版本列表后台补全，并加忙碌态防连点
 23. **窗口尺寸**：最小可调尺寸提升到与启动尺寸一致（1180×720，小屏自动收缩）；创建版本不再报“调用线程无法访问此对象”（对话框属性改在 UI 线程读取）；删除版本顺手清理空目录
 24. **修复非最大化窗口裁切**：删除了对工作区尺寸的二次 DPI 除法（WPF 的 `SystemParameters.WorkArea` 本身就是逻辑单位），右侧/底部内容不再被裁；启动时日志新增一行窗口尺寸诊断
+25. **移动已有安装**：设置 → 运行环境新增「移动已有安装」，把已装好的 DSh 运行目录整体搬到新位置并自动更新引用它的实例（同盘秒级、跨盘复制校验；失败回滚）
 
 ## 构建与发布（SOP）
 
