@@ -358,7 +358,7 @@ public sealed class NodeInstallService
         string.IsNullOrWhiteSpace(requiredNodeEngine)
         || NodeRuntimeInfo.EvaluateCompatibility(DefaultVersion, requiredNodeEngine) == NodeRuntimeCompatibility.Compatible;
 
-    private async Task<string?> ResolveVersionAsync(string distBase, string? requiredNodeEngine, CancellationToken cancellationToken)
+    internal async Task<string?> ResolveVersionAsync(string distBase, string? requiredNodeEngine, CancellationToken cancellationToken)
     {
         try
         {
@@ -395,7 +395,7 @@ public sealed class NodeInstallService
         return segments.Length > 1 && int.TryParse(segments[1], out var minor) ? minor : -1;
     }
 
-    private static bool IsSupportedDistBase(string distBase) =>
+    internal static bool IsSupportedDistBase(string distBase) =>
         string.Equals(distBase, OfficialDistBase, StringComparison.OrdinalIgnoreCase)
         || string.Equals(distBase, MirrorDistBase, StringComparison.OrdinalIgnoreCase);
 

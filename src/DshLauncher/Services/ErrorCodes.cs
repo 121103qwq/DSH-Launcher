@@ -13,11 +13,14 @@ public static class ErrorCodes
     public const string E1003 = "E1003"; // 诊断包导出失败
     public const string E1004 = "E1004"; // Launcher 日志写入失败
     public const string E1005 = "E1005"; // 诊断包导出被取消
+    public const string E1006 = "E1006"; // 便携版 Node.js 准备失败
 
     // E2xxx 插件 / 扩展
     public const string E2001 = "E2001"; // 插件依赖自检发现异常
     public const string E2002 = "E2002"; // 插件更新检查失败
     public const string E2003 = "E2003"; // 批量更新部分失败
+    public const string E2004 = "E2004"; // 插件命令失败后自动重试/镜像恢复
+    public const string E2005 = "E2005"; // 插件失败残留清理（回滚）
 
     // E3xxx 网络 / 代理
     public const string E3001 = "E3001"; // 代理配置无效
@@ -37,9 +40,12 @@ public static class ErrorCodes
         E1003 => "诊断包导出失败（日志/数据文件读取异常）。",
         E1004 => "Launcher 日志写入失败（磁盘/权限问题）。",
         E1005 => "诊断包导出被取消。",
+        E1006 => "便携版 Node.js 准备失败（下载/解压/校验/替换）。",
         E2001 => "插件依赖自检发现异常（核心包混入 profile / 依赖缺失等）。",
         E2002 => "插件更新检查失败（registry 不可达或响应异常）。",
         E2003 => "批量更新部分插件失败（其余插件已更新）。",
+        E2004 => "插件命令失败后触发了自动重试或 GitHub 镜像恢复。",
+        E2005 => "插件失败安装的残留被清理，或残留清理本身失败。",
         E3001 => "代理配置无效（地址或端口不合法，已忽略）。",
         E3002 => "DeepSeek 余额查询失败（网络/凭据问题）。",
         E4001 => "浏览器守卫执行失败（未能枚举或结束浏览器进程）。",

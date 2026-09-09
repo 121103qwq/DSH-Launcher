@@ -759,6 +759,11 @@ public sealed partial class ExtensionService
         {
             ResolvePendingPnpmBuildDecisions(instance);
         }
+        // 失败安装会留下"声明了但装不出来"的依赖，下次启动 include-loader 会
+        // 直接崩；先记录操作前状态，失败后只回滚本次新增的部分。
+        var residue = action is "add" or "update"
+            ? PluginProfileResidue.TryCapture(instance, packageSpec)
+            : null;
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
         var startInfo = CreatePluginStartInfo(
             instance,
@@ -768,8 +773,12 @@ public sealed partial class ExtensionService
             allowBuildPackageName,
             installMode);
         pnpmEnvironment.Apply(startInfo);
-        var output = await RunProcessAsync(
+        GitMirrorEnvironment.ApplyNoPrompt(startInfo);
+        var attempt = await RunPluginCommandWithRecoveryAsync(
             startInfo,
+            action,
+            actionText,
+            packageSpec,
             cancellationToken,
             line =>
             {
@@ -778,14 +787,121 @@ public sealed partial class ExtensionService
                     progress.Report(update);
                 }
             });
-        if (output.ExitCode != 0)
+        if (attempt.Output.ExitCode != 0)
         {
-            throw new InvalidOperationException(
-                $"Plugin {action} 失败（退出码 {output.ExitCode}）。{FormatProcessOutput(output, failure: true)}");
+            var rollback = residue?.Rollback() ?? PluginRollbackResult.None;
+            if (rollback.Changed)
+            {
+                LauncherLog.Warn(
+                    $"Plugin {actionText}失败，已回滚本次失败安装的残留。",
+                    ErrorCodes.E2005,
+                    new { package = packageSpec, removed = rollback.RemovedNames.ToArray(), profile = ProfileName });
+            }
+
+            throw new PluginCommandFailedException(
+                action,
+                actionText,
+                packageSpec,
+                attempt.Output.ExitCode,
+                FormatProcessOutput(attempt.Output, failure: true),
+                attempt.Failure,
+                attempt.Attempts,
+                rollback);
         }
 
-        return FormatProcessOutput(output, failure: false);
+        return FormatProcessOutput(attempt.Output, failure: false);
     }
+
+    private sealed record PluginCommandAttempt(
+        ProcessResult Output,
+        PnpmFailure? Failure,
+        IReadOnlyList<string> Attempts);
+
+    /// <summary>
+    /// 执行插件命令；失败时按 pnpm 失败模式做一次自动恢复（借鉴 MarcoG-h 的
+    /// withHoistRecovery / runPluginCommand）：瞬时网络重试一次；GitHub 直装
+    /// 先直连重试、再依次走进程级镜像重写。恢复仍失败才把最终失败交给调用方。
+    /// </summary>
+    private async Task<PluginCommandAttempt> RunPluginCommandWithRecoveryAsync(
+        ProcessStartInfo startInfo,
+        string action,
+        string actionText,
+        string packageSpec,
+        CancellationToken cancellationToken,
+        Action<string>? lineObserver)
+    {
+        var attempts = new List<string> { "首次" };
+        var output = await RunProcessAsync(startInfo, cancellationToken, lineObserver);
+        if (output.ExitCode == 0)
+        {
+            return new PluginCommandAttempt(output, null, attempts);
+        }
+
+        var failure = PnpmFailureClassifier.Classify(CombinePluginOutput(output));
+        if (action is not ("add" or "update") || failure is null)
+        {
+            return new PluginCommandAttempt(output, failure, attempts);
+        }
+
+        if (failure.Code == PnpmFailureCode.GitNetwork)
+        {
+            attempts.Add("直连重试");
+            LauncherLog.Info(
+                $"Plugin {actionText}命中 GitHub 网络失败，先直连重试一次。",
+                ErrorCodes.E2004,
+                new { package = packageSpec });
+            output = await RunProcessAsync(startInfo, cancellationToken, lineObserver);
+            foreach (var mirror in GitMirrorEnvironment.Mirrors)
+            {
+                if (output.ExitCode == 0)
+                {
+                    break;
+                }
+
+                attempts.Add($"镜像 {mirror.Name}");
+                LauncherLog.Info(
+                    $"Plugin {actionText}直连 GitHub 失败，改用镜像 {mirror.Name} 重试。",
+                    ErrorCodes.E2004,
+                    new { package = packageSpec, mirror = mirror.Name });
+                GitMirrorEnvironment.ApplyMirror(startInfo, mirror);
+                output = await RunProcessAsync(startInfo, cancellationToken, lineObserver);
+            }
+        }
+        else if (failure.RetryOnce)
+        {
+            attempts.Add("自动重试");
+            LauncherLog.Info(
+                $"Plugin {actionText}失败（{failure.Code}），自动重试一次。",
+                ErrorCodes.E2004,
+                new { package = packageSpec, code = failure.Code.ToString() });
+            if (failure.Code == PnpmFailureCode.Fetch404)
+            {
+                // 刚发布的包 registry/镜像可能还没同步完。
+                await Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken);
+            }
+
+            output = await RunProcessAsync(startInfo, cancellationToken, lineObserver);
+        }
+
+        if (output.ExitCode == 0)
+        {
+            LauncherLog.Info(
+                $"Plugin {actionText}自动恢复成功。",
+                ErrorCodes.E2004,
+                new { package = packageSpec, attempts = attempts.ToArray(), code = failure.Code.ToString() });
+            return new PluginCommandAttempt(output, null, attempts);
+        }
+
+        LauncherLog.Warn(
+            $"Plugin {actionText}自动恢复后仍失败。",
+            ErrorCodes.E2004,
+            new { package = packageSpec, attempts = attempts.ToArray(), code = failure.Code.ToString() });
+        var finalFailure = PnpmFailureClassifier.Classify(CombinePluginOutput(output)) ?? failure;
+        return new PluginCommandAttempt(output, finalFailure, attempts);
+    }
+
+    private static string CombinePluginOutput(ProcessResult output) =>
+        $"{output.StandardError}{Environment.NewLine}{output.StandardOutput}";
 
     internal static bool IsProtectedBuiltInPlugin(string? packageSpec)
     {

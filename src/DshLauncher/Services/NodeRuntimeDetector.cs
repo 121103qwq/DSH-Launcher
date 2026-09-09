@@ -126,6 +126,14 @@ public sealed class NodeRuntimeDetector
         IReadOnlyList<string>? pathDirectories = null)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Launcher 自己准备的便携版 Node 优先于系统安装：它保证 ≥22.19，
+        // 不依赖 PATH/注册表，卸载只需删除目录。
+        var portable = Path.Combine(new LauncherPaths().PortableNodeDirectory, "node.exe");
+        if (seen.Add(portable))
+        {
+            yield return portable;
+        }
+
         foreach (var directory in pathDirectories ?? RuntimeSearchPaths.GetNodeRuntimeDirectories())
         {
             var candidate = Path.Combine(directory, "node.exe");

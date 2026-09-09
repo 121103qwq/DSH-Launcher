@@ -31,6 +31,9 @@ public sealed class LauncherPaths
 
     public string ManagedDshRuntimeDirectory => Path.Combine(RootDirectory, "runtime", "dsh");
 
+    /// <summary>便携版 Node.js 的安装目录（免管理员，不写系统 PATH）。</summary>
+    public string PortableNodeDirectory => Path.Combine(RootDirectory, "node");
+
     public string VersionSettingsPath => Path.Combine(RootDirectory, "version-settings.json");
 
     public string GetInstanceDshHome(string instanceId) =>

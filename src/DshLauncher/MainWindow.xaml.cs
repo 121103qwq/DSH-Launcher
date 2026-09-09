@@ -60,6 +60,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly ProviderStateService _providerStateService = new();
     private readonly DshInstallService _dshInstaller = new();
     private readonly NodeInstallService _nodeInstaller = new();
+    private readonly PortableNodeService _portableNodeInstaller = new();
     private readonly SourceBuildService _sourceBuilder = new();
     private readonly CancellationTokenSource _windowCancellation = new();
     private NodeRuntimeInfo _nodeRuntime = NodeRuntimeInfo.Missing();
@@ -3053,6 +3054,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _runtimePanelUpdateStatus?.Invoke();
     }
 
+    private bool IsPreparedNodeUsable(string? requiredEngine) =>
+        _nodeRuntime.IsAvailable
+        && (string.IsNullOrWhiteSpace(requiredEngine)
+            || _nodeRuntime.GetCompatibility(requiredEngine) == NodeRuntimeCompatibility.Compatible);
+
     private async Task<bool> PrepareRuntimeAsync(string sourceName, string nodeDistBase, string? npmRegistry, ManagerInstance? target)
     {
         if (_isRuntimePrepareInProgress)
@@ -3073,12 +3079,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
             && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
         {
-            System.Windows.MessageBox.Show(this,
-                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本后重试。",
+            var usePortable = System.Windows.MessageBox.Show(this,
+                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\n是否下载便携版 Node.js 到 Launcher 自己的目录？\n（免管理员、不修改系统 PATH、不卸载或影响现有 Node.js）",
                 "运行环境不兼容",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return false;
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes;
+            if (!usePortable)
+            {
+                return false;
+            }
         }
 
         _isRuntimePrepareInProgress = true;
@@ -3092,42 +3101,67 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var progress = new Progress<NodeDownloadProgress>(progressWindow.SetDownloadProgress);
             var nodeWasInstalled = false;
 
-            if (packagedRuntime is null && !_nodeRuntime.IsAvailable)
+            // 便携版 Node 优先（免管理员、不写系统 PATH）：既解决“没装 Node”，
+            // 也解决“现有 Node 版本低于 dsh 红线（≥22.19）”；下载失败时再询问
+            // 是否改用官方 MSI（会弹 UAC）。
+            var nodeNeedsPreparation = packagedRuntime is null && !IsPreparedNodeUsable(prepareNodeEngine);
+            if (nodeNeedsPreparation)
             {
                 progressWindow.SetIndeterminate(false);
-                progressWindow.SetStatus($"正在通过 {sourceName} 解析 Node.js 版本并下载安装程序…");
-                var nodeResult = await _nodeInstaller.InstallAsync(
+                progressWindow.SetStatus(_nodeRuntime.IsAvailable
+                    ? $"当前 Node.js {_nodeRuntime.VersionText} 不满足要求，正在通过 {sourceName} 下载便携版 Node.js（免管理员）…"
+                    : $"正在通过 {sourceName} 下载便携版 Node.js（免管理员）…");
+                var nodeResult = await _portableNodeInstaller.InstallAsync(
                     nodeDistBase,
                     progress,
-                    onInstallStarted: () =>
-                    {
-                        progressWindow.SetInstallPhase(true);
-                        SetRuntimeInstallPhase(true);
-                    },
                     cancellation.Token,
                     prepareNodeEngine);
+                if (!nodeResult.IsSuccess && !nodeResult.IsCancelled)
+                {
+                    var useInstaller = System.Windows.MessageBox.Show(
+                        this,
+                        $"便携版 Node.js 准备失败：\n{nodeResult.Error}\n\n是否改用官方安装程序？（需要管理员权限，会弹出 UAC）",
+                        "准备运行环境",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning) == MessageBoxResult.Yes;
+                    if (useInstaller)
+                    {
+                        progressWindow.SetStatus($"正在通过 {sourceName} 下载 Node.js 安装程序…");
+                        nodeResult = await _nodeInstaller.InstallAsync(
+                            nodeDistBase,
+                            progress,
+                            onInstallStarted: () =>
+                            {
+                                progressWindow.SetInstallPhase(true);
+                                SetRuntimeInstallPhase(true);
+                            },
+                            cancellation.Token,
+                            prepareNodeEngine);
+                    }
+                }
+
                 if (!nodeResult.IsSuccess)
                 {
-                    progressWindow.SetStatus(nodeResult.Error ?? "Node.js 安装失败。");
-                    System.Windows.MessageBox.Show(this, nodeResult.Error ?? "Node.js 安装失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    progressWindow.SetStatus(nodeResult.Error ?? "Node.js 准备失败。");
+                    System.Windows.MessageBox.Show(this, nodeResult.Error ?? "Node.js 准备失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
                 RevealRuntimeAfterBootstrap(TestRuntimeKind.Node);
-                progressWindow.SetStatus("Node.js 安装完成，正在重新检测…");
-                for (var attempt = 0; attempt < 5 && !_nodeRuntime.IsAvailable; attempt++)
+                progressWindow.SetStatus("Node.js 已就绪，正在重新检测…");
+                for (var attempt = 0; attempt < 5 && !IsPreparedNodeUsable(prepareNodeEngine); attempt++)
                 {
                     await RefreshNodeAsync();
-                    if (!_nodeRuntime.IsAvailable)
+                    if (!IsPreparedNodeUsable(prepareNodeEngine))
                     {
                         await Task.Delay(1000, cancellation.Token);
                     }
                 }
 
-                if (!_nodeRuntime.IsAvailable)
+                if (!IsPreparedNodeUsable(prepareNodeEngine))
                 {
-                    progressWindow.SetStatus("Node.js 安装后仍未被检测到，请确认安装路径后重新检测。");
-                    System.Windows.MessageBox.Show(this, "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    progressWindow.SetStatus("Node.js 准备后仍未被检测到或版本不满足要求，请重新检测或检查安装路径。");
+                    System.Windows.MessageBox.Show(this, "Node.js 准备后仍未被检测到或版本不满足要求，请重新检测或检查安装路径。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 

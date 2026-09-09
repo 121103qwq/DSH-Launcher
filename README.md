@@ -54,6 +54,9 @@ dsh-launcher-dev/
 | 28 | `Services/BrowserGuard.cs`（新）+ `MainWindow.xaml.cs` | 浏览器守卫：仅当 dsh 不支持 `--no-open` 且本次不由 Launcher 开浏览器时，启动后 30s 内结束命令行带该端口的浏览器进程 |
 | 29 | `Services/ExtensionService.Diagnostics.cs`（新）+ `ExtensionWindow.xaml(.cs)` | 插件 doctor（核心包混入/代际错配/bundle 缺失，核心 bundle 由 CLI 嵌套树提供不再误报）+ 更新检查（node_modules 真实版本 vs registry latest，npmmirror→npmjs）+ 批量更新（失败不中断其余）+ 市场搜索/筛选/滚动持久化 |
 | 30 | `Services/UiStateStore.cs`（新）+ `Services/TrayIconService.cs` + `MainWindow.xaml.cs` | UI 状态持久化（`ui-state.json`）；托盘“运行中的实例”二级菜单（每实例 打开/停止） |
+| 31 | `Services/PnpmFailureClassifier.cs`（新）+ `Services/PluginCommandFailedException.cs`（新）+ `Services/ExtensionService.cs` | pnpm 失败分类（20 种模式→可操作中文提示）+ 瞬时/GitHub 网络失败自动重试一次 + 三段式错误提示（原因/重试/残留清理） |
+| 32 | `Services/PluginProfileResidue.cs`（新）+ `Services/GitMirrorEnvironment.cs`（新） | 失败安装残留回滚（只清本次新增的 package.json 依赖/bundles、node_modules、cordis.patch.yml）；GitHub 直装失败依次用 `GIT_CONFIG_*` 进程级镜像重写（gh-proxy/gitclone，不改用户 git 配置） |
+| 33 | `Services/PortableNodeService.cs`（新）+ `NodeRuntimeDetector.cs` + `MainWindow.xaml.cs` | 便携版 Node（免管理员）：npmmirror/官方源下载 zip → 校验 node.exe 可运行 → 原子替换到 Launcher 数据目录 `node\`，检测时优先于系统 Node；低于社区红线 22.19 自动抬版；失败时再询问是否改用官方 MSI |
 
 ## 行为变化（相对上游）
 
@@ -69,6 +72,8 @@ dsh-launcher-dev/
 10. **代理**：设置/诊断 → 代理（默认关），启用后 Launcher 联网与 dsh 实例同时走代理
 11. **插件更新**：扩展页新增「检查更新 / 全部更新 / 依赖自检」；市场搜索、分类、来源、排序、滚动位置跨窗口记住
 12. **托盘**：新增「运行中的实例」二级菜单（每个实例可打开/停止）；余额卡片（设置中显式启用后显示）
+13. **插件安装韧性**：pnpm 失败会翻译成可操作原因（幽灵依赖/store 不一致/需要允许构建/安全等待期等），瞬时网络与 GitHub 直装失败自动重试一次并依次走国内镜像；失败安装的残留（package.json 依赖/bundles、node_modules、cordis.patch.yml）自动清理，避免下次启动 include-loader 直接崩
+14. **便携版 Node**：「准备运行环境」默认下载免管理员的便携版 Node 到 Launcher 数据目录（不写系统 PATH、不影响已有 Node），低于 22.19 自动抬版；失败时才询问是否改用官方 MSI
 
 ## 构建与发布（SOP）
 
