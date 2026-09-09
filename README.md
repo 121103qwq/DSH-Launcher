@@ -93,6 +93,7 @@ dsh-launcher-dev/
 | 65 | `Models/CrashCauseModels.cs`（新）+ `Services/CrashCauseClassifier.cs`（新）+ `Models/CrashRecoveryModels.cs` + `Services/CrashRecoveryService.cs` + `MainWindow.xaml.cs` + `VersionSettingsWindow.xaml(.cs)` | **崩溃原因归类**：有序规则表（Node 不可用/端口占用/模块解析/插件异常/内存/权限/磁盘/正常退出）+ 端口与 Node 探针；置信度高/中/低（低置信只标未知）；原因落盘（记录 + 状态 + 证据 + 建议）；端口冲突自动先清残留再重启 |
 | 66 | `Models/PluginMatrixModels.cs`（新）+ `Services/PluginMatrixService.cs`（新）+ `PluginMatrixWindow.xaml(.cs)`（新）+ `ExtensionWindow.xaml(.cs)` + `MainWindow.xaml.cs` | **插件 × 实例矩阵**：行=至少在一个实例启用的插件（排除核心/运行时依赖假行），列=实例，单元格三态（已启用/已装未启用/未安装）；动态列 + 复制为 TSV；只读视图 |
 | 67 | `ExtensionWindow.xaml` + `docs/UI-DESIGN.md` | **扩展页工具条按钮紧凑化**：当前实例卡内 9 个按钮改 `CompactToolbarButton`（12px / Padding 9,4 / Margin 0,0,6,6），主操作同理；实测 44→33 设备像素、3 行→2 行 |
+| 68 | `Services/DshInstanceRunner.cs` + `MainWindow.xaml.cs` | **外部连接（Attached）失效收敛**：修 `_attached` 只加不删（没开实例却提示“请先停止实例”）；按 PID/端口活性校验并自动摘除；外部实例也登记 watchdog；5s 周期收敛 + 停止守卫区分死活 |
 
 ## 行为变化（相对上游）
 
@@ -165,6 +166,7 @@ dsh-launcher-dev/
 67. **崩溃原因归类**：每次崩溃在本地跑规则表（只读 dsh/stderr 日志），给出原因 + 置信度 + 依据 + 建议；低置信只显示“未知原因”；原因随现场落盘并在「崩溃恢复」表格/状态中展示；端口冲突时会先清理残留进程再自动重启
 68. **插件 × 实例矩阵**：「扩展 / Agent」→「插件矩阵」内嵌页；行=至少在一个实例启用的插件（排除 `@deepseek-ai` 核心与 schemastery/cosmokit/cordis 等运行时依赖，避免假插件行），列=实例，单元格三态；可「复制为文本」（TSV）；只读，启停仍在插件管理
 69. **扩展页工具条按钮**：「当前实例」卡内的工具条按钮改紧凑档（12px / `Padding="9,4"`，样式 `CompactToolbarButton`），125% DPI 下高度 44→33 设备像素、换行 3→2 行
+70. **外部服务失效收敛**：接管的外部 dsh 进程退出后，Launcher 最多 5 秒把实例收敛为“已停止”（不再残留“运行中”），插件/技能/MCP 修改恢复可用；外部服务仍存活时仍拒绝停止
 
 ## 待办（功能完成后统一处理）
 

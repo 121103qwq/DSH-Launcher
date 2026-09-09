@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.IO;
 using DshLauncher.Models;
+using DshLauncher.Watchdog;
 
 namespace DshLauncher.Services;
 
@@ -82,7 +83,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
 
         lock (_attached)
         {
-            return _attached.ContainsKey(instanceId);
+            return IsAttachedAliveLocked(instanceId);
         }
     }
 
@@ -118,7 +119,75 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     {
         lock (_attached)
         {
-            return _attached.ContainsKey(instanceId);
+            return IsAttachedAliveLocked(instanceId);
+        }
+    }
+
+    /// <summary>
+    /// 外部（Attached）条目是否仍然活着。
+    /// 旧实现只判字典包含，外部进程退出后永远算“运行中”（插件更新会误报
+    /// “请先停止实例”）；这里按 PID/端口活性校验，死了就摘除。
+    /// </summary>
+    private bool IsAttachedAliveLocked(string instanceId)
+    {
+        if (!_attached.TryGetValue(instanceId, out var attached))
+        {
+            return false;
+        }
+
+        if (attached.ProcessId > 0 && ProcessQuery.IsAlive(attached.ProcessId))
+        {
+            return true;
+        }
+
+        if (attached.ProcessId > 0)
+        {
+            // 记录过的进程已退出：外部服务不在了（市场自重启会走 GhostAdopted 重新接管）。
+            _attached.Remove(instanceId);
+            return false;
+        }
+
+        // 接管时没拿到 PID：按端口再查一次，能查到且像 dsh web 主进程才继续算活着。
+        var pid = ProcessQuery.FindPidByListeningPort(attached.Port);
+        if (pid > 0
+            && ProcessQuery.GetSnapshot().FirstOrDefault(process => process.ProcessId == pid) is { } snapshot
+            && ProcessQuery.LooksLikeDshWebMain(snapshot, attached.Port))
+        {
+            _attached[instanceId] = attached with { ProcessId = pid };
+            return true;
+        }
+
+        _attached.Remove(instanceId);
+        return false;
+    }
+
+    /// <summary>丢弃外部连接记录（watchdog 判定实例已停 / 手动清理时调用）。</summary>
+    public void ForgetAttached(string instanceId)
+    {
+        lock (_attached)
+        {
+            _attached.Remove(instanceId);
+        }
+    }
+
+    /// <summary>外部连接记录的监听 PID（0 = 未知）。</summary>
+    public int GetAttachedProcessId(string instanceId)
+    {
+        lock (_attached)
+        {
+            return _attached.TryGetValue(instanceId, out var attached) ? attached.ProcessId : 0;
+        }
+    }
+
+    /// <summary>测试钩子：直接写入外部连接记录。</summary>
+    internal void AttachForTest(string instanceId, int port, int processId)
+    {
+        lock (_attached)
+        {
+            _attached[instanceId] = new AttachedDshService(new Uri($"http://127.0.0.1:{port}/"), port)
+            {
+                ProcessId = processId
+            };
         }
     }
 
@@ -147,7 +216,10 @@ public sealed class DshInstanceRunner : IAsyncDisposable
 
             lock (_attached)
             {
-                _attached[instance.Id] = new AttachedDshService(endpoint, instance.Port!.Value);
+                _attached[instance.Id] = new AttachedDshService(endpoint, instance.Port!.Value)
+                {
+                    ProcessId = ProcessQuery.FindPidByListeningPort(instance.Port.Value)
+                };
             }
 
             return true;
@@ -1413,7 +1485,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         public string? AuthenticatedWebUrl { get; set; }
     }
 
-    private sealed record AttachedDshService(Uri Endpoint, int Port);
+    private sealed record AttachedDshService(Uri Endpoint, int Port)
+    {
+        /// <summary>接管时解析到的监听进程 PID（0 = 未知，按端口再查）。</summary>
+        public int ProcessId { get; init; }
+    }
 
     private sealed class InstanceLock : IDisposable
     {

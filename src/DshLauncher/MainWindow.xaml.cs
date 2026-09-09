@@ -475,7 +475,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
             OnPropertyChanged(nameof(SelectedInstanceCooldownVisibility));
             EvaluateIdleAutoStop();
+            ConvergeStaleAttachedInstances();
         });
+    }
+
+    /// <summary>
+    /// 外部连接失效收敛：曾标记为 Attached 的实例，如果 runner 里的外部记录已被判定失效
+    /// （进程退出/端口无主），把界面状态回落到 Stopped，避免插件更新等操作继续被
+    /// “请先停止实例”挡住。每轮守护探测执行一次，只在真的失效时改动。
+    /// </summary>
+    private void ConvergeStaleAttachedInstances()
+    {
+        foreach (var instance in Instances
+                     .Where(item => item.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+                     .ToArray())
+        {
+            if (_instanceRunner.IsAttached(instance.Id))
+            {
+                continue;
+            }
+
+            UpdateInstance(instance with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                RuntimeOwnership = InstanceRuntimeOwnership.None,
+                ProcessId = null,
+                Port = null,
+                WebUrl = null,
+                AuthenticatedWebUrl = null,
+                LastError = null
+            });
+        }
     }
 
     /// <summary>
@@ -1075,6 +1105,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var exitCode = _instanceRunner.TryGetExitedCode(current.Id, out var code) ? code : null;
                 var intentional = _crashRecovery.ConsumeIntentionalStop(current.Id);
                 var managed = current.RuntimeOwnership == InstanceRuntimeOwnership.Managed;
+                // 外部连接记录同步丢弃（防止 _attached 残留让后续操作误判“运行中”）。
+                _instanceRunner.ForgetAttached(current.Id);
                 UpdateInstance(current with
                 {
                     RuntimeStatus = InstanceRuntimeStatus.Stopped,
@@ -1641,11 +1673,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             else if (await _instanceRunner.TryAttachAsync(storedInstance, _windowCancellation.Token))
             {
+                var attachedPid = _instanceRunner.GetAttachedProcessId(storedInstance.Id);
                 instance = storedInstance with
                 {
                     RuntimeOwnership = InstanceRuntimeOwnership.Attached,
+                    ProcessId = attachedPid > 0 ? attachedPid : storedInstance.ProcessId,
                     LastError = null
                 };
+                // 外部服务也登记到 watchdog：进程退出后能像受管实例一样收敛为 Stopped。
+                // 否则 _attached 记录会让插件更新一直误报“请先停止实例”。
+                if (instance.ProcessId is > 0 && instance.Port is > 0 && !string.IsNullOrWhiteSpace(instance.WebUrl))
+                {
+                    ReportInstanceStartedAsync(
+                        instance,
+                        instance.ProcessId.Value,
+                        instance.Port.Value,
+                        instance.WebUrl,
+                        instance.AuthenticatedWebUrl);
+                }
             }
             else
             {
@@ -4932,7 +4977,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
         {
-            ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会停止该进程。");
+            if (_instanceRunner.IsAttached(selected.Id))
+            {
+                ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会停止该进程。");
+                return;
+            }
+
+            // 外部进程已退出：清掉过期的 Attached 状态，让插件更新等操作恢复可用。
+            _instanceRunner.ForgetAttached(selected.Id);
+            UpdateInstance(selected with
+            {
+                RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                RuntimeOwnership = InstanceRuntimeOwnership.None,
+                ProcessId = null,
+                Port = null,
+                WebUrl = null,
+                AuthenticatedWebUrl = null,
+                LastError = null
+            });
+            ShowNotice($"外部 DSh 服务已不在运行，已刷新实例状态：{selected.Name}。");
             return;
         }
 
