@@ -450,7 +450,9 @@
                                                        FontSize="12"
                                                        Margin="0,4,0,0"
                                                        TextWrapping="Wrap"
-                                                       MaxHeight="34" />
+                                                       MaxHeight="34"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Description}" />
                                             <WrapPanel Margin="0,6,0,0">
                                                 <TextBlock Text="{Binding SourceText}" Foreground="{StaticResource BlueBrush}" FontSize="11" Margin="0,0,12,0" />
                                                 <TextBlock Text="{Binding Category}" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,12,0" />
@@ -672,6 +674,9 @@
                                                    Foreground="{StaticResource MutedBrush}"
                                                    FontSize="11"
                                                    TextWrapping="Wrap"
+                                                   MaxHeight="32"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Description}"
                                                    Margin="0,4,0,0" />
                                         <TextBlock Text="{Binding StatusText}"
                                                    Foreground="{StaticResource BlueBrush}"

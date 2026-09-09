@@ -169,6 +169,8 @@ ClearType 会被系统降级为灰度抗锯齿，**11px 以下小字会明显发
 11px，且所有 Window/UserControl 继承全局 `UseLayoutRounding` +
 `TextFormattingMode=Display`。
 
+**ClearType 降级范围（变更集 56 实测）**：只有 `MainWindow` 与 ComboBox 弹层是透明窗口（灰度抗锯齿）；`ChatWindow` / `ExtensionWindow` / `ConversationWindow` / 内嵌的版本设置页都是标准窗口，ClearType 正常。因此小字发虚只在主窗口出现——这也是主窗口最小字号 11px 且小字一律 `SemiBold` 的原因。**结论：保留透明圆角**（视觉核心），不用换取清晰度。
+
 默认启动尺寸与**最小可调尺寸一致**（`MainWindow` 1180×720，小屏上自动收缩）；用户放大后由窗口记忆持久化，下次启动恢复用户尺寸。
 
 ## 四、审查清单（提交前逐项）
@@ -197,3 +199,4 @@ ClearType 会被系统降级为灰度抗锯齿，**11px 以下小字会明显发
 | 38 | 状态胶囊发糊：根因是 `DropShadowEffect` 把卡片内文字一起栅格化 + 小字半透明底 |
 | 30（审查） | 全量检查：4 处阴影挂内容、语义色散落、CheckBox/ProgressBar 未定制、备份表默认就横向滚动 |
 | 41 | 设置页分类栏改圆角卡片；「新建干净版本」先弹窗后联网（原要等 npmjs 数秒，像按钮坏了）+ 忙碌态防连点；默认窗口尺寸改为最小可调尺寸 |
+| 56 | WPF `TextBlock` 没有 `MaxLines`（那是 WinUI）；两行截断要用 `MaxHeight` + `TextTrimming=CharacterEllipsis`。固定列宽的筛选行在窄窗口会挤爆，用 `*` + `MinWidth` |

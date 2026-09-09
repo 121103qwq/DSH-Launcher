@@ -65,6 +65,17 @@ public partial class App : System.Windows.Application
             () =>
             {
                 _startupWindowCreationCompleted = true;
+                // 主窗口创建失败时绝不能无窗口驻留（否则再次双击只能唤起一个没有 UI 的进程）：
+                // 记日志后直接退出。
+                if (MainWindow is null)
+                {
+                    DshLauncher.Services.LauncherLog.Error(
+                        "启动后没有主窗口，已退出以避免无窗口驻留。",
+                        DshLauncher.Services.ErrorCodes.E9001);
+                    Shutdown(1);
+                    return;
+                }
+
                 if (_activationPending)
                 {
                     TryActivateMainWindow();
@@ -91,8 +102,37 @@ public partial class App : System.Windows.Application
     {
         DshLauncher.Services.LauncherLog.Error("UI 线程未处理异常。", DshLauncher.Services.ErrorCodes.E9001,
             new { exception = e.Exception.ToString() });
-        // UI 线程未处理异常不再直接杀死进程：写入崩溃日志后继续运行，便于
-        // 事后定位（例如窗口关闭与异步初始化竞态曾导致整个应用崩溃）。
+        WriteCrashLog(e.Exception);
+
+        // 启动阶段（还没有主窗口）的异常不能吞：继续跑就是无窗口驻留、
+        // 再次双击也唤不起界面。写日志后退出，让用户重新启动。
+        if (MainWindow is null)
+        {
+            e.Handled = true;
+            try
+            {
+                System.Windows.MessageBox.Show(
+                    $"DSH Launcher 启动失败，即将退出。\n\n{e.Exception.Message}\n\n详情见 %LocalAppData%\\DeepSeek\\launcher\\crash.log",
+                    "DSH Launcher 启动失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            catch
+            {
+                // 连提示都弹不出时仍然退出。
+            }
+
+            Shutdown(1);
+            return;
+        }
+
+        // 已有窗口时：UI 线程未处理异常不再直接杀死进程，写入崩溃日志后继续运行，
+        // 便于事后定位（例如窗口关闭与异步初始化竞态曾导致整个应用崩溃）。
+        e.Handled = true;
+    }
+
+    private static void WriteCrashLog(Exception exception)
+    {
         try
         {
             var logDirectory = Path.Combine(
@@ -101,14 +141,12 @@ public partial class App : System.Windows.Application
             Directory.CreateDirectory(logDirectory);
             File.AppendAllText(
                 Path.Combine(logDirectory, "crash.log"),
-                $"[{DateTimeOffset.Now:O}] {e.Exception}{Environment.NewLine}");
+                $"[{DateTimeOffset.Now:O}] {exception}{Environment.NewLine}");
         }
         catch
         {
             // 日志失败不影响兜底行为。
         }
-
-        e.Handled = true;
     }
 
     protected override void OnExit(ExitEventArgs e)

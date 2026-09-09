@@ -81,6 +81,7 @@ dsh-launcher-dev/
 | 53 | `Services/LauncherPaths.cs` + `Services/VersionSettingsService.cs` + `Services/ErrorCodes.cs` | **默认安装位置改为 `<exe 同目录>\run_time`**（便携优先）；exe 同目录不可写时自动回退旧默认 `<数据根>\runtime\dsh` 并记 E1009；设置页文案同步 |
 | 54 | `DshLauncher.csproj` + `Services/WebView2DataFolder.cs`（新）+ `ChatWindow.xaml.cs` + `Services/WebCacheVersionLedger.cs` + `Services/LauncherPaths.cs` | **独立运行/便携化**：① 自包含单文件发布参数写进 csproj（裸 publish 即得 0 dll 单文件）；② WebView2 数据目录 exe 旁不可写 → 回退 `%LocalAppData%`（E1010，缓存账本同步双布局）；③ 便携数据根：exe 旁 `launcher-data` 或 `DSH_LAUNCHER_DATA_ROOT`（不可写回退 E1011）；诊断包新增 `webview2_data=` |
 | 55 | `Services/DshCredentialStoreNormalizer.cs`（新）+ `Services/DshHomeImportService.cs` + `Services/ModelProviderSyncService.cs` + `Services/VersionSnapshotService.cs` + `MainWindow.xaml.cs` | **上游对照后的三个同源缺陷修复**：① 旧格式凭据（version/records/refs）保守归一化（E1012），接入导入/覆盖/合并/Provider 同步/快照恢复五处；② 快照补 `profiles/web/pnpm-workspace.yaml`（pnpm 构建许可）；③ 列表 `SelectedItem` 瞬时清空防护（实例仍在列表中则忽略并回写绑定） |
+| 56 | `Models/DshEnvironmentVariables.cs`（新）+ `Services/VersionSettingsService.cs` + `Services/DshRuntimeCommandFactory.cs` + `Services/DshInstanceRunner.cs` + `VersionSettingsWindow.xaml(.cs)` + `App.xaml.cs` + `ExtensionWindow.xaml` + `ConversationWindow.xaml` | **短件三项**：① 实例级环境变量（保留项 DSH_HOME/DSH_AGENTS_HOME/PATH；敏感值 DPAPI 加密落盘、读取还原；启动时注入；版本设置页可增删保存；E1013）；② 启动阶段异常不再无窗口驻留（无主窗口则提示 + 退出）；③ UI 尾巴：市场/技能描述限高 + 省略号 + ToolTip、对话页筛选行自适应、ClearType 范围澄清 |
 
 ## 行为变化（相对上游）
 
@@ -123,6 +124,10 @@ dsh-launcher-dev/
 37. **凭据格式**：导入/覆盖刷新/回填合并/Provider 同步/快照恢复遇到旧包装（`version: 1` + `records:` + `refs:`）的 `.credentials.yaml` 会保守转换为顶层键值映射；无法确认的格式保持原样（E1012）
 38. **快照内容**：版本快照与插件快照均包含 `profiles/web/pnpm-workspace.yaml`（pnpm `allowBuilds` 构建许可）；旧快照不含该文件时恢复不会删除它
 39. **实例选中**：列表刷新/页面切换导致的 `SelectedItem` 瞬时 `null` 会被忽略并回写绑定；真正删除实例后仍可正常清空
+40. **实例环境变量**：版本设置 → 个性化可增删键值对；启动该实例时注入进程环境；`DSH_HOME`/`DSH_AGENTS_HOME`/`PATH` 不可覆盖；含 KEY/TOKEN/SECRET/PASSWORD 等的值用 DPAPI 加密落盘，诊断包不含变量值
+41. **启动失败**：启动后没有主窗口或启动阶段出现未处理异常时，记日志 + 提示 + 退出，不再无窗口驻留
+42. **市场/技能描述**：限高两行 + 省略号 + ToolTip（悬停看全文）
+43. **对话页筛选行**：版本/显示两个下拉按比例分配宽度（MinWidth 240/150），窄窗口不再挤爆
 
 ## 构建与发布（SOP）
 

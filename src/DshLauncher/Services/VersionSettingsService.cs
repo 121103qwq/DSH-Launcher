@@ -79,6 +79,7 @@ public sealed class VersionSettingsService
             var settings = JsonSerializer.Deserialize<VersionSettingsData>(
                 File.ReadAllText(path, Encoding.UTF8),
                 JsonOptions) ?? new VersionSettingsData();
+            UnprotectEnvironmentVariables(settings);
             Normalize(settings);
             return settings;
         }
@@ -91,7 +92,84 @@ public sealed class VersionSettingsService
     public void Save(ManagerInstance instance, VersionSettingsData settings)
     {
         Normalize(settings);
-        WriteSettingsFile(GetSettingsPath(instance), JsonSerializer.Serialize(settings, JsonOptions));
+        // 落盘用副本：避免把内存里的明文替换成 dpapi: 密文（界面会变成乱码）。
+        var persisted = Clone(settings);
+        ProtectEnvironmentVariables(persisted);
+        WriteSettingsFile(GetSettingsPath(instance), JsonSerializer.Serialize(persisted, JsonOptions));
+    }
+
+    private static VersionSettingsData Clone(VersionSettingsData settings) =>
+        new()
+        {
+            SyncAllConfiguration = settings.SyncAllConfiguration,
+            ConversationSyncMode = settings.ConversationSyncMode,
+            ConversationWorkspace = settings.ConversationWorkspace,
+            SyncModelProviders = settings.SyncModelProviders,
+            UseDshMarketHotReload = settings.UseDshMarketHotReload,
+            WindowTitle = settings.WindowTitle,
+            NodeExecutablePath = settings.NodeExecutablePath,
+            OpenMode = settings.OpenMode,
+            CustomOpenTargetPath = settings.CustomOpenTargetPath,
+            EnvironmentVariables = settings.EnvironmentVariables is null
+                ? null
+                : new Dictionary<string, string>(settings.EnvironmentVariables, StringComparer.Ordinal)
+        };
+
+    private static void ProtectEnvironmentVariables(VersionSettingsData settings)
+    {
+        if (settings.EnvironmentVariables is null)
+        {
+            return;
+        }
+
+        foreach (var name in settings.EnvironmentVariables.Keys.ToArray())
+        {
+            var value = settings.EnvironmentVariables[name];
+            if (!DshEnvironmentVariables.IsSensitive(name)
+                || DshEnvironmentVariables.IsProtectedValue(value))
+            {
+                continue;
+            }
+
+            if (DshEnvironmentVariables.TryProtect(value, out var protectedValue))
+            {
+                settings.EnvironmentVariables[name] = protectedValue;
+            }
+            else
+            {
+                settings.EnvironmentVariables.Remove(name);
+                LauncherLog.Warn("实例环境变量敏感值加密失败，已跳过该条目。", ErrorCodes.E1013,
+                    new { name });
+            }
+        }
+    }
+
+    private static void UnprotectEnvironmentVariables(VersionSettingsData settings)
+    {
+        if (settings.EnvironmentVariables is null)
+        {
+            return;
+        }
+
+        foreach (var name in settings.EnvironmentVariables.Keys.ToArray())
+        {
+            var value = settings.EnvironmentVariables[name];
+            if (!DshEnvironmentVariables.IsProtectedValue(value))
+            {
+                continue;
+            }
+
+            if (DshEnvironmentVariables.TryUnprotect(value, out var plain))
+            {
+                settings.EnvironmentVariables[name] = plain;
+            }
+            else
+            {
+                settings.EnvironmentVariables.Remove(name);
+                LauncherLog.Warn("实例环境变量敏感值解密失败（可能换了 Windows 账户），已跳过。",
+                    ErrorCodes.E1013, new { name });
+            }
+        }
     }
 
     private static void WriteSettingsFile(string path, string json)
@@ -347,6 +425,21 @@ public sealed class VersionSettingsService
         if (settings.OpenMode is { } openMode && !Enum.IsDefined(openMode))
         {
             settings.OpenMode = null;
+        }
+
+        if (settings.EnvironmentVariables is not null)
+        {
+            var rejected = DshEnvironmentVariables.Sanitize(settings.EnvironmentVariables);
+            if (rejected.Count > 0)
+            {
+                LauncherLog.Warn("实例环境变量存在非法条目，已丢弃。", ErrorCodes.E1013,
+                    new { rejected = rejected.ToArray() });
+            }
+
+            if (settings.EnvironmentVariables.Count == 0)
+            {
+                settings.EnvironmentVariables = null;
+            }
         }
 
         settings.ConversationWorkspace = string.IsNullOrWhiteSpace(settings.ConversationWorkspace)

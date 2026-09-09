@@ -76,6 +76,12 @@ public sealed class VersionSettingsData
     /// This machine-specific path is not included in shareable version packages.
     /// </summary>
     public string? CustomOpenTargetPath { get; set; }
+
+    /// <summary>
+    /// 实例级环境变量：启动 dsh 时注入进程环境。DSH_HOME / DSH_AGENTS_HOME / PATH
+    /// 为保留项；敏感值（KEY/TOKEN/SECRET/PASSWORD…）落盘时用 DPAPI 加密。
+    /// </summary>
+    public Dictionary<string, string>? EnvironmentVariables { get; set; }
 }
 
 /// <summary>

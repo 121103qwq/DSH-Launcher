@@ -24,6 +24,8 @@ public partial class VersionSettingsWindow : UserControl
     private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
     private readonly Action _settingsSaved;
     private readonly bool _openPluginPage;
+    private const string EnvironmentNameTag = "EnvironmentName";
+    private const string EnvironmentValueTag = "EnvironmentValue";
     private VersionSettingsData _settings = new();
 
     public VersionSettingsWindow(
@@ -159,6 +161,119 @@ public partial class VersionSettingsWindow : UserControl
             VersionOpenMode.Web => "当前版本将使用 dsh 原生方式启动：服务启动后由 dsh 在默认浏览器打开 WebUI。",
             _ => "当前版本将使用启动器方式启动：服务启动后自动打开内部 Chat 窗口，不会重复弹浏览器。"
         };
+        LoadEnvironmentVariables();
+    }
+
+    private void LoadEnvironmentVariables()
+    {
+        EnvironmentVariableList.Children.Clear();
+        if (_settings.EnvironmentVariables is not { Count: > 0 } variables)
+        {
+            EnvironmentVariableStatusText.Text = "尚未设置。变量只对这个实例生效，下次启动时注入。";
+            return;
+        }
+
+        EnvironmentVariableStatusText.Text = $"已设置 {variables.Count} 个变量（敏感值已加密落盘），下次启动生效。";
+        foreach (var pair in variables.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            AddEnvironmentVariableRow(pair.Key, pair.Value);
+        }
+    }
+
+    private void AddEnvironmentVariableRow(string name, string value)
+    {
+        var row = new System.Windows.Controls.Grid { Margin = new Thickness(0, 0, 0, 8) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var nameBox = new System.Windows.Controls.TextBox
+        {
+            Text = name,
+            MaxLength = DshEnvironmentVariables.MaximumNameLength,
+            VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            Tag = EnvironmentNameTag
+        };
+        var valueBox = new System.Windows.Controls.TextBox
+        {
+            Text = value,
+            MaxLength = DshEnvironmentVariables.MaximumValueLength,
+            VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            Tag = EnvironmentValueTag
+        };
+        var remove = new System.Windows.Controls.Button
+        {
+            Content = "删除",
+            Padding = new Thickness(12, 7, 12, 7)
+        };
+        remove.Click += (_, _) => EnvironmentVariableList.Children.Remove(row);
+        System.Windows.Controls.Grid.SetColumn(valueBox, 1);
+        System.Windows.Controls.Grid.SetColumn(remove, 2);
+        row.Children.Add(nameBox);
+        row.Children.Add(valueBox);
+        row.Children.Add(remove);
+        EnvironmentVariableList.Children.Add(row);
+    }
+
+    private void AddEnvironmentVariable_Click(object sender, RoutedEventArgs e)
+    {
+        if (EnvironmentVariableList.Children.Count >= DshEnvironmentVariables.MaximumCount)
+        {
+            EnvironmentVariableStatusText.Text = $"最多 {DshEnvironmentVariables.MaximumCount} 个变量。";
+            return;
+        }
+
+        AddEnvironmentVariableRow(string.Empty, string.Empty);
+    }
+
+    private void SaveEnvironmentVariables_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            EnvironmentVariableStatusText.Text = "请先选择版本。";
+            return;
+        }
+
+        var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in EnvironmentVariableList.Children.OfType<System.Windows.Controls.Grid>())
+        {
+            var name = row.Children.OfType<System.Windows.Controls.TextBox>()
+                .FirstOrDefault(box => Equals(box.Tag, EnvironmentNameTag))?.Text.Trim() ?? string.Empty;
+            var value = row.Children.OfType<System.Windows.Controls.TextBox>()
+                .FirstOrDefault(box => Equals(box.Tag, EnvironmentValueTag))?.Text ?? string.Empty;
+            if (name.Length == 0 && value.Length == 0)
+            {
+                continue;
+            }
+
+            if (!DshEnvironmentVariables.IsValidName(name))
+            {
+                EnvironmentVariableStatusText.Text = DshEnvironmentVariables.IsReserved(name)
+                    ? $"{name} 是保留变量（DSH_HOME / DSH_AGENTS_HOME / PATH），不能覆盖。"
+                    : $"变量名无效：{name}（不能为空、含 = 或超过 {DshEnvironmentVariables.MaximumNameLength} 字符）。";
+                return;
+            }
+
+            if (!variables.TryAdd(name, value))
+            {
+                EnvironmentVariableStatusText.Text = $"变量名重复：{name}。";
+                return;
+            }
+        }
+
+        try
+        {
+            _settings.EnvironmentVariables = variables.Count == 0 ? null : variables;
+            _settingsService.Save(_instance, _settings);
+            EnvironmentVariableStatusText.Text = variables.Count == 0
+                ? "已清空环境变量。"
+                : $"已保存 {variables.Count} 个变量（敏感值已加密落盘），下次启动生效。";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            EnvironmentVariableStatusText.Text = $"保存失败：{ex.Message}";
+        }
     }
 
     private string FormatNodeRuntime()

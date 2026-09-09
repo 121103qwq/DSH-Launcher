@@ -35,18 +35,21 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly DshHomeImportService _homeImporter;
     private readonly ExtensionService? _extensionService;
     private readonly Func<ProxySettings?>? _proxySettings;
+    private readonly VersionSettingsService _settingsService;
     private bool _disposed;
 
     public DshInstanceRunner(
         Func<int>? portAllocator = null,
         DshHomeImportService? homeImporter = null,
         ExtensionService? extensionService = null,
-        Func<ProxySettings?>? proxySettings = null)
+        Func<ProxySettings?>? proxySettings = null,
+        VersionSettingsService? settingsService = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
         _extensionService = extensionService;
         _proxySettings = proxySettings;
+        _settingsService = settingsService ?? new VersionSettingsService();
     }
 
     public bool IsRunning(string instanceId)
@@ -936,7 +939,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             instance.RootPath,
             instance.DshHome,
             Path.Combine(instance.DshHome, ".agents"),
-            nodeRuntime?.ExecutablePath);
+            nodeRuntime?.ExecutablePath,
+            environmentOverrides: ResolveInstanceEnvironment(instance));
         // Launcher 级代理：显式注入实例环境（在 dsh 的 npm 代理回退之前）。
         try
         {
@@ -949,6 +953,21 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
 
         return startInfo;
+    }
+
+    /// <summary>读取该实例的环境变量设置（解密后的明文）；失败时按无变量运行。</summary>
+    private IReadOnlyDictionary<string, string>? ResolveInstanceEnvironment(ManagerInstance instance)
+    {
+        try
+        {
+            return _settingsService.Read(instance).EnvironmentVariables;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            LauncherLog.Warn("读取实例环境变量失败（按继承环境运行）。", ErrorCodes.E1013,
+                new { instance = instance.Name, error = ex.Message });
+            return null;
+        }
     }
 
     /// <summary>

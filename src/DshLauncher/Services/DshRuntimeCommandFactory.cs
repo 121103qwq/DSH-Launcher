@@ -14,7 +14,8 @@ internal static class DshRuntimeCommandFactory
         string? dshHome = null,
         string? dshAgentsHome = null,
         string? fallbackNodeExecutablePath = null,
-        bool redirectOutput = true)
+        bool redirectOutput = true,
+        IReadOnlyDictionary<string, string>? environmentOverrides = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
         var normalizedArguments = arguments.ToArray();
@@ -62,7 +63,29 @@ internal static class DshRuntimeCommandFactory
         var preferredNode = spec.NodeExecutablePath ?? fallbackNodeExecutablePath;
         startInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(preferredNode);
         ApplyProxyFallback(startInfo);
+        ApplyEnvironmentOverrides(startInfo, environmentOverrides);
         return startInfo;
+    }
+
+    /// <summary>注入实例级环境变量；保留项（DSH_HOME/DSH_AGENTS_HOME/PATH）与非法名称不生效。</summary>
+    private static void ApplyEnvironmentOverrides(
+        ProcessStartInfo startInfo,
+        IReadOnlyDictionary<string, string>? overrides)
+    {
+        if (overrides is null)
+        {
+            return;
+        }
+
+        foreach (var pair in overrides)
+        {
+            if (!DshEnvironmentVariables.IsValidName(pair.Key) || pair.Value is null)
+            {
+                continue;
+            }
+
+            startInfo.Environment[pair.Key.Trim()] = pair.Value;
+        }
     }
 
     public static DshRuntimeLaunchSpec? Resolve(ManagerInstance instance) =>

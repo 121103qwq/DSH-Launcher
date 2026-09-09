@@ -15,11 +15,10 @@
         <Grid Grid.Row="0" Margin="0,0,0,12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="2*" MinWidth="240" />
                 <ColumnDefinition Width="24" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="220" />
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" MinWidth="150" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="版本"
                        Foreground="{StaticResource MutedBrush}"
