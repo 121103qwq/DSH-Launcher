@@ -72,6 +72,7 @@ dsh-launcher-dev/
 | 45 | `Services/FileSystemCleanup.cs`（新）+ 11 处删除点 + `DshInstallMoveService` + `VersionSnapshotService` | 修复“删除版本 Access denied”：dsh 的 attachments 对象存储带 ReadOnly，递归删除前先清属性（11 处统一收口）；「移动已有安装」改为以**当前选中实例的运行时**为源（回退配置目录）；新增快照单文件恢复 `TryExtractSnapshotFile` |
 
 | 46 | `Services/FileSystemCleanup.cs` + `VersionControlWindow.xaml.cs` | 删除版本确认框预扫描并提示“含 N 个只读文件，删除时会自动清除只读属性”（`CountReadOnlyFiles`） |
+| 47 | `MainWindow.xaml.cs` | 「移动已有安装」新增**「要移动的运行时」下拉框**（配置的安装位置 + 各实例运行时，去重），不再依赖启动页的选中实例；移动成功后自动重建列表 |
 
 ## 行为变化（相对上游）
 
@@ -101,6 +102,7 @@ dsh-launcher-dev/
 24. **修复非最大化窗口裁切**：删除了对工作区尺寸的二次 DPI 除法（WPF 的 `SystemParameters.WorkArea` 本身就是逻辑单位），右侧/底部内容不再被裁；启动时日志新增一行窗口尺寸诊断
 25. **移动已有安装**：设置 → 运行环境新增「移动已有安装」，把已装好的 DSh 运行目录整体搬到新位置并自动更新引用它的实例（同盘秒级、跨盘复制校验；失败回滚）
 26. **删除版本修复**：attachments 对象存储的只读文件不再导致“Access denied”（递归删除前自动清除只读属性，11 处统一处理）；删除确认框先统计并提示将清除的只读文件数；「移动已有安装」以当前选中实例的运行时为源；快照支持单文件精确恢复
+27. **移动源可选择**：设置 → 运行环境新增「要移动的运行时」下拉框（配置位置 + 各实例运行时），无需回启动页选中实例
 
 ## 构建与发布（SOP）
 

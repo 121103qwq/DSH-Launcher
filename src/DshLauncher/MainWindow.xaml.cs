@@ -639,6 +639,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string GetConfiguredDshInstallDirectory() =>
         _versionSettingsService.ResolveDshInstallDirectory();
 
+    private sealed record MoveSourceItem(string Label, string Directory);
+
     /// <summary>
     /// 当前选中实例可移动的运行时根目录：只允许 Launcher 数据根之下的运行时，
     /// 避免把系统 npm 全局安装搬走；<root>ersions\<ver>\dsh.cmd 归一到 <root>。
@@ -1760,6 +1762,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 6, 0, 0)
         });
 
+        // “要移动的运行时”选择框：不再依赖启动页选中的实例，在设置页里直接选。
+        runtimePanel.Children.Add(new TextBlock
+        {
+            Text = "要移动的运行时",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 14, 0, 0)
+        });
+        var moveSourceBox = new System.Windows.Controls.ComboBox
+        {
+            Name = "MoveSourceBox",
+            Height = 36,
+            Margin = new Thickness(0, 6, 0, 0),
+            DisplayMemberPath = "Label",
+            ToolTip = "选择要搬走的 DSh 运行时：可以是配置的安装位置，也可以是某个实例正在用的运行时"
+        };
+        runtimePanel.Children.Add(moveSourceBox);
+
         var buttons = new WrapPanel { Margin = new Thickness(0, 18, 0, 0) };
         var refreshButton = new System.Windows.Controls.Button
         {
@@ -1895,9 +1914,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var mover = new DshInstallMoveService(
                 registry: _instanceRegistry,
                 settings: _versionSettingsService);
-            // 优先搬“当前选中实例正在用的运行时”（用户直觉：“移动这个实例”）；
-            // 没有选中/不属于 Launcher 管理时回退到设置里配置的安装目录。
-            var current = ResolveMovableRuntimeDirectory(SelectedInstance)
+            // 源优先取设置页里明确选择的“要移动的运行时”；没有选时回退到启动页
+            // 选中的实例，再回退到配置的安装目录。
+            var current = (moveSourceBox.SelectedItem as MoveSourceItem)?.Directory
+                ?? ResolveMovableRuntimeDirectory(SelectedInstance)
                 ?? mover.ResolveCurrentInstallDirectory();
             if (current is null)
             {
@@ -1943,6 +1963,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     // 移动后实例的运行时路径已被重写；内存列表必须重载，否则
                     // 接下来的自动注册会按旧路径去重失败、多出一个重复实例。
                     LoadCachedInstances();
+                    RefreshMoveSources();
                 }
 
                 if (result.OldDirectory is not null)
@@ -2063,6 +2084,57 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             navPanel.Children.Add(button);
         }
 
+        // 运行时源列表：配置的安装位置 + 各实例正在用的运行时（去重）。
+        void RefreshMoveSources()
+        {
+            var items = new List<MoveSourceItem>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Add(string label, string directory)
+            {
+                var full = Path.GetFullPath(directory);
+                if (seen.Add(full))
+                {
+                    items.Add(new MoveSourceItem(label, full));
+                }
+            }
+
+            var configuredDirectory = _versionSettingsService.ResolveDshInstallDirectory();
+            if (DshInstallMoveService.LooksLikeInstall(configuredDirectory))
+            {
+                Add($"配置的安装位置 · {ShortRuntimePath(configuredDirectory)}", configuredDirectory);
+            }
+
+            foreach (var instance in Instances)
+            {
+                var directory = ResolveMovableRuntimeDirectory(instance);
+                if (directory is not null)
+                {
+                    var name = string.Equals(instance.Name, instance.DshVersionText, StringComparison.OrdinalIgnoreCase)
+                        ? instance.Name
+                        : $"{instance.Name} · {instance.DshVersionText}";
+                    Add($"{name} · {ShortRuntimePath(directory)}", directory);
+                }
+            }
+
+            var previous = (moveSourceBox.SelectedItem as MoveSourceItem)?.Directory;
+            var preferred = ResolveMovableRuntimeDirectory(SelectedInstance);
+            moveSourceBox.ItemsSource = items;
+            moveSourceBox.SelectedItem = items.FirstOrDefault(item =>
+                    string.Equals(item.Directory, previous, StringComparison.OrdinalIgnoreCase))
+                ?? items.FirstOrDefault(item =>
+                    string.Equals(item.Directory, preferred, StringComparison.OrdinalIgnoreCase))
+                ?? items.FirstOrDefault();
+        }
+
+        static string ShortRuntimePath(string path)
+        {
+            var name = Path.GetFileName(path);
+            var parent = Path.GetFileName(Path.GetDirectoryName(path) ?? string.Empty);
+            return string.IsNullOrEmpty(parent) ? name : $"…\\{parent}\\{name}";
+        }
+
+        RefreshMoveSources();
+        host.Loaded += (_, _) => RefreshMoveSources();
         SelectCategory(0);
         return host;
     }
