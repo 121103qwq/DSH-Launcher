@@ -6,6 +6,20 @@
              HorizontalAlignment="Stretch"
              VerticalAlignment="Stretch"
              Loaded="Window_OnLoaded">
+    <UserControl.Resources>
+        <!-- 左侧「当前实例」卡里的工具条按钮：紧凑尺寸（Padding 9,4 + 12px 字号），
+             避免 9 个按钮在大尺寸下换行到 3 行。 -->
+        <Style x:Key="CompactToolbarButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Padding" Value="9,4" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+        </Style>
+        <Style x:Key="CompactToolbarPrimaryButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+            <Setter Property="Padding" Value="9,4" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+        </Style>
+    </UserControl.Resources>
     <Grid Margin="0">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="340" />
@@ -63,53 +77,43 @@
 
                 <StackPanel Grid.Row="1" Margin="0,14,0,8">
                     <WrapPanel>
-                    <Button Content="刷新" Click="Refresh_Click" Margin="0,0,7,7" Padding="12,7" />
+                    <Button Content="刷新" Click="Refresh_Click" Style="{StaticResource CompactToolbarButton}" />
                     <Button x:Name="CheckUpdatesButton"
                             Content="检查更新"
                             Click="CheckUpdates_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7"
+                            Style="{StaticResource CompactToolbarButton}"
                             ToolTip="对比已安装插件的真实版本与 registry latest" />
                     <Button x:Name="UpdateAllButton"
                             Content="全部更新"
                             Click="UpdateAll_Click"
-                            Style="{StaticResource PrimaryButton}"
-                            Margin="0,0,7,7"
-                            Padding="12,7"
+                            Style="{StaticResource CompactToolbarPrimaryButton}"
                             Visibility="Collapsed" />
                     <Button x:Name="DoctorButton"
                             Content="依赖自检"
                             Click="Doctor_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7"
+                            Style="{StaticResource CompactToolbarButton}"
                             ToolTip="检测 profile 中混入的核心包/缺失 bundle" />
                     <Button x:Name="PluginMatrixButton"
                             Content="插件矩阵"
                             Click="PluginMatrix_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7"
+                            Style="{StaticResource CompactToolbarButton}"
                             ToolTip="对比同一插件在各实例的安装/启用状态（只读）" />
                     <Button x:Name="InstallPluginButton"
                             Content="手动安装 Plugin"
                             Click="InstallPlugin_Click"
-                            Style="{StaticResource PrimaryButton}"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
+                            Style="{StaticResource CompactToolbarPrimaryButton}" />
                     <Button x:Name="ImportSkillButton"
                             Content="导入 Skill"
                             Click="ImportSkill_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
+                            Style="{StaticResource CompactToolbarButton}" />
                     <Button x:Name="AddMcpButton"
                             Content="添加 MCP"
                             Click="AddMcp_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
+                            Style="{StaticResource CompactToolbarButton}" />
                     <Button x:Name="ImportPresetButton"
                             Content="导入 Agent Preset"
                             Click="ImportPreset_Click"
-                            Margin="0,0,7,7"
-                            Padding="12,7" />
+                            Style="{StaticResource CompactToolbarButton}" />
                     </WrapPanel>
                     <CheckBox x:Name="DshMarketHotReloadCheckBox"
                               Content="使用 dsh-market 热加载主题"

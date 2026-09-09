@@ -125,6 +125,7 @@
 - 默认样式：白底 + `#C5D5E6` 描边 + 8px 圆角 + 内边距 16,9；悬停变主色。
 - 主操作：`PrimaryButton`（蓝底白字 SemiBold）。
 - 紧凑按钮：`Padding="10,6"`；工具条按钮 `Padding="12,7"`。
+- 信息卡内的多按钮工具条（如「当前实例」卡）：`Padding="9,4"` + `FontSize="12"` + `Margin="0,0,6,6"`（本页定义 `CompactToolbarButton` / `CompactToolbarPrimaryButton`），避免在窄列里换行过多。
 - 危险操作：`Foreground="{StaticResource DangerBrush}"`。
 - 不要自建按钮模板；导航按钮用 `NavButton` / `TopNavButton`。
 
