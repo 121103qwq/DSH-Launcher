@@ -1523,6 +1523,34 @@ public partial class ExtensionWindow : UserControl
         try
         {
             EnsureMarketplaceMutationAllowed(allowRunning: true);
+            // 安装前校验：普通 npm 包装进去只会变成“已安装（默认禁用）”，
+            // 点“启用”还会把非插件写进 bundles，因此在改动 profile 前就拦住。
+            progressWindow.SetIndeterminate("正在校验安装目标是否为 DSH 插件…");
+            if (_marketplaceService is not null)
+            {
+                var verdict = await _marketplaceService.VerifyManualInstallAsync(
+                    source,
+                    operationCancellation.Token);
+                if (verdict.Status == MarketplaceVerificationStatus.Rejected)
+                {
+                    var proceed = System.Windows.MessageBox.Show(
+                        Window.GetWindow(this),
+                        $"这个目标不是可用的 DSH 插件：\n\n{verdict.Message}\n\n继续安装的话，它只会出现在「已安装（默认禁用）」里，DSh 不会加载它。仍要继续吗？",
+                        "不是 DSH 插件",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning) == MessageBoxResult.Yes;
+                    if (!proceed)
+                    {
+                        throw new InvalidOperationException(verdict.Message);
+                    }
+                }
+                else if (verdict.Status == MarketplaceVerificationStatus.Unverified
+                    && !string.IsNullOrWhiteSpace(verdict.Message))
+                {
+                    progressWindow.SetIndeterminate($"未能确认是否为 DSH 插件：{verdict.Message}（继续安装…）");
+                }
+            }
+
             snapshot = _marketplaceService?.CreatePluginSnapshot(_instance) ?? string.Empty;
             mutationStarted = true;
             var installMode = _pluginInstallMode();

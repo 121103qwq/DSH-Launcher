@@ -440,9 +440,172 @@ public sealed class MarketplaceService
             null);
     }
 
-    private static bool TryGetNpmPackageName(string value, out string packageName)
+    /// <summary>
+    /// 手动安装框的安装前校验：确认目标确实是 DSH Plugin（有 dsh.bundle.patch +
+    /// 可加载入口），避免把普通 npm 包装进 profile（只会变成“已安装（默认禁用）”，
+    /// 点“启用”还会把非插件写进 bundles）。
+    /// 返回 Verified=确认是插件；Rejected=确定不是；Unverified=无法判定（网络
+    /// 不可达/无法识别的 spec），调用方应放行但提示。
+    /// </summary>
+    public async Task<MarketplaceVerificationResult> VerifyManualInstallAsync(
+        string installSpec,
+        CancellationToken cancellationToken = default)
+    {
+        var text = installSpec?.Trim() ?? string.Empty;
+        if (text.Length == 0)
+        {
+            return new MarketplaceVerificationResult(
+                MarketplaceVerificationStatus.Unverified,
+                "没有填写安装目标。",
+                null,
+                null,
+                text);
+        }
+
+        try
+        {
+            // 本地目录 / package.json：直接读清单判定，不联网。
+            var localManifest = TryResolveLocalManifest(text);
+            if (localManifest is not null)
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(localManifest, Encoding.UTF8));
+                return VerifyManifest(
+                    document.RootElement,
+                    ReadString(document.RootElement, "name"),
+                    ReadString(document.RootElement, "version"),
+                    text);
+            }
+
+            if (TrySplitNpmSpec(text, out var packageName, out var version))
+            {
+                // 只有精确版本才按版本查；范围/标签一律按 latest 判定。
+                var exactVersion = version is { Length: > 0 } && char.IsDigit(version[0]) ? version : null;
+                var item = CreateManualItem(text, packageName, exactVersion);
+                MarketplaceVerificationResult? lastFailure = null;
+                foreach (var registryBase in new[]
+                         {
+                             "https://registry.npmmirror.com",
+                             "https://registry.npmjs.org"
+                         })
+                {
+                    try
+                    {
+                        return await VerifyNpmPackageAsync(item, cancellationToken, registryBase);
+                    }
+                    catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        return new MarketplaceVerificationResult(
+                            MarketplaceVerificationStatus.Rejected,
+                            $"npm 上找不到这个包：{packageName}（确认包名拼写，或换一个包）。",
+                            packageName,
+                            null,
+                            text);
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        lastFailure = new MarketplaceVerificationResult(
+                            MarketplaceVerificationStatus.Unverified,
+                            $"无法联网确认这个包是否为 DSH 插件（{ex.Message}）。",
+                            packageName,
+                            null,
+                            text);
+                    }
+                    catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // 镜像超时：换下一个源。
+                    }
+                }
+
+                return lastFailure ?? new MarketplaceVerificationResult(
+                    MarketplaceVerificationStatus.Unverified,
+                    "无法联网确认这个包是否为 DSH 插件（registry 不可达）。",
+                    packageName,
+                    null,
+                    text);
+            }
+
+            if (TryGetGitHubRepository(text, out _))
+            {
+                var item = CreateManualItem(text, null, null) with { RepositoryUrl = text };
+                return await VerifyAsync(item, cancellationToken);
+            }
+
+            return new MarketplaceVerificationResult(
+                MarketplaceVerificationStatus.Unverified,
+                "无法识别安装目标类型（既不是 npm 包名、GitHub 仓库，也不是本地目录），跳过插件校验。",
+                null,
+                null,
+                text);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or TaskCanceledException
+            or JsonException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            return new MarketplaceVerificationResult(
+                MarketplaceVerificationStatus.Unverified,
+                $"无法确认这个目标是否为 DSH 插件：{ex.Message}",
+                null,
+                null,
+                text);
+        }
+    }
+
+    private static MarketplaceItem CreateManualItem(string installSpec, string? packageName, string? version) =>
+        new(
+            "manual:" + installSpec,
+            installSpec,
+            packageName,
+            version,
+            string.Empty,
+            installSpec,
+            null,
+            string.Empty,
+            MarketplaceSourceKind.CommunityCatalog,
+            "手动安装校验",
+            MarketplaceVerificationStatus.Unverified,
+            string.Empty);
+
+    private static string? TryResolveLocalManifest(string text)
+    {
+        try
+        {
+            if (Directory.Exists(text))
+            {
+                var candidate = Path.Combine(text, "package.json");
+                return File.Exists(candidate) ? candidate : null;
+            }
+
+            if (File.Exists(text)
+                && string.Equals(Path.GetFileName(text), "package.json", StringComparison.OrdinalIgnoreCase))
+            {
+                return text;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or NotSupportedException
+            or PathTooLongException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            // 不是可读取的本地路径：按其它 spec 类型继续。
+        }
+
+        return null;
+    }
+
+    private static bool TryGetNpmPackageName(string value, out string packageName) =>
+        TrySplitNpmSpec(value, out packageName, out _);
+
+    internal static bool TrySplitNpmSpec(string value, out string packageName, out string? version)
     {
         packageName = string.Empty;
+        version = null;
         var text = value.Trim();
         if (text.StartsWith("npm:", StringComparison.OrdinalIgnoreCase))
         {
@@ -453,7 +616,7 @@ public sealed class MarketplaceService
             ? text.IndexOf('@', text.IndexOf('/') + 1)
             : text.IndexOf('@');
         packageName = versionMarker > 0 ? text[..versionMarker] : text;
-        var version = versionMarker > 0 ? text[(versionMarker + 1)..] : null;
+        version = versionMarker > 0 ? text[(versionMarker + 1)..] : null;
         if (!IsSafePackageName(packageName)
             || version is not null
                 && (version.Length == 0
@@ -461,6 +624,7 @@ public sealed class MarketplaceService
                         || character is '.' or '-' or '_' or '~' or '^' or '*' or '<' or '>' or '='))))
         {
             packageName = string.Empty;
+            version = null;
             return false;
         }
 
@@ -581,7 +745,8 @@ public sealed class MarketplaceService
 
     private async Task<MarketplaceVerificationResult> VerifyNpmPackageAsync(
         MarketplaceItem item,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string registryBase = "https://registry.npmjs.org")
     {
         var packageName = item.PackageName!.Trim();
         if (!IsSafePackageName(packageName))
@@ -590,7 +755,7 @@ public sealed class MarketplaceService
         }
 
         var encodedName = packageName.Replace("/", "%2f", StringComparison.Ordinal);
-        var uri = new Uri($"https://registry.npmjs.org/{encodedName}");
+        var uri = new Uri($"{registryBase.TrimEnd('/')}/{encodedName}");
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         using var response = await SendAsync(request, cancellationToken);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
@@ -1046,7 +1211,7 @@ public sealed class MarketplaceService
             : 2;
     }
 
-    private static MarketplaceVerificationResult VerifyManifest(
+    internal static MarketplaceVerificationResult VerifyManifest(
         JsonElement manifest,
         string? packageName,
         string? version,

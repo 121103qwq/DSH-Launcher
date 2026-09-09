@@ -57,6 +57,7 @@ dsh-launcher-dev/
 | 31 | `Services/PnpmFailureClassifier.cs`（新）+ `Services/PluginCommandFailedException.cs`（新）+ `Services/ExtensionService.cs` | pnpm 失败分类（20 种模式→可操作中文提示）+ 瞬时/GitHub 网络失败自动重试一次 + 三段式错误提示（原因/重试/残留清理） |
 | 32 | `Services/PluginProfileResidue.cs`（新）+ `Services/GitMirrorEnvironment.cs`（新） | 失败安装残留回滚（只清本次新增的 package.json 依赖/bundles、node_modules、cordis.patch.yml）；GitHub 直装失败依次用 `GIT_CONFIG_*` 进程级镜像重写（gh-proxy/gitclone，不改用户 git 配置） |
 | 33 | `Services/PortableNodeService.cs`（新）+ `NodeRuntimeDetector.cs` + `MainWindow.xaml.cs` | 便携版 Node（免管理员）：npmmirror/官方源下载 zip → 校验 node.exe 可运行 → 原子替换到 Launcher 数据目录 `node\`，检测时优先于系统 Node；低于社区红线 22.19 自动抬版；失败时再询问是否改用官方 MSI |
+| 34 | `MarketplaceService.VerifyManualInstallAsync`（新）+ `ExtensionWindow.xaml.cs` | 手动安装「装前校验」：npm 包查 registry 清单（npmmirror→npmjs）、GitHub 查 raw package.json、本地路径直接读，要求 `dsh.bundle.patch` + 可加载入口（main/module/exports/dsh.client）；普通 npm 包默认拦截（可显式确认后继续）；无法联网/无法识别时放行但提示 |
 
 ## 行为变化（相对上游）
 
@@ -74,6 +75,7 @@ dsh-launcher-dev/
 12. **托盘**：新增「运行中的实例」二级菜单（每个实例可打开/停止）；余额卡片（设置中显式启用后显示）
 13. **插件安装韧性**：pnpm 失败会翻译成可操作原因（幽灵依赖/store 不一致/需要允许构建/安全等待期等），瞬时网络与 GitHub 直装失败自动重试一次并依次走国内镜像；失败安装的残留（package.json 依赖/bundles、node_modules、cordis.patch.yml）自动清理，避免下次启动 include-loader 直接崩
 14. **便携版 Node**：「准备运行环境」默认下载免管理员的便携版 Node 到 Launcher 数据目录（不写系统 PATH、不影响已有 Node），低于 22.19 自动抬版；失败时才询问是否改用官方 MSI
+15. **装前校验**：手动安装框先确认目标是 DSH 插件（`dsh.bundle.patch` + 可加载入口）——像 `abc`/`nothing` 这类普通 npm 包默认拦下（可选择继续），避免装进 profile 变成“已安装（默认禁用）”的幽灵依赖；联网不可达时放行但提示
 
 ## 构建与发布（SOP）
 
