@@ -91,6 +91,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly HashSet<string> _safeModeAsked = new(StringComparer.Ordinal);
     private readonly StartupEvidenceStore _startupEvidence;
     private readonly InstanceIdleTracker _idleTracker = new();
+    private readonly CrashRecoveryService _crashRecovery;
+    private readonly Dictionary<string, CancellationTokenSource> _crashRestartTokens = new(StringComparer.Ordinal);
 
     private readonly WatchdogRuntime _watchdog;
     private readonly Dictionary<string, DateTimeOffset> _lastReassertAt = new(StringComparer.Ordinal);
@@ -113,6 +115,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _versionSnapshotService = new(isRunning: id => _instanceRunner!.IsRunning(id));
         _startupEvidence = new StartupEvidenceStore(
             dshHomeResolver: id => ResolveInstanceById(Instances, id)?.DshHome);
+        _crashRecovery = new CrashRecoveryService(id => ResolveInstanceById(Instances, id)?.DshHome);
         _extensionService = new(
             id => _instanceRunner!.IsRunning(id),
             snapshotService: _versionSnapshotService);
@@ -418,6 +421,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ? Visibility.Visible
             : Visibility.Collapsed;
 
+    /// <summary>当前实例处于崩溃冷却（卡片上的“崩溃冷却”徽标）。</summary>
+    public Visibility SelectedInstanceCooldownVisibility =>
+        SelectedInstance is { } instance && _crashRecovery.IsCoolingDown(instance.Id)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
     private void OnHttpHealthDegraded(WatchdogInstanceDto instance, int consecutiveFailures)
     {
         _startupEvidence.Record(instance.InstanceId, new StartupEvidence(
@@ -462,6 +471,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceResourceText));
             OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
             OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceCooldownVisibility));
             EvaluateIdleAutoStop();
         });
     }
@@ -1043,7 +1053,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
     }
 
-    /// <summary>watchdog 判定实例停止（端口已释放）：把界面收敛为 Stopped。</summary>
+    /// <summary>watchdog 判定实例停止（端口已释放）：收敛界面，并在非主动停止时按策略处置崩溃。</summary>
     private void OnInstanceStopped(WatchdogInstanceDto instance)
     {
         Dispatcher.BeginInvoke(() =>
@@ -1051,21 +1061,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             try
             {
                 var current = ResolveInstanceById(Instances, instance.InstanceId);
-                if (current is not null
-                    && current.RuntimeStatus == InstanceRuntimeStatus.Running
-                    && !_instanceRunner.IsRunning(current.Id)
-                    && !_instanceRunner.IsAttached(current.Id))
+                if (current is null
+                    || current.RuntimeStatus != InstanceRuntimeStatus.Running
+                    || _instanceRunner.IsRunning(current.Id)
+                    || _instanceRunner.IsAttached(current.Id))
                 {
-                    UpdateInstance(current with
-                    {
-                        RuntimeStatus = InstanceRuntimeStatus.Stopped,
-                        RuntimeOwnership = InstanceRuntimeOwnership.None,
-                        ProcessId = null,
-                        Port = null,
-                        WebUrl = null,
-                        AuthenticatedWebUrl = null,
-                        LastError = null
-                    });
+                    return;
+                }
+
+                // 退出码要在任何 Stop/清理之前读（runner 还持有进程对象）。
+                var exitCode = _instanceRunner.TryGetExitedCode(current.Id, out var code) ? code : null;
+                var intentional = _crashRecovery.ConsumeIntentionalStop(current.Id);
+                var managed = current.RuntimeOwnership == InstanceRuntimeOwnership.Managed;
+                UpdateInstance(current with
+                {
+                    RuntimeStatus = InstanceRuntimeStatus.Stopped,
+                    RuntimeOwnership = InstanceRuntimeOwnership.None,
+                    ProcessId = null,
+                    Port = null,
+                    WebUrl = null,
+                    AuthenticatedWebUrl = null,
+                    LastError = null
+                });
+
+                if (!intentional && managed)
+                {
+                    HandleInstanceCrash(current, exitCode);
                 }
             }
             catch (Exception ex)
@@ -1073,6 +1094,226 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ShowNotice($"同步实例状态异常：{ex.Message}");
             }
         });
+    }
+
+    /// <summary>
+    /// 崩溃处置：记录现场 → 按每实例策略给出计划（仅通知 / 退避自动重启 / 冷却关闭）。
+    /// 主动停止（用户、空闲自动停止、安全模式切换、更新、退出 Launcher）已提前标记，
+    /// 不会走到这里，避免把正常停止当成崩溃反复重启。
+    /// </summary>
+    private void HandleInstanceCrash(ManagerInstance instance, int? exitCode)
+    {
+        var settings = _versionSettingsService.Read(instance);
+        var logs = _instanceRunner.GetLogs(instance.Id)
+            .TakeLast(20)
+            .Select(line => $"{line.At:HH:mm:ss} [{line.Source}] {line.Text}")
+            .ToArray();
+        var evidence = _startupEvidence.Snapshot(instance.Id)
+            .Take(5)
+            .Select(item => $"{item.At:HH:mm:ss} [{item.Layer}] {item.Summary}")
+            .ToArray();
+        var resource = _watchdog.GetResource(instance.Id) is { } snapshot
+            ? $"CPU {snapshot.CpuPercent:0.#}% / 内存 {FormatBytes(snapshot.WorkingSetBytes)} / {snapshot.ProcessCount} 个进程"
+            : null;
+
+        var plan = _crashRecovery.NoteCrash(
+            instance.Id,
+            settings.CrashPolicy,
+            settings.CrashRestartLimit ?? 5,
+            new CrashRecord
+            {
+                ExitCode = exitCode,
+                TailLog = logs,
+                Evidence = evidence,
+                Resource = resource
+            });
+        LauncherLog.Warn("实例崩溃。", ErrorCodes.E1016, new
+        {
+            instance = instance.Name ?? instance.Id,
+            exitCode,
+            decision = plan.Decision.ToString(),
+            attempt = plan.Attempt,
+            limit = plan.Limit
+        });
+        _startupEvidence.Record(instance.Id, new StartupEvidence(
+            BootLayer.Process,
+            "实例崩溃",
+            $"exitCode={exitCode?.ToString() ?? "?"}；{plan.Summary}"));
+        _idleTracker.Forget(instance.Id);
+        OnPropertyChanged(nameof(SelectedInstanceCooldownVisibility));
+
+        var exitText = exitCode is { } value ? $"（exitCode={value}）" : string.Empty;
+        if (plan.Decision == CrashRecoveryDecision.Restart)
+        {
+            ShowNotice($"实例 {instance.Name} 已崩溃{exitText}，{plan.Summary}；现场已记录到「实例设置 → 运行状况」。");
+            ScheduleCrashRestart(instance, plan);
+            return;
+        }
+
+        ShowNotice(plan.Decision == CrashRecoveryDecision.CoolDown
+            ? $"实例 {instance.Name} 已崩溃{exitText}，{plan.Summary}；现场已保留，可在「实例设置 → 运行状况」查看并手动重启。"
+            : $"实例 {instance.Name} 已崩溃{exitText}（策略为仅通知）；现场已记录，可在「实例设置 → 运行状况」查看。");
+    }
+
+    /// <summary>退避延时后自动重启（用户手动启动/停止、实例删除、退出 Launcher 都会取消）。</summary>
+    private void ScheduleCrashRestart(ManagerInstance instance, CrashRecoveryPlan plan)
+    {
+        CancelPendingCrashRestart(instance.Id);
+        var cancellation = new CancellationTokenSource();
+        _crashRestartTokens[instance.Id] = cancellation;
+        _ = RunCrashRestartAsync(instance.Id, plan, cancellation);
+    }
+
+    private async Task RunCrashRestartAsync(string instanceId, CrashRecoveryPlan plan, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(plan.Delay, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        await Dispatcher.InvokeAsync(async () =>
+        {
+            try
+            {
+                if (cancellation.IsCancellationRequested
+                    || _shutdownCleanupStarted
+                    || _windowCancellation.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                var current = ResolveInstanceById(Instances, instanceId);
+                if (current is null
+                    || _instanceRunner.IsRunning(instanceId)
+                    || current.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
+                {
+                    return;
+                }
+
+                var settings = _versionSettingsService.Read(current);
+                if (settings.CrashPolicy is not (CrashRecoveryPolicy.AutoRestart or CrashRecoveryPolicy.RestartThenCoolDown)
+                    || _crashRecovery.IsCoolingDown(instanceId))
+                {
+                    return;
+                }
+
+                if (!TryBeginLifecycleOperation())
+                {
+                    ShowNotice($"实例 {current.Name} 的自动重启被其它操作占用，已跳过；可在「实例设置 → 运行状况」手动重启。");
+                    return;
+                }
+
+                try
+                {
+                    if (!await EnsureRuntimeReadyAsync(current))
+                    {
+                        ShowNotice($"实例 {current.Name} 自动重启失败（运行环境未就绪）。");
+                        return;
+                    }
+
+                    var resolved = ResolveInstanceById(Instances, instanceId);
+                    if (resolved is null)
+                    {
+                        return;
+                    }
+
+                    ShowNotice($"正在自动重启实例 {resolved.Name}（第 {plan.Attempt}/{plan.Limit} 次）…");
+                    await StartPreparedInstanceAndOpenAsync(resolved, interactive: false);
+                }
+                finally
+                {
+                    EndLifecycleOperation();
+                }
+            }
+            catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"实例自动重启失败：{ex.Message}");
+            }
+        });
+    }
+
+    private void CancelPendingCrashRestart(string? instanceId)
+    {
+        if (string.IsNullOrWhiteSpace(instanceId))
+        {
+            return;
+        }
+
+        if (_crashRestartTokens.Remove(instanceId, out var cancellation))
+        {
+            try
+            {
+                cancellation.Cancel();
+                cancellation.Dispose();
+            }
+            catch
+            {
+                // 已取消/已释放都无所谓。
+            }
+        }
+    }
+
+    /// <summary>「运行状况 → 崩溃恢复」：解除冷却并立即重启。</summary>
+    private void ClearCrashCooldownAndRestart(ManagerInstance instance)
+    {
+        _crashRecovery.ClearCooldown(instance.Id);
+        OnPropertyChanged(nameof(SelectedInstanceCooldownVisibility));
+        var current = ResolveInstanceById(Instances, instance.Id);
+        if (current is null)
+        {
+            return;
+        }
+
+        if (_instanceRunner.IsRunning(current.Id))
+        {
+            ShowNotice($"已解除实例 {current.Name} 的崩溃冷却。");
+            return;
+        }
+
+        _ = StartAfterCooldownAsync(current);
+    }
+
+    private async Task StartAfterCooldownAsync(ManagerInstance instance)
+    {
+        if (!TryBeginLifecycleOperation())
+        {
+            ShowNotice("实例正在执行启动或停止操作，请稍后再试。");
+            return;
+        }
+
+        try
+        {
+            if (!await EnsureRuntimeReadyAsync(instance))
+            {
+                return;
+            }
+
+            var resolved = ResolveInstanceById(Instances, instance.Id);
+            if (resolved is null)
+            {
+                return;
+            }
+
+            await StartPreparedInstanceAndOpenAsync(resolved, interactive: true);
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"重启实例失败：{ex.Message}");
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
     }
 
     /// <summary>检测到未登记进程占用实例端口（残留/异常启动）：提示用户，不自动处置。</summary>
@@ -1802,7 +2043,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 },
                 instance => _startupEvidence.Snapshot(instance.Id),
                 instance => _idleTracker.GetLastActivity(instance.Id),
-                instance => _startupEvidence.Clear(instance.Id))));
+                instance => _startupEvidence.Clear(instance.Id),
+                instance => _crashRecovery.GetStatus(instance.Id),
+                instance => _crashRecovery.GetRecords(instance.Id),
+                ClearCrashCooldownAndRestart)));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -1895,6 +2139,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void RemoveDeletedVersion(ManagerInstance deleted)
     {
+        _crashRecovery.Forget(deleted.Id);
+        CancelPendingCrashRestart(deleted.Id);
         var wasSelected = SelectedInstance is not null
             && string.Equals(SelectedInstance.Id, deleted.Id, StringComparison.Ordinal);
         var removed = Instances.FirstOrDefault(instance =>
@@ -4427,6 +4673,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
+        _crashRecovery.NoteIntentionalStop(instance.Id);
+        CancelPendingCrashRestart(instance.Id);
+
         if (!TryBeginLifecycleOperation())
         {
             return false;
@@ -4535,6 +4784,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会停止该进程。");
             return;
         }
+
+        // 主动停止：崩溃恢复不会把它当成崩溃（用户 / 空闲自动停止都走这里）。
+        _crashRecovery.NoteIntentionalStop(selected.Id);
+        CancelPendingCrashRestart(selected.Id);
 
         if (!TryBeginLifecycleOperation())
         {
@@ -4871,7 +5124,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task<DshInstanceRunResult?> StartManagedInstanceAsync(
         ManagerInstance instance,
-        bool openBrowser = false)
+        bool openBrowser = false,
+        bool interactive = true)
     {
         await SynchronizeModelProvidersAsync(instance, notifyNoConfiguration: true);
         await SynchronizeConversationsAsync(instance);
@@ -4893,7 +5147,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // 启动失败：若用户 web profile 里有第三方 bundle，且本会话还没问过，就提议安全模式
         // （隔离 profile 启动，绝不改用户文件）。Tier1 失败自动降级 Tier2 再试一次。
-        if (_safeModeAsked.Add(instance.Id)
+        // 自动重启（interactive=false）不问，避免弹窗打扰；手动启动时仍会问。
+        if (interactive
+            && _safeModeAsked.Add(instance.Id)
             && _safeProfileService.HasThirdPartyBundles(instance, out var thirdParty))
         {
             var evidenceText = result.Evidence is { Count: > 0 }
@@ -5028,6 +5284,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (_instanceRunner.IsRunning(instance.Id))
             {
+                _crashRecovery.NoteIntentionalStop(instance.Id);
+                CancelPendingCrashRestart(instance.Id);
                 await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token);
             }
 
@@ -5072,6 +5330,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         bool openBrowser)
     {
         _idleTracker.MarkActivity(instance.Id, "启动");
+        _crashRecovery.NoteStarted(instance.Id);
+        CancelPendingCrashRestart(instance.Id);
+        OnPropertyChanged(nameof(SelectedInstanceCooldownVisibility));
         // 浏览器守卫：仅当 dsh 不支持 --no-open（可能自行弹出浏览器）且本次不由
         // Launcher 开浏览器时启用；守卫只在启动后 30 秒窗口内结束命令行带该端口的浏览器进程。
         if (!openBrowser
@@ -5465,6 +5726,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             _shutdownCleanupStarted = true;
             _windowCancellation.Cancel();
+            foreach (var instance in Instances.Where(item => _instanceRunner.IsRunning(item.Id)).ToArray())
+            {
+                _crashRecovery.NoteIntentionalStop(instance.Id);
+                CancelPendingCrashRestart(instance.Id);
+            }
+
             CloseAllChatWindows();
             try
             {
@@ -5982,10 +6249,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private async Task<bool> StartPreparedInstanceAndOpenAsync(ManagerInstance selected)
+    private async Task<bool> StartPreparedInstanceAndOpenAsync(ManagerInstance selected, bool interactive = true)
     {
         var openBrowser = GetSelectedOpenMode() == VersionOpenMode.Web;
-        var result = await StartManagedInstanceAsync(selected, openBrowser);
+        var result = await StartManagedInstanceAsync(selected, openBrowser, interactive);
         if (result is null)
         {
             return false;
@@ -5993,7 +6260,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
         {
-            ShowStartFailure(result.Error);
+            if (interactive)
+            {
+                ShowStartFailure(result.Error);
+            }
+            else
+            {
+                ShowNotice($"实例 {selected.Name} 启动失败：{result.Error ?? "未知错误"}");
+            }
+
             return false;
         }
 

@@ -579,6 +579,67 @@
                             Padding="20"
                             Margin="0,16,0,0">
                         <StackPanel>
+                            <TextBlock Text="崩溃恢复" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="dsh 进程意外退出时怎么办。Launcher 主动停止（手动 / 空闲自动停止 / 安全模式切换 / 更新 / 退出启动器）不算崩溃；退避重启 5 秒 → 15 秒 → 1 分钟 → 5 分钟，稳定运行 10 分钟后再崩溃会重新计算次数。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,10" />
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="崩溃后行为"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <ComboBox x:Name="CrashPolicyBox" Width="230" Height="34" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="自动重启上限"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <ComboBox x:Name="CrashLimitBox" Width="150" Height="34" />
+                            </StackPanel>
+                            <TextBlock x:Name="CrashStatusText"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button Content="保存崩溃设置"
+                                        Click="SaveCrashPolicy_Click"
+                                        Style="{StaticResource PrimaryButton}" />
+                                <Button x:Name="ClearCooldownButton"
+                                        Content="清冷却并重启"
+                                        Click="ClearCooldown_Click"
+                                        Visibility="Collapsed"
+                                        Margin="10,0,0,0" />
+                            </StackPanel>
+                            <ListView x:Name="CrashRecordList"
+                                      Height="140"
+                                      Margin="0,14,0,0"
+                                      BorderThickness="0"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                <ListView.View>
+                                    <GridView AllowsColumnReorder="False">
+                                        <GridViewColumn Header="时间" Width="150" DisplayMemberBinding="{Binding TimeText}" />
+                                        <GridViewColumn Header="退出码" Width="70" DisplayMemberBinding="{Binding ExitText}" />
+                                        <GridViewColumn Header="运行时长" Width="100" DisplayMemberBinding="{Binding UptimeText}" />
+                                        <GridViewColumn Header="动作" Width="90" DisplayMemberBinding="{Binding Action}" />
+                                        <GridViewColumn Header="摘要" Width="420" DisplayMemberBinding="{Binding Summary}" />
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource CardCornerRadius}"
+                            Padding="20"
+                            Margin="0,16,0,0">
+                        <StackPanel>
                             <TextBlock Text="资源占用（最近 20 分钟，每 5 秒一个采样点）" FontSize="16" FontWeight="SemiBold" />
                             <controls:MetricChart x:Name="HealthCpuChart" Height="120" Margin="0,12,0,0" />
                             <controls:MetricChart x:Name="HealthMemoryChart" Height="120" Margin="0,10,0,0" />

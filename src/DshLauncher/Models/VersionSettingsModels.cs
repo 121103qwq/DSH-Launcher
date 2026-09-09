@@ -88,6 +88,12 @@ public sealed class VersionSettingsData
 
     /// <summary>空闲阈值（分钟，5–240，默认 30）。</summary>
     public int? AutoStopIdleMinutes { get; set; }
+
+    /// <summary>崩溃后行为（默认仅通知）。</summary>
+    public CrashRecoveryPolicy CrashPolicy { get; set; } = CrashRecoveryPolicy.NotifyOnly;
+
+    /// <summary>自动重启上限（1–10，默认 5）。</summary>
+    public int? CrashRestartLimit { get; set; }
 }
 
 /// <summary>

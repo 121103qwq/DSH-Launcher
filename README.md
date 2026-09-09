@@ -87,6 +87,8 @@ dsh-launcher-dev/
 | 59 | `Services/SafeProfileService.cs`（新）+ `Services/StartupHealthEvidence.cs`（新）+ `Services/DshInstanceRunner.cs` + `Models/DshInstanceRunResult.cs` + `MainWindow.xaml.cs` + `ChatWindow.xaml.cs` + `Services/ErrorCodes.cs` | **#11 安全模式 + 四层启动健康证据（第一阶段）**：① `.dsh-safe` 隔离 profile（Tier1 剥离第三方保留核心 / Tier2 最小、用户文件只读、SHA-256 零污染证据、正常启动自动清理）；② 启动健康四层证据：进程（exitCode）、日志（新增行签名）、HTTP（探针异常只记不判）、页面（WebView2 失败上报）；③ 启动失败且存在第三方插件时**会话内只问一次**、Tier1→Tier2 自动降级；提示区分安全模式/普通启动（E1014/E1015） |
 | 60 | `ChatWindow.xaml.cs` + `Services/StartupEvidenceStore.cs`（新）+ `Services/HttpHealthMonitor.cs`（新）+ `Watchdog/WatchdogRuntime.cs` + `MainWindow.xaml(.cs)` + `VersionSettingsWindow.xaml(.cs)` + `Models/InstanceHealthModels.cs` | **#11 安全模式第二阶段**：① 页面层升级为判死输入（`ProbePageAsync` DOM 探针 + 失败时安全模式重启提议）；② 「运行状况」新增“启动证据”区块（进程/日志/HTTP/页面，含接管记录）；③ 就绪后 HTTP 连续 3 次失败报降级（探针异常按 miss 计）；④ 实例卡片“安全模式”徽标 |
 | 61 | `Services/InstanceIdleTracker.cs`（新）+ `Services/DshInstanceRunner.cs` + `Watchdog/ProcessQuery.cs` + `MainWindow.xaml.cs` + `VersionSettingsWindow.xaml(.cs)` + `Models/VersionSettingsModels.cs` | **空闲自动停止（可开关）**：每实例开关 + 5–240 分钟阈值；后台任务不算空闲（进程树外部连接/CPU≥1%/会话写入/dsh 输出/Launcher 忙）；停止复用既有链路并写证据；修两个真缺陷（活动信号漏接 CPU 与写入；运行状况页每秒刷新覆盖用户正在编辑的控件） |
+| 62 | `Services/StartupEvidenceStore.cs` + `MainWindow.xaml.cs` + `VersionSettingsWindow.xaml(.cs)` + `Services/DiagnoseExportService.cs` | **启动证据落盘**：内存环形 + `<DSH_HOME>/.dsh-launcher/startup-evidence.jsonl`（最近 200 条、每 25 次追加裁剪、损坏行容忍）；运行状况页「清空启动证据」；诊断包附带证据文件 |
+| 63 | `Models/CrashRecoveryModels.cs`（新）+ `Services/CrashRecoveryService.cs`（新）+ `Services/DshInstanceRunner.cs` + `MainWindow.xaml(.cs)` + `VersionSettingsWindow.xaml(.cs)` + `Models/VersionSettingsModels.cs` + `Services/ErrorCodes.cs` | **崩溃恢复策略**：每实例「仅通知 / 自动重启（退避 5s→15s→1m→5m，默认上限 5）/ 直接冷却关闭 / 重启后冷却」；主动停止不误判（手动/空闲/安全模式/更新/退出）；崩溃现场落盘（退出码/运行时长/日志尾部/证据/资源，最近 10 条）；冷却跨 Launcher 重启保留 + 「崩溃冷却」徽标 + 「清冷却并重启」；稳定运行 10 分钟重置计数；E1016 |
 
 ## 行为变化（相对上游）
 
@@ -150,6 +152,10 @@ dsh-launcher-dev/
 58. **空闲自动停止**：实例设置 → 运行状况可开启（默认关），阈值 5/15/30/60/120/240 分钟；只对 Launcher 托管的运行中实例生效，停止后写启动证据并提示
 59. **后台任务不算空闲**：进程树有到非回环地址的已建立连接（等模型响应/工具联网）、CPU ≥ 1%、`sessions`/`storages` 最近 90 秒有写入、dsh 有新输出、Launcher 正在安装/准备 —— 任一命中都不停
 60. **运行状况页刷新**：只初始化一次控件，之后仅刷新状态文案，不再覆盖用户正在编辑的复选框/下拉
+61. **启动证据落盘**：每次启动判定/四层证据追加到 `<实例 dsh-home>/.dsh-launcher/startup-evidence.jsonl`（保留最近 200 条），Launcher 重启后仍可在「运行状况」回看；诊断包也带一份
+62. **崩溃恢复**：实例设置 → 运行状况可设「仅通知（默认）/ 自动重启（退避 5s→15s→1m→5m，上限 1–10 次）/ 直接冷却关闭 / 自动重启后冷却」；稳定运行 10 分钟后再崩溃计数清零
+63. **主动停止不算崩溃**：手动停止、空闲自动停止、安全模式切换、插件重试、更新重启、退出 Launcher 都不触发自动重启
+64. **崩溃现场与冷却**：每次崩溃记录退出码/运行时长/日志尾部/启动证据/资源采样（最近 10 条，落盘）；达上限转「冷却中」，实例卡片显示“崩溃冷却”徽标（跨 Launcher 重启保留），运行状况页可「清冷却并重启」
 
 ## 待办（功能完成后统一处理）
 

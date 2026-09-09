@@ -410,6 +410,7 @@ public partial class VersionSettingsWindow : UserControl
             .ToArray();
 
         LoadAutoStopControls();
+        LoadCrashControls();
     }
 
     private bool _autoStopControlsInitialized;
@@ -450,6 +451,169 @@ public partial class VersionSettingsWindow : UserControl
         }
 
         UpdateAutoStopStatus();
+    }
+
+    private bool _crashControlsInitialized;
+
+    /// <summary>崩溃恢复控件：只初始化一次，刷新时只更新状态/列表（不覆盖用户选择）。</summary>
+    private void LoadCrashControls()
+    {
+        if (!_crashControlsInitialized)
+        {
+            _crashControlsInitialized = true;
+            if (CrashPolicyBox.Items.Count == 0)
+            {
+                foreach (var (policy, label) in new[]
+                         {
+                             (CrashRecoveryPolicy.NotifyOnly, "仅通知（默认）"),
+                             (CrashRecoveryPolicy.AutoRestart, "自动重启（受限退避）"),
+                             (CrashRecoveryPolicy.CoolDown, "直接冷却关闭"),
+                             (CrashRecoveryPolicy.RestartThenCoolDown, "自动重启后冷却（推荐）")
+                         })
+                {
+                    CrashPolicyBox.Items.Add(new System.Windows.Controls.ComboBoxItem
+                    {
+                        Content = label,
+                        Tag = policy
+                    });
+                }
+            }
+
+            if (CrashLimitBox.Items.Count == 0)
+            {
+                foreach (var limit in Enumerable.Range(1, 10))
+                {
+                    CrashLimitBox.Items.Add(new System.Windows.Controls.ComboBoxItem
+                    {
+                        Content = $"{limit} 次",
+                        Tag = limit
+                    });
+                }
+            }
+
+            foreach (System.Windows.Controls.ComboBoxItem item in CrashPolicyBox.Items)
+            {
+                if (item.Tag is CrashRecoveryPolicy policy && policy == _settings.CrashPolicy)
+                {
+                    CrashPolicyBox.SelectedItem = item;
+                    break;
+                }
+            }
+
+            CrashPolicyBox.SelectedItem ??= CrashPolicyBox.Items[0];
+            var limitValue = _settings.CrashRestartLimit ?? 5;
+            foreach (System.Windows.Controls.ComboBoxItem item in CrashLimitBox.Items)
+            {
+                if (Equals(item.Tag, limitValue))
+                {
+                    CrashLimitBox.SelectedItem = item;
+                    break;
+                }
+            }
+
+            CrashLimitBox.SelectedItem ??= CrashLimitBox.Items[4];
+        }
+
+        UpdateCrashStatus();
+    }
+
+    private void UpdateCrashStatus()
+    {
+        var status = _healthProviders?.CrashStatus?.Invoke(_instance!) ?? CrashRecoveryStatus.Normal;
+        var records = _healthProviders?.CrashRecords?.Invoke(_instance!) ?? Array.Empty<CrashRecord>();
+        CrashRecordList.ItemsSource = records
+            .Select(record => new
+            {
+                TimeText = record.At.ToString("MM-dd HH:mm:ss"),
+                ExitText = record.ExitCode?.ToString() ?? "?",
+                UptimeText = FormatCrashUptime(record.Uptime),
+                record.Action,
+                record.Summary
+            })
+            .ToArray();
+
+        ClearCooldownButton.Visibility = status.Cooldown ? Visibility.Visible : Visibility.Collapsed;
+        if (status.Cooldown)
+        {
+            CrashStatusText.Text =
+                $"冷却中：上次崩溃 {status.LastCrashAt:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}，{status.LastAction}）；已停止自动重启，现场已保留。";
+            return;
+        }
+
+        if (status.LastCrashAt is { } lastCrash)
+        {
+            CrashStatusText.Text = status.Attempts > 0
+                ? $"最近崩溃 {lastCrash:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}），已自动重启 {status.Attempts} 次（上限见上方设置）。"
+                : $"最近崩溃 {lastCrash:MM-dd HH:mm:ss}（exitCode={status.LastExitCode?.ToString() ?? "?"}，{status.LastAction}）。";
+            return;
+        }
+
+        CrashStatusText.Text = "运行正常，暂无崩溃记录。";
+    }
+
+    private static string FormatCrashUptime(TimeSpan uptime) => uptime <= TimeSpan.Zero
+        ? "—"
+        : uptime.TotalHours >= 1
+            ? $"{uptime.TotalHours:0.#} 小时"
+            : uptime.TotalMinutes >= 1
+                ? $"{uptime.TotalMinutes:0.#} 分钟"
+                : $"{uptime.TotalSeconds:0} 秒";
+
+    private void SaveCrashPolicy_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            CrashStatusText.Text = "请先选择版本。";
+            return;
+        }
+
+        var policy = CrashPolicyBox.SelectedItem is System.Windows.Controls.ComboBoxItem policyItem
+            && policyItem.Tag is CrashRecoveryPolicy value
+                ? value
+                : CrashRecoveryPolicy.NotifyOnly;
+        var limit = CrashLimitBox.SelectedItem is System.Windows.Controls.ComboBoxItem limitItem
+            && limitItem.Tag is int limitValue
+                ? limitValue
+                : 5;
+        try
+        {
+            _settings.CrashPolicy = policy;
+            _settings.CrashRestartLimit = limit;
+            _settingsService.Save(_instance, _settings);
+            UpdateCrashStatus();
+            CrashStatusText.Text = policy switch
+            {
+                CrashRecoveryPolicy.NotifyOnly => "已保存：崩溃后仅通知，不自动重启。",
+                CrashRecoveryPolicy.AutoRestart => $"已保存：崩溃后自动重启（最多 {limit} 次，退避重试）。",
+                CrashRecoveryPolicy.CoolDown => "已保存：崩溃后直接冷却关闭并保留现场。",
+                _ => $"已保存：崩溃后自动重启（最多 {limit} 次），达上限转冷却关闭。"
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            CrashStatusText.Text = $"保存失败：{ex.Message}";
+        }
+    }
+
+    private void ClearCooldown_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        var owner = Window.GetWindow(this);
+        var message = $"解除实例 {_instance.Name} 的崩溃冷却并立即重启？";
+        var confirmed = owner is null
+            ? System.Windows.MessageBox.Show(message, "清冷却并重启", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes
+            : System.Windows.MessageBox.Show(owner, message, "清冷却并重启", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _healthProviders?.ClearCrashCooldown?.Invoke(_instance);
+        CrashStatusText.Text = "已解除冷却，正在重启…";
     }
 
     private void UpdateAutoStopStatus()

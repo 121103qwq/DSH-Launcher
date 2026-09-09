@@ -331,6 +331,21 @@
                                                            FontSize="12"
                                                            FontWeight="SemiBold" />
                                             </Border>
+                                            <Border Visibility="{Binding SelectedInstanceCooldownVisibility}"
+                                                    Background="#FEF3F2"
+                                                    BorderBrush="{StaticResource DangerBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="{StaticResource PanelCornerRadius}"
+                                                    Padding="9,3"
+                                                    Margin="0,0,8,0"
+                                                    ToolTip="该实例连续崩溃后已转入冷却关闭：不再自动重启，崩溃现场已保留（实例设置 → 运行状况）。"
+                                                    SnapsToDevicePixels="True"
+                                                    UseLayoutRounding="True">
+                                                <TextBlock Text="崩溃冷却"
+                                                           Foreground="{StaticResource DangerBrush}"
+                                                           FontSize="12"
+                                                           FontWeight="SemiBold" />
+                                            </Border>
                                             <Border HorizontalAlignment="Right"
                                                     Background="{Binding SelectedInstanceStatusBackgroundBrush}"
                                                     BorderBrush="{Binding SelectedInstanceStatusBrush}"

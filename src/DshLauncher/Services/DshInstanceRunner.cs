@@ -95,6 +95,25 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 读取已退出实例的退出码（崩溃恢复判定用）。进程仍活着或未托管时返回 false。
+    /// 注意：要在任何 Stop/移除托管记录之前调用。
+    /// </summary>
+    public bool TryGetExitedCode(string instanceId, out int? exitCode)
+    {
+        lock (_running)
+        {
+            if (_running.TryGetValue(instanceId, out var running) && HasExited(running.Process))
+            {
+                exitCode = TryGetExitCode(running.Process);
+                return true;
+            }
+        }
+
+        exitCode = null;
+        return false;
+    }
+
     public bool IsAttached(string instanceId)
     {
         lock (_attached)

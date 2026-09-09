@@ -114,7 +114,9 @@ public sealed class VersionSettingsService
                 ? null
                 : new Dictionary<string, string>(settings.EnvironmentVariables, StringComparer.Ordinal),
             AutoStopWhenIdle = settings.AutoStopWhenIdle,
-            AutoStopIdleMinutes = settings.AutoStopIdleMinutes
+            AutoStopIdleMinutes = settings.AutoStopIdleMinutes,
+            CrashPolicy = settings.CrashPolicy,
+            CrashRestartLimit = settings.CrashRestartLimit
         };
 
     private static void ProtectEnvironmentVariables(VersionSettingsData settings)
@@ -447,6 +449,16 @@ public sealed class VersionSettingsService
         if (settings.AutoStopIdleMinutes is { } idleMinutes)
         {
             settings.AutoStopIdleMinutes = Math.Clamp(idleMinutes, 5, 240);
+        }
+
+        if (!Enum.IsDefined(settings.CrashPolicy))
+        {
+            settings.CrashPolicy = CrashRecoveryPolicy.NotifyOnly;
+        }
+
+        if (settings.CrashRestartLimit is { } crashLimit)
+        {
+            settings.CrashRestartLimit = Math.Clamp(crashLimit, 1, 10);
         }
 
         settings.ConversationWorkspace = string.IsNullOrWhiteSpace(settings.ConversationWorkspace)
