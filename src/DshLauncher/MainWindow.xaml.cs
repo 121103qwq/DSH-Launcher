@@ -88,6 +88,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _shutdownFromTray;
     private readonly WatchdogRuntime _watchdog;
     private readonly Dictionary<string, DateTimeOffset> _lastReassertAt = new(StringComparer.Ordinal);
+    private readonly WindowStateStore _windowStateStore = new();
+    private readonly WebCacheVersionLedger _webCacheLedger = new();
+    private readonly BalanceService _balanceService = new();
+    private readonly BrowserGuard _browserGuard = new();
+    private CancellationTokenSource? _balanceCancellation;
+    private bool _windowStateRestored;
 
     public MainWindow()
     {
@@ -102,7 +108,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _extensionService = new(
             id => _instanceRunner!.IsRunning(id),
             snapshotService: _versionSnapshotService);
-        _instanceRunner = new(extensionService: _extensionService);
+        _instanceRunner = new(
+            extensionService: _extensionService,
+            proxySettings: () => ProxySettings.From(_versionSettingsService.ReadLauncherSettings()));
         _watchdog = new WatchdogRuntime(ReadWatchdogProbeSeconds());
         _watchdog.GhostAdopted += OnGhostAdopted;
         _watchdog.InstanceStopped += OnInstanceStopped;
@@ -125,6 +133,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _nodeInstaller.LingeringInstallerCompleted += OnLingeringInstallerCompleted;
         InitializeComponent();
         WindowSizeHelper.FitInitialSize(this);
+        _windowStateRestored = _windowStateStore.TryRestore(this);
         DataContext = this;
     }
 
@@ -152,6 +161,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string PageNoticeDetail { get; private set; } = string.Empty;
 
     public Visibility PageNoticeDetailVisibility { get; private set; } = Visibility.Collapsed;
+
+    /// <summary>余额卡片（仅在设置中显式启用后显示；凭据只在内存中读取）。</summary>
+    public string BalanceText { get; private set; } = string.Empty;
+
+    public string BalanceDetailText { get; private set; } = string.Empty;
+
+    public Visibility BalanceVisibility { get; private set; } = Visibility.Collapsed;
+
+    public WpfBrush BalanceForeground { get; private set; } =
+        new SolidColorBrush(WpfColor.FromRgb(46, 166, 107));
 
     public ObservableCollection<ManagerInstance> Instances { get; } = new();
 
@@ -191,6 +210,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodePathText));
             if (IsLoaded && !_isLoadingCachedInstances)
             {
+                RefreshBalanceAsync();
                 _ = RefreshNodeAsync();
             }
         }
@@ -438,16 +458,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // 窗口尺寸自适应：不超过工作区 92% 并居中。WPF 的 Width/Left 是
             // DIP（逻辑单位），SystemParameters.WorkArea 是物理像素（system-aware
             // 进程），高 DPI（如 125%）下必须除以 DpiScale 再比较，否则窗控按钮
-            // 会被裁出屏幕右缘。
-            var dpi = VisualTreeHelper.GetDpi(this);
-            var workArea = SystemParameters.WorkArea;
-            Width = Math.Min(Width, workArea.Width * 0.92 / dpi.DpiScaleX);
-            Height = Math.Min(Height, workArea.Height * 0.92 / dpi.DpiScaleY);
-            Left = workArea.Left / dpi.DpiScaleX + Math.Max(0, (workArea.Width / dpi.DpiScaleX - Width) / 2);
-            Top = workArea.Top / dpi.DpiScaleY + Math.Max(0, (workArea.Height / dpi.DpiScaleY - Height) / 2);
+            // 会被裁出屏幕右缘。已恢复上次位置/尺寸时不再重算（仅首次运行居中）。
+            if (!_windowStateRestored)
+            {
+                var dpi = VisualTreeHelper.GetDpi(this);
+                var workArea = SystemParameters.WorkArea;
+                Width = Math.Min(Width, workArea.Width * 0.92 / dpi.DpiScaleX);
+                Height = Math.Min(Height, workArea.Height * 0.92 / dpi.DpiScaleY);
+                Left = workArea.Left / dpi.DpiScaleX + Math.Max(0, (workArea.Width / dpi.DpiScaleX - Width) / 2);
+                Top = workArea.Top / dpi.DpiScaleY + Math.Max(0, (workArea.Height / dpi.DpiScaleY - Height) / 2);
+            }
 
             SwitchSection("启动");
             LoadCachedInstances();
+            RefreshBalanceAsync();
             await Dispatcher.Yield(DispatcherPriority.Background);
             _watchdog.Start();
             await ReconcileCachedInstanceStatesAsync();
@@ -1076,6 +1100,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(RunningInstanceCountText));
         OnPropertyChanged(nameof(NoRunningInstancesVisibility));
         OnPropertyChanged(nameof(RunningInstancesVisibility));
+        _trayIconService?.RefreshRunningItems();
     }
 
     internal static IReadOnlyList<ManagerInstance> SelectRecentInstances(
@@ -1814,6 +1839,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         AddCloseBehaviorSection(panel);
         AddWatchdogSection(panel);
         AddVersionSyncSection(panel);
+        AddProxySection(panel);
+        AddBalanceSection(panel);
+        AddDiagnoseSection(panel);
         // 宿主内容区已把页面限制在视口内；设置页内容较长，改为页内滚动。
         return new ScrollViewer
         {
@@ -1823,6 +1851,362 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             PanningMode = PanningMode.VerticalOnly,
             Content = panel
         };
+    }
+
+    private void AddProxySection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "代理",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        var card = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        };
+
+        LauncherSettingsData current;
+        try
+        {
+            current = _versionSettingsService.ReadLauncherSettings();
+        }
+        catch
+        {
+            current = new LauncherSettingsData();
+        }
+
+        var enabled = new System.Windows.Controls.CheckBox
+        {
+            Content = "启用代理（Launcher 联网与实例启动均使用）",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            IsChecked = current.ProxyEnabled
+        };
+        var urlBox = new System.Windows.Controls.TextBox
+        {
+            Text = current.ProxyUrl ?? string.Empty,
+            Width = 360,
+            FontSize = 13,
+            Margin = new Thickness(0, 14, 0, 0),
+            ToolTip = "形如 http://127.0.0.1:7890"
+        };
+        var noProxyBox = new System.Windows.Controls.TextBox
+        {
+            Text = current.NoProxy ?? string.Empty,
+            Width = 360,
+            FontSize = 13,
+            Margin = new Thickness(0, 10, 0, 0),
+            ToolTip = "不走代理的地址，逗号分隔；默认已跳过本机回环"
+        };
+        var applyDsh = new System.Windows.Controls.CheckBox
+        {
+            Content = "同时注入启动的 dsh 实例（HTTP_PROXY / HTTPS_PROXY / NO_PROXY）",
+            FontSize = 13,
+            Margin = new Thickness(0, 12, 0, 0),
+            IsChecked = current.ProxyApplyDsh
+        };
+        var saveButton = new System.Windows.Controls.Button
+        {
+            Content = "保存代理设置",
+            Style = (Style)FindResource("PrimaryButton"),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            Margin = new Thickness(0, 16, 0, 0)
+        };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            Margin = new Thickness(0, 10, 0, 0),
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        content.Children.Add(enabled);
+        content.Children.Add(new TextBlock
+        {
+            Text = "代理地址（http(s)://主机:端口）",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            Margin = new Thickness(0, 14, 0, 0)
+        });
+        content.Children.Add(urlBox);
+        content.Children.Add(new TextBlock
+        {
+            Text = "NO_PROXY（逗号分隔，可空）",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            Margin = new Thickness(0, 10, 0, 0)
+        });
+        content.Children.Add(noProxyBox);
+        content.Children.Add(applyDsh);
+        content.Children.Add(saveButton);
+        content.Children.Add(status);
+        panel.Children.Add(card);
+
+        saveButton.Click += (_, _) =>
+        {
+            try
+            {
+                var settings = _versionSettingsService.ReadLauncherSettings();
+                settings.ProxyEnabled = enabled.IsChecked == true;
+                settings.ProxyUrl = string.IsNullOrWhiteSpace(urlBox.Text) ? null : urlBox.Text.Trim();
+                settings.NoProxy = string.IsNullOrWhiteSpace(noProxyBox.Text) ? null : noProxyBox.Text.Trim();
+                settings.ProxyApplyDsh = applyDsh.IsChecked == true;
+                if (settings.ProxyEnabled
+                    && !ProxySettings.TryNormalizeServer(settings.ProxyUrl, out _, out var error))
+                {
+                    status.Text = $"代理地址无效：{error}";
+                    return;
+                }
+
+                _versionSettingsService.SaveLauncherSettings(settings);
+                ProxyConfigurator.ApplyGlobal(settings);
+                status.Text = settings.ProxyEnabled
+                    ? "已保存并生效（新启动的实例会注入代理环境变量）。"
+                    : "已保存：代理关闭，使用直连。";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                status.Text = $"保存失败：{ex.Message}";
+            }
+        };
+    }
+
+    private void AddBalanceSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "余额显示",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        var card = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        };
+
+        var enabled = true;
+        try
+        {
+            enabled = _versionSettingsService.ReadLauncherSettings().BalanceEnabled;
+        }
+        catch
+        {
+        }
+
+        var toggle = new System.Windows.Controls.CheckBox
+        {
+            Content = "在启动页显示 DeepSeek 余额（默认关闭）",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            IsChecked = enabled
+        };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            Margin = new Thickness(0, 10, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+            Text = "开启后，Launcher 会在本机内存读取所选实例 DSH_HOME 下的 .credentials.yaml 并请求 api.deepseek.com 查询余额；" +
+                   "Key 不落盘、不写日志、不进诊断包。"
+        };
+        content.Children.Add(toggle);
+        content.Children.Add(status);
+        panel.Children.Add(card);
+
+        toggle.Checked += (_, _) => SaveBalance(true);
+        toggle.Unchecked += (_, _) => SaveBalance(false);
+        return;
+
+        void SaveBalance(bool value)
+        {
+            try
+            {
+                var settings = _versionSettingsService.ReadLauncherSettings();
+                settings.BalanceEnabled = value;
+                _versionSettingsService.SaveLauncherSettings(settings);
+                RefreshBalanceAsync();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                ShowNotice($"保存余额显示设置失败：{ex.Message}");
+            }
+        }
+    }
+
+    private void AddDiagnoseSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "诊断与日志",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        var card = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        };
+
+        var exportButton = new System.Windows.Controls.Button
+        {
+            Content = "导出诊断包",
+            Style = (Style)FindResource("PrimaryButton"),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left
+        };
+        var openLogButton = new System.Windows.Controls.Button
+        {
+            Content = "打开日志目录",
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        var buttons = new WrapPanel();
+        buttons.Children.Add(exportButton);
+        buttons.Children.Add(openLogButton);
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            Margin = new Thickness(0, 12, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+            Text = "诊断包包含 Launcher 日志、崩溃/守护日志、环境与版本、设置与状态文件（已脱敏）；" +
+                   "不包含 .credentials.yaml / 会话内容，产物只落在本机，由你自行决定是否分享。"
+        };
+        content.Children.Add(buttons);
+        content.Children.Add(status);
+        panel.Children.Add(card);
+
+        exportButton.Click += async (_, _) =>
+        {
+            exportButton.IsEnabled = false;
+            status.Text = "正在导出诊断包…";
+            try
+            {
+                var result = await Task.Run(() => new DiagnoseExportService().Export());
+                status.Text = result.Ok
+                    ? $"已导出：{result.ArchivePath}"
+                    : $"导出失败：{result.Error}";
+            }
+            finally
+            {
+                exportButton.IsEnabled = true;
+            }
+        };
+        openLogButton.Click += (_, _) =>
+        {
+            try
+            {
+                Directory.CreateDirectory(LauncherLog.LogDirectory);
+                Process.Start(new ProcessStartInfo(LauncherLog.LogDirectory) { UseShellExecute = true });
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                ShowNotice($"打开日志目录失败：{ex.Message}");
+            }
+        };
+    }
+
+    /// <summary>余额刷新（异步、可取消；未启用或未选实例时隐藏卡片）。</summary>
+    private void RefreshBalanceAsync()
+    {
+        _balanceCancellation?.Cancel();
+        _balanceCancellation?.Dispose();
+        _balanceCancellation = null;
+
+        var enabled = false;
+        try
+        {
+            enabled = _versionSettingsService.ReadLauncherSettings().BalanceEnabled;
+        }
+        catch
+        {
+        }
+
+        if (!enabled || SelectedInstance is not { } instance)
+        {
+            BalanceText = string.Empty;
+            BalanceDetailText = string.Empty;
+            BalanceVisibility = Visibility.Collapsed;
+            OnPropertyChanged(nameof(BalanceText));
+            OnPropertyChanged(nameof(BalanceDetailText));
+            OnPropertyChanged(nameof(BalanceVisibility));
+            OnPropertyChanged(nameof(BalanceForeground));
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _balanceCancellation = cancellation;
+        var dshHome = instance.DshHome;
+        _ = Task.Run(async () =>
+        {
+            BalanceResult result;
+            try
+            {
+                result = await _balanceService.GetAsync(dshHome, cancellation.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _ = Dispatcher.BeginInvoke(() =>
+            {
+                if (cancellation.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (result is { Ok: true, Data: { } data })
+                {
+                    BalanceText = $"余额 {data.Currency} {data.Total}（赠送 {data.Granted} · 充值 {data.ToppedUp}）";
+                    BalanceDetailText = data.Available ? "账户可用" : "账户不可用或余额不足";
+                    BalanceForeground = new SolidColorBrush(WpfColor.FromRgb(46, 166, 107));
+                }
+                else
+                {
+                    // 已开启但取不到：给可见的灰提示（悬停看原因），否则用户会以为开关无效。
+                    BalanceText = "余额不可用（悬停查看原因）";
+                    BalanceDetailText = result.Error ?? "未知错误";
+                    BalanceForeground = new SolidColorBrush(WpfColor.FromRgb(140, 140, 140));
+                }
+
+                BalanceVisibility = Visibility.Visible;
+                OnPropertyChanged(nameof(BalanceText));
+                OnPropertyChanged(nameof(BalanceDetailText));
+                OnPropertyChanged(nameof(BalanceVisibility));
+                OnPropertyChanged(nameof(BalanceForeground));
+            });
+        });
     }
 
     private void AddPluginInstallModeSection(StackPanel panel)
@@ -3461,7 +3845,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var selected = SelectedInstance;
+        await StopInstanceAsync(SelectedInstance);
+    }
+
+    private async Task StopInstanceAsync(ManagerInstance selected)
+    {
         if (selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
         {
             ShowNotice("当前实例连接的是外部 DSh 服务，Launcher 不会停止该进程。");
@@ -3822,6 +4210,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return result;
         }
 
+        // 浏览器守卫：仅当 dsh 不支持 --no-open（可能自行弹出浏览器）且本次不由
+        // Launcher 开浏览器时启用；守卫只在启动后 30 秒窗口内结束命令行带该端口的浏览器进程。
+        if (!openBrowser
+            && result.Port is { } guardedPort
+            && !DshInstanceRunner.SupportsNoOpen(instance.DetectedVersion))
+        {
+            _browserGuard.Watch(guardedPort);
+        }
+
         UpdateInstance(instance with
         {
             RuntimeStatus = InstanceRuntimeStatus.Running,
@@ -4171,6 +4568,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 点击 × 的行为由设置（设置 / 诊断 → 关闭主窗口时）决定：
         // MinimizeToTray —— 隐藏到托盘（默认，实例继续运行）；
         // ExitAndStopInstances —— 退出并停止 Launcher 管理的实例（等同托盘菜单“退出”）。
+        // 窗口位置/尺寸在任何关闭路径下都持久化（包括隐藏到托盘）。
+        if (!_shutdownCleanupStarted)
+        {
+            _windowStateStore.Save(WindowStateStore.Capture(this));
+        }
+
         var closeBehavior = CloseBehavior.MinimizeToTray;
         try
         {
@@ -4227,8 +4630,48 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _trayIconService = new Services.TrayIconService(
             LoadLauncherIcon(),
             "DSH Launcher",
+            BuildTrayRunningItems,
+            OpenInstanceFromTray,
+            StopInstanceFromTray,
             ShowMainWindowFromTray,
             RequestShutdownFromTray);
+    }
+
+    private IReadOnlyList<TrayRunningItem> BuildTrayRunningItems() =>
+        Instances
+            .Where(instance => _instanceRunner.IsRunning(instance.Id))
+            .Select(instance => new TrayRunningItem(
+                instance.Id,
+                instance.Name,
+                $"{instance.DshVersionText} · {instance.StatusText}"))
+            .ToArray();
+
+    /// <summary>托盘菜单“打开”：Web 模式开浏览器，Desktop/Custom 模式开 Chat 窗口（运行中实例）。</summary>
+    private void OpenInstanceFromTray(string instanceId)
+    {
+        var instance = Instances.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, instanceId, StringComparison.Ordinal));
+        if (instance is null)
+        {
+            return;
+        }
+
+        SelectedInstance = instance;
+        _ = StartSelectedInstanceAsync();
+    }
+
+    /// <summary>托盘菜单“停止”：仅停止 Launcher 管理的实例（Attached 外部实例不受影响）。</summary>
+    private void StopInstanceFromTray(string instanceId)
+    {
+        var instance = Instances.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, instanceId, StringComparison.Ordinal));
+        if (instance is null)
+        {
+            return;
+        }
+
+        SelectedInstance = instance;
+        _ = StopInstanceAsync(instance);
     }
 
     private static System.Drawing.Icon LoadLauncherIcon()
@@ -4782,6 +5225,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     protected override void OnClosed(EventArgs e)
     {
+        _browserGuard.Dispose();
+        _balanceCancellation?.Cancel();
+        _balanceCancellation?.Dispose();
         _windowSource?.RemoveHook(WindowProcedure);
         _windowSource = null;
         CloseAllChatWindows();
@@ -4792,6 +5238,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private ChatWindow? OpenChatWindow(string instanceId, string address, string? conversationId = null)
     {
+        // dsh 版本变化时清一次 WebView2 磁盘缓存（仅在当前没有其它 Chat 窗口时，
+        // 避免删除正在使用的缓存）。
+        if (_chatWindows.Count == 0
+            && Instances.FirstOrDefault(instance =>
+                string.Equals(instance.Id, instanceId, StringComparison.Ordinal)) is { } cacheInstance)
+        {
+            try
+            {
+                _webCacheLedger.EnsureCacheMatches(cacheInstance.DetectedVersion, message => ShowNotice(message));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                LauncherLog.Warn("WebView2 缓存版本检查失败（继续打开窗口）。", ErrorCodes.E1002,
+                    new { instance = cacheInstance.Name, error = ex.Message });
+            }
+        }
+
         CloseChatWindow(instanceId);
         try
         {

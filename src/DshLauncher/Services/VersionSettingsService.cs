@@ -386,6 +386,18 @@ public sealed class VersionSettingsService
         {
             settings.WatchdogProbeSeconds = 5;
         }
+
+        settings.ProxyUrl = string.IsNullOrWhiteSpace(settings.ProxyUrl) ? null : settings.ProxyUrl.Trim();
+        settings.NoProxy = string.IsNullOrWhiteSpace(settings.NoProxy) ? null : settings.NoProxy.Trim();
+        if (settings.ProxyUrl?.Length > 500)
+        {
+            settings.ProxyUrl = null;
+        }
+
+        if (settings.NoProxy?.Length > 1000)
+        {
+            settings.NoProxy = null;
+        }
     }
 
     private static string? NormalizePath(string? value)

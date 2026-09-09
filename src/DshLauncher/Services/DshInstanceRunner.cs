@@ -34,16 +34,19 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly Func<int> _portAllocator;
     private readonly DshHomeImportService _homeImporter;
     private readonly ExtensionService? _extensionService;
+    private readonly Func<ProxySettings?>? _proxySettings;
     private bool _disposed;
 
     public DshInstanceRunner(
         Func<int>? portAllocator = null,
         DshHomeImportService? homeImporter = null,
-        ExtensionService? extensionService = null)
+        ExtensionService? extensionService = null,
+        Func<ProxySettings?>? proxySettings = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
         _extensionService = extensionService;
+        _proxySettings = proxySettings;
     }
 
     public bool IsRunning(string instanceId)
@@ -889,7 +892,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
-    private static ProcessStartInfo CreateStartInfo(
+    private ProcessStartInfo CreateStartInfo(
         ManagerInstance instance,
         int port,
         NodeRuntimeInfo? nodeRuntime,
@@ -927,13 +930,25 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         arguments.Add("127.0.0.1");
         arguments.Add("--port");
         arguments.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        return DshRuntimeCommandFactory.Create(
+        var startInfo = DshRuntimeCommandFactory.Create(
             spec,
             arguments,
             instance.RootPath,
             instance.DshHome,
             Path.Combine(instance.DshHome, ".agents"),
             nodeRuntime?.ExecutablePath);
+        // Launcher 级代理：显式注入实例环境（在 dsh 的 npm 代理回退之前）。
+        try
+        {
+            _proxySettings?.Invoke()?.ApplyTo(startInfo);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            LauncherLog.Warn("代理注入实例环境失败（按继承环境运行）。", ErrorCodes.E3001,
+                new { instance = instance.Name, error = ex.Message });
+        }
+
+        return startInfo;
     }
 
     /// <summary>
@@ -942,7 +957,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     /// 预发布后缀只在主段恰好等于 0.1.0 时参与比较（rc.N 需 ≥ 8）；
     /// 解析失败（未知/旧版）时按不支持处理——不传开关，保持旧版能正常启动。
     /// </summary>
-    private static bool SupportsNoOpen(string? version)
+    internal static bool SupportsNoOpen(string? version)
     {
         var trimmed = version?.Trim().TrimStart('v', 'V');
         if (string.IsNullOrWhiteSpace(trimmed))

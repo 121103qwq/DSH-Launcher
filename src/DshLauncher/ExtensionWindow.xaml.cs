@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -51,6 +52,10 @@ public partial class ExtensionWindow : UserControl
     private string _activeMarketplaceCategoryKey = string.Empty;
     private string _activeSkillMarketCategoryKey = string.Empty;
     private bool _useDshMarketHotReload = true;
+    private readonly UiStateStore _uiStateStore = new();
+    private readonly DispatcherTimer _uiStateSaveTimer;
+    private IReadOnlyDictionary<string, PluginUpdateInfo> _pluginUpdateInfos =
+        new Dictionary<string, PluginUpdateInfo>(StringComparer.OrdinalIgnoreCase);
 
     public ExtensionWindow(
         ManagerInstance instance,
@@ -77,6 +82,17 @@ public partial class ExtensionWindow : UserControl
         _versionSettingsService = versionSettingsService;
         _versionSnapshotService = versionSnapshotService;
         InitializeComponent();
+        _uiStateSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _uiStateSaveTimer.Tick += (_, _) =>
+        {
+            _uiStateSaveTimer.Stop();
+            SaveMarketplaceUiState();
+        };
+        Unloaded += (_, _) =>
+        {
+            _uiStateSaveTimer.Stop();
+            SaveMarketplaceUiState();
+        };
         _useDshMarketHotReload = _versionSettingsService?.Read(instance).UseDshMarketHotReload ?? true;
         DshMarketHotReloadCheckBox.IsChecked = _useDshMarketHotReload;
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
@@ -98,6 +114,9 @@ public partial class ExtensionWindow : UserControl
 
             MarketplacePanel.Visibility = Visibility.Collapsed;
             InstallPluginButton.Visibility = Visibility.Collapsed;
+            CheckUpdatesButton.Visibility = Visibility.Collapsed;
+            UpdateAllButton.Visibility = Visibility.Collapsed;
+            DoctorButton.Visibility = Visibility.Collapsed;
             AddMcpButton.Visibility = Visibility.Collapsed;
             DshMarketHotReloadCheckBox.Visibility = Visibility.Collapsed;
             EnableButton.Visibility = Visibility.Collapsed;
@@ -348,6 +367,9 @@ public partial class ExtensionWindow : UserControl
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
+        // 先恢复上次的市场 UI 状态（搜索/分类/来源/排序/滚动），再置 _controlLoaded
+        // 以抑制恢复过程中的渲染与重复保存。
+        RestoreMarketplaceUiState();
         _controlLoaded = true;
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
@@ -430,6 +452,7 @@ public partial class ExtensionWindow : UserControl
             if (!cancellation.IsCancellationRequested)
             {
                 RenderMarketplaceItems();
+                ScheduleUiStateSave();
             }
         }
         catch (OperationCanceledException)
@@ -453,6 +476,8 @@ public partial class ExtensionWindow : UserControl
             {
                 RenderMarketplaceItems();
             }
+
+            ScheduleUiStateSave();
         }
     }
 
@@ -607,6 +632,12 @@ public partial class ExtensionWindow : UserControl
         var visibleCount = _marketplaceVisibleCount;
         // 记录当前位置：ItemSource 替换会重置滚动偏移，保证任何重渲染“原地”。
         var currentOffset = FindScrollViewer(MarketplaceList)?.VerticalOffset ?? 0;
+        if (currentOffset <= 0
+            && _marketplaceScrollOffsets.TryGetValue(_activeMarketplaceCategoryKey, out var savedOffset))
+        {
+            // 首次打开（或重渲染到顶部）时恢复上次保存的滚动位置。
+            currentOffset = savedOffset;
+        }
         var installedPlugins = _installedPlugins;
         var canMutate = _marketplaceCanMutate;
         var themeState = _themeState;
@@ -662,6 +693,7 @@ public partial class ExtensionWindow : UserControl
 
     private void MarketplaceList_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        ScheduleUiStateSave();
         // 到达底部附近时加载下一批（增量加载，CanContentScroll 下单位为“条目”）。
         var viewer = FindScrollViewer(MarketplaceList);
         if (viewer is null || viewer.ExtentHeight <= viewer.ViewportHeight)
@@ -1717,6 +1749,232 @@ public partial class ExtensionWindow : UserControl
         UpdateButton.IsEnabled = true;
         RemoveButton.IsEnabled = true;
         HintText.Text = "修改前请停止实例。Plugin 和 MCP 会在下次启动时生效。";
+        if (entry.Kind == ExtensionKind.Plugin
+            && _pluginUpdateInfos.TryGetValue(entry.Name, out var update)
+            && update.HasUpdate)
+        {
+            HintText.Text += $" 可更新：{update.Current ?? "?"} → {update.Latest}（点“更新”或“全部更新”）。";
+        }
+    }
+
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isMarketplaceMutating)
+        {
+            return;
+        }
+
+        CheckUpdatesButton.IsEnabled = false;
+        StatusText.Text = "正在检查插件更新（registry latest）…";
+        try
+        {
+            var updates = await _service.CheckPluginUpdatesAsync(_instance);
+            _pluginUpdateInfos = updates.ToDictionary(info => info.Name, StringComparer.OrdinalIgnoreCase);
+            var pending = updates.Where(info => info.HasUpdate).ToArray();
+            UpdateAllButton.Visibility = pending.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            StatusText.Text = pending.Length == 0
+                ? $"已检查 {updates.Count} 个插件：均为最新版本。"
+                : $"发现 {pending.Length} 个可更新插件：" +
+                  string.Join("、", pending.Take(6).Select(info => $"{info.Name} {info.Current}→{info.Latest}")) +
+                  (pending.Length > 6 ? " 等" : string.Empty);
+            UpdateSelection();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"检查更新失败：{ex.Message}";
+        }
+        finally
+        {
+            CheckUpdatesButton.IsEnabled = true;
+        }
+    }
+
+    private async void UpdateAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isMarketplaceMutating)
+        {
+            return;
+        }
+
+        var pending = _pluginUpdateInfos.Values.Where(info => info.HasUpdate).Select(info => info.Name).ToArray();
+        if (pending.Length == 0)
+        {
+            StatusText.Text = "没有可更新的插件（先点“检查更新”）。";
+            return;
+        }
+
+        if (_instance.RuntimeStatus == InstanceRuntimeStatus.Running
+            && System.Windows.MessageBox.Show(
+                Window.GetWindow(this),
+                $"当前实例正在运行。批量更新 {pending.Length} 个插件可能不会立即生效（需重启实例）。是否继续？",
+                "批量更新插件",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        UpdateAllButton.IsEnabled = false;
+        var progress = new Progress<PluginBatchProgress>(item =>
+        {
+            StatusText.Text = $"正在更新（{item.Index}/{item.Total}）：{item.Name}" +
+                              (item.Error is null ? string.Empty : $"（失败：{item.Error}）");
+        });
+        try
+        {
+            var summary = await _service.UpdatePluginsAsync(
+                _instance,
+                pending,
+                _nodeRuntime(),
+                _pluginInstallMode(),
+                progress);
+            StatusText.Text = summary;
+            await RefreshAsync();
+            _pluginUpdateInfos = new Dictionary<string, PluginUpdateInfo>(StringComparer.OrdinalIgnoreCase);
+            UpdateAllButton.Visibility = Visibility.Collapsed;
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"批量更新失败：{ex.Message}";
+        }
+        finally
+        {
+            UpdateAllButton.IsEnabled = true;
+        }
+    }
+
+    private async void Doctor_Click(object sender, RoutedEventArgs e)
+    {
+        DoctorButton.IsEnabled = false;
+        StatusText.Text = "正在做依赖自检…";
+        try
+        {
+            var findings = await _service.RunDoctorAsync(_instance);
+            if (findings.Count == 0)
+            {
+                StatusText.Text = "依赖自检通过：未发现核心包混入或 bundle 缺失。";
+                System.Windows.MessageBox.Show(Window.GetWindow(this),
+                    "依赖自检通过：未发现核心包混入或 bundle 缺失。", "依赖自检",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var errors = findings.Count(finding => finding.Level == "error");
+            StatusText.Text = $"依赖自检：{findings.Count} 项发现（{errors} 项错误）。";
+            System.Windows.MessageBox.Show(Window.GetWindow(this),
+                string.Join("\n\n", findings.Select(finding =>
+                    $"[{(finding.Level == "error" ? "错误" : "警告")}] {finding.Message}")),
+                "依赖自检结果",
+                MessageBoxButton.OK,
+                errors > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"依赖自检失败：{ex.Message}";
+        }
+        finally
+        {
+            DoctorButton.IsEnabled = true;
+        }
+    }
+
+    private void ScheduleUiStateSave()
+    {
+        if (!_controlLoaded)
+        {
+            return;
+        }
+
+        _uiStateSaveTimer.Stop();
+        _uiStateSaveTimer.Start();
+    }
+
+    private void SaveMarketplaceUiState()
+    {
+        if (_agentOnly)
+        {
+            return;
+        }
+
+        try
+        {
+            SaveScrollOffset(MarketplaceList, _marketplaceScrollOffsets, _activeMarketplaceCategoryKey);
+            _uiStateStore.SaveMarketplace(_instance.Id, new MarketplaceUiState
+            {
+                Search = MarketplaceSearchBox.Text,
+                CategoryKey = GetSelectedCategoryKey(),
+                SourceKey = (MarketplaceSourceBox.SelectedItem as ComboBoxItem)?.Tag as string,
+                SortKey = (MarketplaceSortBox.SelectedItem as ComboBoxItem)?.Tag as string,
+                ScrollOffsets = new Dictionary<string, double>(_marketplaceScrollOffsets, StringComparer.Ordinal)
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // UI 状态保存失败不影响使用。
+        }
+    }
+
+    private void RestoreMarketplaceUiState()
+    {
+        if (_agentOnly)
+        {
+            return;
+        }
+
+        var state = _uiStateStore.GetMarketplace(_instance.Id);
+        if (state is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(state.Search))
+        {
+            MarketplaceSearchBox.Text = state.Search;
+        }
+
+        SelectListBoxTag(MarketplaceCategoryList, state.CategoryKey);
+        SelectComboTag(MarketplaceSourceBox, state.SourceKey);
+        SelectComboTag(MarketplaceSortBox, state.SortKey);
+        foreach (var pair in state.ScrollOffsets)
+        {
+            _marketplaceScrollOffsets[pair.Key] = pair.Value;
+        }
+    }
+
+    private static void SelectListBoxTag(WpfListBox list, string? tag)
+    {
+        if (string.IsNullOrEmpty(tag))
+        {
+            return;
+        }
+
+        foreach (var item in list.Items)
+        {
+            if (item is ListBoxItem listBoxItem
+                && string.Equals(listBoxItem.Tag as string, tag, StringComparison.Ordinal))
+            {
+                list.SelectedItem = listBoxItem;
+                return;
+            }
+        }
+    }
+
+    private static void SelectComboTag(System.Windows.Controls.ComboBox combo, string? tag)
+    {
+        if (string.IsNullOrEmpty(tag))
+        {
+            return;
+        }
+
+        foreach (var item in combo.Items)
+        {
+            if (item is ComboBoxItem comboItem
+                && string.Equals(comboItem.Tag as string, tag, StringComparison.Ordinal))
+            {
+                combo.SelectedItem = comboItem;
+                return;
+            }
+        }
     }
 
     private void MarketplaceTitle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)

@@ -130,6 +130,21 @@ public sealed class LauncherSettingsData
 
     /// <summary>实例守护监控轮询间隔（秒，2–120；默认 5）。</summary>
     public int WatchdogProbeSeconds { get; set; } = 5;
+
+    /// <summary>Launcher 级代理开关（同时作用于 Launcher HTTP 与 dsh 实例环境变量）。</summary>
+    public bool ProxyEnabled { get; set; }
+
+    /// <summary>代理地址，形如 http://127.0.0.1:7890（缺 scheme 时按 http 处理）。</summary>
+    public string? ProxyUrl { get; set; }
+
+    /// <summary>NO_PROXY 列表（逗号/分号/空格分隔）。</summary>
+    public string? NoProxy { get; set; }
+
+    /// <summary>是否把代理注入启动的 dsh 实例（默认开）。</summary>
+    public bool ProxyApplyDsh { get; set; } = true;
+
+    /// <summary>是否在主界面显示 DeepSeek 余额（默认关；开启后仅在本机内存读取凭据）。</summary>
+    public bool BalanceEnabled { get; set; }
 }
 
 public sealed record VersionExportOptions(

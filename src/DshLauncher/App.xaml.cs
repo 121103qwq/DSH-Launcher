@@ -20,6 +20,13 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // 诊断模式：只导出脱敏诊断包后退出，不创建任何窗口（借鉴 Ruler4396 的 --diagnose，MIT）。
+        if (e.Args.Any(argument => string.Equals(argument, "--diagnose", StringComparison.OrdinalIgnoreCase)))
+        {
+            Environment.Exit(DshLauncher.Services.DiagnoseExportService.RunFromCommandLine(e.Args));
+            return;
+        }
+
         // 实例锁是进程级文件句柄：两个 Launcher 同时运行时，第二个只能以只读
         // Attached 连接实例，Stop/Restart 会不可用。因此限制单实例，再次启动时
         // 唤起已有窗口。
@@ -39,6 +46,7 @@ public partial class App : System.Windows.Application
 
         _ownsSingleInstanceMutex = true;
         base.OnStartup(e);
+        ApplyLauncherSettings();
         DispatcherUnhandledException += App_DispatcherUnhandledException;
         _activationChannel = new SingleInstanceActivationChannel(
             GetActivationPipeName(),
@@ -56,8 +64,24 @@ public partial class App : System.Windows.Application
             DispatcherPriority.ApplicationIdle);
     }
 
+    /// <summary>启动时应用 Launcher 级设置（当前为代理），须在 MainWindow 构造之前执行。</summary>
+    private static void ApplyLauncherSettings()
+    {
+        try
+        {
+            var settings = new DshLauncher.Services.VersionSettingsService().ReadLauncherSettings();
+            DshLauncher.Services.ProxyConfigurator.ApplyGlobal(settings);
+        }
+        catch
+        {
+            // 设置不可读时保持直连，不影响启动。
+        }
+    }
+
     private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
     {
+        DshLauncher.Services.LauncherLog.Error("UI 线程未处理异常。", DshLauncher.Services.ErrorCodes.E9001,
+            new { exception = e.Exception.ToString() });
         // UI 线程未处理异常不再直接杀死进程：写入崩溃日志后继续运行，便于
         // 事后定位（例如窗口关闭与异步初始化竞态曾导致整个应用崩溃）。
         try

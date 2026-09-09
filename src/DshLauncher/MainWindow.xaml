@@ -356,6 +356,13 @@
                                                        FontSize="12"
                                                        TextWrapping="Wrap"
                                                        Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding BalanceText}"
+                                                       Visibility="{Binding BalanceVisibility}"
+                                                       ToolTip="{Binding BalanceDetailText}"
+                                                       Foreground="{Binding BalanceForeground}"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,8,0,0" />
                                             <WrapPanel Margin="0,24,0,0">
                                                 <Button Content="重命名"
                                                         Click="RenameSelectedInstance_Click"

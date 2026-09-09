@@ -38,7 +38,22 @@ dsh-launcher-dev/
 | 19 | `App.xaml` / `MainWindow.xaml(.cs)` | **PCL2 风 P0 打磨**：①配色升级为 PCL 式 10 级蓝渐变体系（`#0B5BCB→#1370F3→#4890F5→#96C0F9→#D5E6FD→#E0EAFD→#EAF2FE`）+ 灰阶/红绿强调色；②标题栏线性渐变（左深右亮的 PCL 式）+ 返回/实例胶囊改半透明白；③顶部导航胶囊化（圆角 10、hover `#55FFFFFF`、pressed `#B3FFFFFF`）；④窗控按钮改 34px 圆形（hover 半透明白、**关闭钮悬停红底**）；⑤启动面板右栏加 PCL 式渐变圆空态插画；⑥**窗口工作区自适应**（≤92% 工作区并居中，DPI 感知——修复 125% DPI 下窗控按钮被裁出屏幕右缘的长期问题）；⑦字体加雅黑回退 |
 | 20 | `src/DshLauncher/Watchdog/`（新目录）+ `MainWindow.xaml.cs` + `App.xaml.cs` | **实例守护（进程内版）**：无独立 watchdog 进程——监控循环内建于 Launcher（后台 5s 定时），零额外 exe/管道/Mutex。职责：①实例台账（注册/注销/快照，落盘 `%LocalAppData%\DeepSeek\launcher\watchdog-state.json`）；②周期探测——**识别 dshmarket 自重启换 PID 的幽灵实例**（登记 PID 死 + 端口活 → 反查新 PID → 身份校验（DSH_HOME 命令行或 dsh web 特征）→ 转正）；③**接管重启**：用户决策——非启动器重启的实例不收养，Launcher 追加一次标准重启（杀无主实例连同 powershell/cmd 包装链→终端窗口消失，CreateNoWindow 重拉，完全受管）；④停止判定 15s 宽限（覆盖市场重启窗口）+ 5 分钟重生观察窗；⑤残留清理（桌宠 electron/市场 helper 按 DSH_HOME 命令行 + 端口）；⑥正常退出全量收尾清账；崩溃兜底=下次启动台账恢复 + 孤儿检测提示 |
 
-其余文件与上游逐字节一致。构建 0 警告 0 错误；功能全部实测通过（见 work-log 12-15、17）。
+其余文件与上游逐字节一致。构建 0 警告 0 错误；功能全部实测通过（见 work-log 12-15、17、28）。
+
+### P0 借鉴落地（2026-09-09，基于 work-log 27 三仓对比，提交见 git log）
+
+| # | 文件 | 变更 |
+|---|---|---|
+| 21 | `Services/ErrorCodes.cs`（新） | 错误码目录（E1xxx 运行环境 / E2xxx 插件 / E3xxx 网络代理 / E4xxx 体验 / E9xxx 内部），用户可见错误与结构化日志共用同一套码（借鉴 Ruler4396，MIT） |
+| 22 | `Services/LauncherLog.cs`（新） | 轻量 JSON 行结构化日志 `%LocalAppData%\DeepSeek\launcher\launcher.log`（1MB 轮转），写入失败静默降级 |
+| 23 | `Services/WindowStateStore.cs`（新）+ `MainWindow.xaml.cs` | 窗口位置/大小/最大化记忆：关闭写 `window-state.json`，启动多屏可见性校验后恢复（越界回退居中）；已恢复时跳过首次居中重算 |
+| 24 | `Services/WebCacheVersionLedger.cs`（新）+ `MainWindow.xaml.cs` | WebView2 缓存版本账本：dsh 版本变化时清一次磁盘缓存（保留 Cookie/登录态）；无基线只写基线、空版本不清不写；仅在无其它 Chat 窗口时执行 |
+| 25 | `Services/DiagnoseExportService.cs`（新）+ `App.xaml.cs` + 设置页 | `--diagnose [--out path]` 与设置页按钮：导出脱敏 zip（env/日志/状态/错误码汇总/实例设置），用户目录→%USER%、密钥值打码，**不含 .credentials.yaml/会话** |
+| 26 | `Services/ProxySettings.cs`（新）+ `Models/VersionSettingsModels.cs` + `DshInstanceRunner.cs` + 设置页 | Launcher 级代理：`HttpClient.DefaultProxy` 全局生效 + 启动实例注入 `HTTP(S)_PROXY/NO_PROXY`；地址归一化/校验，非法只告警不阻断 |
+| 27 | `Services/BalanceService.cs`（新）+ `MainWindow.xaml(.cs)` + 设置页 | DeepSeek 余额卡片（默认关闭，设置页显式启用）：内存读取所选实例 DSH_HOME 的凭据并查询余额，不落盘/不写日志/不进诊断包 |
+| 28 | `Services/BrowserGuard.cs`（新）+ `MainWindow.xaml.cs` | 浏览器守卫：仅当 dsh 不支持 `--no-open` 且本次不由 Launcher 开浏览器时，启动后 30s 内结束命令行带该端口的浏览器进程 |
+| 29 | `Services/ExtensionService.Diagnostics.cs`（新）+ `ExtensionWindow.xaml(.cs)` | 插件 doctor（核心包混入/代际错配/bundle 缺失，核心 bundle 由 CLI 嵌套树提供不再误报）+ 更新检查（node_modules 真实版本 vs registry latest，npmmirror→npmjs）+ 批量更新（失败不中断其余）+ 市场搜索/筛选/滚动持久化 |
+| 30 | `Services/UiStateStore.cs`（新）+ `Services/TrayIconService.cs` + `MainWindow.xaml.cs` | UI 状态持久化（`ui-state.json`）；托盘“运行中的实例”二级菜单（每实例 打开/停止） |
 
 ## 行为变化（相对上游）
 
@@ -49,6 +64,11 @@ dsh-launcher-dev/
 5. **窗口打磨**：标题栏三按钮统一（最大化 50×50 圆角方形）；最大化占满工作区 + 直角，还原恢复圆角；市场卡片撑满整行
 6. 旧设置值自动迁移（Launcher/Desktop→Desktop；Exit→ExitAndStopInstances）
 7. **实例守护（进程内）**：启动器同一个进程内跑 5s 监控循环；插件市场（dshmarket）「重启以生效」换掉 dsh 进程后，监控识别幽灵实例 → **Launcher 自动接管重启**（杀掉无主实例与包装链，用无窗口方式重拉，全程受管、无终端窗口）；停止/退出时清理关联残留（桌宠 electron 等）。监控随 Launcher 同生命同进退（无额外 exe、无常驻进程）
+8. **窗口记忆**：关闭（含隐藏到托盘）时记录位置/尺寸/最大化，下次启动恢复（多屏越界自动回居中）
+9. **诊断包**：`DSH Launcher.exe --diagnose` 或 设置/诊断 → 导出诊断包（脱敏 zip 到下载目录）
+10. **代理**：设置/诊断 → 代理（默认关），启用后 Launcher 联网与 dsh 实例同时走代理
+11. **插件更新**：扩展页新增「检查更新 / 全部更新 / 依赖自检」；市场搜索、分类、来源、排序、滚动位置跨窗口记住
+12. **托盘**：新增「运行中的实例」二级菜单（每个实例可打开/停止）；余额卡片（设置中显式启用后显示）
 
 ## 构建与发布（SOP）
 
