@@ -20,6 +20,8 @@ public static class ErrorCodes
     public const string E1011 = "E1011"; // 便携数据根不可写，回退默认数据根
     public const string E1012 = "E1012"; // 旧格式 DSh 凭据转换
     public const string E1013 = "E1013"; // 实例环境变量加解密/清理
+    public const string E1014 = "E1014"; // 安全模式隔离 profile 构建/清理/零污染校验
+    public const string E1015 = "E1015"; // 启动健康四层证据判定
 
     // E2xxx 插件 / 扩展
     public const string E2001 = "E2001"; // 插件依赖自检发现异常
@@ -53,6 +55,8 @@ public static class ErrorCodes
         E1011 => "便携数据根（exe 旁 launcher-data 或 DSH_LAUNCHER_DATA_ROOT）不可用，已回退默认数据根。",
         E1012 => "旧格式 DSh 凭据文件（version/records/refs 包装）已转换或转换失败（失败时保持原样）。",
         E1013 => "实例环境变量的敏感值加解密失败或条目非法（已跳过，不影响其它设置）。",
+        E1014 => "安全模式隔离 profile 构建/清理失败，或零污染校验发现用户文件被改动。",
+        E1015 => "启动健康检查判定失败（进程/日志/HTTP 证据见详情）。",
         E2001 => "插件依赖自检发现异常（核心包混入 profile / 依赖缺失等）。",
         E2002 => "插件更新检查失败（registry 不可达或响应异常）。",
         E2003 => "批量更新部分插件失败（其余插件已更新）。",

@@ -84,6 +84,7 @@ dsh-launcher-dev/
 | 56 | `Models/DshEnvironmentVariables.cs`（新）+ `Services/VersionSettingsService.cs` + `Services/DshRuntimeCommandFactory.cs` + `Services/DshInstanceRunner.cs` + `VersionSettingsWindow.xaml(.cs)` + `App.xaml.cs` + `ExtensionWindow.xaml` + `ConversationWindow.xaml` | **短件三项**：① 实例级环境变量（保留项 DSH_HOME/DSH_AGENTS_HOME/PATH；敏感值 DPAPI 加密落盘、读取还原；启动时注入；版本设置页可增删保存；E1013）；② 启动阶段异常不再无窗口驻留（无主窗口则提示 + 退出）；③ UI 尾巴：市场/技能描述限高 + 省略号 + ToolTip、对话页筛选行自适应、ClearType 范围澄清 |
 | 57 | `Watchdog/InstanceResourceSampler.cs`（新）+ `Watchdog/WatchdogCore.cs` + `Watchdog/WatchdogRuntime.cs` + `MainWindow.xaml(.cs)` + `Services/ConversationService.cs` + `Models/EcosystemModels.cs` + `ConversationWindow.xaml(.cs)` | **会话全文检索 + 实例资源监控**：① 资源采样挂在守护进程既有探测轮（CPU/内存/运行时长/进程数，无独立定时器），启动页卡片展示；② 修孤儿检测误报（根 PID → 认整个进程树）；③ 对话页全文检索（JSONL+zstd、32MiB/文件上限、损坏跳过、命中排序、片段高亮位置、跨实例双击打开） |
 | 58 | `VersionSettingsWindow.xaml(.cs)` + `Controls/MetricChart.cs`（新）+ `Services/InstanceLogBuffer.cs`（新）+ `Watchdog/InstanceResourceSampler.cs` + `Watchdog/WatchdogCore.cs` + `Watchdog/WatchdogRuntime.cs` + `Watchdog/ProcessQuery.cs` + `App.xaml` + `MainWindow.xaml.cs` + `Models/InstanceHealthModels.cs`（新） | **实例设置「运行状况」大栏**：运行概况 + CPU/内存折线图（20 分钟环形历史）+ 进程树 + 运行日志窗（dsh 输出/生命周期事件，2000 行环形不落盘）+ 清理残留进程（keepPid 保留本体 + 二次确认）；顺带修两个真实缺陷：`FindProcessesForDshHome` 因 `Name=="cmd"` 永不匹配导致按 DSH_HOME 清理静默失效、运行状况页头标题漏分支 |
+| 59 | `Services/SafeProfileService.cs`（新）+ `Services/StartupHealthEvidence.cs`（新）+ `Services/DshInstanceRunner.cs` + `Models/DshInstanceRunResult.cs` + `MainWindow.xaml.cs` + `ChatWindow.xaml.cs` + `Services/ErrorCodes.cs` | **#11 安全模式 + 四层启动健康证据（第一阶段）**：① `.dsh-safe` 隔离 profile（Tier1 剥离第三方保留核心 / Tier2 最小、用户文件只读、SHA-256 零污染证据、正常启动自动清理）；② 启动健康四层证据：进程（exitCode）、日志（新增行签名）、HTTP（探针异常只记不判）、页面（WebView2 失败上报）；③ 启动失败且存在第三方插件时**会话内只问一次**、Tier1→Tier2 自动降级；提示区分安全模式/普通启动（E1014/E1015） |
 
 ## 行为变化（相对上游）
 
@@ -136,6 +137,10 @@ dsh-launcher-dev/
 47. **实例设置 → 运行状况**：运行概况（状态/时长/进程数/端点）+ CPU 与内存折线图（最近 20 分钟，每 5 秒一点）+ 进程树表 + 运行日志窗（dsh 输出与启动/停止/健康检查事件，带时间戳与来源，保留 2000 行不落盘）
 48. **清理残留进程**：运行中传 keepPid 只清残留（桌宠/市场 helper/上次异常退出遗留），未运行时清理全部遗留；执行前二次确认、结束后反馈数量
 49. **日志捕获范围**：只有当前 Launcher 进程启动的实例才有 stdout 日志；被接管的实例日志窗为空（曲线与进程树仍有数据）
+50. **安全模式**：启动失败且 web profile 有第三方插件时，会话内询问一次；同意后在 `<DSH_HOME>\profiles\.dsh-safe` 生成隔离 profile（Tier1 剥离第三方保留核心，失败自动降级 Tier2 最小核心），用 `dsh --profile .dsh-safe` 启动；**用户配置文件零改动**（前后 SHA-256 快照比对，改动会警告）
+51. **安全模式清理**：正常启动成功后自动删除 `.dsh-safe`；停止/删除实例不影响用户 profile
+52. **启动健康证据**：进程提前退出（附 exitCode）、dsh 日志命中失败签名（新增行，只认 dsh/stderr）、HTTP 探测（探针异常只记证据）、WebView2 页面加载失败（上报提示）四层；失败原因与证据会出现在弹窗与运行日志中
+53. **启动提示**：安全模式成功时提示"第三方插件未加载，你的配置未被修改"，普通启动保持原提示
 
 ## 待办（功能完成后统一处理）
 

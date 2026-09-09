@@ -37,6 +37,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly Func<ProxySettings?>? _proxySettings;
     private readonly VersionSettingsService _settingsService;
     private readonly InstanceLogBuffer _logs;
+    private readonly SafeProfileService _safeProfileService;
     private bool _disposed;
 
     public DshInstanceRunner(
@@ -45,7 +46,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         ExtensionService? extensionService = null,
         Func<ProxySettings?>? proxySettings = null,
         VersionSettingsService? settingsService = null,
-        InstanceLogBuffer? logs = null)
+        InstanceLogBuffer? logs = null,
+        SafeProfileService? safeProfileService = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
@@ -53,6 +55,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         _proxySettings = proxySettings;
         _settingsService = settingsService ?? new VersionSettingsService();
         _logs = logs ?? new InstanceLogBuffer();
+        _safeProfileService = safeProfileService ?? new SafeProfileService();
     }
 
     /// <summary>实例运行日志（dsh 输出 + Launcher 生命周期事件）。</summary>
@@ -236,9 +239,26 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         ManagerInstance instance,
         NodeRuntimeInfo? nodeRuntime,
         CancellationToken cancellationToken = default,
-        bool openBrowser = false)
+        bool openBrowser = false,
+        SafeProfileTier? safeProfile = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // 安全模式：先构建隔离 profile（不改用户文件），并在启动前后取哈希做零污染证据。
+        IReadOnlyDictionary<string, byte[]>? profilesBefore = null;
+        if (safeProfile is { } tier)
+        {
+            var build = _safeProfileService.Build(instance, tier);
+            if (!build.Ok)
+            {
+                return DshInstanceRunResult.Failure(
+                    $"安全模式隔离 profile 生成失败：{build.Error}",
+                    safeMode: true);
+            }
+
+            profilesBefore = _safeProfileService.CaptureProfilesHash(instance);
+            _logs.Append(instance.Id, "launcher", $"安全模式：已生成 {SafeProfileService.SafeProfileName}（{tier}，bundle：{string.Join(", ", build.Bundles)}）");
+        }
 
         var sourceEntrypoint = instance.Kind == InstanceKind.Source
             ? SourceProjectInspector.TryFindBuiltCliEntrypoint(instance.RootPath)
@@ -370,7 +390,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         var webUrl = $"http://127.0.0.1:{port}/";
                         process = new Process
                         {
-                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint, openBrowser),
+                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint, openBrowser, safeProfile),
                             EnableRaisingEvents = true
                         };
                         var output = new StringBuilder();
@@ -405,22 +425,51 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                             $"启动进程 pid={process.Id}，端口 {port}，地址 {webUrl}");
                         process = null;
 
-                        var health = await WaitForHealthAsync(running, cancellationToken);
-                        if (health.IsSuccess)
+                        var health = await WaitForHealthAsync(instance, running, cancellationToken);
+                        if (health.IsHealthy)
                         {
                             // 0.1.2-rc.1 起 web 页面需要 launch token；地址行在 Loader
                             // 树落定后才打印（可能晚于健康检查通过），再等一小段窗口。
                             await WaitForAuthenticatedUrlAsync(running, cancellationToken);
                             _logs.Append(instance.Id, "launcher", $"健康检查通过：{webUrl}");
                             instanceLock = null;
+                            if (safeProfile is { } usedTier)
+                            {
+                                var untouched = _safeProfileService.ProfilesUntouched(
+                                    instance, profilesBefore!, out var changed);
+                                _logs.Append(
+                                    instance.Id,
+                                    "launcher",
+                                    untouched
+                                        ? "安全模式启动成功；用户 profile 零污染校验通过。"
+                                        : $"安全模式启动成功，但零污染校验发现 {changed.Count} 个文件被改动：{string.Join(", ", changed.Take(3))}");
+                                if (!untouched)
+                                {
+                                    LauncherLog.Warn("安全模式零污染校验失败。", ErrorCodes.E1014,
+                                        new { instance = instance.Name, changed = changed.Take(5).ToArray() });
+                                }
+
+                                return DshInstanceRunResult.Success(
+                                    running.Process.Id,
+                                    port,
+                                    webUrl,
+                                    running.AuthenticatedWebUrl,
+                                    safeMode: true,
+                                    zeroPollution: untouched,
+                                    evidence: health.Evidence);
+                            }
+
+                            // 正常启动成功：清理上次安全模式遗留的隔离 profile。
+                            _safeProfileService.Cleanup(instance);
                             return DshInstanceRunResult.Success(
                                 running.Process.Id,
                                 port,
                                 webUrl,
-                                running.AuthenticatedWebUrl);
+                                running.AuthenticatedWebUrl,
+                                evidence: health.Evidence);
                         }
 
-                        var retryPort = attempt < PortStartAttempts && IsPortConflict(health.Error);
+                        var retryPort = attempt < PortStartAttempts && IsPortConflict(health.Summary);
                         if (!await StopCoreAsync(instance.Id, running, releaseInstanceLock: !retryPort))
                         {
                             // The running entry still owns the lock and process.
@@ -437,7 +486,10 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         }
 
                         instanceLock = null;
-                        return DshInstanceRunResult.Failure(health.Error ?? "DSh 健康检查失败。 ");
+                        return DshInstanceRunResult.Failure(
+                            health.Summary,
+                            safeMode: safeProfile is not null,
+                            evidence: health.Evidence);
                     }
                     catch
                     {
@@ -613,16 +665,27 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
     }
 
-    private async Task<HealthResult> WaitForHealthAsync(
+    /// <summary>
+    /// 启动健康检查（四层证据的进程/日志/HTTP 三层，页面层由 ChatWindow 上报）：
+    ///  - 进程层：提前退出 → 判死（附 exitCode 与最后输出）；
+    ///  - 日志层：只扫新增行，命中启动失败签名 → 判死（比等满 30 秒快）；
+    ///  - HTTP 层：探测通过 → 健康；探针自身异常只记证据，不单独判死；
+    ///  - 超时 → 判死（附最后一次 HTTP 错误与输出尾巴）。
+    /// </summary>
+    private async Task<StartupVerdict> WaitForHealthAsync(
+        ManagerInstance instance,
         RunningDshProcess running,
         CancellationToken cancellationToken)
     {
+        var evidence = new List<StartupEvidence>();
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false })
         {
             Timeout = HealthRequestTimeout
         };
         var deadline = DateTimeOffset.UtcNow + HealthTimeout;
         string? lastError = null;
+        var consecutiveMisses = 0;
+        var scannedLines = 0;
 
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -630,7 +693,29 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             if (HasExited(running.Process))
             {
                 await DrainExitedProcessOutputAsync(running.Process);
-                return HealthResult.Failed($"DSh 在健康检查前退出。{GetDiagnosticSuffix(running)}");
+                var exitCode = TryGetExitCode(running.Process);
+                evidence.Add(new StartupEvidence(
+                    BootLayer.Process,
+                    "DSh 进程在健康检查通过前退出",
+                    $"exitCode={exitCode?.ToString() ?? "?"}"));
+                return StartupVerdict.Failed(
+                    $"DSh 在健康检查前退出（exitCode={exitCode?.ToString() ?? "?"}）。{GetDiagnosticSuffix(running)}",
+                    evidence);
+            }
+
+            // 日志层：只看监控起点之后的新增行。
+            var logs = _logs.Snapshot(instance.Id);
+            if (logs.Count > scannedLines)
+            {
+                var newLines = logs.Skip(scannedLines).ToArray();
+                scannedLines = logs.Count;
+                if (StartupLogClassifier.FindFailure(newLines) is { } failure)
+                {
+                    evidence.Add(new StartupEvidence(BootLayer.Log, failure.Description, failure.Line.Text));
+                    return StartupVerdict.Failed(
+                        $"DSh 启动日志出现失败签名：{failure.Description}。{failure.Line.Text}",
+                        evidence);
+                }
             }
 
             try
@@ -645,27 +730,59 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     if (HasExited(running.Process))
                     {
                         await DrainExitedProcessOutputAsync(running.Process);
-                        return HealthResult.Failed($"DSh 在健康检查前退出。{GetDiagnosticSuffix(running)}");
+                        var exitCode = TryGetExitCode(running.Process);
+                        evidence.Add(new StartupEvidence(
+                            BootLayer.Process,
+                            "DSh 进程在健康检查通过前退出",
+                            $"exitCode={exitCode?.ToString() ?? "?"}"));
+                        return StartupVerdict.Failed(
+                            $"DSh 在健康检查前退出（exitCode={exitCode?.ToString() ?? "?"}）。{GetDiagnosticSuffix(running)}",
+                            evidence);
                     }
 
-                    return HealthResult.Ok();
+                    evidence.Add(new StartupEvidence(BootLayer.Http, $"HTTP {(int)response.StatusCode} 健康检查通过", running.WebUrl));
+                    return StartupVerdict.Healthy(evidence);
                 }
 
+                consecutiveMisses++;
                 lastError = $"HTTP {(int)response.StatusCode}";
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                consecutiveMisses++;
                 lastError = "HTTP 请求超时";
             }
             catch (HttpRequestException ex)
             {
+                // 探针自身异常只记证据，不单独判死（等待其它层或超时）。
+                consecutiveMisses++;
                 lastError = ex.Message;
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
         }
 
-        return HealthResult.Failed($"DSh 健康检查超时（30 秒）。{lastError ?? string.Empty}{GetDiagnosticSuffix(running)}");
+        evidence.Add(new StartupEvidence(
+            BootLayer.Http,
+            "健康检查超时（30 秒）",
+            $"连续 {consecutiveMisses} 次未通过；最后错误：{lastError ?? "无"}"));
+        return StartupVerdict.Failed(
+            $"DSh 健康检查超时（30 秒）。{lastError ?? string.Empty}{GetDiagnosticSuffix(running)}",
+            evidence);
+    }
+
+    private static int? TryGetExitCode(Process process)
+    {
+        try
+        {
+            return process.HasExited ? process.ExitCode : null;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+            or NotSupportedException
+            or System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -921,7 +1038,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         int port,
         NodeRuntimeInfo? nodeRuntime,
         string? sourceEntrypoint,
-        bool openBrowser)
+        bool openBrowser,
+        SafeProfileTier? safeProfile)
     {
         var spec = instance.Kind == InstanceKind.Source
             ? new DshRuntimeLaunchSpec(
@@ -931,29 +1049,12 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 NodeExecutablePath: nodeRuntime.ExecutablePath)
             : DshRuntimeCommandFactory.Resolve(instance)
                 ?? throw new InvalidOperationException("实例没有可用的 DSh 启动描述。");
-        var arguments = new List<string> { "web" };
         var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
-        if (IsRegularFile(patchPath))
-        {
-            arguments.Add("--patch");
-            arguments.Add(patchPath);
-        }
-
-        // dsh 0.1.2 的浏览器交接（open@11 的 Windows 实现）实测不弹浏览器：
-        // 其 PowerShell Start 调用静默失败（exit 0 且无新窗口），而直接
-        // Start-Process / UseShellExecute 正常。Launcher 改为全部托管打开：
-        // 总是传 --no-open（0.1.0-rc.8+ 支持），启动成功后由 Launcher 用系统
-        // 默认方式打开（Web 模式开浏览器 / Desktop 模式开 Chat 窗口），
-        // 彻底绕开 dsh→open 链路。旧版 dsh（< 0.1.0-rc.8）不传，保持其原生行为。
-        if (SupportsNoOpen(instance.DetectedVersion))
-        {
-            arguments.Add("--no-open");
-        }
-
-        arguments.Add("--host");
-        arguments.Add("127.0.0.1");
-        arguments.Add("--port");
-        arguments.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var arguments = BuildStartArguments(
+            safeMode: safeProfile is not null,
+            supportsNoOpen: SupportsNoOpen(instance.DetectedVersion),
+            patchPath: IsRegularFile(patchPath) ? patchPath : null,
+            port: port);
         var startInfo = DshRuntimeCommandFactory.Create(
             spec,
             arguments,
@@ -974,6 +1075,40 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
 
         return startInfo;
+    }
+
+    /// <summary>
+    /// 构造 dsh 启动参数（可测）：安全模式用 <c>--profile .dsh-safe</c>，正常模式用 <c>web</c>。
+    /// dsh 0.1.2 的浏览器交接（open@11 的 Windows 实现）实测不弹浏览器：其 PowerShell
+    /// Start 调用静默失败（exit 0 且无新窗口），而直接 Start-Process / UseShellExecute 正常。
+    /// Launcher 改为全部托管打开：总是传 --no-open（0.1.0-rc.8+ 支持），启动成功后由
+    /// Launcher 用系统默认方式打开；旧版 dsh 不传，保持其原生行为。
+    /// </summary>
+    internal static List<string> BuildStartArguments(
+        bool safeMode,
+        bool supportsNoOpen,
+        string? patchPath,
+        int port)
+    {
+        var arguments = safeMode
+            ? new List<string> { "--profile", SafeProfileService.SafeProfileName }
+            : new List<string> { "web" };
+        if (!string.IsNullOrWhiteSpace(patchPath))
+        {
+            arguments.Add("--patch");
+            arguments.Add(patchPath);
+        }
+
+        if (supportsNoOpen)
+        {
+            arguments.Add("--no-open");
+        }
+
+        arguments.Add("--host");
+        arguments.Add("127.0.0.1");
+        arguments.Add("--port");
+        arguments.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return arguments;
     }
 
     /// <summary>读取该实例的环境变量设置（解密后的明文）；失败时按无变量运行。</summary>

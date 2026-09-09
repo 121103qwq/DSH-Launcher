@@ -12,11 +12,15 @@ public partial class ChatWindow : Window
     private const string DeepSeekWindowAppUserModelId = "DSHLauncher.DeepSeekWindow";
     private readonly string _address;
     private readonly string? _conversationId;
+    private readonly Action<string>? _pageFailureReporter;
     private bool _conversationSelectionApplied;
     private readonly TaskCompletionSource<bool> _navigationReady = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public ChatWindow(string address, string? conversationId = null)
+    public ChatWindow(
+        string address,
+        string? conversationId = null,
+        Action<string>? pageFailureReporter = null)
     {
         if (!Uri.TryCreate(address, UriKind.Absolute, out var parsed)
             || parsed.Scheme is not ("http" or "https"))
@@ -26,6 +30,7 @@ public partial class ChatWindow : Window
 
         _address = parsed.ToString();
         _conversationId = string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim();
+        _pageFailureReporter = pageFailureReporter;
         InitializeComponent();
         WindowSizeHelper.FitInitialSize(this);
     }
@@ -56,6 +61,7 @@ public partial class ChatWindow : Window
         }
         catch (Exception ex)
         {
+            _pageFailureReporter?.Invoke($"WebView2 环境创建失败：{ex.Message}");
             System.Windows.MessageBox.Show(
                 this,
                 $"DeepSeek 窗口无法加载 WebView2。\n\n{ex.Message}\n\nLauncher 和 DSh 实例仍会保持运行。",
@@ -71,6 +77,7 @@ public partial class ChatWindow : Window
         if (!e.IsSuccess)
         {
             Title = $"DeepSeek - 连接失败 ({e.WebErrorStatus})";
+            _pageFailureReporter?.Invoke($"页面加载失败：{e.WebErrorStatus}");
             _navigationReady.TrySetResult(false);
             return;
         }

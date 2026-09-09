@@ -87,6 +87,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private HwndSource? _windowSource;
     private Services.TrayIconService? _trayIconService;
     private bool _shutdownFromTray;
+    private readonly SafeProfileService _safeProfileService = new();
+    private readonly HashSet<string> _safeModeAsked = new(StringComparer.Ordinal);
+
     private readonly WatchdogRuntime _watchdog;
     private readonly Dictionary<string, DateTimeOffset> _lastReassertAt = new(StringComparer.Ordinal);
     private readonly WindowStateStore _windowStateStore = new();
@@ -4732,12 +4735,68 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _nodeRuntime,
             _windowCancellation.Token,
             openBrowser);
-        if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
+        if (IsStartSuccess(result))
         {
-            UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, result.Error);
-            return result;
+            return ApplySuccessfulStart(instance, result, openBrowser);
         }
 
+        // 启动失败：若用户 web profile 里有第三方 bundle，且本会话还没问过，就提议安全模式
+        // （隔离 profile 启动，绝不改用户文件）。Tier1 失败自动降级 Tier2 再试一次。
+        if (_safeModeAsked.Add(instance.Id)
+            && _safeProfileService.HasThirdPartyBundles(instance, out var thirdParty))
+        {
+            var evidenceText = result.Evidence is { Count: > 0 }
+                ? "\n\n证据：\n" + string.Join("\n", result.Evidence.Select(item => $"· [{item.Layer}] {item.Summary}"))
+                : string.Empty;
+            var preview = string.Join("、", thirdParty.Take(3));
+            var confirmed = System.Windows.MessageBox.Show(
+                this,
+                $"实例 {instance.Name} 启动失败：\n{result.Error}{evidenceText}\n\n"
+                + $"检测到 {thirdParty.Count} 个第三方插件（{preview}{(thirdParty.Count > 3 ? "…" : string.Empty)}），可能是它们导致启动失败。\n\n"
+                + $"是否用安全模式启动？安全模式会生成一个隔离 profile（{SafeProfileService.SafeProfileName}），"
+                + "剥离第三方插件、保留 dsh 核心；不会修改你的任何配置。",
+                "启动失败 — 使用安全模式？",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) == MessageBoxResult.Yes;
+            if (confirmed)
+            {
+                foreach (var tier in new[] { SafeProfileTier.Tier1KeepDeepSeekCore, SafeProfileTier.Tier2Minimal })
+                {
+                    var safeResult = await _instanceRunner.StartAsync(
+                        instance,
+                        _nodeRuntime,
+                        _windowCancellation.Token,
+                        openBrowser,
+                        tier);
+                    if (IsStartSuccess(safeResult))
+                    {
+                        var applied = ApplySuccessfulStart(instance, safeResult, openBrowser);
+                        ShowNotice(safeResult.ZeroPollution
+                            ? $"已用安全模式启动（{tier}）：第三方插件未加载，你的配置未被修改。"
+                            : $"已用安全模式启动（{tier}），但零污染校验发现用户文件被改动，请查看运行日志。");
+                        return applied;
+                    }
+
+                    result = safeResult;
+                }
+            }
+        }
+
+        UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, result.Error);
+        return result;
+    }
+
+    private static bool IsStartSuccess(DshInstanceRunResult result) =>
+        result.IsSuccess
+        && result.ProcessId is not null
+        && result.Port is not null
+        && result.WebUrl is not null;
+
+    private DshInstanceRunResult ApplySuccessfulStart(
+        ManagerInstance instance,
+        DshInstanceRunResult result,
+        bool openBrowser)
+    {
         // 浏览器守卫：仅当 dsh 不支持 --no-open（可能自行弹出浏览器）且本次不由
         // Launcher 开浏览器时启用；守卫只在启动后 30 秒窗口内结束命令行带该端口的浏览器进程。
         if (!openBrowser
@@ -4760,9 +4819,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
         ReportInstanceStartedAsync(
             instance,
-            result.ProcessId.Value,
-            result.Port.Value,
-            result.WebUrl,
+            result.ProcessId!.Value,
+            result.Port!.Value,
+            result.WebUrl!,
             result.AuthenticatedWebUrl);
         return result;
     }
@@ -5668,15 +5727,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // Web 启动：dsh 已带 --no-open，由 Launcher 用系统默认方式打开；
             // 0.1.2-rc.1 起页面需要 launch token，必须用带 token 的地址。
             OpenWebUrlInBrowser(result.AuthenticatedWebUrl ?? result.WebUrl);
-            ShowNotice($"实例已启动：{selected.Name}，{result.WebUrl}（已在默认浏览器打开）。");
+            ShowNotice(BuildStartSuccessNotice(selected, result, openedInBrowser: true));
             return true;
         }
 
         // Desktop 启动（启动器方式）：Launcher 用内部 Chat 窗口承载 WebUI；
         // 0.1.2-rc.1 起页面需要 launch token，优先用带 token 的地址。
         OpenChatWindow(selected.Id, result.AuthenticatedWebUrl ?? result.WebUrl);
-        ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
+        ShowNotice(BuildStartSuccessNotice(selected, result, openedInBrowser: false));
         return true;
+    }
+
+    /// <summary>启动成功提示：安全模式与普通启动文案分开（安全模式要说明未改配置）。</summary>
+    private static string BuildStartSuccessNotice(
+        ManagerInstance instance,
+        DshInstanceRunResult result,
+        bool openedInBrowser)
+    {
+        if (result.SafeMode)
+        {
+            return result.ZeroPollution
+                ? $"已用安全模式启动：{instance.Name}（第三方插件未加载，你的配置未被修改），运行地址 {result.WebUrl}。"
+                : $"已用安全模式启动：{instance.Name}，但零污染校验发现用户文件被改动，请到「实例设置 → 运行状况」查看日志。";
+        }
+
+        return openedInBrowser
+            ? $"实例已启动：{instance.Name}，{result.WebUrl}（已在默认浏览器打开）。"
+            : $"实例已启动：{instance.Name}，运行地址 {result.WebUrl}。健康检查已通过。";
     }
 
     private async Task<bool> SendPluginFailureToCurrentInstanceAsync(
@@ -5764,6 +5841,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         base.OnClosed(e);
     }
 
+    /// <summary>页面层证据：WebView2 加载失败只记证据与提示，不单独判死（四层证据之一）。</summary>
+    private void LauncherLoggerForPageFailure(string instanceId, string summary)
+    {
+        var instance = ResolveInstanceById(Instances, instanceId);
+        LauncherLog.Warn("Chat 页面加载失败（页面层证据，不单独判死）。", ErrorCodes.E1015,
+            new { instance = instance?.Name ?? instanceId, summary });
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() => ShowNotice(
+            $"页面加载失败：{summary}。Launcher 与实例仍在运行；可在「实例设置 → 运行状况」查看日志，或重启时选择安全模式。"));
+    }
+
     private ChatWindow? OpenChatWindow(string instanceId, string address, string? conversationId = null)
     {
         // dsh 版本变化时清一次 WebView2 磁盘缓存（仅在当前没有其它 Chat 窗口时，
@@ -5786,7 +5878,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         CloseChatWindow(instanceId);
         try
         {
-            var chat = new ChatWindow(address, conversationId);
+            var chat = new ChatWindow(
+                address,
+                conversationId,
+                pageFailureReporter: summary =>
+                {
+                    // 四层证据的页面层：只采集与提示，不单独判死。
+                    LauncherLoggerForPageFailure(instanceId, summary);
+                });
             _chatWindows[instanceId] = chat;
             chat.Closed += (_, _) =>
             {
