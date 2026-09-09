@@ -50,6 +50,7 @@
                 <Grid Margin="0,12,0,0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <WrapPanel Grid.Row="0" Margin="0,0,0,14">
@@ -60,7 +61,58 @@
                         <Button Content="备份选中对话" Click="Backup_Click" Margin="0,0,8,0" />
                         <Button Content="删除选中对话" Click="Delete_Click" />
                     </WrapPanel>
-                    <Border Grid.Row="1"
+                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="SearchBox"
+                                 Height="36"
+                                 VerticalContentAlignment="Center"
+                                 ToolTip="搜索所有实例的会话内容（正文、标题、工作区）；压缩的 session.jsonl.zstd 也会解压搜索"
+                                 KeyDown="SearchBox_KeyDown" />
+                        <Button x:Name="SearchButton"
+                                Grid.Column="1"
+                                Content="搜索"
+                                Click="Search_Click"
+                                Style="{StaticResource PrimaryButton}"
+                                Margin="8,0,0,0" />
+                        <Button x:Name="ClearSearchButton"
+                                Grid.Column="2"
+                                Content="退出搜索"
+                                Click="ClearSearch_Click"
+                                Visibility="Collapsed"
+                                Margin="8,0,0,0" />
+                    </Grid>
+                    <Border Grid.Row="2"
+                            x:Name="SearchResultsPanel"
+                            Visibility="Collapsed"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource PanelCornerRadius}"
+                            Background="White"
+                            Padding="8"
+                            ClipToBounds="True">
+                        <ListView x:Name="SearchResultsList"
+                                  BorderThickness="0"
+                                  MouseDoubleClick="SearchResultsList_MouseDoubleClick"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                            <ListView.View>
+                                <GridView AllowsColumnReorder="False">
+                                    <GridViewColumn Header="名称" Width="220" DisplayMemberBinding="{Binding Entry.DisplayName}" />
+                                    <GridViewColumn Header="工作区" Width="200" DisplayMemberBinding="{Binding Entry.WorkingDirectory}" />
+                                    <GridViewColumn Header="命中片段" Width="420" DisplayMemberBinding="{Binding Snippet}" />
+                                    <GridViewColumn Header="命中" Width="60" DisplayMemberBinding="{Binding MatchCount}" />
+                                    <GridViewColumn Header="实例" Width="160" DisplayMemberBinding="{Binding Entry.InstanceName}" />
+                                    <GridViewColumn Header="更新时间" Width="150" DisplayMemberBinding="{Binding Entry.UpdatedAt}" />
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </Border>
+                    <Border Grid.Row="2"
+                            x:Name="ConversationListPanel"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"
                             CornerRadius="{StaticResource PanelCornerRadius}"

@@ -15,7 +15,7 @@ public partial class ConversationWindow : UserControl
 {
     private readonly ManagerInstance _instance;
     private readonly ConversationService _service;
-    private readonly Func<ConversationEntry, Task<bool>> _openConversation;
+    private readonly Func<ManagerInstance, ConversationEntry, Task<bool>> _openConversation;
     private readonly Func<Task>? _synchronizeConversations;
     private readonly Func<string, Task>? _propagateDeletion;
     private readonly IReadOnlyList<ManagerInstance>? _instances;
@@ -25,7 +25,7 @@ public partial class ConversationWindow : UserControl
     public ConversationWindow(
         ManagerInstance instance,
         ConversationService service,
-        Func<ConversationEntry, Task<bool>> openConversation,
+        Func<ManagerInstance, ConversationEntry, Task<bool>> openConversation,
         Func<Task>? synchronizeConversations = null,
         Func<string, Task>? propagateDeletion = null,
         IReadOnlyList<ManagerInstance>? instances = null,
@@ -61,6 +61,117 @@ public partial class ConversationWindow : UserControl
         await SynchronizeAsync();
         await RefreshAsync();
     }
+
+    // ---------- 会话全文检索 ----------
+
+    private CancellationTokenSource? _searchCancellation;
+
+    private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            _ = RunSearchAsync();
+        }
+    }
+
+    private async void Search_Click(object sender, RoutedEventArgs e) => await RunSearchAsync();
+
+    private async Task RunSearchAsync()
+    {
+        var query = SearchBox.Text.Trim();
+        if (query.Length == 0)
+        {
+            StatusText.Text = "请输入要搜索的内容。";
+            return;
+        }
+
+        _searchCancellation?.Cancel();
+        _searchCancellation?.Dispose();
+        _searchCancellation = new CancellationTokenSource();
+        var token = _searchCancellation.Token;
+        SearchButton.IsEnabled = false;
+        StatusText.Text = $"正在搜索“{query}”…";
+        try
+        {
+            var hits = await _service.SearchAsync(
+                _instances ?? new[] { _instance },
+                query,
+                maxResults: 200,
+                cancellationToken: token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            SearchResultsList.ItemsSource = hits;
+            var hasResults = hits.Count > 0;
+            SearchResultsPanel.Visibility = hasResults ? Visibility.Visible : Visibility.Collapsed;
+            ConversationListPanel.Visibility = hasResults ? Visibility.Collapsed : Visibility.Visible;
+            ClearSearchButton.Visibility = Visibility.Visible;
+            StatusText.Text = hasResults
+                ? $"找到 {hits.Count} 条会话（按命中次数排序），双击结果可打开。"
+                : $"没有找到包含“{query}”的会话。";
+        }
+        catch (OperationCanceledException)
+        {
+            // 新一轮搜索已接管。
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            StatusText.Text = $"搜索失败：{ex.Message}";
+        }
+        finally
+        {
+            SearchButton.IsEnabled = true;
+        }
+    }
+
+    private void ClearSearch_Click(object sender, RoutedEventArgs e)
+    {
+        _searchCancellation?.Cancel();
+        SearchResultsList.ItemsSource = null;
+        SearchResultsPanel.Visibility = Visibility.Collapsed;
+        ConversationListPanel.Visibility = Visibility.Visible;
+        ClearSearchButton.Visibility = Visibility.Collapsed;
+        StatusText.Text = $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。";
+    }
+
+    private async void SearchResultsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left
+            || ItemsControl.ContainerFromElement(SearchResultsList, (DependencyObject)e.OriginalSource)
+                is not System.Windows.Controls.ListViewItem)
+        {
+            return;
+        }
+
+        if (SearchResultsList.SelectedItem is not ConversationSearchHit hit)
+        {
+            return;
+        }
+
+        var owner = ResolveOwnerInstance(hit.Entry) ?? _instance;
+        try
+        {
+            if (!await _openConversation(owner, hit.Entry))
+            {
+                StatusText.Text = "该会话无法打开（可能已被移动或删除）。";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            StatusText.Text = $"打开会话失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>按会话文件路径反查所属实例（检索结果是跨实例的）。</summary>
+    private ManagerInstance? ResolveOwnerInstance(ConversationEntry entry) =>
+        (_instances ?? new[] { _instance }).FirstOrDefault(instance =>
+            !string.IsNullOrWhiteSpace(instance.DshHome)
+            && entry.FullPath.StartsWith(
+                Path.Combine(instance.DshHome, "sessions"),
+                StringComparison.OrdinalIgnoreCase));
 
     private async Task SynchronizeAsync()
     {
@@ -187,7 +298,7 @@ public partial class ConversationWindow : UserControl
 
         try
         {
-            if (!await _openConversation(entry))
+            if (!await _openConversation(_instance, entry))
             {
                 StatusText.Text = "当前实例没有运行，或没有可用的 Chat 地址；请先启动实例。";
             }

@@ -27,6 +27,9 @@ public sealed class WatchdogRuntime : IDisposable
     public event Action<WatchdogInstanceDto>? InstanceStopped;
     public event Action<WatchdogInstanceDto>? OrphanDetected;
 
+    /// <summary>每轮探测后触发（资源快照已更新）：UI 层据此刷新 CPU/内存/运行时长。</summary>
+    public event Action? ResourcesUpdated;
+
     /// <param name="probeSeconds">监控轮询间隔（秒，2–120 范围内截断，默认 5）。</param>
     public WatchdogRuntime(int probeSeconds = 5)
     {
@@ -67,6 +70,7 @@ public sealed class WatchdogRuntime : IDisposable
             try
             {
                 _core.ProbeOnce();
+                ResourcesUpdated?.Invoke();
             }
             catch (Exception)
             {
@@ -123,6 +127,9 @@ public sealed class WatchdogRuntime : IDisposable
     public int Cleanup(string instanceId, int? keepPid = null) => _core.CleanupInstance(instanceId, keepPid);
 
     public IReadOnlyList<WatchdogInstanceDto> Snapshot() => _core.Snapshot();
+
+    /// <summary>实例最近一次资源快照（未运行/未登记时为 null）。</summary>
+    public InstanceResourceSnapshot? GetResource(string instanceId) => _core.GetResource(instanceId);
 
     /// <summary>启动时（Reconcile 前）拉台账：恢复崩溃前记录的实例（用于提示残留）。</summary>
     public IReadOnlyList<WatchdogInstanceDto> LoadLedger() => _core.Snapshot();

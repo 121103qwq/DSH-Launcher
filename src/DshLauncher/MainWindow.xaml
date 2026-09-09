@@ -416,6 +416,12 @@
                                                        FontSize="12"
                                                        TextWrapping="Wrap"
                                                        Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding SelectedInstanceResourceText}"
+                                                       Visibility="{Binding SelectedInstanceResourceVisibility}"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="11"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,6,0,0" />
                                             <TextBlock Text="{Binding BalanceText}"
                                                        Visibility="{Binding BalanceVisibility}"
                                                        ToolTip="{Binding BalanceDetailText}"

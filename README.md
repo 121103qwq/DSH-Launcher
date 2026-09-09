@@ -82,6 +82,7 @@ dsh-launcher-dev/
 | 54 | `DshLauncher.csproj` + `Services/WebView2DataFolder.cs`（新）+ `ChatWindow.xaml.cs` + `Services/WebCacheVersionLedger.cs` + `Services/LauncherPaths.cs` | **独立运行/便携化**：① 自包含单文件发布参数写进 csproj（裸 publish 即得 0 dll 单文件）；② WebView2 数据目录 exe 旁不可写 → 回退 `%LocalAppData%`（E1010，缓存账本同步双布局）；③ 便携数据根：exe 旁 `launcher-data` 或 `DSH_LAUNCHER_DATA_ROOT`（不可写回退 E1011）；诊断包新增 `webview2_data=` |
 | 55 | `Services/DshCredentialStoreNormalizer.cs`（新）+ `Services/DshHomeImportService.cs` + `Services/ModelProviderSyncService.cs` + `Services/VersionSnapshotService.cs` + `MainWindow.xaml.cs` | **上游对照后的三个同源缺陷修复**：① 旧格式凭据（version/records/refs）保守归一化（E1012），接入导入/覆盖/合并/Provider 同步/快照恢复五处；② 快照补 `profiles/web/pnpm-workspace.yaml`（pnpm 构建许可）；③ 列表 `SelectedItem` 瞬时清空防护（实例仍在列表中则忽略并回写绑定） |
 | 56 | `Models/DshEnvironmentVariables.cs`（新）+ `Services/VersionSettingsService.cs` + `Services/DshRuntimeCommandFactory.cs` + `Services/DshInstanceRunner.cs` + `VersionSettingsWindow.xaml(.cs)` + `App.xaml.cs` + `ExtensionWindow.xaml` + `ConversationWindow.xaml` | **短件三项**：① 实例级环境变量（保留项 DSH_HOME/DSH_AGENTS_HOME/PATH；敏感值 DPAPI 加密落盘、读取还原；启动时注入；版本设置页可增删保存；E1013）；② 启动阶段异常不再无窗口驻留（无主窗口则提示 + 退出）；③ UI 尾巴：市场/技能描述限高 + 省略号 + ToolTip、对话页筛选行自适应、ClearType 范围澄清 |
+| 57 | `Watchdog/InstanceResourceSampler.cs`（新）+ `Watchdog/WatchdogCore.cs` + `Watchdog/WatchdogRuntime.cs` + `MainWindow.xaml(.cs)` + `Services/ConversationService.cs` + `Models/EcosystemModels.cs` + `ConversationWindow.xaml(.cs)` | **会话全文检索 + 实例资源监控**：① 资源采样挂在守护进程既有探测轮（CPU/内存/运行时长/进程数，无独立定时器），启动页卡片展示；② 修孤儿检测误报（根 PID → 认整个进程树）；③ 对话页全文检索（JSONL+zstd、32MiB/文件上限、损坏跳过、命中排序、片段高亮位置、跨实例双击打开） |
 
 ## 行为变化（相对上游）
 
@@ -128,6 +129,9 @@ dsh-launcher-dev/
 41. **启动失败**：启动后没有主窗口或启动阶段出现未处理异常时，记日志 + 提示 + 退出，不再无窗口驻留
 42. **市场/技能描述**：限高两行 + 省略号 + ToolTip（悬停看全文）
 43. **对话页筛选行**：版本/显示两个下拉按比例分配宽度（MinWidth 240/150），窄窗口不再挤爆
+44. **实例资源**：运行中实例的卡片显示 `CPU x% · 内存 xxx MB · 运行 x 分 x 秒 · n 个进程`，采样跟随守护进程探测间隔（默认 5s），停止即清空
+45. **会话全文检索**：对话页搜索框可跨实例检索会话正文（含压缩的 `session.jsonl.zstd`），单文件最多读 32 MiB，损坏文件跳过；结果按命中次数排序，双击直接打开（自动切换到所属实例）
+46. **孤儿检测**：监听实例端口的是该实例进程树内的子进程（cmd → node）时不再误报"未受管进程占用端口"
 
 ## 待办（功能完成后统一处理）
 

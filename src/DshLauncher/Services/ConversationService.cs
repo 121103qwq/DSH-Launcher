@@ -45,6 +45,201 @@ public sealed class ConversationService
             .ToArray();
     }
 
+    /// <summary>全文检索单文件解压后读取上限（32 MiB，超出部分不扫）。</summary>
+    public const int MaxSearchBytes = 32 * 1024 * 1024;
+    private const int MaxMatchesPerFile = 2000;
+    private const int SnippetBefore = 48;
+    private const int SnippetAfter = 140;
+
+    /// <summary>
+    /// 会话全文检索：扫多个实例的 session.jsonl / session.jsonl.zstd 正文。
+    /// 单个文件损坏/不可读只跳过该文件；不改写任何文件；不触碰上游 SQLite。
+    /// 排序：命中次数降序 → 更新时间降序。
+    /// </summary>
+    public Task<IReadOnlyList<ConversationSearchHit>> SearchAsync(
+        IEnumerable<ManagerInstance> instances,
+        string? query,
+        int maxResults = 200,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        var term = query?.Trim() ?? string.Empty;
+        if (term.Length == 0)
+        {
+            return Task.FromResult<IReadOnlyList<ConversationSearchHit>>(Array.Empty<ConversationSearchHit>());
+        }
+
+        var targets = instances
+            .Where(instance => !string.IsNullOrWhiteSpace(instance.DshHome))
+            .GroupBy(instance => instance.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+        var limit = Math.Clamp(maxResults, 1, 500);
+        return Task.Run(() => SearchCore(targets, term, limit, cancellationToken), cancellationToken);
+    }
+
+    private IReadOnlyList<ConversationSearchHit> SearchCore(
+        IReadOnlyList<ManagerInstance> instances,
+        string term,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        // JSONL 里反斜杠/引号是转义的：带这类字符的词再试一次转义后的形式。
+        var escapedTerm = term.Contains('\\', StringComparison.Ordinal) || term.Contains('"', StringComparison.Ordinal)
+            ? term.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)
+            : null;
+        var hits = new List<ConversationSearchHit>();
+        foreach (var instance in instances)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IReadOnlyList<ConversationEntry> entries;
+            try
+            {
+                entries = List(instance);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            foreach (var entry in entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string text;
+                try
+                {
+                    text = ReadSessionText(entry.FullPath);
+                }
+                catch (Exception ex) when (ex is IOException
+                    or UnauthorizedAccessException
+                    or InvalidDataException
+                    or ZstdException)
+                {
+                    // 损坏/不可读文件单独跳过。
+                    continue;
+                }
+
+                var count = CountOccurrences(text, term, escapedTerm, out var firstIndex, out var matchLength);
+                if (count == 0)
+                {
+                    continue;
+                }
+
+                hits.Add(new ConversationSearchHit(
+                    entry,
+                    count,
+                    BuildSnippet(text, firstIndex, matchLength, out var snippetMatchStart),
+                    snippetMatchStart,
+                    matchLength));
+            }
+        }
+
+        return hits
+            .OrderByDescending(hit => hit.MatchCount)
+            .ThenByDescending(hit => hit.Entry.UpdatedAt)
+            .Take(maxResults)
+            .ToArray();
+    }
+
+    private static int CountOccurrences(
+        string text,
+        string term,
+        string? escapedTerm,
+        out int firstIndex,
+        out int matchLength)
+    {
+        firstIndex = -1;
+        matchLength = term.Length;
+        var count = CountInText(text, term, ref firstIndex);
+        if (count > 0 || escapedTerm is null)
+        {
+            return count;
+        }
+
+        matchLength = escapedTerm.Length;
+        return CountInText(text, escapedTerm, ref firstIndex);
+    }
+
+    private static int CountInText(string text, string term, ref int firstIndex)
+    {
+        var count = 0;
+        var index = 0;
+        while (count < MaxMatchesPerFile)
+        {
+            var found = text.IndexOf(term, index, StringComparison.OrdinalIgnoreCase);
+            if (found < 0)
+            {
+                break;
+            }
+
+            if (firstIndex < 0)
+            {
+                firstIndex = found;
+            }
+
+            count++;
+            index = found + term.Length;
+        }
+
+        return count;
+    }
+
+    private static string BuildSnippet(string text, int index, int length, out int matchStart)
+    {
+        var start = Math.Max(0, index - SnippetBefore);
+        var end = Math.Min(text.Length, index + length + SnippetAfter);
+        var snippet = text[start..end]
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Replace('\t', ' ');
+        matchStart = index - start;
+        if (start > 0)
+        {
+            snippet = "…" + snippet;
+            matchStart++;
+        }
+
+        if (end < text.Length)
+        {
+            snippet += "…";
+        }
+
+        return snippet;
+    }
+
+    private static string ReadSessionText(string path)
+    {
+        using var file = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        Stream source = file;
+        if (path.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase))
+        {
+            source = new DecompressionStream(file, ZstdReadBufferSize, checkEndOfStream: false, leaveOpen: true);
+        }
+
+        using (source)
+        {
+            var buffer = new byte[ZstdReadBufferSize];
+            using var memory = new MemoryStream();
+            while (memory.Length < MaxSearchBytes)
+            {
+                var toRead = (int)Math.Min(buffer.Length, MaxSearchBytes - memory.Length);
+                var read = source.Read(buffer, 0, toRead);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                memory.Write(buffer, 0, read);
+            }
+
+            return Encoding.UTF8.GetString(memory.GetBuffer(), 0, (int)memory.Length);
+        }
+    }
+
     public string Backup(ManagerInstance instance, ConversationEntry entry)
     {
         EnsureStopped(instance);

@@ -32,10 +32,12 @@ public sealed class WatchdogCore
 
     private readonly WatchdogStateStore _store;
     private readonly WatchdogLog _log;
+    private readonly InstanceResourceSampler _resourceSampler = new();
     private readonly object _gate = new();
     private readonly WatchdogState _state;
     private readonly Dictionary<string, DateTimeOffset> _suspectSince = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ZombieRecord> _zombies = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InstanceResourceSnapshot> _resources = new(StringComparer.Ordinal);
 
     private sealed record ZombieRecord(WatchdogInstanceDto Instance, DateTimeOffset Since);
 
@@ -72,10 +74,19 @@ public sealed class WatchdogCore
 
     public void UnregisterInstance(string instanceId)
     {
+        var processId = 0;
         lock (_gate)
         {
+            processId = _state.Instances
+                .FirstOrDefault(item => item.InstanceId == instanceId)?.ProcessId ?? 0;
             _state.Instances.RemoveAll(item => item.InstanceId == instanceId);
             _store.Save(_state);
+            _resources.Remove(instanceId);
+        }
+
+        if (processId > 0)
+        {
+            _resourceSampler.Forget(processId);
         }
 
         lock (_zombies)
@@ -85,6 +96,15 @@ public sealed class WatchdogCore
         }
 
         _log.Info($"unregistered instance {instanceId}");
+    }
+
+    /// <summary>实例的最近一次资源快照（实例已停止/未登记时为 null）。</summary>
+    public InstanceResourceSnapshot? GetResource(string instanceId)
+    {
+        lock (_gate)
+        {
+            return _resources.TryGetValue(instanceId, out var snapshot) ? snapshot : null;
+        }
     }
 
     public IReadOnlyList<WatchdogInstanceDto> Snapshot()
@@ -112,6 +132,20 @@ public sealed class WatchdogCore
             if (ProcessQuery.IsAlive(instance.ProcessId))
             {
                 ForgetSuspect(instance.InstanceId);
+                // 资源采样搭在同一轮探测里：不额外起定时器、不重复做进程快照。
+                var snapshot = _resourceSampler.Sample(instance.ProcessId);
+                lock (_gate)
+                {
+                    if (snapshot is null)
+                    {
+                        _resources.Remove(instance.InstanceId);
+                    }
+                    else
+                    {
+                        _resources[instance.InstanceId] = snapshot;
+                    }
+                }
+
                 continue;
             }
 
@@ -233,7 +267,10 @@ public sealed class WatchdogCore
         {
             _state.Instances.RemoveAll(item => item.InstanceId == instance.InstanceId);
             _store.Save(_state);
+            _resources.Remove(instance.InstanceId);
         }
+
+        _resourceSampler.Forget(instance.ProcessId);
 
         lock (_zombies)
         {
@@ -341,6 +378,16 @@ public sealed class WatchdogCore
 
             var listenerPid = ProcessQuery.FindPidByListeningPort(instance.Port);
             if (listenerPid <= 0 || listenerPid == instance.ProcessId)
+            {
+                continue;
+            }
+
+            // 自己的进程树（cmd → node）监听端口不是孤儿：dsh.cmd 拉起 node 后，
+            // 监听端口的是子进程，只比对根 PID 会误报。
+            var isOwnDescendant = ProcessQuery
+                .GetDescendants(instance.ProcessId)
+                .Any(process => process.ProcessId == listenerPid);
+            if (isOwnDescendant)
             {
                 continue;
             }
@@ -459,6 +506,7 @@ public sealed class WatchdogCore
         lock (_gate)
         {
             _state.Instances.Clear();
+            _resources.Clear();
             _store.Clear();
         }
 

@@ -116,6 +116,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _watchdog.GhostAdopted += OnGhostAdopted;
         _watchdog.InstanceStopped += OnInstanceStopped;
         _watchdog.OrphanDetected += OnOrphanDetected;
+        _watchdog.ResourcesUpdated += OnResourcesUpdated;
         _marketplaceService = new();
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
@@ -217,6 +218,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceStatusBackgroundBrush));
             OnPropertyChanged(nameof(SelectedInstanceStatusTextBrush));
             OnPropertyChanged(nameof(InstanceEndpointText));
+            OnPropertyChanged(nameof(SelectedInstanceResourceText));
+            OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
@@ -390,6 +393,44 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string InstanceEndpointText => SelectedInstance?.WebUrl
         ?? (SelectedInstance?.RuntimeStatus == InstanceRuntimeStatus.Running ? "正在检查运行地址…" : "尚未启动");
+
+    /// <summary>选中实例的实时资源（CPU/内存/运行时长/进程数）；无数据时为空。</summary>
+    public string SelectedInstanceResourceText =>
+        SelectedInstance is { } instance && _watchdog.GetResource(instance.Id) is { } snapshot
+            ? $"CPU {snapshot.CpuPercent:0.#}% · 内存 {FormatBytes(snapshot.WorkingSetBytes)} · 运行 {FormatDuration(snapshot.Uptime)} · {snapshot.ProcessCount} 个进程"
+            : string.Empty;
+
+    public Visibility SelectedInstanceResourceVisibility =>
+        SelectedInstanceResourceText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    internal static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024 / 1024:0.##} GB",
+        >= 1024 * 1024 => $"{bytes / 1024.0 / 1024:0.#} MB",
+        >= 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes} B"
+    };
+
+    internal static string FormatDuration(TimeSpan duration) => duration switch
+    {
+        { TotalHours: >= 1 } => $"{(int)duration.TotalHours} 小时 {duration.Minutes} 分",
+        { TotalMinutes: >= 1 } => $"{(int)duration.TotalMinutes} 分 {duration.Seconds} 秒",
+        _ => $"{Math.Max(0, (int)duration.TotalSeconds)} 秒"
+    };
+
+    private void OnResourcesUpdated()
+    {
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            OnPropertyChanged(nameof(SelectedInstanceResourceText));
+            OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
+        });
+    }
 
     public bool CanInstallDsh => !_isDshInstallInProgress
         && !_isNodeDetectionInProgress
@@ -1438,7 +1479,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     _ => new ConversationWindow(
                         instance,
                         _conversationService,
-                        entry => OpenConversationAsync(instance, entry),
+                        OpenConversationAsync,
                         () => SynchronizeConversationsAsync(instance),
                         relativePath => PropagateConversationDeletionAsync(instance, relativePath),
                         instances: Instances.ToArray(),

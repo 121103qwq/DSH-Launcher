@@ -47,6 +47,14 @@ public sealed record ConversationEntry(
     string DisplayName,
     string InstanceName);
 
+/// <summary>会话全文检索命中项（Snippet 已把换行/制表符替换为空格）。</summary>
+public sealed record ConversationSearchHit(
+    ConversationEntry Entry,
+    int MatchCount,
+    string Snippet,
+    int SnippetMatchStart,
+    int SnippetMatchLength);
+
 public sealed record ConversationBackupEntry(
     string FileName,
     string FullPath,
