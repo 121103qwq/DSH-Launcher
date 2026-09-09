@@ -82,6 +82,12 @@ public sealed class VersionSettingsData
     /// 为保留项；敏感值（KEY/TOKEN/SECRET/PASSWORD…）落盘时用 DPAPI 加密。
     /// </summary>
     public Dictionary<string, string>? EnvironmentVariables { get; set; }
+
+    /// <summary>空闲时自动停止该实例（仅对 Launcher 托管的运行中实例生效）。</summary>
+    public bool AutoStopWhenIdle { get; set; }
+
+    /// <summary>空闲阈值（分钟，5–240，默认 30）。</summary>
+    public int? AutoStopIdleMinutes { get; set; }
 }
 
 /// <summary>

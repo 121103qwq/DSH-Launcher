@@ -32,6 +32,7 @@ public static class ProcessQuery
 {
     private const int TcpTableOwnerPidAll = 5;
     private const uint MibTcpStateListen = 2;
+    private const uint MibTcpStateEstablished = 5;
 
     private static readonly ConcurrentDictionary<int, string> CommandLineCache = new();
     private static readonly object Gate = new();
@@ -292,6 +293,56 @@ public static class ProcessQuery
         return 0;
     }
 
+    /// <summary>
+    /// 进程集合中是否存在到**非回环地址**的已建立连接（后台任务信号：正在等 LLM 响应/
+    /// 工具联网等——此时 CPU 可能为 0、也没有文件写入，不能算空闲）。
+    /// </summary>
+    public static bool HasExternalConnection(IReadOnlyCollection<int> processIds)
+    {
+        if (processIds.Count == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            var table = GetTcpTable();
+            if (table is null)
+            {
+                return false;
+            }
+
+            var set = processIds as HashSet<int> ?? new HashSet<int>(processIds);
+            foreach (var row in table)
+            {
+                if (row.State != MibTcpStateEstablished || !set.Contains(row.OwningPid))
+                {
+                    continue;
+                }
+
+                var remote = new IPAddress(new[]
+                {
+                    (byte)(row.RemoteAddress & 0xFF),
+                    (byte)((row.RemoteAddress >> 8) & 0xFF),
+                    (byte)((row.RemoteAddress >> 16) & 0xFF),
+                    (byte)((row.RemoteAddress >> 24) & 0xFF)
+                });
+                if (IPAddress.IsLoopback(remote) || remote.Equals(IPAddress.Any))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+        }
+        catch
+        {
+            // 读取失败时按“无外部连接”处理（宁可保守多等一轮，也不误停）。
+        }
+
+        return false;
+    }
+
     private static List<TcpRow>? GetTcpTable()
     {
         var size = 0;
@@ -322,7 +373,8 @@ public static class ProcessQuery
                 // MIB 表内端口为网络字节序。不能 (short) 强转：端口 >32767
                 // （launcher 随机分配的高位端口全在此范围）会溢出为负数。
                 var port = (int)(((row.LocalPort & 0xFF) << 8) | ((row.LocalPort >> 8) & 0xFF));
-                list.Add(new TcpRow(row.State, row.LocalAddr, port, (int)row.OwningPid));
+                var remotePort = (int)(((row.RemotePort & 0xFF) << 8) | ((row.RemotePort >> 8) & 0xFF));
+                list.Add(new TcpRow(row.State, row.LocalAddr, port, row.RemoteAddr, remotePort, (int)row.OwningPid));
             }
 
             return list;
@@ -333,7 +385,13 @@ public static class ProcessQuery
         }
     }
 
-    private readonly record struct TcpRow(uint State, uint LocalAddress, int LocalPort, int OwningPid);
+    private readonly record struct TcpRow(
+        uint State,
+        uint LocalAddress,
+        int LocalPort,
+        uint RemoteAddress,
+        int RemotePort,
+        int OwningPid);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MibTcpRowOwnerPid

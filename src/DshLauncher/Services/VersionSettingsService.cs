@@ -112,7 +112,9 @@ public sealed class VersionSettingsService
             CustomOpenTargetPath = settings.CustomOpenTargetPath,
             EnvironmentVariables = settings.EnvironmentVariables is null
                 ? null
-                : new Dictionary<string, string>(settings.EnvironmentVariables, StringComparer.Ordinal)
+                : new Dictionary<string, string>(settings.EnvironmentVariables, StringComparer.Ordinal),
+            AutoStopWhenIdle = settings.AutoStopWhenIdle,
+            AutoStopIdleMinutes = settings.AutoStopIdleMinutes
         };
 
     private static void ProtectEnvironmentVariables(VersionSettingsData settings)
@@ -440,6 +442,11 @@ public sealed class VersionSettingsService
             {
                 settings.EnvironmentVariables = null;
             }
+        }
+
+        if (settings.AutoStopIdleMinutes is { } idleMinutes)
+        {
+            settings.AutoStopIdleMinutes = Math.Clamp(idleMinutes, 5, 240);
         }
 
         settings.ConversationWorkspace = string.IsNullOrWhiteSpace(settings.ConversationWorkspace)

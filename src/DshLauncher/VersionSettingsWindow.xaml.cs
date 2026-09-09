@@ -408,6 +408,94 @@ public partial class VersionSettingsWindow : UserControl
                 Detail = item.Detail ?? string.Empty
             })
             .ToArray();
+
+        LoadAutoStopControls();
+    }
+
+    private bool _autoStopControlsInitialized;
+
+    /// <summary>
+    /// 只初始化一次（填充下拉 + 回填当前设置）。刷新时绝不覆盖用户正在编辑的控件——
+    /// 否则 1 秒自动刷新会把刚勾上的开关改回去。
+    /// </summary>
+    private void LoadAutoStopControls()
+    {
+        if (!_autoStopControlsInitialized)
+        {
+            _autoStopControlsInitialized = true;
+            if (AutoStopMinutesBox.Items.Count == 0)
+            {
+                foreach (var minutes in new[] { 5, 15, 30, 60, 120, 240 })
+                {
+                    AutoStopMinutesBox.Items.Add(new System.Windows.Controls.ComboBoxItem
+                    {
+                        Content = $"{minutes} 分钟",
+                        Tag = minutes
+                    });
+                }
+            }
+
+            AutoStopCheckBox.IsChecked = _settings.AutoStopWhenIdle;
+            var selected = _settings.AutoStopIdleMinutes ?? 30;
+            foreach (System.Windows.Controls.ComboBoxItem item in AutoStopMinutesBox.Items)
+            {
+                if (Equals(item.Tag, selected))
+                {
+                    AutoStopMinutesBox.SelectedItem = item;
+                    break;
+                }
+            }
+
+            AutoStopMinutesBox.SelectedItem ??= AutoStopMinutesBox.Items[2];
+        }
+
+        UpdateAutoStopStatus();
+    }
+
+    private void UpdateAutoStopStatus()
+    {
+        var minutes = AutoStopMinutesBox.SelectedItem is System.Windows.Controls.ComboBoxItem item
+            && item.Tag is int value
+                ? value
+                : _settings.AutoStopIdleMinutes ?? 30;
+        var lastActivity = _healthProviders?.LastActivity?.Invoke(_instance!);
+        if (AutoStopCheckBox.IsChecked != true)
+        {
+            AutoStopStatusText.Text = "当前关闭。开启后实例长时间无活动会自动停止。";
+            return;
+        }
+
+        AutoStopStatusText.Text = lastActivity is null
+            ? $"已开启（{minutes} 分钟）；尚无活动记录（实例启动后开始计时）。"
+            : $"已开启（{minutes} 分钟）；最近活动：{lastActivity.At:HH:mm:ss}（{lastActivity.Source}）。";
+    }
+
+    private void SaveAutoStop_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            AutoStopStatusText.Text = "请先选择版本。";
+            return;
+        }
+
+        var minutes = AutoStopMinutesBox.SelectedItem is System.Windows.Controls.ComboBoxItem item
+            && item.Tag is int value
+                ? value
+                : 30;
+        try
+        {
+            _settings.AutoStopWhenIdle = AutoStopCheckBox.IsChecked == true;
+            _settings.AutoStopIdleMinutes = minutes;
+            _settingsService.Save(_instance, _settings);
+            UpdateAutoStopStatus();
+            AutoStopStatusText.Text = _settings.AutoStopWhenIdle
+                ? $"已保存：空闲 {minutes} 分钟自动停止（后台任务进行中不会停）。"
+                : "已保存：空闲自动停止已关闭。";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            AutoStopStatusText.Text = $"保存失败：{ex.Message}";
+        }
     }
 
     private static string FormatHealthDuration(TimeSpan duration) => duration switch

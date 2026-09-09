@@ -543,6 +543,42 @@
                             Padding="20"
                             Margin="0,16,0,0">
                         <StackPanel>
+                            <TextBlock Text="空闲自动停止" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="开启后，实例长时间没有活动（无 CPU、无外部连接、无会话写入、无日志输出）会自动停止，避免后台常驻占内存。存在后台任务（如正在等模型响应）时不会算空闲；Launcher 正在安装/更新时也不会停。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,6,0,10" />
+                            <CheckBox x:Name="AutoStopCheckBox"
+                                      Content="空闲时自动停止该实例"
+                                      VerticalAlignment="Center" />
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <TextBlock Text="空闲阈值"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <ComboBox x:Name="AutoStopMinutesBox" Width="150" Height="34" />
+                            </StackPanel>
+                            <TextBlock x:Name="AutoStopStatusText"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <Button Content="保存空闲设置"
+                                    Click="SaveAutoStop_Click"
+                                    Style="{StaticResource PrimaryButton}"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,14,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource CardCornerRadius}"
+                            Padding="20"
+                            Margin="0,16,0,0">
+                        <StackPanel>
                             <TextBlock Text="资源占用（最近 20 分钟，每 5 秒一个采样点）" FontSize="16" FontWeight="SemiBold" />
                             <controls:MetricChart x:Name="HealthCpuChart" Height="120" Margin="0,12,0,0" />
                             <controls:MetricChart x:Name="HealthMemoryChart" Height="120" Margin="0,10,0,0" />

@@ -38,6 +38,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly VersionSettingsService _settingsService;
     private readonly InstanceLogBuffer _logs;
     private readonly SafeProfileService _safeProfileService;
+    private readonly InstanceIdleTracker _idleTracker;
     private bool _disposed;
 
     public DshInstanceRunner(
@@ -47,7 +48,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         Func<ProxySettings?>? proxySettings = null,
         VersionSettingsService? settingsService = null,
         InstanceLogBuffer? logs = null,
-        SafeProfileService? safeProfileService = null)
+        SafeProfileService? safeProfileService = null,
+        InstanceIdleTracker? idleTracker = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
@@ -56,7 +58,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         _settingsService = settingsService ?? new VersionSettingsService();
         _logs = logs ?? new InstanceLogBuffer();
         _safeProfileService = safeProfileService ?? new SafeProfileService();
+        _idleTracker = idleTracker ?? new InstanceIdleTracker();
     }
+
+    /// <summary>实例活动追踪（空闲自动停止用）。</summary>
+    public InstanceIdleTracker IdleTracker => _idleTracker;
 
     /// <summary>实例运行日志（dsh 输出 + Launcher 生命周期事件）。</summary>
     public IReadOnlyList<InstanceLogLine> GetLogs(string? instanceId) => _logs.Snapshot(instanceId);
@@ -398,12 +404,14 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         {
                             AppendOutput(output, args.Data);
                             _logs.Append(instance.Id, "dsh", args.Data);
+                            _idleTracker.MarkActivity(instance.Id, "dsh 输出");
                             TryCaptureAuthenticatedUrl(instance.Id, args.Data);
                         };
                         process.ErrorDataReceived += (_, args) =>
                         {
                             AppendOutput(output, args.Data);
                             _logs.Append(instance.Id, "stderr", args.Data);
+                            _idleTracker.MarkActivity(instance.Id, "dsh 错误输出");
                         };
 
                         if (!process.Start())

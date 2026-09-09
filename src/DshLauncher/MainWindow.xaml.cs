@@ -90,6 +90,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SafeProfileService _safeProfileService = new();
     private readonly HashSet<string> _safeModeAsked = new(StringComparer.Ordinal);
     private readonly StartupEvidenceStore _startupEvidence = new();
+    private readonly InstanceIdleTracker _idleTracker = new();
 
     private readonly WatchdogRuntime _watchdog;
     private readonly Dictionary<string, DateTimeOffset> _lastReassertAt = new(StringComparer.Ordinal);
@@ -459,7 +460,119 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceResourceText));
             OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
             OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
+            EvaluateIdleAutoStop();
         });
+    }
+
+    /// <summary>
+    /// 空闲自动停止（每轮守护探测后评估）：
+    ///  - 开关来自实例设置（默认关）；
+    ///  - 只在 Launcher 托管且运行中时生效；
+    ///  - **后台任务不算空闲**：进程树有到非回环地址的已建立连接（等 LLM/工具联网）、
+    ///    CPU 活跃、sessions/storages 有写入、dsh 有输出、Launcher 自身在忙（安装/准备等）。
+    /// </summary>
+    private void EvaluateIdleAutoStop()
+    {
+        var launcherBusy = _isLifecycleInProgress
+            || _isRuntimePrepareInProgress
+            || _isNodeDetectionInProgress
+            || _isDshInstallInProgress;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var instance in Instances.ToArray())
+        {
+            if (!_instanceRunner.IsRunning(instance.Id)
+                || instance.RuntimeOwnership != InstanceRuntimeOwnership.Managed)
+            {
+                continue;
+            }
+
+            VersionSettingsData settings;
+            try
+            {
+                settings = _versionSettingsService.Read(instance);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            if (!settings.AutoStopWhenIdle)
+            {
+                continue;
+            }
+
+            var threshold = TimeSpan.FromMinutes(settings.AutoStopIdleMinutes ?? 30);
+            MarkInstanceActivityFromSignals(instance);
+            var lastActivity = _idleTracker.GetLastActivity(instance.Id);
+            var hasBackgroundTask = HasBackgroundTask(instance);
+            if (!InstanceIdleTracker.ShouldAutoStop(
+                    enabled: true,
+                    managed: true,
+                    launcherBusy,
+                    hasBackgroundTask,
+                    lastActivity,
+                    threshold,
+                    now))
+            {
+                continue;
+            }
+
+            _ = StopIdleInstanceAsync(instance, threshold);
+        }
+    }
+
+    /// <summary>后台任务信号：进程树有到非回环地址的已建立连接。</summary>
+    private bool HasBackgroundTask(ManagerInstance instance)
+    {
+        var rootPid = _watchdog.GetProcessId(instance.Id);
+        if (rootPid <= 0)
+        {
+            return false;
+        }
+
+        var pids = new List<int> { rootPid };
+        try
+        {
+            pids.AddRange(ProcessQuery.GetDescendants(rootPid).Select(process => process.ProcessId));
+        }
+        catch
+        {
+            // 快照失败时至少看根进程。
+        }
+
+        return ProcessQuery.HasExternalConnection(pids);
+    }
+
+    /// <summary>
+    /// 把 CPU 与会话/存储写入这两个活动信号标进空闲追踪（每个探测轮一次）：
+    ///  - CPU ≥ 1%（进程树）→ 活动；
+    ///  - sessions/ 或 storages/ 最近 90 秒内有写入 → 活动（agent 每回合都会写会话事件）。
+    /// </summary>
+    private void MarkInstanceActivityFromSignals(ManagerInstance instance)
+    {
+        var snapshot = _watchdog.GetResource(instance.Id);
+        if (snapshot is { CpuPercent: >= 1.0 })
+        {
+            _idleTracker.MarkActivity(instance.Id, $"CPU {snapshot.CpuPercent:0.#}%");
+        }
+
+        var lastWrite = InstanceActivityProbe.GetLastDataWriteTime(instance.DshHome);
+        if (lastWrite is { } written && DateTimeOffset.UtcNow - written < TimeSpan.FromSeconds(90))
+        {
+            _idleTracker.MarkActivity(instance.Id, "会话写入", written);
+        }
+    }
+
+    private async Task StopIdleInstanceAsync(ManagerInstance instance, TimeSpan threshold)
+    {
+        var minutes = (int)Math.Round(threshold.TotalMinutes);
+        await StopInstanceAsync(
+            instance,
+            $"实例 {instance.Name} 已空闲超过 {minutes} 分钟，已自动停止；可在「实例设置 → 运行状况」关闭空闲自动停止。");
+        _startupEvidence.Record(instance.Id, new StartupEvidence(
+            BootLayer.Process,
+            "空闲自动停止",
+            $"空闲超过 {minutes} 分钟"));
     }
 
     public bool CanInstallDsh => !_isDshInstallInProgress
@@ -1685,7 +1798,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     var keepPid = _watchdog.GetProcessId(instance.Id);
                     return _watchdog.Cleanup(instance.Id, keepPid > 0 ? keepPid : null);
                 },
-                instance => _startupEvidence.Snapshot(instance.Id))));
+                instance => _startupEvidence.Snapshot(instance.Id),
+                instance => _idleTracker.GetLastActivity(instance.Id))));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -4411,7 +4525,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         await StopInstanceAsync(SelectedInstance);
     }
 
-    private async Task StopInstanceAsync(ManagerInstance selected)
+    private async Task StopInstanceAsync(ManagerInstance selected, string? notice = null)
     {
         if (selected.RuntimeOwnership == InstanceRuntimeOwnership.Attached)
         {
@@ -4456,7 +4570,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 LastError = null
             });
             ReportInstanceStoppedAsync(selected.Id);
-            ShowNotice($"实例已停止：{selected.Name}。");
+            _idleTracker.Forget(selected.Id);
+            ShowNotice(notice ?? $"实例已停止：{selected.Name}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -4953,6 +5068,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         DshInstanceRunResult result,
         bool openBrowser)
     {
+        _idleTracker.MarkActivity(instance.Id, "启动");
         // 浏览器守卫：仅当 dsh 不支持 --no-open（可能自行弹出浏览器）且本次不由
         // Launcher 开浏览器时启用；守卫只在启动后 30 秒窗口内结束命令行带该端口的浏览器进程。
         if (!openBrowser
@@ -6054,6 +6170,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             };
             chat.Show();
             MarkInstanceUsed(instanceId);
+            _idleTracker.MarkActivity(instanceId, "打开窗口");
             return chat;
         }
         catch (Exception ex)
