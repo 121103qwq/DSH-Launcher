@@ -182,6 +182,73 @@ public sealed class DshInstallMoveService
         }
     }
 
+    /// <summary>
+    /// 多源移动：勾选一个时直接搬到目标目录；勾选多个时，每个运行时分别搬到
+    /// 目标目录下的同名子目录（避免不同版本互相覆盖），最后把安装位置指向目标根。
+    /// </summary>
+    public async Task<DshInstallMoveResult> MoveManyAsync(
+        IReadOnlyList<string> sourceDirectories,
+        string targetDirectory,
+        Func<string, bool> isInstanceRunning,
+        CancellationToken cancellationToken = default)
+    {
+        var sources = sourceDirectories
+            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (sources.Length == 0)
+        {
+            return DshInstallMoveResult.Failure("请先勾选要移动的运行时。");
+        }
+
+        if (sources.Length == 1)
+        {
+            return await MoveAsync(targetDirectory, isInstanceRunning, cancellationToken, sources[0]);
+        }
+
+        var target = DshInstallService.NormalizeInstallDirectory(targetDirectory);
+        if (target is null)
+        {
+            return DshInstallMoveResult.Failure("请先填写目标位置。");
+        }
+
+        var moved = new List<string>();
+        var rebound = 0;
+        foreach (var source in sources)
+        {
+            var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(source));
+            if (string.IsNullOrWhiteSpace(leaf))
+            {
+                leaf = "dsh";
+            }
+
+            var destination = Path.Combine(target, leaf);
+            var result = await MoveAsync(destination, isInstanceRunning, cancellationToken, source);
+            if (!result.Ok)
+            {
+                return DshInstallMoveResult.Failure(
+                    $"移动 {source} 失败：{result.Message}（已完成 {moved.Count} 个）",
+                    source,
+                    destination);
+            }
+
+            rebound += result.ReboundInstances;
+            moved.Add(destination);
+        }
+
+        // 各运行时已分别落在目标目录的同名子目录下；安装位置指向目标根。
+        var launcherSettings = _settings.ReadLauncherSettings();
+        launcherSettings.DshInstallDirectory = target;
+        _settings.SaveLauncherSettings(launcherSettings);
+        return new DshInstallMoveResult(
+            true,
+            $"已移动 {moved.Count} 个运行时到 {target} 下的同名子目录；共更新 {rebound} 个实例的引用。",
+            null,
+            target,
+            rebound);
+    }
+
     /// <summary>把实例中所有位于旧安装目录下的路径重写到新目录（纯函数，便于回归测试）。</summary>
     internal static ManagerInstance RebindPaths(ManagerInstance instance, string oldRoot, string newRoot)
     {

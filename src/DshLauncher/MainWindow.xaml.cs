@@ -1841,7 +1841,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         runtimePanel.Children.Add(moveSourceCard);
 
-        MoveSourceItem? selectedMoveSource = null;
+        // 多选：勾选的运行时目录集合（独立勾选，不互相取消）。
+        var checkedMoveSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var moveSourcesInitialized = false;
 
         var prepareButton = new System.Windows.Controls.Button
         {
@@ -1960,21 +1962,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var mover = new DshInstallMoveService(
                 registry: _instanceRegistry,
                 settings: _versionSettingsService);
-            // 源优先取设置页里明确选择的“要移动的运行时”；没有选时回退到启动页
-            // 选中的实例，再回退到配置的安装目录。
-            var current = selectedMoveSource?.Directory
-                ?? ResolveMovableRuntimeDirectory(SelectedInstance)
-                ?? mover.ResolveCurrentInstallDirectory();
-            if (current is null)
+            // 源 = 卡片里勾选的运行时（可多选）；没勾选时回退到启动页选中实例、配置目录。
+            var sources = checkedMoveSources
+                .Where(DshInstallMoveService.LooksLikeInstall)
+                .ToArray();
+            if (sources.Length == 0)
             {
-                ShowNotice("没有找到可移动的 DSh 安装目录（可能尚未安装）。");
-                return;
+                var fallback = ResolveMovableRuntimeDirectory(SelectedInstance)
+                    ?? mover.ResolveCurrentInstallDirectory();
+                if (fallback is null)
+                {
+                    ShowNotice("没有找到可移动的 DSh 运行时（可能尚未安装）。");
+                    return;
+                }
+
+                sources = new[] { fallback };
             }
 
             var target = DshInstallService.NormalizeInstallDirectory(dshInstallBox.Text)
                 ?? _versionSettingsService.DefaultDshInstallDirectory;
-            if (string.Equals(
-                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(current)),
+            if (sources.Length == 1
+                && string.Equals(
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(sources[0])),
                     Path.TrimEndingDirectorySeparator(Path.GetFullPath(target)),
                     StringComparison.OrdinalIgnoreCase))
             {
@@ -1982,9 +1991,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
+            var multiple = sources.Length > 1;
+            var sourceList = string.Join(Environment.NewLine, sources);
             var confirmed = System.Windows.MessageBox.Show(
                 this,
-                $"将当前 DSh 安装目录：\n{current}\n\n整体移动到：\n{target}\n\n会同步更新引用它的实例；请先停止正在运行的实例。继续吗？",
+                $"将以下 DSh 运行时：\n{sourceList}\n\n移动到：\n{target}\n\n"
+                + (multiple ? "（多个运行时会分别放入目标目录下的同名子文件夹）\n\n" : string.Empty)
+                + "会同步更新引用它们的实例；请先停止正在运行的实例。继续吗？",
                 "移动 DSh 安装位置",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question) == MessageBoxResult.Yes;
@@ -1998,16 +2011,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             moveDshInstallButton.Content = "正在移动…";
             try
             {
-                var result = await mover.MoveAsync(
+                var result = await mover.MoveManyAsync(
+                    sources,
                     target,
                     id => _instanceRunner.IsRunning(id),
-                    _windowCancellation.Token,
-                    sourceDirectory: current);
+                    _windowCancellation.Token);
                 ShowNotice(result.Message);
                 if (result.Ok)
                 {
                     // 移动后实例的运行时路径已被重写；内存列表必须重载，否则
                     // 接下来的自动注册会按旧路径去重失败、多出一个重复实例。
+                    checkedMoveSources.Clear();
                     LoadCachedInstances();
                     RefreshMoveSources();
                 }
@@ -2162,11 +2176,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
             }
 
-            var preferred = selectedMoveSource?.Directory
-                ?? ResolveMovableRuntimeDirectory(SelectedInstance)
-                ?? items.FirstOrDefault()?.Directory;
+            // 首次构建时默认勾选启动页选中的实例（或第一项）；之后保持用户勾选。
+            var applyDefault = checkedMoveSources.Count == 0 && !moveSourcesInitialized;
+            var defaultDirectory = applyDefault
+                ? ResolveMovableRuntimeDirectory(SelectedInstance) ?? items.FirstOrDefault()?.Directory
+                : null;
+            moveSourcesInitialized = true;
             moveSourceList.Children.Clear();
-            selectedMoveSource = null;
             foreach (var item in items)
             {
                 var row = new System.Windows.Controls.CheckBox
@@ -2192,31 +2208,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                             }
                         }
                     },
-                    IsChecked = string.Equals(item.Directory, preferred, StringComparison.OrdinalIgnoreCase),
+                    IsChecked = checkedMoveSources.Contains(item.Directory)
+                        || (defaultDirectory is not null
+                            && string.Equals(item.Directory, defaultDirectory, StringComparison.OrdinalIgnoreCase)),
                     Margin = new Thickness(0, 5, 0, 5)
                 };
                 var captured = item;
-                row.Checked += (_, _) =>
-                {
-                    selectedMoveSource = captured;
-                    foreach (var sibling in moveSourceList.Children.OfType<System.Windows.Controls.CheckBox>())
-                    {
-                        if (!ReferenceEquals(sibling, row))
-                        {
-                            sibling.IsChecked = false;
-                        }
-                    }
-                };
-                row.Unchecked += (_, _) =>
-                {
-                    if (ReferenceEquals(selectedMoveSource, captured))
-                    {
-                        selectedMoveSource = null;
-                    }
-                };
+                row.Checked += (_, _) => checkedMoveSources.Add(captured.Directory);
+                row.Unchecked += (_, _) => checkedMoveSources.Remove(captured.Directory);
                 if (row.IsChecked == true)
                 {
-                    selectedMoveSource = item;
+                    checkedMoveSources.Add(item.Directory);
                 }
 
                 moveSourceList.Children.Add(row);
