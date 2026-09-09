@@ -14,7 +14,7 @@ public sealed record ScannedHomeImportOutcome(
 }
 
 /// <summary>
-/// 把扫描到的本机/WSL home 登记成实例（work-log/50）：一个 home → 一个实例，
+/// 把扫描到的本机 home 登记成实例（work-log/50）：一个 home → 一个实例，
 /// 只认 <c>profiles/web</c>（启动器正常模式跑 <c>dsh web</c>）。文件复制复用
 /// <see cref="DshHomeImportService"/>，登记复用 <see cref="InstanceRegistry"/>，
 /// 失败时回滚注册，避免留下半成品实例。
@@ -99,18 +99,13 @@ public sealed class ScannedHomeImportService
         }
     }
 
-    /// <summary>显示名：本地取目录名（.dsh-dev），WSL 追加发行版（.dsh-dev（Ubuntu））。</summary>
+    /// <summary>显示名：取目录名（.dsh-dev）。</summary>
     internal static string DisplayName(ScannedDshHome home)
     {
         var folder = home.Path
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var name = Path.GetFileName(folder);
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            name = home.Path;
-        }
-
-        return string.IsNullOrWhiteSpace(home.WslDistro) ? name : $"{name}（{home.WslDistro}）";
+        return string.IsNullOrWhiteSpace(name) ? home.Path : name;
     }
 
     internal static bool IsSameSourceHome(string? importedFrom, string candidate) =>

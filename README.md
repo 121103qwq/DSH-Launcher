@@ -96,7 +96,8 @@ dsh-launcher-dev/
 | 68 | `Services/DshInstanceRunner.cs` + `MainWindow.xaml.cs` | **外部连接（Attached）失效收敛**：修 `_attached` 只加不删（没开实例却提示“请先停止实例”）；按 PID/端口活性校验并自动摘除；外部实例也登记 watchdog；5s 周期收敛 + 停止守卫区分死活 |
 | 69 | `Services/StartupHealthEvidence.cs` + `Services/DshInstanceRunner.cs` + `Services/DialogText.cs`（新）+ `MainWindow.xaml.cs` | **启动健康检查日志基线 + 对话框文本收敛**（work-log/47）：① 健康检查只扫本次进程启动后的新增日志行（`logBaselineAt` + `StartupLogClassifier.Since`），修复“旧失败签名行让本会话内后续启动/安全模式/自动重启瞬间假失败”（清空日志才恢复）；② 新增 `DialogText.ForMessageBox`（每行 ≤120 字符硬折 + 总长 ≤1200 + 截断提示），安全模式询问改用 `FormatStartFailure` 摘要 + 证据 + 插件清单 + 指向运行日志（原来原样塞 ~5.3KB 输出，弹窗实测 1584×1182、是/否按钮出屏），「启动详情」弹窗同步收敛 |
 | 70 | `Services/PluginCompatibility.cs`（新）+ `Models/DshCoreBundles.cs`（新）+ `Services/MarketplaceService.cs` + `Models/MarketplaceModels.cs` + `ExtensionWindow.xaml.cs` + `Services/DshInstanceRunner.cs` + `Models/ManagerInstance.cs` + `Services/ExtensionService.cs` + `Services/PluginMatrixService.cs` + `Services/SafeProfileService.cs` + `MainWindow.xaml.cs` | **46 号遗留 4 项（work-log/48 验证、49 实施）**：① **装前/更新前兼容性预检**——新增 `PluginCompatibility`（npm 语义化范围匹配含预发布规则 + 实例内实际版本解析），手动安装/市场安装/单条更新/批量更新均检查 `@deepseek-ai/*` peerDependencies，不兼容返回 `Incompatible` 并警告（computer-user 这类“装完就崩”会被拦住；批量更新自动跳过）；② **生命周期日志**——启动/停止写 `launcher.log`（实例名/端口/PID/normal|safe）；③ **核心包口径统一**——新增 `DshCoreBundles`（计数/列表/矩阵/安全模式共用），实例卡片不再把核心算成插件、插件管理/扩展页不再列核心；④ **harness 隔离**——`ExtensionWindow.UiStateStore` 可注入，UI 冒烟用临时目录，不再污染真实 `ui-state.json` |
-| 71 | `Services/DshEnvironmentScanner.cs`（新）+ `Services/ScannedHomeImportService.cs`（新）+ `EnvironmentScanWindow.xaml(.cs)`（新）+ `VersionControlWindow.xaml(.cs)` + `Services/DshHomeImportService.cs` + `MainWindow.xaml.cs` | **#14 本机/WSL DSH 环境扫描导入（work-log/50）**：扫描 `%USERPROFILE%\.dsh*` + `DSH_HOME` + WSL 发行版里的 `~/.dsh*`，按 `dsh.profile.bundles` 分类 web/tui/other；勾选后一 home 一实例（只收 `profiles/web`，重复源跳过、失败回滚）；WSL home 拷到 Windows 侧跑（跳过 Linux `node_modules`，启动前 pnpm 自愈）；「导入实例」菜单新增「扫描本机 DSH 环境」与接上死代码的「从源码目录导入」 |
+| 71 | `Services/DshEnvironmentScanner.cs`（新）+ `Services/ScannedHomeImportService.cs`（新）+ `EnvironmentScanWindow.xaml(.cs)`（新）+ `VersionControlWindow.xaml(.cs)` + `MainWindow.xaml.cs` | **#14 本机 DSH 环境扫描导入（work-log/50）**：扫描 `%USERPROFILE%\.dsh*` + `DSH_HOME`，按 `dsh.profile.bundles` 分类 web/tui/other；勾选后一 home 一实例（只收 `profiles/web`，重复源跳过、失败回滚）；「导入实例」菜单新增「扫描本机 DSH 环境」与接上死代码的「从源码目录导入」 |
+| 72 | `Services/DshEnvironmentScanner.cs` + `Services/ScannedHomeImportService.cs` + `Services/DshHomeImportService.cs` + `EnvironmentScanWindow.xaml(.cs)` | **清理：移除 WSL 扫描冗余**（work-log/50 第五节）：本机 WSL 服务被禁用（`Wsl/0x80070422`），WSL 分支无法验证且无使用场景，删除发行版枚举/`sh` 清单协议/UNC 转换/WSL 源跳过插件包复制/UI 标签与文案；harness 255 PASS |
 
 ## 行为变化（相对上游）
 
@@ -176,15 +177,14 @@ dsh-launcher-dev/
 74. **实例生命周期日志**：启动与停止各写一条 `launcher.log`（含实例名、端口、PID、normal/safe 模式），不必再去 watchdog.log 查
 75. **核心包口径统一**：`@deepseek-ai/dsh-base` / `dsh-web-app` 不计入实例卡片「N Plugins」，也不出现在插件管理页与扩展页已装列表（与矩阵/doctor/安全模式同一份定义）
 76. **harness 隔离**：UI 冒烟注入临时 `UiStateStore`，不再写入真实 `ui-state.json`
-77. **扫描本机 DSH 环境**：「版本控制 → 导入实例 → 扫描本机 DSH 环境」列出 `%USERPROFILE%\.dsh*`、`DSH_HOME` 与 WSL 发行版里的 `~/.dsh*`（带 web/tui/other 分类与「已登记」标记），勾选后按 home 建实例；已登记源自动跳过，重复导入不产生副本
+77. **扫描本机 DSH 环境**：「版本控制 → 导入实例 → 扫描本机 DSH 环境」列出 `%USERPROFILE%\.dsh*` 与 `DSH_HOME` 指向的 home（带 web/tui/other 分类与「已登记」标记），勾选后按 home 建实例；已登记源自动跳过，重复导入不产生副本
 78. **从源码目录导入**：「导入实例」菜单补上原本悬空的源码导入入口（之前只有提示文字指向不存在的按钮）
-79. **WSL home 导入（方案 A）**：WSL 里的 home 复制到 Windows 实例目录后用 Windows 运行时启动；Linux 侧 `node_modules` 不复制，首次启动由依赖自愈按 `package.json` 重装
-80. **不含 `profiles/web` 的 home 不可导入**：列表里标红说明（TUI profile 需 #19 支持后才能启动）
+79. **不含 `profiles/web` 的 home 不可导入**：列表里标红说明（TUI profile 需 #19 支持后才能启动）
 
 ## 待办（功能完成后统一处理）
 
 - **[UI 统一待办](docs/UI-UNIFICATION-TODO.md)**：挂起中——图标体系、颜色令牌、字号下限、表格自适应、窗口框架、键盘可达性、高 DPI 复检等，等所有功能性需求结束后作为一个独立变更集统一处理。
-- 功能侧剩余（按性价比）：对话全文检索 / 实例资源监控（1–2 天）→ #17 插件×实例矩阵 / #16 中文插件源 → **#11 安全模式 + 四层启动健康证据**（3–5 天）；#14 本机 DSH 扫描导入已完成（变更集 71，work-log/50）。
+- 功能侧剩余（按性价比）：对话全文检索 / 实例资源监控（1–2 天）→ #17 插件×实例矩阵 / #16 中文插件源 → **#11 安全模式 + 四层启动健康证据**（3–5 天）；#14 本机 DSH 扫描导入已完成（变更集 71，WSL 已在 72 移除，见 work-log/50）。
 
 ## 构建与发布（SOP）
 

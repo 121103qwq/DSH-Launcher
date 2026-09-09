@@ -12,10 +12,7 @@ public enum DshHomeSource
     UserProfile,
 
     /// <summary>DSH_HOME 环境变量指向的目录。</summary>
-    DshHomeEnvironment,
-
-    /// <summary>WSL 发行版里的 ~/.dsh*（路径是 \\wsl$\... UNC）。</summary>
-    Wsl
+    DshHomeEnvironment
 }
 
 /// <summary>profile 分类：web 可启动、tui 暂不支持启动、other 未知。</summary>
@@ -31,7 +28,6 @@ public sealed record ScannedDshProfile(string Name, DshProfileKind Kind);
 public sealed record ScannedDshHome(
     string Path,
     DshHomeSource Source,
-    string? WslDistro,
     IReadOnlyList<ScannedDshProfile> Profiles,
     bool AlreadyRegistered);
 
@@ -43,23 +39,14 @@ public sealed record DshEnvironmentScanResult(
         new(Array.Empty<ScannedDshHome>(), Array.Empty<string>());
 }
 
-/// <summary>WSL 发行版列表探测结果（失败时带错误文案，用于 UI 提示而不是抛异常）。</summary>
-public sealed record WslDistroListResult(IReadOnlyList<string> Distros, string? Error);
-
 /// <summary>
 /// 扫描本机 DSH 环境（work-log/50，借鉴上游 dsh-plugins scan.rs 的思路）：
 /// 只负责"发现 + 分类"，不登记实例；登记复用 DshHomeImportService + InstanceRegistry。
-/// 与既有启动时自动导入的区别：这里枚举所有 .dsh* home（不止当前 DSH_HOME）、支持 WSL，
-/// 且由用户勾选。WSL home 走"拷出来用 Windows 运行时跑"（方案 A）。
+/// 与既有启动时自动导入的区别：这里枚举所有 .dsh* home（不止当前 DSH_HOME），
+/// 且由用户勾选。WSL 扫描已按需求移除（本机 WSL 服务不可用，见 work-log/50 第五节）。
 /// </summary>
 public sealed class DshEnvironmentScanner
 {
-    /// <summary>WSL 里的 home 通过 UNC 共享访问。</summary>
-    public const string WslUncPrefix = @"\\wsl$\";
-
-    /// <summary>WSL2 的另一个 UNC 别名，比较路径时归一化成 <see cref="WslUncPrefix"/>。</summary>
-    public const string WslLocalhostUncPrefix = @"\\wsl.localhost\";
-
     /// <summary>TUI bundle（第三方 scope；上游 process.rs 同名常量）。</summary>
     public const string TuiBundle = "@deepseek-harness-tui/dsh-tui";
 
@@ -67,69 +54,41 @@ public sealed class DshEnvironmentScanner
 
     private readonly string? _userProfileRoot;
     private readonly string? _dshHomeEnvironment;
-    private readonly Func<CancellationToken, Task<WslDistroListResult>> _listWslDistros;
-    private readonly Func<string, string, CancellationToken, Task<string?>> _runInWslDistro;
     private readonly Func<string, string?> _readManifest;
 
-    /// <summary>
-    /// 生产用构造：读真实 %USERPROFILE% / DSH_HOME / wsl.exe / 文件系统。
-    /// </summary>
+    /// <summary>生产用构造：读真实 %USERPROFILE% / DSH_HOME / 文件系统。</summary>
     public DshEnvironmentScanner()
         : this(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             Environment.GetEnvironmentVariable("DSH_HOME"),
-            WslBridge.ListDistrosAsync,
-            WslBridge.RunShellAsync,
             ReadManifestFromDisk)
     {
     }
 
-    /// <summary>可注入构造（harness 用：不依赖真实环境变量、WSL 或磁盘）。</summary>
+    /// <summary>可注入构造（harness 用：不依赖真实环境变量与磁盘）。</summary>
     public DshEnvironmentScanner(
         string? userProfileRoot,
         string? dshHomeEnvironment,
-        Func<CancellationToken, Task<WslDistroListResult>> listWslDistros,
-        Func<string, string, CancellationToken, Task<string?>> runInWslDistro,
         Func<string, string?> readManifest)
     {
         _userProfileRoot = userProfileRoot;
         _dshHomeEnvironment = dshHomeEnvironment;
-        _listWslDistros = listWslDistros;
-        _runInWslDistro = runInWslDistro;
         _readManifest = readManifest;
     }
 
-    public async Task<DshEnvironmentScanResult> ScanAsync(
+    public Task<DshEnvironmentScanResult> ScanAsync(
         IReadOnlyCollection<ManagerInstance> existingInstances,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var homes = new List<ScannedDshHome>();
         var warnings = new List<string>();
-        var registered = BuildRegisteredHomeSet(existingInstances);
-
-        ScanLocalHomes(homes, warnings, registered);
-
-        try
-        {
-            var wsl = await ScanWslHomesAsync(registered, warnings, cancellationToken);
-            homes.AddRange(wsl);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is IOException
-            or InvalidOperationException
-            or System.ComponentModel.Win32Exception)
-        {
-            warnings.Add($"扫描 WSL 失败：{ex.Message}");
-        }
-
-        return new DshEnvironmentScanResult(homes, warnings);
+        ScanLocalHomes(homes, warnings, BuildRegisteredHomeSet(existingInstances));
+        return Task.FromResult<DshEnvironmentScanResult>(new(homes, warnings));
     }
 
     /// <summary>
-    /// 枚举 %USERPROFILE%\.dsh* 目录 + DSH_HOME 环境变量目标（去重；DSH_HOME 命中已有项时只改来源标记）。
+    /// 枚举 %USERPROFILE%\.dsh* 目录 + DSH_HOME 环境变量目标（去重；DSH_HOME 命中已有项时不重复）。
     /// </summary>
     private void ScanLocalHomes(
         ICollection<ScannedDshHome> homes,
@@ -167,7 +126,7 @@ public sealed class DshEnvironmentScanner
                     continue;
                 }
 
-                homes.Add(BuildHome(directory, DshHomeSource.UserProfile, null, registered));
+                homes.Add(BuildHome(directory, DshHomeSource.UserProfile, registered));
             }
         }
 
@@ -185,56 +144,13 @@ public sealed class DshEnvironmentScanner
 
         if (seen.Add(NormalizeForCompare(envHome)))
         {
-            homes.Add(BuildHome(envHome, DshHomeSource.DshHomeEnvironment, null, registered));
+            homes.Add(BuildHome(envHome, DshHomeSource.DshHomeEnvironment, registered));
         }
-    }
-
-    /// <summary>探测每个已安装 WSL 发行版里的 ~/.dsh*（发行版少，每次一个短进程）。</summary>
-    private async Task<IReadOnlyList<ScannedDshHome>> ScanWslHomesAsync(
-        IReadOnlySet<string> registered,
-        ICollection<string> warnings,
-        CancellationToken cancellationToken)
-    {
-        var result = new List<ScannedDshHome>();
-        var listing = await _listWslDistros(cancellationToken);
-        if (!string.IsNullOrWhiteSpace(listing.Error))
-        {
-            warnings.Add($"WSL 不可用：{listing.Error}");
-            return result;
-        }
-
-        foreach (var distro in listing.Distros)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var output = await _runInWslDistro(distro, WslHomeListScript, cancellationToken);
-            if (output is null)
-            {
-                warnings.Add($"无法读取 WSL 发行版 {distro} 的 home（wsl.exe 调用失败）。");
-                continue;
-            }
-
-            foreach (var (homePath, profileNames) in ParseWslListing(output))
-            {
-                var uncPath = ToUncPath(distro, homePath);
-                var profiles = profileNames
-                    .Select(name => new ScannedDshProfile(name, ClassifyProfile(uncPath, name)))
-                    .ToArray();
-                result.Add(new ScannedDshHome(
-                    uncPath,
-                    DshHomeSource.Wsl,
-                    distro,
-                    profiles,
-                    registered.Contains(NormalizeForCompare(uncPath))));
-            }
-        }
-
-        return result;
     }
 
     private ScannedDshHome BuildHome(
         string homePath,
         DshHomeSource source,
-        string? wslDistro,
         IReadOnlySet<string> registered)
     {
         var profiles = EnumerateProfiles(homePath)
@@ -243,7 +159,6 @@ public sealed class DshEnvironmentScanner
         return new ScannedDshHome(
             homePath,
             source,
-            wslDistro,
             profiles,
             registered.Contains(NormalizeForCompare(homePath)));
     }
@@ -324,7 +239,6 @@ public sealed class DshEnvironmentScanner
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var instance in existingInstances)
         {
-            // 不要求源路径当前可访问：WSL home 在发行版停止时不可访问，但"已登记"标记应保留。
             var imported = TryNormalizePath(instance.ImportedFromDshHome);
             if (imported is not null)
             {
@@ -335,79 +249,12 @@ public sealed class DshEnvironmentScanner
         return set;
     }
 
-    /// <summary>WSL 侧列 home + profile 的一行一条协议（与上游 scan_wsl_homes 相同）。</summary>
-    internal const string WslHomeListScript =
-        "for h in \"$HOME\"/.dsh*; do [ -d \"$h\" ] || continue; echo \"H\t$h\"; "
-        + "for p in \"$h\"/profiles/*; do [ -d \"$p\" ] || continue; "
-        + "n=$(basename \"$p\"); [ \"$n\" = node_modules ] && continue; [ \"$n\" = __temp__ ] && continue; "
-        + "echo \"P\t$h\t$n\"; done; done";
-
-    internal static IReadOnlyList<(string Home, IReadOnlyList<string> Profiles)> ParseWslListing(
-        string output)
-    {
-        var homes = new List<(string Home, List<string> Profiles)>();
-        foreach (var rawLine in output.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r');
-            var parts = line.Split('\t');
-            if (parts.Length >= 2 && parts[0] == "H")
-            {
-                var home = parts[1].Trim();
-                if (home.Length > 0
-                    && !homes.Any(item => string.Equals(item.Home, home, StringComparison.Ordinal)))
-                {
-                    homes.Add((home, new List<string>()));
-                }
-            }
-            else if (parts.Length >= 3 && parts[0] == "P")
-            {
-                var home = parts[1].Trim();
-                var profile = parts[2].Trim();
-                if (profile.Length == 0)
-                {
-                    continue;
-                }
-
-                var entry = homes.FirstOrDefault(item =>
-                    string.Equals(item.Home, home, StringComparison.Ordinal));
-                if (entry.Home is null)
-                {
-                    continue;
-                }
-
-                if (!entry.Profiles.Contains(profile, StringComparer.Ordinal))
-                {
-                    entry.Profiles.Add(profile);
-                }
-            }
-        }
-
-        return homes
-            .Select(static item => (item.Home, (IReadOnlyList<string>)item.Profiles
-                .OrderBy(static name => name, StringComparer.Ordinal)
-                .ToArray()))
-            .ToArray();
-    }
-
-    internal static string ToUncPath(string distro, string linuxPath)
-    {
-        var relative = linuxPath.Replace('/', '\\').TrimStart('\\');
-        return $"{WslUncPrefix}{distro}\\{relative}";
-    }
-
-    /// <summary>比较用归一化：大小写、斜杠方向、wsl.localhost 别名、尾部分隔符。</summary>
-    internal static string NormalizeForCompare(string path)
-    {
-        var normalized = path.Trim().Replace('/', '\\');
-        if (normalized.StartsWith(WslLocalhostUncPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            normalized = WslUncPrefix + normalized[WslLocalhostUncPrefix.Length..];
-        }
-
-        return normalized
+    /// <summary>比较用归一化：大小写、斜杠方向、尾部分隔符。</summary>
+    internal static string NormalizeForCompare(string path) =>
+        path.Trim()
+            .Replace('/', '\\')
             .TrimEnd('\\')
             .ToLowerInvariant();
-    }
 
     private static string? TryNormalizePath(string? path)
     {
@@ -492,95 +339,5 @@ public sealed class DshEnvironmentScanner
         {
             return null;
         }
-    }
-
-    /// <summary>wsl.exe 调用封装（生产实现；测试可整段替换）。</summary>
-    private static class WslBridge
-    {
-        public static async Task<WslDistroListResult> ListDistrosAsync(CancellationToken cancellationToken)
-        {
-            var result = await RunAsync(["-l", "-q"], Encoding.Unicode, cancellationToken);
-            if (result is null)
-            {
-                return new WslDistroListResult(Array.Empty<string>(), "无法启动 wsl.exe。");
-            }
-
-            if (result.Value.ExitCode != 0)
-            {
-                var error = FirstNonEmptyLine(result.Value.Error) ?? FirstNonEmptyLine(result.Value.Output);
-                return new WslDistroListResult(
-                    Array.Empty<string>(),
-                    string.IsNullOrWhiteSpace(error) ? $"wsl.exe 退出码 {result.Value.ExitCode}。" : error);
-            }
-
-            var distros = result.Value.Output
-                .Split('\n')
-                .Select(static line => line.Trim('\r', ' ', '\0'))
-                .Where(static line => line.Length > 0)
-                .ToArray();
-            return new WslDistroListResult(distros, null);
-        }
-
-        public static async Task<string?> RunShellAsync(
-            string distro,
-            string script,
-            CancellationToken cancellationToken)
-        {
-            var result = await RunAsync(
-                ["-d", distro, "--", "sh", "-c", script],
-                Encoding.UTF8,
-                cancellationToken);
-            return result is { ExitCode: 0 } ? result.Value.Output : null;
-        }
-
-        private static async Task<(int ExitCode, string Output, string Error)?> RunAsync(
-            string[] arguments,
-            Encoding outputEncoding,
-            CancellationToken cancellationToken)
-        {
-            try
-            {
-                var startInfo = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "wsl.exe",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = outputEncoding,
-                    StandardErrorEncoding = outputEncoding
-                };
-                foreach (var argument in arguments)
-                {
-                    startInfo.ArgumentList.Add(argument);
-                }
-
-                using var process = System.Diagnostics.Process.Start(startInfo);
-                if (process is null)
-                {
-                    return null;
-                }
-
-                var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-                var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-                await process.WaitForExitAsync(cancellationToken);
-                return (process.ExitCode, await outputTask, await errorTask);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception
-                or InvalidOperationException
-                or IOException)
-            {
-                return null;
-            }
-        }
-
-        private static string? FirstNonEmptyLine(string text) =>
-            text.Split('\n')
-                .Select(static line => line.Trim('\r', ' ', '\0'))
-                .FirstOrDefault(static line => line.Length > 0);
     }
 }

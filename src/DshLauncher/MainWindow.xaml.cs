@@ -4685,7 +4685,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    /// <summary>内嵌页：扫描本机/WSL 的 DSH home 并按 home 导入实例（work-log/50）。</summary>
+    /// <summary>内嵌页：扫描本机 .dsh*/DSH_HOME 并按 home 导入实例（work-log/50）。</summary>
     private void ShowEnvironmentScanPage()
     {
         ShowEmbeddedPage(new EnvironmentScanWindow(

@@ -13,8 +13,8 @@ using UserControl = System.Windows.Controls.UserControl;
 namespace DshLauncher;
 
 /// <summary>
-/// 扫描本机 DSH 环境（内嵌页，work-log/50）：列出 %USERPROFILE%\.dsh*、DSH_HOME
-/// 与 WSL 里的 home，勾选后按 home 建实例。扫描/导入分别复用
+/// 扫描本机 DSH 环境（内嵌页，work-log/50）：列出 %USERPROFILE%\.dsh* 与
+/// DSH_HOME 指向的 home，勾选后按 home 建实例。扫描/导入分别复用
 /// <see cref="DshEnvironmentScanner"/> 与 <see cref="ScannedHomeImportService"/>。
 /// </summary>
 public partial class EnvironmentScanWindow : UserControl, INotifyPropertyChanged
@@ -238,11 +238,8 @@ public partial class EnvironmentScanWindow : UserControl, INotifyPropertyChanged
             SourceText = home.Source switch
             {
                 DshHomeSource.UserProfile => "用户目录",
-                DshHomeSource.DshHomeEnvironment => "DSH_HOME",
-                _ => "WSL"
+                _ => "DSH_HOME"
             };
-            WslText = home.WslDistro is null ? string.Empty : $"WSL: {home.WslDistro}";
-            WslVisibility = home.WslDistro is null ? Visibility.Collapsed : Visibility.Visible;
             RegisteredVisibility = home.AlreadyRegistered ? Visibility.Visible : Visibility.Collapsed;
             Profiles = home.Profiles
                 .Select(static profile => new ScanProfileItem(profile))
@@ -264,10 +261,6 @@ public partial class EnvironmentScanWindow : UserControl, INotifyPropertyChanged
         public string PathText => Home.Path;
 
         public string SourceText { get; }
-
-        public string WslText { get; }
-
-        public Visibility WslVisibility { get; }
 
         public Visibility RegisteredVisibility { get; }
 

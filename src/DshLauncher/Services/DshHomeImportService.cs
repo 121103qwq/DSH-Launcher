@@ -472,13 +472,6 @@ public sealed class DshHomeImportService
             return 0;
         }
 
-        // WSL home 的 node_modules 是 Linux 二进制/符号链接，拷到 Windows 只会得到坏包；
-        // 这里不复制，交给启动前的 EnsureProfileDependenciesAsync 按 package.json 重新 pnpm install。
-        if (IsWslUncPath(sourceHome))
-        {
-            return 0;
-        }
-
         string source;
         string destination;
         try
@@ -742,14 +735,6 @@ public sealed class DshHomeImportService
             }
         }
     }
-
-    /// <summary>判断路径是否位于 WSL 的 UNC 共享（\\wsl$\ 或 \\wsl.localhost\）。</summary>
-    internal static bool IsWslUncPath(string? path) =>
-        !string.IsNullOrWhiteSpace(path)
-        && (path.TrimStart().StartsWith(DshEnvironmentScanner.WslUncPrefix, StringComparison.OrdinalIgnoreCase)
-            || path.TrimStart().StartsWith(
-                DshEnvironmentScanner.WslLocalhostUncPrefix,
-                StringComparison.OrdinalIgnoreCase));
 
     private static bool ContainsNodeModulesSegment(string relativePath) =>
         relativePath.Split(
