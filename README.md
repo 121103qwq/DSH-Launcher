@@ -85,6 +85,7 @@ dsh-launcher-dev/
 | 57 | `Watchdog/InstanceResourceSampler.cs`（新）+ `Watchdog/WatchdogCore.cs` + `Watchdog/WatchdogRuntime.cs` + `MainWindow.xaml(.cs)` + `Services/ConversationService.cs` + `Models/EcosystemModels.cs` + `ConversationWindow.xaml(.cs)` | **会话全文检索 + 实例资源监控**：① 资源采样挂在守护进程既有探测轮（CPU/内存/运行时长/进程数，无独立定时器），启动页卡片展示；② 修孤儿检测误报（根 PID → 认整个进程树）；③ 对话页全文检索（JSONL+zstd、32MiB/文件上限、损坏跳过、命中排序、片段高亮位置、跨实例双击打开） |
 | 58 | `VersionSettingsWindow.xaml(.cs)` + `Controls/MetricChart.cs`（新）+ `Services/InstanceLogBuffer.cs`（新）+ `Watchdog/InstanceResourceSampler.cs` + `Watchdog/WatchdogCore.cs` + `Watchdog/WatchdogRuntime.cs` + `Watchdog/ProcessQuery.cs` + `App.xaml` + `MainWindow.xaml.cs` + `Models/InstanceHealthModels.cs`（新） | **实例设置「运行状况」大栏**：运行概况 + CPU/内存折线图（20 分钟环形历史）+ 进程树 + 运行日志窗（dsh 输出/生命周期事件，2000 行环形不落盘）+ 清理残留进程（keepPid 保留本体 + 二次确认）；顺带修两个真实缺陷：`FindProcessesForDshHome` 因 `Name=="cmd"` 永不匹配导致按 DSH_HOME 清理静默失效、运行状况页头标题漏分支 |
 | 59 | `Services/SafeProfileService.cs`（新）+ `Services/StartupHealthEvidence.cs`（新）+ `Services/DshInstanceRunner.cs` + `Models/DshInstanceRunResult.cs` + `MainWindow.xaml.cs` + `ChatWindow.xaml.cs` + `Services/ErrorCodes.cs` | **#11 安全模式 + 四层启动健康证据（第一阶段）**：① `.dsh-safe` 隔离 profile（Tier1 剥离第三方保留核心 / Tier2 最小、用户文件只读、SHA-256 零污染证据、正常启动自动清理）；② 启动健康四层证据：进程（exitCode）、日志（新增行签名）、HTTP（探针异常只记不判）、页面（WebView2 失败上报）；③ 启动失败且存在第三方插件时**会话内只问一次**、Tier1→Tier2 自动降级；提示区分安全模式/普通启动（E1014/E1015） |
+| 60 | `ChatWindow.xaml.cs` + `Services/StartupEvidenceStore.cs`（新）+ `Services/HttpHealthMonitor.cs`（新）+ `Watchdog/WatchdogRuntime.cs` + `MainWindow.xaml(.cs)` + `VersionSettingsWindow.xaml(.cs)` + `Models/InstanceHealthModels.cs` | **#11 安全模式第二阶段**：① 页面层升级为判死输入（`ProbePageAsync` DOM 探针 + 失败时安全模式重启提议）；② 「运行状况」新增“启动证据”区块（进程/日志/HTTP/页面，含接管记录）；③ 就绪后 HTTP 连续 3 次失败报降级（探针异常按 miss 计）；④ 实例卡片“安全模式”徽标 |
 
 ## 行为变化（相对上游）
 
@@ -141,6 +142,10 @@ dsh-launcher-dev/
 51. **安全模式清理**：正常启动成功后自动删除 `.dsh-safe`；停止/删除实例不影响用户 profile
 52. **启动健康证据**：进程提前退出（附 exitCode）、dsh 日志命中失败签名（新增行，只认 dsh/stderr）、HTTP 探测（探针异常只记证据）、WebView2 页面加载失败（上报提示）四层；失败原因与证据会出现在弹窗与运行日志中
 53. **启动提示**：安全模式成功时提示"第三方插件未加载，你的配置未被修改"，普通启动保持原提示
+54. **页面层判死**：Desktop 启动后对 Chat 页面做 DOM 探针（根节点 + 错误签名）；失败且存在第三方插件时会话内询问一次是否安全模式重启；探针异常只记证据不判死
+55. **启动证据**：实例设置 → 运行状况新增“启动证据”区块，记录每次启动尝试的结论与四层证据（含接管已运行实例），最多 60 条、进程内不落盘
+56. **就绪后 HTTP 健康**：任何 HTTP 响应（含 401/403）算服务活着；连续 3 次无响应报一次降级提示并记证据，成功即清零
+57. **安全模式徽标**：实例卡片状态胶囊旁显示“安全模式”徽标（存在 `.dsh-safe` 时），正常启动清理后消失
 
 ## 待办（功能完成后统一处理）
 

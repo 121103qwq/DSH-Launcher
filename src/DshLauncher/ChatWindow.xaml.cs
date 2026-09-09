@@ -7,6 +7,16 @@ using Microsoft.Web.WebView2.Core;
 
 namespace DshLauncher;
 
+/// <summary>页面层探针结果：Ok=页面可用；Failed=导航失败/根节点缺失/命中错误签名；Unknown=探针异常（绝不判死）。</summary>
+public enum PageProbeStatus
+{
+    Ok,
+    Failed,
+    Unknown
+}
+
+public sealed record PageProbeResult(PageProbeStatus Status, string? Summary);
+
 public partial class ChatWindow : Window
 {
     private const string DeepSeekWindowAppUserModelId = "DSHLauncher.DeepSeekWindow";
@@ -102,6 +112,101 @@ public partial class ChatWindow : Window
         }
 
         _navigationReady.TrySetResult(true);
+    }
+
+    /// <summary>
+    /// 页面层探针（启动健康四层证据之一）：导航完成后检查 DOM 根节点与错误签名。
+    /// 探针自身异常一律返回 Unknown（绝不判死）。
+    /// </summary>
+    public async Task<PageProbeResult> ProbePageAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        // Chat 窗口 Show() 后 WebView2 是异步初始化的：先等它就绪（最多 5 秒），
+        // 否则会误报 Unknown。
+        var initDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (Browser.CoreWebView2 is null && DateTimeOffset.UtcNow < initDeadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(250, cancellationToken);
+        }
+
+        if (Browser.CoreWebView2 is null)
+        {
+            return new PageProbeResult(PageProbeStatus.Unknown, "WebView2 未初始化");
+        }
+
+        try
+        {
+            var readyTask = _navigationReady.Task;
+            var completed = await Task.WhenAny(readyTask, Task.Delay(timeout, cancellationToken));
+            if (completed != readyTask)
+            {
+                return new PageProbeResult(PageProbeStatus.Failed, "页面导航超时");
+            }
+
+            if (!await readyTask)
+            {
+                return new PageProbeResult(PageProbeStatus.Failed, "页面导航失败");
+            }
+
+            const string script = """
+                (() => {
+                  const body = document.body;
+                  const text = body ? (body.innerText || '') : '';
+                  const root = document.querySelector('#root, #app, [data-dsh-root], .dsh-app');
+                  return JSON.stringify({ root: !!root, text: text.slice(0, 300) });
+                })()
+                """;
+            var raw = await Browser.CoreWebView2.ExecuteScriptAsync(script);
+            // ExecuteScriptAsync 返回的是 JSON 编码的字符串：外层解一次得到探针的 JSON 文本。
+            var payload = JsonSerializer.Deserialize<string>(raw);
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return new PageProbeResult(PageProbeStatus.Unknown, "探针返回空结果");
+            }
+
+            using var document = JsonDocument.Parse(payload);
+            var hasRoot = document.RootElement.TryGetProperty("root", out var rootElement)
+                && rootElement.ValueKind == JsonValueKind.True;
+            var text = document.RootElement.TryGetProperty("text", out var textElement)
+                && textElement.ValueKind == JsonValueKind.String
+                ? textElement.GetString() ?? string.Empty
+                : string.Empty;
+            foreach (var signature in new[]
+                     {
+                         "failed to load",
+                         "cannot get",
+                         "plugin tree failed",
+                         "internal server error"
+                     })
+            {
+                if (text.Contains(signature, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new PageProbeResult(
+                        PageProbeStatus.Failed,
+                        $"页面出现错误提示：{text[..Math.Min(120, text.Length)]}");
+                }
+            }
+
+            if (!hasRoot && text.Trim().Length == 0)
+            {
+                return new PageProbeResult(PageProbeStatus.Failed, "页面没有渲染出应用根节点");
+            }
+
+            return new PageProbeResult(
+                PageProbeStatus.Ok,
+                hasRoot ? "应用根节点已渲染" : "页面已渲染（未识别根节点选择器）");
+        }
+        catch (OperationCanceledException)
+        {
+            return new PageProbeResult(PageProbeStatus.Unknown, "探针被取消");
+        }
+        catch (Exception ex)
+        {
+            // 探针异常只记证据，不判死。
+            return new PageProbeResult(PageProbeStatus.Unknown, $"探针异常：{ex.Message}");
+        }
     }
 
     public async Task<bool> SendMessageAsync(string message, CancellationToken cancellationToken = default)

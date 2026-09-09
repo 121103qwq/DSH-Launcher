@@ -315,11 +315,27 @@
                                     </Grid.RowDefinitions>
                                     <Grid>
                                         <TextBlock Text="实例状态" FontSize="18" FontWeight="SemiBold" />
-                                        <Border HorizontalAlignment="Right"
-                                                Background="{Binding SelectedInstanceStatusBackgroundBrush}"
-                                                BorderBrush="{Binding SelectedInstanceStatusBrush}"
-                                                BorderThickness="1"
-                                                CornerRadius="{StaticResource PanelCornerRadius}"
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <Border Visibility="{Binding SelectedInstanceSafeModeVisibility}"
+                                                    Background="{StaticResource WarningBackgroundBrush}"
+                                                    BorderBrush="{StaticResource WarningBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="{StaticResource PanelCornerRadius}"
+                                                    Padding="9,3"
+                                                    Margin="0,0,8,0"
+                                                    ToolTip="当前实例存在隔离 profile（.dsh-safe）：启动时剥离了第三方插件，用户配置未被修改。"
+                                                    SnapsToDevicePixels="True"
+                                                    UseLayoutRounding="True">
+                                                <TextBlock Text="安全模式"
+                                                           Foreground="#8B5A12"
+                                                           FontSize="12"
+                                                           FontWeight="SemiBold" />
+                                            </Border>
+                                            <Border HorizontalAlignment="Right"
+                                                    Background="{Binding SelectedInstanceStatusBackgroundBrush}"
+                                                    BorderBrush="{Binding SelectedInstanceStatusBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="{StaticResource PanelCornerRadius}"
                                                 Padding="9,3"
                                                 SnapsToDevicePixels="True"
                                                 UseLayoutRounding="True">
@@ -328,6 +344,7 @@
                                                 <TextBlock Text="{Binding SelectedInstanceStatus}" Foreground="{Binding SelectedInstanceStatusTextBrush}" FontSize="12" FontWeight="SemiBold" />
                                             </StackPanel>
                                         </Border>
+                                        </StackPanel>
                                     </Grid>
                                     <Grid Grid.Row="1" Margin="0,16,0,0">
                                         <StackPanel VerticalAlignment="Center" Visibility="{Binding NoInstancesVisibility}">

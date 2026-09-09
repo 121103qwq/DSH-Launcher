@@ -604,6 +604,35 @@
                                      BorderThickness="1" />
                         </StackPanel>
                     </Border>
+
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource CardCornerRadius}"
+                            Padding="20"
+                            Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="启动证据" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="最近 60 条启动判定与四层证据（进程 / 日志 / HTTP / 页面），最新的在最上面。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       Margin="0,6,0,10" />
+                            <ListView x:Name="HealthEvidenceList"
+                                      Height="160"
+                                      BorderThickness="0"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                <ListView.View>
+                                    <GridView AllowsColumnReorder="False">
+                                        <GridViewColumn Header="时间" Width="90" DisplayMemberBinding="{Binding TimeText}" />
+                                        <GridViewColumn Header="层" Width="70" DisplayMemberBinding="{Binding LayerText}" />
+                                        <GridViewColumn Header="结论" Width="260" DisplayMemberBinding="{Binding Summary}" />
+                                        <GridViewColumn Header="详情" Width="420" DisplayMemberBinding="{Binding Detail}" />
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
 
                 <TextBlock x:Name="VersionRequiredText"

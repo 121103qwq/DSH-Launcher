@@ -1,4 +1,6 @@
 using System.IO;
+using System.Net.Http;
+using DshLauncher.Services;
 
 namespace DshLauncher.Watchdog;
 
@@ -19,6 +21,11 @@ public sealed class WatchdogRuntime : IDisposable
 {
     private readonly WatchdogCore _core;
     private readonly CancellationTokenSource _cancellation = new();
+    private readonly HttpClient _healthClient = new(new HttpClientHandler { UseProxy = false })
+    {
+        Timeout = TimeSpan.FromSeconds(3)
+    };
+    private readonly HttpHealthMonitor _httpHealth;
     private Task? _loop;
     private TimeSpan _probeInterval = TimeSpan.FromSeconds(5);
     private readonly object _intervalLock = new();
@@ -26,6 +33,9 @@ public sealed class WatchdogRuntime : IDisposable
     public event Action<WatchdogInstanceDto>? GhostAdopted;
     public event Action<WatchdogInstanceDto>? InstanceStopped;
     public event Action<WatchdogInstanceDto>? OrphanDetected;
+
+    /// <summary>就绪后 HTTP 连续失败达到阈值（实例仍在台账里，但 Web 服务无响应）。</summary>
+    public event Action<WatchdogInstanceDto, int>? HttpHealthDegraded;
 
     /// <summary>每轮探测后触发（资源快照已更新）：UI 层据此刷新 CPU/内存/运行时长。</summary>
     public event Action? ResourcesUpdated;
@@ -41,6 +51,24 @@ public sealed class WatchdogRuntime : IDisposable
         _core.GhostAdopted += instance => GhostAdopted?.Invoke(instance);
         _core.InstanceStopped += instance => InstanceStopped?.Invoke(instance);
         _core.OrphanDetected += instance => OrphanDetected?.Invoke(instance);
+        _httpHealth = new HttpHealthMonitor(async (url, token) =>
+        {
+            try
+            {
+                // 任何 HTTP 响应（含 401/403，dsh 页面需要 launch token）都算服务活着。
+                using var response = await _healthClient.GetAsync(
+                    url, HttpCompletionOption.ResponseHeadersRead, token);
+                return true;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                return false;
+            }
+        });
     }
 
     /// <summary>设置页保存后即时生效（2–120 秒，越界截断）。</summary>
@@ -79,6 +107,19 @@ public sealed class WatchdogRuntime : IDisposable
 
             try
             {
+                await ProbeHttpHealthAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception)
+            {
+                // HTTP 探针异常不影响主循环。
+            }
+
+            try
+            {
                 await Task.Delay(GetProbeInterval(), cancellationToken);
             }
             catch (OperationCanceledException)
@@ -93,6 +134,28 @@ public sealed class WatchdogRuntime : IDisposable
         lock (_intervalLock)
         {
             return _probeInterval;
+        }
+    }
+
+    /// <summary>就绪后的 HTTP 持续健康：连续 3 次无响应报一次降级（任何 HTTP 响应都算活着）。</summary>
+    private async Task ProbeHttpHealthAsync(CancellationToken cancellationToken)
+    {
+        foreach (var instance in _core.Snapshot())
+        {
+            if (string.IsNullOrWhiteSpace(instance.WebUrl))
+            {
+                _httpHealth.Forget(instance.InstanceId);
+                continue;
+            }
+
+            var observation = await _httpHealth.ObserveAsync(
+                instance.InstanceId, instance.WebUrl, cancellationToken);
+            if (observation.Degraded)
+            {
+                // 报一次后清零，避免每轮重复告警。
+                _httpHealth.Forget(instance.InstanceId);
+                HttpHealthDegraded?.Invoke(instance, observation.ConsecutiveFailures);
+            }
         }
     }
 
@@ -153,5 +216,6 @@ public sealed class WatchdogRuntime : IDisposable
     {
         _cancellation.Cancel();
         _cancellation.Dispose();
+        _healthClient.Dispose();
     }
 }

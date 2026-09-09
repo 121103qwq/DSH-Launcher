@@ -391,6 +391,23 @@ public partial class VersionSettingsWindow : UserControl
                 logs.TakeLast(500).Select(line => $"{line.At:HH:mm:ss} [{line.Source}] {line.Text}"));
             HealthLogBox.ScrollToEnd();
         }
+
+        var evidence = providers?.StartupEvidence?.Invoke(_instance) ?? Array.Empty<StartupEvidence>();
+        HealthEvidenceList.ItemsSource = evidence
+            .Select(item => new
+            {
+                TimeText = item.At.ToString("HH:mm:ss"),
+                LayerText = item.Layer switch
+                {
+                    BootLayer.Process => "进程",
+                    BootLayer.Log => "日志",
+                    BootLayer.Http => "HTTP",
+                    _ => "页面"
+                },
+                item.Summary,
+                Detail = item.Detail ?? string.Empty
+            })
+            .ToArray();
     }
 
     private static string FormatHealthDuration(TimeSpan duration) => duration switch

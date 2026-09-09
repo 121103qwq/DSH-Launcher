@@ -89,6 +89,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _shutdownFromTray;
     private readonly SafeProfileService _safeProfileService = new();
     private readonly HashSet<string> _safeModeAsked = new(StringComparer.Ordinal);
+    private readonly StartupEvidenceStore _startupEvidence = new();
 
     private readonly WatchdogRuntime _watchdog;
     private readonly Dictionary<string, DateTimeOffset> _lastReassertAt = new(StringComparer.Ordinal);
@@ -120,6 +121,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _watchdog.InstanceStopped += OnInstanceStopped;
         _watchdog.OrphanDetected += OnOrphanDetected;
         _watchdog.ResourcesUpdated += OnResourcesUpdated;
+        _watchdog.HttpHealthDegraded += OnHttpHealthDegraded;
         _marketplaceService = new();
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
@@ -223,6 +225,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(InstanceEndpointText));
             OnPropertyChanged(nameof(SelectedInstanceResourceText));
             OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
@@ -406,6 +409,29 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public Visibility SelectedInstanceResourceVisibility =>
         SelectedInstanceResourceText.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
+    /// <summary>当前实例是否存在安全模式隔离 profile（卡片上的“安全模式”徽标）。</summary>
+    public Visibility SelectedInstanceSafeModeVisibility =>
+        SelectedInstance is { } instance && _safeProfileService.SafeProfileExists(instance)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private void OnHttpHealthDegraded(WatchdogInstanceDto instance, int consecutiveFailures)
+    {
+        _startupEvidence.Record(instance.InstanceId, new StartupEvidence(
+            BootLayer.Http,
+            "就绪后 HTTP 连续无响应",
+            $"连续 {consecutiveFailures} 次未响应（{instance.WebUrl}）"));
+        LauncherLog.Warn("就绪后 HTTP 连续失败。", ErrorCodes.E1015,
+            new { instance = instance.Name ?? instance.InstanceId, failures = consecutiveFailures, url = instance.WebUrl });
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() => ShowNotice(
+            $"实例 {instance.Name ?? instance.InstanceId} 的 Web 服务连续 {consecutiveFailures} 次无响应（可能已崩溃或端口被占用）；可在「实例设置 → 运行状况」查看日志。"));
+    }
+
     internal static string FormatBytes(long bytes) => bytes switch
     {
         >= 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024 / 1024:0.##} GB",
@@ -432,6 +458,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             OnPropertyChanged(nameof(SelectedInstanceResourceText));
             OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
         });
     }
 
@@ -1128,6 +1155,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     RuntimeOwnership = InstanceRuntimeOwnership.Managed,
                     LastError = null
                 };
+                _startupEvidence.Record(instance.Id, new StartupEvidence(
+                    BootLayer.Process,
+                    "接管已运行实例（本进程未重新启动）",
+                    $"pid={instance.ProcessId} port={instance.Port}"));
             }
             else if (await _instanceRunner.TryAttachAsync(storedInstance, _windowCancellation.Token))
             {
@@ -1653,7 +1684,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     var keepPid = _watchdog.GetProcessId(instance.Id);
                     return _watchdog.Cleanup(instance.Id, keepPid > 0 ? keepPid : null);
-                })));
+                },
+                instance => _startupEvidence.Snapshot(instance.Id))));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -4735,6 +4767,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _nodeRuntime,
             _windowCancellation.Token,
             openBrowser);
+        RecordStartupEvidence(instance, result, "正常启动");
         if (IsStartSuccess(result))
         {
             return ApplySuccessfulStart(instance, result, openBrowser);
@@ -4768,6 +4801,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         _windowCancellation.Token,
                         openBrowser,
                         tier);
+                    RecordStartupEvidence(instance, safeResult, $"安全模式启动（{tier}）");
                     if (IsStartSuccess(safeResult))
                     {
                         var applied = ApplySuccessfulStart(instance, safeResult, openBrowser);
@@ -4791,6 +4825,128 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         && result.ProcessId is not null
         && result.Port is not null
         && result.WebUrl is not null;
+
+    /// <summary>把一次启动尝试的结论与四层证据记入实例的启动证据库（运行状况页展示）。</summary>
+    private void RecordStartupEvidence(ManagerInstance instance, DshInstanceRunResult result, string phase)
+    {
+        _startupEvidence.Record(instance.Id, new StartupEvidence(
+            BootLayer.Process,
+            $"{phase}：{(result.IsSuccess ? "成功" : "失败")}",
+            result.IsSuccess
+                ? $"pid={result.ProcessId} port={result.Port}"
+                : result.Error));
+        if (result.Evidence is { Count: > 0 } evidence)
+        {
+            _startupEvidence.Record(instance.Id, evidence);
+        }
+    }
+
+    /// <summary>
+    /// 页面层判死（第二阶段）：Chat 窗口打开后探针检查 DOM；失败且存在第三方插件时，
+    /// 会话内询问一次是否用安全模式重启（用户配置不改）。
+    /// </summary>
+    private async Task VerifyPageHealthAsync(ManagerInstance instance, ChatWindow? chat)
+    {
+        if (chat is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var probe = await chat.ProbePageAsync(TimeSpan.FromSeconds(15), _windowCancellation.Token);
+            _startupEvidence.Record(instance.Id, new StartupEvidence(
+                BootLayer.Page,
+                probe.Status switch
+                {
+                    PageProbeStatus.Failed => "页面探针失败",
+                    PageProbeStatus.Ok => "页面探针通过",
+                    _ => "页面探针未完成"
+                },
+                probe.Summary));
+            if (probe.Status != PageProbeStatus.Failed)
+            {
+                return;
+            }
+
+            if (!_safeProfileService.HasThirdPartyBundles(instance, out var thirdParty)
+                || !_safeModeAsked.Add(instance.Id))
+            {
+                return;
+            }
+
+            var confirmed = System.Windows.MessageBox.Show(
+                this,
+                $"实例 {instance.Name} 的页面加载异常：{probe.Summary}\n\n"
+                + $"检测到 {thirdParty.Count} 个第三方插件（{string.Join("、", thirdParty.Take(3))}），可能是它们导致页面无法渲染。\n\n"
+                + "是否用安全模式重启？会先停止当前实例，再用隔离 profile 重新启动；不会修改你的任何配置。",
+                "页面加载失败 — 用安全模式重启？",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) == MessageBoxResult.Yes;
+            if (confirmed)
+            {
+                await RestartWithSafeModeAsync(instance);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            LauncherLog.Warn("页面健康验证异常（忽略）。", ErrorCodes.E1015,
+                new { instance = instance.Name, error = ex.Message });
+        }
+    }
+
+    private async Task RestartWithSafeModeAsync(ManagerInstance instance)
+    {
+        if (!TryBeginLifecycleOperation())
+        {
+            ShowNotice("实例正在执行启动或停止操作，请稍后再试。");
+            return;
+        }
+
+        try
+        {
+            if (_instanceRunner.IsRunning(instance.Id))
+            {
+                await _instanceRunner.StopAsync(instance.Id, _windowCancellation.Token);
+            }
+
+            CloseChatWindow(instance.Id);
+            foreach (var tier in new[] { SafeProfileTier.Tier1KeepDeepSeekCore, SafeProfileTier.Tier2Minimal })
+            {
+                var safeResult = await _instanceRunner.StartAsync(
+                    instance,
+                    _nodeRuntime,
+                    _windowCancellation.Token,
+                    openBrowser: false,
+                    tier);
+                RecordStartupEvidence(instance, safeResult, $"安全模式重启（{tier}）");
+                if (!IsStartSuccess(safeResult))
+                {
+                    continue;
+                }
+
+                ApplySuccessfulStart(instance, safeResult, openBrowser: false);
+                var chat = OpenChatWindow(instance.Id, safeResult.AuthenticatedWebUrl ?? safeResult.WebUrl!);
+                _ = VerifyPageHealthAsync(instance, chat);
+                ShowNotice(safeResult.ZeroPollution
+                    ? $"已用安全模式重启（{tier}）：第三方插件未加载，你的配置未被修改。"
+                    : $"已用安全模式重启（{tier}），但零污染校验发现用户文件被改动，请查看运行日志。");
+                return;
+            }
+
+            ShowNotice("安全模式重启失败；请在「实例设置 → 运行状况」查看启动证据与日志。");
+        }
+        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            EndLifecycleOperation();
+        }
+    }
 
     private DshInstanceRunResult ApplySuccessfulStart(
         ManagerInstance instance,
@@ -5733,7 +5889,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // Desktop 启动（启动器方式）：Launcher 用内部 Chat 窗口承载 WebUI；
         // 0.1.2-rc.1 起页面需要 launch token，优先用带 token 的地址。
-        OpenChatWindow(selected.Id, result.AuthenticatedWebUrl ?? result.WebUrl);
+        var chat = OpenChatWindow(selected.Id, result.AuthenticatedWebUrl ?? result.WebUrl);
+        _ = VerifyPageHealthAsync(selected, chat);
         ShowNotice(BuildStartSuccessNotice(selected, result, openedInBrowser: false));
         return true;
     }
