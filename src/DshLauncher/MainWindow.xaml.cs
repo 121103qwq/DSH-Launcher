@@ -1601,18 +1601,39 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private FrameworkElement CreateSettingsPage()
     {
-        var panel = new StackPanel
+        StackPanel NewCategoryPanel() => new()
         {
             Margin = new Thickness(0),
             VerticalAlignment = VerticalAlignment.Top,
             MaxWidth = 980
         };
-        panel.Children.Add(new TextBlock
+
+        void AddPageHeader(StackPanel target, string title, string description)
         {
-            Text = "运行环境检测",
-            FontSize = 20,
-            FontWeight = FontWeights.SemiBold
-        });
+            target.Children.Add(new TextBlock
+            {
+                Text = title,
+                FontSize = 20,
+                FontWeight = FontWeights.SemiBold
+            });
+            target.Children.Add(new TextBlock
+            {
+                Text = description,
+                Foreground = (WpfBrush)FindResource("MutedBrush"),
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 18)
+            });
+        }
+
+        var runtimePanel = NewCategoryPanel();
+        var generalPanel = NewCategoryPanel();
+        var networkPanel = NewCategoryPanel();
+        var diagnosePanel = NewCategoryPanel();
+        AddPageHeader(runtimePanel, "运行环境", "Node.js 与 DeepSeek Harness 的检测、安装位置与准备。");
+        AddPageHeader(generalPanel, "常规", "插件安装方式、关闭行为、版本同步与实例守护。");
+        AddPageHeader(networkPanel, "网络与账户", "代理设置与 DeepSeek 余额显示。");
+        AddPageHeader(diagnosePanel, "诊断与日志", "导出脱敏诊断包、查看日志与错误码。");
 
         var nodeStatus = new TextBlock
         {
@@ -1638,10 +1659,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 0)
         };
-        panel.Children.Add(nodeStatus);
-        panel.Children.Add(nodeDetail);
-        panel.Children.Add(dshStatus);
-        panel.Children.Add(dshDetail);
+        runtimePanel.Children.Add(nodeStatus);
+        runtimePanel.Children.Add(nodeDetail);
+        runtimePanel.Children.Add(dshStatus);
+        runtimePanel.Children.Add(dshDetail);
 
         var dshInstallLabel = new TextBlock
         {
@@ -1677,9 +1698,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         dshInstallRow.Children.Add(dshInstallBox);
         dshInstallRow.Children.Add(browseDshInstallButton);
         dshInstallRow.Children.Add(saveDshInstallButton);
-        panel.Children.Add(dshInstallLabel);
-        panel.Children.Add(dshInstallRow);
-        panel.Children.Add(new TextBlock
+        runtimePanel.Children.Add(dshInstallLabel);
+        runtimePanel.Children.Add(dshInstallRow);
+        runtimePanel.Children.Add(new TextBlock
         {
             Text = $"Launcher 默认把 @deepseek-ai/dsh 安装到 {_versionSettingsService.DefaultDshInstallDirectory}；可以在这里改为其它目录。实例的 Plugin、Skill、Provider、设置和对话仍保存在各自独立的 DSH_HOME。",
             Foreground = (WpfBrush)FindResource("MutedBrush"),
@@ -1731,8 +1752,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         buttons.Children.Add(scanDirectoryButton);
         buttons.Children.Add(prepareButton);
         buttons.Children.Add(prepareMirrorButton);
-        panel.Children.Add(buttons);
-        panel.Children.Add(hint);
+        runtimePanel.Children.Add(buttons);
+        runtimePanel.Children.Add(hint);
 
         void UpdateStatus()
         {
@@ -1836,22 +1857,90 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _runtimePanelUpdateStatus = UpdateStatus;
         UpdateStatus();
 
-        AddPluginInstallModeSection(panel);
-        AddCloseBehaviorSection(panel);
-        AddWatchdogSection(panel);
-        AddVersionSyncSection(panel);
-        AddProxySection(panel);
-        AddBalanceSection(panel);
-        AddDiagnoseSection(panel);
-        // 宿主内容区已把页面限制在视口内；设置页内容较长，改为页内滚动。
-        return new ScrollViewer
+        AddPluginInstallModeSection(generalPanel);
+        AddCloseBehaviorSection(generalPanel);
+        AddVersionSyncSection(generalPanel);
+        AddWatchdogSection(generalPanel);
+        AddProxySection(networkPanel);
+        AddBalanceSection(networkPanel);
+        AddDiagnoseSection(diagnosePanel);
+
+        // 左侧分类 + 右侧内容（与版本设置页同一套导航外观，见 docs/UI-DESIGN.md）
+        var host = new Grid();
+        host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(196) });
+        host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
+        host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var navPanel = new StackPanel { Margin = new Thickness(10, 18, 10, 18) };
+        var navCard = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(0, 0, 1, 0),
+            Child = navPanel
+        };
+        Grid.SetColumn(navCard, 0);
+        host.Children.Add(navCard);
+
+        var contentScroller = new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             CanContentScroll = false,
             PanningMode = PanningMode.VerticalOnly,
-            Content = panel
+            Content = runtimePanel
         };
+        Grid.SetColumn(contentScroller, 2);
+        host.Children.Add(contentScroller);
+
+        var categories = new (string Title, StackPanel Panel)[]
+        {
+            ("运行环境", runtimePanel),
+            ("常规", generalPanel),
+            ("网络与账户", networkPanel),
+            ("诊断与日志", diagnosePanel)
+        };
+        var navButtons = new List<System.Windows.Controls.Button>();
+        var scrollOffsets = new double[categories.Length];
+        var currentCategory = -1;
+        void SelectCategory(int index)
+        {
+            if (currentCategory >= 0)
+            {
+                scrollOffsets[currentCategory] = contentScroller.VerticalOffset;
+            }
+
+            contentScroller.Content = categories[index].Panel;
+            contentScroller.UpdateLayout();
+            contentScroller.ScrollToVerticalOffset(scrollOffsets[index]);
+            currentCategory = index;
+            for (var i = 0; i < navButtons.Count; i++)
+            {
+                var selected = i == index;
+                navButtons[i].Background = selected
+                    ? new SolidColorBrush(WpfColor.FromRgb(227, 240, 253))
+                    : WpfBrushes.Transparent;
+                navButtons[i].Foreground = selected
+                    ? (WpfBrush)FindResource("BlueBrush")
+                    : (WpfBrush)FindResource("TextBrush");
+            }
+        }
+
+        for (var i = 0; i < categories.Length; i++)
+        {
+            var index = i;
+            var button = new System.Windows.Controls.Button
+            {
+                Content = categories[i].Title,
+                Style = (Style)FindResource("NavButton")
+            };
+            button.Click += (_, _) => SelectCategory(index);
+            navButtons.Add(button);
+            navPanel.Children.Add(button);
+        }
+
+        SelectCategory(0);
+        return host;
     }
 
     private void AddProxySection(StackPanel panel)
