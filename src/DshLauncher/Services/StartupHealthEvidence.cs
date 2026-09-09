@@ -92,4 +92,24 @@ public static class StartupLogClassifier
 
         return null;
     }
+
+    /// <summary>
+    /// 只保留 <paramref name="since"/> 之后新增的日志行。实例日志是跨启动保留的环形缓冲，
+    /// 启动健康检查必须带上本次进程的起始时间作基线，否则上一轮的失败签名会被反复命中。
+    /// </summary>
+    public static IReadOnlyList<InstanceLogLine> Since(
+        IEnumerable<InstanceLogLine> lines,
+        DateTimeOffset since)
+    {
+        var result = new List<InstanceLogLine>();
+        foreach (var line in lines)
+        {
+            if (line.At >= since)
+            {
+                result.Add(line);
+            }
+        }
+
+        return result;
+    }
 }

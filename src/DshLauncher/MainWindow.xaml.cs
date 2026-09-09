@@ -5372,10 +5372,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var preview = string.Join("、", thirdParty.Take(3));
             var confirmed = System.Windows.MessageBox.Show(
                 this,
-                $"实例 {instance.Name} 启动失败：\n{result.Error}{evidenceText}\n\n"
+                $"实例 {instance.Name} 启动失败：\n{FormatStartFailure(result.Error)}{evidenceText}\n\n"
                 + $"检测到 {thirdParty.Count} 个第三方插件（{preview}{(thirdParty.Count > 3 ? "…" : string.Empty)}），可能是它们导致启动失败。\n\n"
                 + $"是否用安全模式启动？安全模式会生成一个隔离 profile（{SafeProfileService.SafeProfileName}），"
-                + "剥离第三方插件、保留 dsh 核心；不会修改你的任何配置。",
+                + "剥离第三方插件、保留 dsh 核心；不会修改你的任何配置。\n\n"
+                + "完整输出见「运行状况 → 运行日志」。",
                 "启动失败 — 使用安全模式？",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) == MessageBoxResult.Yes;
@@ -6970,7 +6971,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         System.Windows.MessageBox.Show(
             this,
-            PageNoticeDetail,
+            Services.DialogText.ForMessageBox(PageNoticeDetail),
             "启动详情",
             MessageBoxButton.OK,
             MessageBoxImage.Information);

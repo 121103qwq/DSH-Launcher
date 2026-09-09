@@ -94,6 +94,7 @@ dsh-launcher-dev/
 | 66 | `Models/PluginMatrixModels.cs`（新）+ `Services/PluginMatrixService.cs`（新）+ `PluginMatrixWindow.xaml(.cs)`（新）+ `ExtensionWindow.xaml(.cs)` + `MainWindow.xaml.cs` | **插件 × 实例矩阵**：行=至少在一个实例启用的插件（排除核心/运行时依赖假行），列=实例，单元格三态（已启用/已装未启用/未安装）；动态列 + 复制为 TSV；只读视图 |
 | 67 | `ExtensionWindow.xaml` + `docs/UI-DESIGN.md` | **扩展页工具条按钮紧凑化**：当前实例卡内 9 个按钮改 `CompactToolbarButton`（12px / Padding 9,4 / Margin 0,0,6,6），主操作同理；实测 44→33 设备像素、3 行→2 行 |
 | 68 | `Services/DshInstanceRunner.cs` + `MainWindow.xaml.cs` | **外部连接（Attached）失效收敛**：修 `_attached` 只加不删（没开实例却提示“请先停止实例”）；按 PID/端口活性校验并自动摘除；外部实例也登记 watchdog；5s 周期收敛 + 停止守卫区分死活 |
+| 69 | `Services/StartupHealthEvidence.cs` + `Services/DshInstanceRunner.cs` + `Services/DialogText.cs`（新）+ `MainWindow.xaml.cs` | **启动健康检查日志基线 + 对话框文本收敛**（work-log/47）：① 健康检查只扫本次进程启动后的新增日志行（`logBaselineAt` + `StartupLogClassifier.Since`），修复“旧失败签名行让本会话内后续启动/安全模式/自动重启瞬间假失败”（清空日志才恢复）；② 新增 `DialogText.ForMessageBox`（每行 ≤120 字符硬折 + 总长 ≤1200 + 截断提示），安全模式询问改用 `FormatStartFailure` 摘要 + 证据 + 插件清单 + 指向运行日志（原来原样塞 ~5.3KB 输出，弹窗实测 1584×1182、是/否按钮出屏），「启动详情」弹窗同步收敛 |
 
 ## 行为变化（相对上游）
 
@@ -167,6 +168,8 @@ dsh-launcher-dev/
 68. **插件 × 实例矩阵**：「扩展 / Agent」→「插件矩阵」内嵌页；行=至少在一个实例启用的插件（排除 `@deepseek-ai` 核心与 schemastery/cosmokit/cordis 等运行时依赖，避免假插件行），列=实例，单元格三态；可「复制为文本」（TSV）；只读，启停仍在插件管理
 69. **扩展页工具条按钮**：「当前实例」卡内的工具条按钮改紧凑档（12px / `Padding="9,4"`，样式 `CompactToolbarButton`），125% DPI 下高度 44→33 设备像素、换行 3→2 行
 70. **外部服务失效收敛**：接管的外部 dsh 进程退出后，Launcher 最多 5 秒把实例收敛为“已停止”（不再残留“运行中”），插件/技能/MCP 修改恢复可用；外部服务仍存活时仍拒绝停止
+71. **启动日志基线**：健康检查只认本次进程启动后新增的日志行；上一次尝试留下的失败签名不再让后续启动（含安全模式与自动重启）瞬间假失败（运行状况页的历史日志仍保留）
+72. **长文本弹窗**：安全模式询问与「启动详情」不再直接显示原始日志/堆栈（每行 ≤120 字符、总长 ≤1200 字符，超出提示“完整内容见运行状况 → 运行日志”），避免按钮被撑出屏幕
 
 ## 待办（功能完成后统一处理）
 

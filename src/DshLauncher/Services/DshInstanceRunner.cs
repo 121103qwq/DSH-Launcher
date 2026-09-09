@@ -506,6 +506,10 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                             _idleTracker.MarkActivity(instance.Id, "dsh 错误输出");
                         };
 
+                        // 本次尝试的日志基线：只扫本进程启动后新增的行。实例日志是跨启动保留的
+                        // 环形缓冲，若从 0 全扫，上一轮残留的失败签名会让后续每次启动（含安全
+                        // 模式与自动重启）瞬间误判失败。
+                        var logBaselineAt = DateTimeOffset.Now;
                         if (!process.Start())
                         {
                             return DshInstanceRunResult.Failure("DSh 进程无法启动。 ");
@@ -525,7 +529,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                             $"启动进程 pid={process.Id}，端口 {port}，地址 {webUrl}");
                         process = null;
 
-                        var health = await WaitForHealthAsync(instance, running, cancellationToken);
+                        var health = await WaitForHealthAsync(instance, running, logBaselineAt, cancellationToken);
                         if (health.IsHealthy)
                         {
                             // 0.1.2-rc.1 起 web 页面需要 launch token；地址行在 Loader
@@ -775,6 +779,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private async Task<StartupVerdict> WaitForHealthAsync(
         ManagerInstance instance,
         RunningDshProcess running,
+        DateTimeOffset logBaselineAt,
         CancellationToken cancellationToken)
     {
         var evidence = new List<StartupEvidence>();
@@ -785,7 +790,6 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         var deadline = DateTimeOffset.UtcNow + HealthTimeout;
         string? lastError = null;
         var consecutiveMisses = 0;
-        var scannedLines = 0;
 
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -803,19 +807,14 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     evidence);
             }
 
-            // 日志层：只看监控起点之后的新增行。
-            var logs = _logs.Snapshot(instance.Id);
-            if (logs.Count > scannedLines)
+            // 日志层：只看本次进程启动之后新增的行（基线之前的行属于上一轮）。
+            var newLines = StartupLogClassifier.Since(_logs.Snapshot(instance.Id), logBaselineAt);
+            if (StartupLogClassifier.FindFailure(newLines) is { } failure)
             {
-                var newLines = logs.Skip(scannedLines).ToArray();
-                scannedLines = logs.Count;
-                if (StartupLogClassifier.FindFailure(newLines) is { } failure)
-                {
-                    evidence.Add(new StartupEvidence(BootLayer.Log, failure.Description, failure.Line.Text));
-                    return StartupVerdict.Failed(
-                        $"DSh 启动日志出现失败签名：{failure.Description}。{failure.Line.Text}",
-                        evidence);
-                }
+                evidence.Add(new StartupEvidence(BootLayer.Log, failure.Description, failure.Line.Text));
+                return StartupVerdict.Failed(
+                    $"DSh 启动日志出现失败签名：{failure.Description}。{failure.Line.Text}",
+                    evidence);
             }
 
             try
