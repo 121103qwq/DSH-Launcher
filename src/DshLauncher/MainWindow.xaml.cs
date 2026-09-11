@@ -3518,11 +3518,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ToolTip = "清点 Launcher 自有文件（崩溃日志/轮转旧日志/市场缓存/插件回滚点/会话备份/换版本导出）；" +
                       "会话、凭据、实例数据、自动快照不在清理范围内，删除走回收站"
         };
+        var webView2CacheButton = new System.Windows.Controls.Button
+        {
+            Content = "清除桌面窗口缓存",
+            Margin = new Thickness(8, 0, 0, 0),
+            ToolTip = "桌面窗口（WebView2）缓存被污染时，实例可能只在 Desktop 窗口报“Failed to load plugins”，"
+                      + "而浏览器打开正常。点这里会在下次启动启动器时清除该缓存（不动会话、凭据与实例数据）"
+        };
+        webView2CacheButton.Click += (_, _) =>
+        {
+            if (WebView2CacheService.IsPending())
+            {
+                ShowNotice("已经排队：下次启动启动器时清除桌面窗口（WebView2）缓存。");
+                return;
+            }
+
+            if (!WebView2CacheService.TryQueue(out var queueError))
+            {
+                ShowNotice($"排队失败：{queueError}");
+                return;
+            }
+
+            ShowNotice("已排队：下次启动启动器时清除桌面窗口（WebView2）缓存（本次运行不受影响）。");
+        };
         var storagePreviewed = false;
         var buttons = new WrapPanel();
         buttons.Children.Add(exportButton);
         buttons.Children.Add(openLogButton);
         buttons.Children.Add(storageButton);
+        buttons.Children.Add(webView2CacheButton);
         var status = new TextBlock
         {
             Foreground = (WpfBrush)FindResource("BlueBrush"),
@@ -5961,8 +5985,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            if (!_safeProfileService.HasThirdPartyBundles(instance, out var thirdParty)
-                || !_safeModeAsked.Add(instance.Id))
+            if (!_safeProfileService.HasThirdPartyBundles(instance, out var thirdParty))
+            {
+                // 没有第三方插件可怀疑时，原来会**静默返回**、用户什么都看不到（work-log/71 事故正是如此）。
+                // 这里给出下一步引导：先区分"渲染宿主"（浏览器 vs 桌面窗口），再给出一键清缓存入口。
+                System.Windows.MessageBox.Show(
+                    this,
+                    $"实例 {instance.Name} 的页面加载异常：{probe.Summary}\n\n"
+                    + "下一步建议：先点上面的「浏览器」方式打开同一个实例。\n"
+                    + "· 浏览器正常、只有桌面窗口报错 ⇒ 多半是桌面窗口（WebView2）的缓存问题，\n"
+                    + "   可在 设置 → 诊断与日志 里点「清除桌面窗口缓存」（下次启动启动器时执行）。\n"
+                    + "· 浏览器同样报错 ⇒ 是 dsh/实例本身的问题，请把完整错误文本发给我们。",
+                    "页面加载失败 — 先对比浏览器打开");
+                return;
+            }
+
+            if (!_safeModeAsked.Add(instance.Id))
             {
                 return;
             }

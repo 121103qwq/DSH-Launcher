@@ -21,6 +21,8 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+            // A4：把"清除桌面窗口缓存"的排队请求在创建任何 WebView2 之前执行完（work-log/71 事故）。
+            WebView2CacheService.ApplyPendingAtStartup();
         // 验证 harness 专用开关：只加载资源与窗口，不执行单实例互斥/代理/激活管道，
         // 避免验证进程被当成第二实例而自杀（生产环境不会设置该变量）。
         if (string.Equals(
