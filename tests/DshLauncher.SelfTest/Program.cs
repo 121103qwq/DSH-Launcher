@@ -1403,6 +1403,74 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 19. 从实例 profile 导出 v4 整合包（PackExportService，C 组）
+// ===========================================================================
+{
+    var exportRoot = Path.Combine(scratch, "export-from-profile");
+    var exportPaths = new LauncherPaths(Path.Combine(exportRoot, "root"));
+    Directory.CreateDirectory(exportPaths.RootDirectory);
+    var exportRegistry = new InstanceRegistry(exportPaths);
+    var exportTemplateRoot = Path.Combine(exportRoot, "runtime");
+    Directory.CreateDirectory(exportTemplateRoot);
+    var exportExe = Path.Combine(exportTemplateRoot, "dsh.cmd");
+    File.WriteAllText(exportExe, "@echo off", new UTF8Encoding(false));
+    var exportInstance = exportRegistry.Register("导出源实例", exportTemplateRoot, InstanceKind.Installed, exportExe, "0.1.5-rc.2", "pnpm");
+
+    var exportProfileDir = Path.Combine(exportInstance.DshHome, "profiles", "web");
+    Directory.CreateDirectory(exportProfileDir);
+    File.WriteAllText(Path.Combine(exportProfileDir, "package.json"), """
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "dsh-pet": "0.2.0",
+    "dsh-reasoning-effort": "github:HanaAyane/dsh-reasoning-effort#83bc8c5",
+    "theme": "github:owner/repo#abcdef1&path:packages/theme"
+  },
+  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"], "patchReload": "live" } }
+}
+""", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(exportProfileDir, "cordis.patch.yml"), "plugins:\n  whale: {}\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(exportProfileDir, "pnpm-workspace.yaml"), "packages:\n  - .\n", new UTF8Encoding(false));
+
+    var exportTarget = Path.Combine(exportRoot, "web-export.dspack");
+    var exportOk = PackExportService.TryExport(exportInstance, "web", exportTarget, "2.1.0", out var exportSummary, out var exportError);
+    var exportReadOk = PackArchiveReader.TryRead(exportTarget, out var exportArchive, out var exportOutcome, out var exportReadError);
+    Check("packexport-service/从 profile 导出：manifest v4 + v3 配对的容器、bundles/依赖/坐标齐全",
+        exportOk
+        && exportSummary.Count >= 5
+        && exportReadOk
+        && exportOutcome == PackArchiveOutcome.Ok
+        && exportArchive!.Manifest.Version == PackManifestVersion.V4
+        && exportArchive.Manifest.PackVersion == "2.1.0"
+        && exportArchive.Manifest.DshVersion == "0.1.5-rc.2"
+        && exportArchive.Manifest.Bundles.Count == 2
+        && exportArchive.Manifest.Dependencies.Count == 3
+        && exportArchive.Manifest.Dependencies.ContainsKey("github:owner/repo#path:/packages/theme")
+        && exportArchive.HasPnpmWorkspace
+        && exportArchive.Manifest.Patch is not null
+        && exportArchive.Manifest.ResolveDisplayName("zh-CN") == "导出源实例",
+        exportError ?? exportReadError ?? string.Empty);
+
+    Check("packexport-service/导出物能被自家导入器读回（往返一致）",
+        PackArchiveReader.TryRead(exportTarget, out var roundTripArchive, out _, out _)
+        && roundTripArchive!.Manifest.Dependencies.TryGetValue("dsh-pet", out var petVersion)
+        && petVersion == "0.2.0"
+        && roundTripArchive.Manifest.Dependencies.TryGetValue("github:HanaAyane/dsh-reasoning-effort", out var sha)
+        && sha == "83bc8c5");
+
+    // 缺少 bundles 的 profile 应被拒绝，而不是产出坏包
+    var emptyProfile = Path.Combine(exportInstance.DshHome, "profiles", "pack");
+    Directory.CreateDirectory(emptyProfile);
+    File.WriteAllText(Path.Combine(emptyProfile, "package.json"), "{ \"name\": \"dsh-profile-pack\", \"private\": true }\n", new UTF8Encoding(false));
+    var rejectedTarget = Path.Combine(exportRoot, "bad.dspack");
+    Check("packexport-service/没有 bundles 的 profile：明确拒绝且不产出坏包",
+        !PackExportService.TryExport(exportInstance, "pack", rejectedTarget, "1.0.0", out _, out var rejectError)
+        && rejectError!.Contains("bundles", StringComparison.Ordinal)
+        && !File.Exists(rejectedTarget));
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",

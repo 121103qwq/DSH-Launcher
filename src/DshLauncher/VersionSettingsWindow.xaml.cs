@@ -1322,6 +1322,40 @@ public partial class VersionSettingsWindow : UserControl
         }
     }
 
+    /// <summary>C 组：按规范导出 manifest v4 + .dspack（当前 profile）。</summary>
+    private void ExportPackV4_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            ExportStatusText.Text = "请先选择版本。";
+            return;
+        }
+
+        var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出为整合包（.dspack）",
+            Filter = "DSH 整合包 (*.dspack)|*.dspack",
+            FileName = $"{PackFormat.ResolveProfileName(profileName)}-{_instance.DetectedVersion ?? "pack"}.dspack",
+            AddExtension = true,
+            DefaultExt = ".dspack"
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var version = string.IsNullOrWhiteSpace(_instance.DetectedVersion) ? "1.0.0" : _instance.DetectedVersion!;
+        if (!PackExportService.TryExport(_instance, profileName, dialog.FileName, version, out var summary, out var error))
+        {
+            ExportStatusText.Text = $"导出失败：{error}";
+            return;
+        }
+
+        ExportStatusText.Text = "整合包已导出（manifest v4）：" + string.Join("；", summary);
+        LauncherLog.Info("已导出 v4 整合包。", "E3002", new { dialog.FileName, summary });
+    }
+
     private async void ExportPackage_Click(object sender, RoutedEventArgs e)
     {
         if (_instance is null)
