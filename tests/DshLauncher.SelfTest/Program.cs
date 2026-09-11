@@ -2013,6 +2013,38 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && AuditProbeTimelineService.Summarize(previewTimeline).Contains("含凭据片段", StringComparison.Ordinal));
 }
 
+{
+    // work-log/78：版本匹配（精确 + 可选前导 v）与安装后运行目录定位
+    Check("packtemplate/版本比较：精确匹配，忽略大小写/空白/可选前导 v；空值一律不匹配",
+        PackTemplateResolution.VersionsMatch("0.1.5-rc.2", "0.1.5-rc.2")
+        && PackTemplateResolution.VersionsMatch("v0.1.5-rc.2", " 0.1.5-rc.2 ")
+        && !PackTemplateResolution.VersionsMatch("0.1.5-rc.2", "0.1.5-rc.1")
+        && !PackTemplateResolution.VersionsMatch(null, "0.1.5-rc.2")
+        && !PackTemplateResolution.VersionsMatch("", "")
+        && PackTemplateResolution.Normalize("v1.2.3") == "1.2.3");
+
+    // 目录定位：versions/<版本>/ 形态（真实运行时的布局）必须能找到；无关目录返回 null 而不是乱猜
+    var locateRoot = Path.Combine(scratch, "packtemplate-locate");
+    var versionDir = Path.Combine(locateRoot, "versions", "0.1.5-rc.2");
+    Directory.CreateDirectory(Path.Combine(versionDir, "node_modules", "@deepseek-ai", "dsh"));
+    File.WriteAllText(Path.Combine(versionDir, "dsh.cmd"), "@echo off", new UTF8Encoding(false));
+    // 正例（能解析到真实包根）需要完整 npm 包结构，由真实链路「更换运行版本」覆盖；
+    // 这里只锁**反例**：未知版本 / 不存在的目录一律返回 null，绝不乱猜。
+    Check("packtemplate/安装后定位：未知版本与不存在的目录一律返回 null（不猜）",
+        PackTemplateResolution.LocateInstalledPackageRoot(locateRoot, "9.9.9") is null
+        && PackTemplateResolution.LocateInstalledPackageRoot(Path.Combine(locateRoot, "missing"), "0.1.5-rc.2") is null);
+
+    var candidateTemplate = new ManagerInstance(
+        "id-a", "甲", @"C:	mp", InstanceKind.Installed, @"C:	mp\home", null, "0.1.5-rc.1",
+        InstanceRuntimeStatus.Ready, "npm", null, DateTimeOffset.UtcNow, DshLaunchSpec: null);
+    var candidateOther = candidateTemplate with { Id = "id-b", Name = "乙", DetectedVersion = "0.1.5-rc.2" };
+    var candidates = PackTemplateResolution.BuildCandidates(new[] { candidateTemplate, candidateOther }, "0.1.5-rc.2");
+    Check("packtemplate/候选模板：只列实例、匹配的排前面并正确标注",
+        candidates.Count == 2
+        && candidates[0].Instance.Id == "id-b" && candidates[0].Matches
+        && !candidates[1].Matches);
+}
+
 // ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================

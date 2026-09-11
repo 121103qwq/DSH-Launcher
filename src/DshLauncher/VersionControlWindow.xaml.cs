@@ -628,6 +628,66 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         };
     }
 
+    /// <summary>work-log/78：版本不一致时提示并让用户选择（换模板 / 下载安装 / 取消）；返回 null = 取消。</summary>
+    private async Task<ManagerInstance?> ResolveMatchingTemplateAsync(string? requiredVersion, ManagerInstance template)
+    {
+        var installDirectory = _versionSettingsService.ResolveDshInstallDirectory();
+        var chosenDirectory = installDirectory;
+        var dialog = new PackVersionMismatchWindow(
+            Window.GetWindow(this),
+            requiredVersion ?? "未知",
+            template.DetectedVersion,
+            PackTemplateResolution.BuildCandidates(Versions, requiredVersion),
+            installDirectory,
+            chosen =>
+            {
+                using var picker = new Forms.FolderBrowserDialog { Description = "选择 DSh 安装位置", SelectedPath = chosen };
+                if (picker.ShowDialog() == Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(picker.SelectedPath))
+                {
+                    chosenDirectory = picker.SelectedPath;
+                }
+            });
+        if (dialog.ShowDialog() != true) { return null; }
+        if (!dialog.DownloadRequested) { return dialog.SelectedInstance; }
+
+        var nodeRuntime = _nodeRuntimeProvider();
+        if (!nodeRuntime.IsAvailable || string.IsNullOrWhiteSpace(nodeRuntime.ExecutablePath))
+        {
+            SetStatus("缺少可用的 Node.js，无法下载所选 DSh 版本。");
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(requiredVersion) || !DshInstallService.IsSafePackageVersion(requiredVersion))
+        {
+            SetStatus($"整合包声明的版本无法安装：{requiredVersion ?? "未声明"}。");
+            return null;
+        }
+
+        var target = string.IsNullOrWhiteSpace(chosenDirectory) ? installDirectory : chosenDirectory;
+        LauncherTaskHandle? task = null;
+        try
+        {
+            task = _taskService?.Begin(LauncherTaskKind.RuntimePrepare, $"安装 DSh {requiredVersion}", template.Name, target);
+            task?.Report($"正在从 npm 下载 DSh {requiredVersion}…");
+            var install = await new DshInstallService().InstallVersionAsync(
+                nodeRuntime, requiredVersion, DshInstallService.OfficialRegistry, target,
+                task?.Token ?? _lifetimeCancellation.Token);
+            if (!install.IsSuccess) { task?.Fail(install.Error); SetStatus($"安装 DSh {requiredVersion} 失败：{install.Error}"); return null; }
+
+            var packageRoot = PackTemplateResolution.LocateInstalledPackageRoot(target, requiredVersion!);
+            if (packageRoot is null) { task?.Fail("找不到运行目录"); SetStatus($"已安装但找不到运行目录：{target}"); return null; }
+
+            var resolvedTemplate = PackTemplateResolution.BuildTemplateFromRuntime(template, packageRoot, requiredVersion!, out var buildError);
+            if (resolvedTemplate is null) { task?.Fail(buildError); SetStatus(buildError ?? "构造模板失败"); return null; }
+
+            task?.Complete($"已安装 {requiredVersion}");
+            SetStatus($"已安装 DSh {requiredVersion}，继续导入。");
+            return resolvedTemplate;
+        }
+        catch (OperationCanceledException) { task?.MarkCancelled("安装已取消"); SetStatus("安装 DSh 的下载已取消。"); return null; }
+        catch (Exception ex) { task?.Fail(ex.Message); SetStatus($"安装 DSh {requiredVersion} 失败：{ex.Message}"); return null; }
+        finally { task?.Dispose(); }
+    }
+
     /// <summary>
     /// C4：导入**规范格式**整合包（.dspack v2/v3 或旧 .tgz）。读包校验 → 确认面板（实例名/profile/
     /// 文件清单与体积/dshVersion）→ files[] 需联网下载时必须显式同意 → 导入（失败整体回滚）。
@@ -653,6 +713,14 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
 
             var manifest = archive.Manifest;
             var plan = _packImportService.BuildPlan(archive, Versions.ToArray(), template);
+            if (!plan.TemplateVersionMatches)
+            {
+                var resolved = await ResolveMatchingTemplateAsync(plan.RequiredDshVersion, template);
+                if (resolved is null) { SetStatus("已取消导入：整合包要求的 DSh 版本与当前模板不一致。"); return; }
+                template = resolved;
+                plan = _packImportService.BuildPlan(archive, Versions.ToArray(), template);
+            }
+
             var downloadFiles = manifest.Files;
             var downloadBytes = downloadFiles.Sum(file => file.Size);
 
@@ -756,6 +824,13 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         try
         {
             var preview = await Task.Run(() => _packageService.PreviewPackage(dialog.FileName));
+            if (!PackTemplateResolution.VersionsMatch(preview.DshVersion, template.DetectedVersion))
+            {
+                var resolved = await ResolveMatchingTemplateAsync(preview.DshVersion, template);
+                if (resolved is null) { SetStatus("已取消导入：整合包要求的 DSh 版本与当前模板不一致。"); return; }
+                template = resolved;
+            }
+
             if (new LegacyPackImportWindow(Window.GetWindow(this), preview).ShowDialog() != true)
             {
                 SetStatus("已取消导入：未确认整合包内容。");
