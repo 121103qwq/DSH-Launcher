@@ -457,7 +457,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (SelectedInstance is { } instance && TryGetUpdateNotice(instance, out var notice))
             {
                 return $"官方最新 {notice!.LatestVersion}（当前 {notice.CurrentVersion}）。"
-                    + "在「实例设置 → 版本与快照 → 更换运行版本」里升级或降级。";
+                    + "在「版本控制 → 更换运行版本」里升级或降级。";
             }
 
             return "该实例开启了 DSh 版本更新提示；正在查询官方最新版本。";
@@ -2231,6 +2231,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ImportSourceProject,
             _versionHealthService,
             _versionSnapshotService,
+            _instanceVersionSwitchService,
+            _switchHistory,
+            _updateNotice,
+            _versionSettingsService,
             () => _nodeRuntime,
             () => _dshRuntime,
             id => _instanceRunner.IsRunning(id),
@@ -2273,23 +2277,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _extensionService,
             () => _nodeRuntime,
             _versionPackageService,
-            _versionSnapshotService,
             (current, name) =>
             {
                 var updated = current with { Name = name };
                 UpdateInstance(updated);
-                var saved = Instances.First(instance =>
-                    string.Equals(instance.Id, current.Id, StringComparison.Ordinal));
-                PageTitle = $"版本设置 - {saved.Name}";
-                PageSubtitle = $"当前实例：{saved.Name} · 管理个性化、配置、插件和分享导出";
-                OnPropertyChanged(nameof(PageTitle));
-                OnPropertyChanged(nameof(PageSubtitle));
-                return saved;
-            },
-            _instanceVersionSwitchService,
-            current =>
-            {
-                UpdateInstance(current);
                 var saved = Instances.First(instance =>
                     string.Equals(instance.Id, current.Id, StringComparison.Ordinal));
                 PageTitle = $"版本设置 - {saved.Name}";
@@ -2331,9 +2322,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     : Array.Empty<string>(),
                 instance => _instanceRunner.IsRunning(instance.Id),
                 RunPluginBisectAsync,
-                DisablePluginAndStartAsync),
-            switchHistory: _switchHistory,
-            updateNotice: _updateNotice));
+                DisablePluginAndStartAsync)));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }

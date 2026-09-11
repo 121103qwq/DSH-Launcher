@@ -24,6 +24,9 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly Action _importSourceProject;
     private readonly VersionHealthService _healthService;
     private readonly VersionSnapshotService _snapshotService;
+    private readonly InstanceVersionSwitchService _switchService;
+    private readonly VersionSwitchHistoryService _switchHistory;
+    private readonly DshUpdateNoticeService _updateNotice;
     private readonly Func<NodeRuntimeInfo> _nodeRuntimeProvider;
     private readonly Func<DshRuntimeInfo> _dshRuntimeProvider;
     private readonly Func<string, bool> _isRunning;
@@ -31,7 +34,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly Action _versionContentChanged;
     private readonly DshInstallService _dshInstallService = new();
     private readonly DshVersionCatalogService _dshVersionCatalogService = new();
-    private readonly VersionSettingsService _versionSettingsService = new();
+    private readonly VersionSettingsService _versionSettingsService;
     private readonly CancellationTokenSource _lifetimeCancellation;
     private VersionHealthReport? _healthReport;
     private bool _isBusy;
@@ -49,6 +52,10 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Action importSourceProject,
         VersionHealthService healthService,
         VersionSnapshotService snapshotService,
+        InstanceVersionSwitchService switchService,
+        VersionSwitchHistoryService switchHistory,
+        DshUpdateNoticeService updateNotice,
+        VersionSettingsService versionSettingsService,
         Func<NodeRuntimeInfo> nodeRuntimeProvider,
         Func<DshRuntimeInfo> dshRuntimeProvider,
         Func<string, bool> isRunning,
@@ -66,6 +73,10 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _importSourceProject = importSourceProject;
         _healthService = healthService;
         _snapshotService = snapshotService;
+        _switchService = switchService;
+        _switchHistory = switchHistory;
+        _updateNotice = updateNotice;
+        _versionSettingsService = versionSettingsService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _dshRuntimeProvider = dshRuntimeProvider;
         _isRunning = isRunning;
@@ -134,7 +145,11 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             OnPropertyChanged(nameof(CanCheck));
             OnPropertyChanged(nameof(CanRepair));
             OnPropertyChanged(nameof(CanSnapshot));
+            OnPropertyChanged(nameof(CanSwitchVersion));
+            OnPropertyChanged(nameof(CanRollbackVersion));
             RefreshSnapshots();
+            RefreshRuntimeVersion();
+            RefreshSwitchHistory();
             if (value is not null)
             {
                 _versionSelected(value);
@@ -670,6 +685,189 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         {
             mainWindow.ShowVersionSettings();
         }
+    }
+
+    /// <summary>只有 Installed 且未运行的版本可以换运行版本。</summary>
+    public bool CanSwitchVersion =>
+        !_isBusy
+        && SelectedVersion is { Kind: InstanceKind.Installed }
+        && !_isRunning(SelectedVersion.Id)
+        && SelectedVersion.RuntimeOwnership != InstanceRuntimeOwnership.Attached;
+
+    /// <summary>有历史记录且可切换时才能一键回退（只预选版本，仍需检查 + 确认）。</summary>
+    public bool CanRollbackVersion =>
+        CanSwitchVersion && _latestSwitchRecord is not null;
+
+    private VersionSwitchRecord? _latestSwitchRecord;
+
+    /// <summary>刷新「运行版本」卡：当前 dsh 版本/入口 + 更新提示开关状态。</summary>
+    private void RefreshRuntimeVersion()
+    {
+        var version = SelectedVersion;
+        RuntimeVersionText.Text = version is null
+            ? "尚未选择版本"
+            : $"DSh {version.DetectedVersion ?? "未知"} · {version.EffectiveDshLaunchSpec?.HostPath ?? version.RootPath}";
+        var checkUpdates = false;
+        if (version is not null)
+        {
+            try
+            {
+                checkUpdates = _versionSettingsService.Read(version).CheckDshUpdates;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                checkUpdates = false;
+            }
+        }
+
+        CheckDshUpdatesBox.IsChecked = checkUpdates;
+        OnPropertyChanged(nameof(CanSwitchVersion));
+        OnPropertyChanged(nameof(CanRollbackVersion));
+    }
+
+    /// <summary>刷新「切换历史」卡（只显示当前选中版本自己的记录）。</summary>
+    private void RefreshSwitchHistory()
+    {
+        var version = SelectedVersion;
+        var records = version is null
+            ? Array.Empty<VersionSwitchRecord>()
+            : _switchHistory.LoadForInstance(version.Id).ToArray();
+        SwitchHistoryList.ItemsSource = records.Select(record => record.DisplayText).ToArray();
+        _latestSwitchRecord = records.FirstOrDefault();
+        SwitchHistoryStatusText.Text = records.Length == 0
+            ? "还没有切换记录（每次从这里更换运行版本后会写一条）。"
+            : $"共 {records.Length} 条；回退目标：DSh {_latestSwitchRecord!.FromVersion}"
+                + (records.Length > 1 ? "（只回退一步）" : string.Empty);
+        OnPropertyChanged(nameof(CanRollbackVersion));
+    }
+
+    private async void CheckDshUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        var version = SelectedVersion;
+        if (version is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = _versionSettingsService.Read(version);
+            settings.CheckDshUpdates = CheckDshUpdatesBox.IsChecked == true;
+            _versionSettingsService.Save(version, settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            SetStatus($"保存更新提示开关失败：{ex.Message}");
+            return;
+        }
+
+        _versionContentChanged?.Invoke();
+        await RefreshDshUpdateHintAsync(version);
+    }
+
+    /// <summary>开启更新提示时联网查官方版本（服务内部带 6 小时缓存）；失败也给出明确文案。</summary>
+    private async Task RefreshDshUpdateHintAsync(ManagerInstance version)
+    {
+        if (!_versionSettingsService.Read(version).CheckDshUpdates)
+        {
+            DshUpdateHintText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        try
+        {
+            var notice = await _updateNotice.CheckAsync(version.DetectedVersion, _lifetimeCancellation.Token);
+            if (!string.Equals(SelectedVersion?.Id, version.Id, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (notice is null)
+            {
+                DshUpdateHintText.Text = "未能获取官方版本（网络不可用或版本号无法解析）。";
+            }
+            else
+            {
+                DshUpdateHintText.Text = notice.UpdateAvailable
+                    ? $"官方最新：{notice.LatestVersion}（当前 {notice.CurrentVersion}）——可用「更换运行版本」升级或降级。"
+                    : $"已是最新（官方最新 {notice.LatestVersion}）。";
+            }
+
+            DshUpdateHintText.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or TaskCanceledException
+            or OperationCanceledException
+            or InvalidDataException)
+        {
+            DshUpdateHintText.Text = "官方版本查询失败（不影响其它功能）。";
+            DshUpdateHintText.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void SwitchVersion_Click(object sender, RoutedEventArgs e) => OpenSwitchDialog(null);
+
+    /// <summary>「回退到上一版本」：把上一条历史的起点版本预选进切换向导，仍需检查 + 确认。</summary>
+    private void RollbackVersion_Click(object sender, RoutedEventArgs e)
+    {
+        if (_latestSwitchRecord is null)
+        {
+            SwitchHistoryStatusText.Text = "没有可回退的记录。";
+            return;
+        }
+
+        OpenSwitchDialog(_latestSwitchRecord.FromVersion);
+    }
+
+    private void OpenSwitchDialog(string? preselectVersion)
+    {
+        var version = SelectedVersion;
+        if (version is null)
+        {
+            SetStatus("请先在左侧选择一个版本。");
+            return;
+        }
+
+        var previousVersion = version.DetectedVersion;
+        var dialog = new VersionSwitchWindow(
+            Window.GetWindow(this),
+            version,
+            _switchService,
+            _nodeRuntimeProvider,
+            _versionSettingsService,
+            preselectVersion);
+        if (dialog.ShowDialog() != true || dialog.SwitchedInstance is null)
+        {
+            return;
+        }
+
+        // 换过版本后旧更新提示作废；实例对象也换了（运行目录/版本号），把左列表与选中项一起换掉。
+        _updateNotice.Invalidate(previousVersion);
+        _updateNotice.Invalidate(dialog.SwitchedInstance.DetectedVersion);
+        var updated = _versionUpdated(dialog.SwitchedInstance);
+        var index = -1;
+        for (var i = 0; i < Versions.Count; i++)
+        {
+            if (string.Equals(Versions[i].Id, version.Id, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index >= 0)
+        {
+            Versions[index] = updated;
+        }
+        else
+        {
+            Versions.Add(updated);
+        }
+
+        SelectedVersion = updated;
+        OnPropertyChanged(nameof(Versions));
+        SetStatus($"已更换运行版本：DSh {updated.DetectedVersion}。DSH_HOME 未改动，配置/插件/会话保留。");
+        _ = RefreshDshUpdateHintAsync(updated);
     }
 
     private async void CheckVersion_Click(object sender, RoutedEventArgs e)

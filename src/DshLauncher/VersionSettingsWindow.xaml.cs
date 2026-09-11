@@ -21,15 +21,12 @@ public partial class VersionSettingsWindow : UserControl
     private readonly ExtensionService _extensionService;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntimeProvider;
     private readonly VersionPackageService _packageService;
-    private readonly VersionSnapshotService _snapshotService;
     private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
-    private readonly InstanceVersionSwitchService _versionSwitchService;
-    private readonly VersionSwitchHistoryService _switchHistory;
-    private readonly DshUpdateNoticeService _updateNotice;
-    private readonly Func<ManagerInstance, ManagerInstance> _runtimeChanged;
     private readonly Action _settingsSaved;
     private readonly bool _openPluginPage;
     private readonly InstanceHealthProviders? _healthProviders;
+    /// <summary>保存前自动快照用（版本与快照页已搬到「版本控制」，这里的自动快照仍保留）。</summary>
+    private readonly VersionSnapshotService _snapshotService = new();
     private System.Windows.Threading.DispatcherTimer? _healthTimer;
     private int _healthLogLineCount = -1;
     private const string EnvironmentNameTag = "EnvironmentName";
@@ -43,15 +40,10 @@ public partial class VersionSettingsWindow : UserControl
         ExtensionService extensionService,
         Func<NodeRuntimeInfo?> nodeRuntimeProvider,
         VersionPackageService packageService,
-        VersionSnapshotService snapshotService,
         Func<ManagerInstance, string, ManagerInstance> renameVersion,
-        InstanceVersionSwitchService versionSwitchService,
-        Func<ManagerInstance, ManagerInstance> runtimeChanged,
         Action settingsSaved,
         bool openPluginPage = false,
-        InstanceHealthProviders? healthProviders = null,
-        VersionSwitchHistoryService? switchHistory = null,
-        DshUpdateNoticeService? updateNotice = null)
+        InstanceHealthProviders? healthProviders = null)
     {
         _healthProviders = healthProviders;
         _instance = instance;
@@ -60,12 +52,7 @@ public partial class VersionSettingsWindow : UserControl
         _extensionService = extensionService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _packageService = packageService;
-        _snapshotService = snapshotService;
         _renameVersion = renameVersion;
-        _versionSwitchService = versionSwitchService;
-        _switchHistory = switchHistory ?? new VersionSwitchHistoryService();
-        _updateNotice = updateNotice ?? new DshUpdateNoticeService();
-        _runtimeChanged = runtimeChanged;
         _settingsSaved = settingsSaved;
         _openPluginPage = openPluginPage;
 
@@ -95,14 +82,10 @@ public partial class VersionSettingsWindow : UserControl
         DshHomeText.Text = _instance?.DshHome ?? "尚未创建 DSH_HOME";
         PackageExtensionBox.Text = _packageService.PackageExtension;
         NodeRuntimeText.Text = FormatNodeRuntime();
-        RefreshRuntimeVersion();
-        _ = RefreshDshUpdateHintAsync();
 
         LoadWorkspaceNames();
         LoadConfigurationControls();
         LoadPluginSettingsControls();
-        RefreshSnapshots();
-        RefreshSwitchHistory();
         ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
 
         if (_instance is null)
@@ -112,7 +95,6 @@ public partial class VersionSettingsWindow : UserControl
             PersonalizationPage.IsEnabled = false;
             ConfigurationPage.IsEnabled = false;
             PluginPage.IsEnabled = false;
-            SnapshotPage.IsEnabled = false;
             ExportPage.IsEnabled = false;
             return;
         }
@@ -121,162 +103,11 @@ public partial class VersionSettingsWindow : UserControl
     }
 
     /// <summary>刷新“运行版本”区域（当前 dsh 版本 + 更新提示开关）。</summary>
-    private void RefreshRuntimeVersion()
-    {
-        RuntimeVersionText.Text = _instance is null
-            ? "尚未选择版本"
-            : $"DSh {_instance.DetectedVersion ?? "未知"} · {_instance.EffectiveDshLaunchSpec?.HostPath ?? _instance.RootPath}";
-        CheckDshUpdatesBox.IsChecked = _settings.CheckDshUpdates;
-        SwitchVersionButton.IsEnabled = _instance is { Kind: InstanceKind.Installed };
-    }
-
     /// <summary>“显示 DSh 版本更新提示”开关：写实例设置 + 刷新提示。</summary>
-    private void CheckDshUpdates_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null)
-        {
-            return;
-        }
-
-        _settings.CheckDshUpdates = CheckDshUpdatesBox.IsChecked == true;
-        try
-        {
-            _settingsService.Save(_instance, _settings);
-            _settingsSaved?.Invoke();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            PersonalizationStatusText.Text = $"保存更新提示设置失败：{ex.Message}";
-            return;
-        }
-
-        _ = RefreshDshUpdateHintAsync();
-    }
-
     /// <summary>开启更新提示时联网查官方版本，与当前版本比较后显示一行提示；失败也给出明确文案。</summary>
-    private async Task RefreshDshUpdateHintAsync()
-    {
-        var instance = _instance;
-        if (instance is null || !_settings.CheckDshUpdates)
-        {
-            DshUpdateHintText.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        try
-        {
-            // 复用带 6 小时缓存的提示服务：实例设置页与实例卡片徽标共享同一次查询结论。
-            // 超时由服务内部统一控制（10s），这里不额外绑定窗口生命周期。
-            var notice = await _updateNotice.CheckAsync(instance.DetectedVersion, CancellationToken.None);
-            if (_instance?.Id != instance.Id || !_settings.CheckDshUpdates)
-            {
-                return;
-            }
-
-            if (notice is null)
-            {
-                DshUpdateHintText.Text = "未能获取官方版本（网络不可用或版本号无法解析）。";
-                DshUpdateHintText.Visibility = Visibility.Visible;
-                return;
-            }
-
-            DshUpdateHintText.Text = notice.UpdateAvailable
-                ? $"官方最新：{notice.LatestVersion}（当前 {notice.CurrentVersion}）——可在「更换运行版本」里升级或降级。"
-                : $"已是最新（官方最新 {notice.LatestVersion}）。";
-            DshUpdateHintText.Visibility = Visibility.Visible;
-        }
-        catch (Exception ex) when (ex is System.Net.Http.HttpRequestException
-            or TaskCanceledException
-            or OperationCanceledException
-            or InvalidDataException)
-        {
-            DshUpdateHintText.Text = "官方版本查询失败（不影响其它功能）。";
-            DshUpdateHintText.Visibility = Visibility.Visible;
-        }
-    }
-
     /// <summary>刷新「切换历史」卡：列表 + 回退按钮可用性（历史来自 Launcher 数据根的 version-switch-history.json）。</summary>
-    private void RefreshSwitchHistory()
-    {
-        var records = _instance is null
-            ? Array.Empty<VersionSwitchRecord>()
-            : _switchHistory.LoadForInstance(_instance.Id).ToArray();
-        SwitchHistoryList.ItemsSource = records.Select(record => record.DisplayText).ToArray();
-        var latest = records.FirstOrDefault();
-        // 回退只在 Installed 实例上有意义（Source 实例没有可切换的运行版本）。
-        RollbackVersionButton.IsEnabled = latest is not null
-            && !string.IsNullOrWhiteSpace(latest.FromVersion)
-            && _instance is { Kind: InstanceKind.Installed };
-        SwitchHistoryStatusText.Text = records.Length == 0
-            ? "还没有切换记录（每次从这里更换运行版本后会写一条）。"
-            : $"共 {records.Length} 条；回退目标：DSh {latest!.FromVersion}"
-                + (records.Length > 1 ? "（只回退一步）" : string.Empty);
-    }
-
     /// <summary>「回退到上一版本」：把上一条历史的起点版本预选进切换向导，仍需检查 + 确认。</summary>
-    private void RollbackVersion_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null)
-        {
-            return;
-        }
-
-        var latest = _switchHistory.LatestForInstance(_instance.Id);
-        if (latest is null)
-        {
-            SwitchHistoryStatusText.Text = "没有可回退的记录。";
-            return;
-        }
-
-        OpenSwitchDialog(latest.FromVersion);
-    }
-
     /// <summary>“更换运行版本”：弹对话框，成功后回写实例。</summary>
-    private void SwitchVersion_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null)
-        {
-            return;
-        }
-
-        OpenSwitchDialog(null);
-    }
-
-    private void OpenSwitchDialog(string? preselectVersion)
-    {
-        if (_instance is null)
-        {
-            return;
-        }
-
-        var previousVersion = _instance.DetectedVersion;
-        var dialog = new VersionSwitchWindow(
-            Window.GetWindow(this),
-            _instance,
-            _versionSwitchService,
-            _nodeRuntimeProvider,
-            _settingsService,
-            preselectVersion);
-        if (dialog.ShowDialog() != true || dialog.SwitchedInstance is null)
-        {
-            return;
-        }
-
-        // 换过版本后旧更新提示作废，避免继续显示“已是最新/有新版”的旧结论。
-        _updateNotice.Invalidate(previousVersion);
-        _updateNotice.Invalidate(dialog.SwitchedInstance.DetectedVersion);
-        _instance = _runtimeChanged(dialog.SwitchedInstance);
-        VersionIdentityText.Text = _instance.Name;
-        PersonalizationVersionText.Text = _instance.Name;
-        VersionNameBox.Text = _instance.Name;
-        PersonalizationDetailsText.Text = $"{_instance.KindText} · {_instance.RootPath}\n状态：{_instance.StatusText}";
-        RefreshRuntimeVersion();
-        RefreshSwitchHistory();
-        _ = RefreshDshUpdateHintAsync();
-        PersonalizationStatusText.Text = $"已更换运行版本：DSh {_instance.DetectedVersion}。";
-        SwitchHistoryStatusText.Text = $"已完成一次切换；最新：{_instance.DetectedVersion}。";
-    }
-
     private void SaveVersionName_Click(object sender, RoutedEventArgs e)
     {
         if (_instance is null)
@@ -1064,14 +895,6 @@ public partial class VersionSettingsWindow : UserControl
 
     private void Plugins_Click(object sender, RoutedEventArgs e) => ShowPage(PluginsButton);
 
-    private void Snapshots_Click(object sender, RoutedEventArgs e)
-    {
-        _ = RefreshDshUpdateHintAsync();
-        RefreshSnapshots();
-        RefreshSwitchHistory();
-        ShowPage(SnapshotsButton);
-    }
-
     private void Export_Click(object sender, RoutedEventArgs e) => ShowPage(ExportButton);
 
     private void ShowPage(WpfButton activeButton)
@@ -1083,9 +906,6 @@ public partial class VersionSettingsWindow : UserControl
             ? Visibility.Visible
             : Visibility.Collapsed;
         PluginPage.Visibility = ReferenceEquals(activeButton, PluginsButton)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        SnapshotPage.Visibility = ReferenceEquals(activeButton, SnapshotsButton)
             ? Visibility.Visible
             : Visibility.Collapsed;
         ExportPage.Visibility = ReferenceEquals(activeButton, ExportButton)
@@ -1109,8 +929,6 @@ public partial class VersionSettingsWindow : UserControl
             ? "配置"
             : activeButton == PluginsButton
                 ? "插件管理"
-                : activeButton == SnapshotsButton
-                    ? "版本与快照"
                 : activeButton == HealthButton
                     ? "运行状况"
                 : activeButton == ExportButton
@@ -1120,15 +938,13 @@ public partial class VersionSettingsWindow : UserControl
             ? "决定对话文件同步范围，以及是否让所有版本自动同步模型。"
             : activeButton == PluginsButton
                 ? "像 PCL2 的 Mod 管理一样，在当前版本快速启用、禁用或删除 Plugin。"
-                : activeButton == SnapshotsButton
-                    ? "更换这个实例使用的 DSh 运行版本（升级/降级），或创建加密配置快照并回滚到先前状态。"
                 : activeButton == ExportButton
                     ? "导出可以分享的版本设计，不带隐私内容和会话。"
                     : activeButton == HealthButton
                         ? "实时查看这个实例的 CPU/内存曲线、进程树与运行日志。"
                         : "查看当前版本和它自己的 DSH_HOME。";
 
-        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, SnapshotsButton, HealthButton, ExportButton })
+        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, HealthButton, ExportButton })
         {
             button.Background = ReferenceEquals(button, activeButton)
                 ? new System.Windows.Media.SolidColorBrush(WpfColor.FromRgb(227, 240, 253))
@@ -1138,117 +954,6 @@ public partial class VersionSettingsWindow : UserControl
                 : (WpfBrush)FindResource("TextBrush");
         }
     }
-
-    private void SnapshotBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSnapshotButtons();
-
-    private async void CreateSnapshot_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null || !CanMutateSnapshot())
-        {
-            SnapshotStatusText.Text = "请先停止当前版本，再创建配置快照。";
-            return;
-        }
-
-        SetSnapshotBusy(true);
-        try
-        {
-            var snapshot = await Task.Run(() => _snapshotService.CreateSnapshot(_instance, "手动快照"));
-            RefreshSnapshots();
-            SnapshotBox.SelectedItem = SnapshotBox.Items
-                .OfType<VersionSnapshotInfo>()
-                .FirstOrDefault(item => string.Equals(item.FilePath, snapshot.FilePath, StringComparison.OrdinalIgnoreCase));
-            SnapshotStatusText.Text = "配置快照已创建。快照由当前 Windows 用户加密，不包含会话文件。";
-        }
-        catch (Exception ex)
-        {
-            SnapshotStatusText.Text = $"创建快照失败：{ex.Message}";
-        }
-        finally
-        {
-            SetSnapshotBusy(false);
-        }
-    }
-
-    private async void RollbackSnapshot_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null
-            || SnapshotBox.SelectedItem is not VersionSnapshotInfo snapshot
-            || !CanMutateSnapshot())
-        {
-            SnapshotStatusText.Text = "请先停止版本并选择一个可用快照。";
-            return;
-        }
-
-        if (System.Windows.MessageBox.Show(
-                Window.GetWindow(this),
-                $"确定把“{_instance.Name}”的配置恢复到 {snapshot.DisplayName}？\n\n恢复前会再自动创建一个回滚点；会话文件不会改变。",
-                "确认回滚版本配置",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning) != MessageBoxResult.Yes)
-        {
-            return;
-        }
-
-        SetSnapshotBusy(true);
-        try
-        {
-            var rollbackPoint = await Task.Run(() => _snapshotService.RestoreSnapshot(_instance, snapshot.FilePath));
-            _settings = _settingsService.Read(_instance);
-            LoadWorkspaceNames();
-            LoadConfigurationControls();
-            LoadPluginSettingsControls();
-            await LoadPluginsAsync();
-            _settingsSaved();
-            RefreshSnapshots();
-            SnapshotStatusText.Text = $"配置已回滚；恢复前状态保存在：{rollbackPoint.DisplayName}。";
-        }
-        catch (Exception ex)
-        {
-            SnapshotStatusText.Text = $"回滚失败：{ex.Message}";
-        }
-        finally
-        {
-            SetSnapshotBusy(false);
-        }
-    }
-
-    private void RefreshSnapshots()
-    {
-        if (SnapshotBox is null)
-        {
-            return;
-        }
-
-        try
-        {
-            SnapshotBox.ItemsSource = _instance is null
-                ? Array.Empty<VersionSnapshotInfo>()
-                : _snapshotService.ListSnapshots(_instance);
-            SnapshotBox.SelectedIndex = SnapshotBox.Items.Count > 0 ? 0 : -1;
-        }
-        catch (Exception ex)
-        {
-            SnapshotBox.ItemsSource = Array.Empty<VersionSnapshotInfo>();
-            SnapshotStatusText.Text = $"读取版本快照失败：{ex.Message}";
-        }
-
-        UpdateSnapshotButtons();
-    }
-
-    private bool CanMutateSnapshot() => _instance is { } instance
-        && instance.RuntimeStatus != InstanceRuntimeStatus.Running
-        && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached;
-
-    private void SetSnapshotBusy(bool busy)
-    {
-        SnapshotBox.IsEnabled = !busy;
-        CreateSnapshotButton.IsEnabled = !busy && CanMutateSnapshot();
-        RollbackSnapshotButton.IsEnabled = !busy
-            && CanMutateSnapshot()
-            && SnapshotBox.SelectedItem is VersionSnapshotInfo;
-    }
-
-    private void UpdateSnapshotButtons() => SetSnapshotBusy(false);
 
     private void SyncAllConfiguration_Changed(object sender, RoutedEventArgs e)
     {

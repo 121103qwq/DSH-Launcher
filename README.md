@@ -99,6 +99,7 @@ dsh-launcher-dev/
 | 71 | `Services/DshEnvironmentScanner.cs`（新）+ `Services/ScannedHomeImportService.cs`（新）+ `EnvironmentScanWindow.xaml(.cs)`（新）+ `VersionControlWindow.xaml(.cs)` + `MainWindow.xaml.cs` | **#14 本机 DSH 环境扫描导入（work-log/50）**：扫描 `%USERPROFILE%\.dsh*` + `DSH_HOME`，按 `dsh.profile.bundles` 分类 web/tui/other；勾选后一 home 一实例（只收 `profiles/web`，重复源跳过、失败回滚）；「导入实例」菜单新增「扫描本机 DSH 环境」与接上死代码的「从源码目录导入」 |
 | 72 | `Services/DshEnvironmentScanner.cs` + `Services/ScannedHomeImportService.cs` + `Services/DshHomeImportService.cs` + `EnvironmentScanWindow.xaml(.cs)` | **清理：移除 WSL 扫描冗余**（work-log/50 第五节）：本机 WSL 服务被禁用（`Wsl/0x80070422`），WSL 分支无法验证且无使用场景，删除发行版枚举/`sh` 清单协议/UNC 转换/WSL 源跳过插件包复制/UI 标签与文案；harness 255 PASS |
 | 73 | `Services/SessionFileNames.cs`（新）+ `Services/ConversationService.cs` + `Services/ConversationSyncService.cs` + `EnvironmentScanWindow.xaml` | **dsh 0.1.5-rc 会话格式兼容（work-log/51）**：① 会话头接受任意版本（0..N，含 `isSeeded` 可选）；② 文件名识别 dsh canonical 规则（`session.jsonl[.zstd]` = v0、`session.vN.jsonl[.zstd]`），导入按**头部版本**命名、编码跟随目标实例（不一致时流式转码）；③ 旧 dsh 实例拒绝 vN 导入并明确报错；④ 跨实例同步按会话目录归并、取最高代际、跨编码/不支持版本时跳过；⑤ 修掉变更集 71 扫描页 `Run Text` TwoWay 绑定导致的 57 条 E9001 XamlParseException |
+| 79 | `VersionControlWindow.xaml(.cs)` + `VersionSettingsWindow.xaml(.cs)` + `MainWindow.xaml.cs` + `Services/VersionSwitchHistoryService.cs` | **版本相关操作集中到「版本控制」页（work-log/57）**：运行版本（更换 + 更新提示开关/提示行）、切换历史（含一键回退）、配置快照与回滚全部搬到「版本控制」的选中版本详情；实例设置里的「版本与快照」整页移除（快照与版本控制页原本完全重复）；切换成功后左列表与详情同步换实例对象；保存前自动快照保留（窗口自建快照服务）。harness 302 PASS；UI 端到端：版本控制页完成整轮切换并写台账 |
 | 78 | `Services/ConversationService.cs` + `Models/EcosystemModels.cs` + `ConversationWindow.xaml(.cs)` | **对话页按会话目录归并（work-log/56，work-log/53 发现 F1）**：dsh 的模型是"一个会话目录 = 一个会话、文件是格式代际、读最高代际"，对话页原来每文件一行 → 从旧版升上来的实例同一会话显示两行（旧内容是升级前状态，导出/删除容易选错）。现在按目录归并只列最高代际，新增「代际」列与状态行提示；删除确认说明"会退回更早一代"；「降级前一键导出」改为逐代际全量导出（列表与备份语义显式分开） |
 | 77 | `Services/VersionSwitchHistoryService.cs`（新）+ `Services/DshUpdateNoticeService.cs`（新）+ `Services/InstanceVersionSwitchService.cs` + `Services/DshVersionCatalogService.cs` + `VersionSwitchWindow.xaml.cs` + `VersionSettingsWindow.xaml(.cs)` + `MainWindow.xaml(.cs)` | **切换历史 + 一键回退 + 卡片更新徽标（work-log/55）**：① 每次换版本留痕（`version-switch-history.json`，含方向/快照/会话备份，保留 50 条），「版本与快照」页新增历史卡片与「回退到上一版本」（只预选进向导，仍需检查+确认）；② 实例卡片新增「有新版本」徽标，与实例设置共用 `DshUpdateNoticeService`（6 小时缓存、失败不缓存、只对开启开关的实例联网）；③ **修掉官方版本排序缺陷**：旧比较器丢掉预发布标签（alpha.2 与 rc.2 同序）→ 「官方最新」被算成 0.1.5-alpha.2，改为复用 semver 比较器 |
 | 76 | `Services/LauncherLog.cs` + `App.xaml.cs` + `VersionSwitchWindow.xaml(.cs)` + `_verify-p0/Program.cs` | **日志隔离 + 确认面板自绘（work-log/54）**：① `LauncherLog` 支持 `DSH_LAUNCHER_LOG_ROOT` 覆盖，harness 与崩溃兜底日志一律写临时目录，不再污染用户真实 `launcher.log`（`diagnose` 用例在 Launcher 运行中也稳定）；② 更换运行版本的确认步骤改为窗口内自绘面板（`ConfirmPanel`：逐条说明 + 实际生效的勾选项 + 「返回」/「确认切换」），彻底移除 `MessageBox`，换版本/改勾选会作废旧确认 |
@@ -188,12 +189,13 @@ dsh-launcher-dev/
 79. **不含 `profiles/web` 的 home 不可导入**：列表里标红说明（TUI profile 需 #19 支持后才能启动）
 80. **会话格式跟随 dsh 版本**：对话页/检索/导出/备份/删除/同步都能识别 `session.v<N>.jsonl[.zstd]`（dsh 0.1.5-rc 起的命名），会话头接受 v0..当前 与新增的 `isSeeded`；导入/恢复按头部版本命名并跟随目标实例的压缩编码（只换容器、不改内容），交给 dsh 自己的格式迁移链处理旧版本
 81. **旧版实例不接收新格式会话**：目标实例的 DSh 读不了 vN（无 format catalog）时，导入会明确报错而不是写出坏文件
-82. **更换实例运行版本（升级/降级）**：「版本设置 → 版本与快照」页的「运行版本」卡片 →「更换运行版本」；只改运行时绑定（DSH_HOME / 配置 / 插件 / 会话全部保留），支持自动下载未安装版本，失败自动回滚原绑定
+82. **更换实例运行版本（升级/降级）**：「版本控制」页选中某个版本后的「运行版本」卡片 →「更换运行版本」；只改运行时绑定（DSH_HOME / 配置 / 插件 / 会话全部保留），支持自动下载未安装版本，失败自动回滚原绑定
 83. **降级保护**：目标版本读不了现有 `session.vN` 会话时明确警告，并提供「导出现有会话备份」；不做会话格式转换（迁移交给 dsh）
 84. **DSh 更新提示（可选）**：实例级开关（默认关）；开启后在运行版本区块联网显示“官方最新 x.y.z”与升降级建议
-86. **切换历史与一键回退**：「版本与快照」页记录每次更换（时间/前→后版本/升级或降级/是否建快照或导出会话）；「回退到上一版本」把上一条的起点版本预选进向导
+86. **切换历史与一键回退**：「版本控制」页记录每次更换（时间/前→后版本/升级或降级/是否建快照或导出会话）；「回退到上一版本」把上一条的起点版本预选进向导
 87. **实例卡片「有新版本」徽标**：实例设置里开启「更新提示」后，卡片上直接显示是否有官方新版本（6 小时缓存，关闭开关的实例不联网）
 89. **同一会话只列一行**：同一会话目录里的历史代际不再各占一行；「代际」列显示当前代际与历史代际数，状态行给出合计
+91. **版本相关操作集中在一处**：「运行版本」「切换历史」「配置快照与回滚」都在「版本控制」页的选中版本详情里；实例设置不再有「版本与快照」页，快照不再重复两份
 90. **删除确认说清后果**：删掉最高代际时明确提示 dsh 会退回到更早的那一代（升级前的旧内容）
 88. **官方版本排序修正**：预发布标签参与排序（alpha < beta < rc < 正式版），「官方最新」不再被算成更旧的 alpha 版本
 85. **切换确认在同窗内完成**：确认面板会列出实际生效的勾选项（会话备份/配置快照），改选版本或勾选项会自动作废上一次确认；切换过程不再弹模态框

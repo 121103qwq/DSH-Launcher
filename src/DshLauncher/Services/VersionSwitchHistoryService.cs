@@ -6,7 +6,7 @@ using DshLauncher.Models;
 
 namespace DshLauncher.Services;
 
-/// <summary>一次"更换运行版本"的留痕（用于「版本与快照」页的切换历史与一键回退）。</summary>
+/// <summary>一次"更换运行版本"的留痕（用于「版本控制」页的切换历史与一键回退）。</summary>
 public sealed record VersionSwitchRecord(
     string InstanceId,
     string InstanceName,
