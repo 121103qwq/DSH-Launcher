@@ -534,6 +534,7 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                        
                 </Border>
 
                 <StackPanel Grid.Row="4"

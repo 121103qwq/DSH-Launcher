@@ -404,12 +404,6 @@ public partial class ExtensionWindow : UserControl
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
         MarketplaceList.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(MarketplaceList_ScrollChanged));
-        // 页面级滚动也要触发追加：向外层找最近的 ScrollViewer 并监听（市场页实际滚动发生在外层）。
-        _marketplaceOuterScrollViewer = FindAncestorScrollViewer(MarketplaceList);
-        if (_marketplaceOuterScrollViewer is not null)
-        {
-            _marketplaceOuterScrollViewer.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(MarketplaceList_ScrollChanged));
-        }
         if (!_agentOnly)
         {
             // Show the cached catalog first; only go online when there is no
@@ -801,10 +795,10 @@ public partial class ExtensionWindow : UserControl
     /// </summary>
     private const int MarketplaceInitialVisibleCount = 50;
     private int _marketplaceVisibleCount = MarketplaceInitialVisibleCount;
-
-    /// <summary>页面外层滚动器（实测：市场页滚动发生在外层，内层列表从不滚动 → 只监听内层会永远卡在初始条数）。</summary>
-    private ScrollViewer? _marketplaceOuterScrollViewer;
     private bool _marketplaceRevealing;
+
+    /// <summary>临时诊断（work-log/79 I2）：统计滚动事件与几何数值，定位"拉到底不追加"。</summary>
+    private int _marketplaceScrollEventCount;
     private string _marketplaceFilterKey = string.Empty;
 
     private void RenderMarketplaceItems(string? restoreCategoryKey = null)
@@ -870,6 +864,8 @@ public partial class ExtensionWindow : UserControl
             // 批量加载：只暴露前 N 条，滚动到底部附近时再扩大。
             var visible = visibleCount < rendered.Count
                 ? rendered.Take(visibleCount).ToList()
+
+
                 : rendered;
             Dispatcher.BeginInvoke(() =>
             {
@@ -902,19 +898,31 @@ public partial class ExtensionWindow : UserControl
     {
         ScheduleUiStateSave();
         // 到达底部附近时加载下一批（增量加载，CanContentScroll 下单位为“条目”）。
-        // 内层能滚就用内层；否则用外层页面滚动器（实测市场页是后者）。
         var viewer = FindScrollViewer(MarketplaceList);
-        if (viewer is null || viewer.ExtentHeight <= viewer.ViewportHeight)
-        {
-            viewer = _marketplaceOuterScrollViewer;
-        }
-
         if (viewer is null || viewer.ExtentHeight <= viewer.ViewportHeight)
         {
             return;
         }
 
         var remaining = viewer.ExtentHeight - (viewer.VerticalOffset + viewer.ViewportHeight);
+        _marketplaceScrollEventCount++;
+        if (_marketplaceScrollEventCount <= 30 || _marketplaceScrollEventCount % 20 == 0)
+        {
+            LauncherLog.Info(
+                "市场滚动诊断",
+                "E3001",
+                new
+                {
+                    Count = _marketplaceScrollEventCount,
+                    Extent = viewer.ExtentHeight,
+                    Viewport = viewer.ViewportHeight,
+                    Offset = viewer.VerticalOffset,
+                    Remaining = remaining,
+                    Visible = _marketplaceVisibleCount,
+                    Snapshot = _marketplaceSnapshot.Count
+                });
+        }
+
         if (remaining <= Math.Max(6, viewer.ViewportHeight * 1.5)
             && _marketplaceVisibleCount < _marketplaceSnapshot.Count)
         {
@@ -1065,23 +1073,6 @@ public partial class ExtensionWindow : UserControl
         }
 
         viewer.ScrollToVerticalOffset(offsets.TryGetValue(categoryKey, out var offset) ? offset : 0);
-    }
-
-    /// <summary>向上查找祖先里的 ScrollViewer（市场页滚动发生在外层页面，而不是列表内部）。</summary>
-    private static ScrollViewer? FindAncestorScrollViewer(DependencyObject element)
-    {
-        var current = VisualTreeHelper.GetParent(element);
-        while (current is not null)
-        {
-            if (current is ScrollViewer viewer)
-            {
-                return viewer;
-            }
-
-            current = VisualTreeHelper.GetParent(current);
-        }
-
-        return null;
     }
 
     private static ScrollViewer? FindScrollViewer(DependencyObject root)
