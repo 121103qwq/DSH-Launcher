@@ -35,6 +35,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly DshInstallService _dshInstallService = new();
     private readonly DshVersionCatalogService _dshVersionCatalogService = new();
     private readonly VersionSettingsService _versionSettingsService;
+    private readonly LauncherTaskService? _taskService;
     private readonly CancellationTokenSource _lifetimeCancellation;
     private VersionHealthReport? _healthReport;
     private bool _isBusy;
@@ -61,6 +62,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Func<string, bool> isRunning,
         Func<ManagerInstance, ManagerInstance> versionUpdated,
         Action versionContentChanged,
+        LauncherTaskService? taskService = null,
         CancellationToken cancellationToken = default)
     {
         _packageService = packageService;
@@ -77,6 +79,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _switchHistory = switchHistory;
         _updateNotice = updateNotice;
         _versionSettingsService = versionSettingsService;
+        _taskService = taskService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _dshRuntimeProvider = dshRuntimeProvider;
         _isRunning = isRunning;
@@ -835,7 +838,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             _switchService,
             _nodeRuntimeProvider,
             _versionSettingsService,
-            preselectVersion);
+            preselectVersion,
+            _taskService);
         if (dialog.ShowDialog() != true || dialog.SwitchedInstance is null)
         {
             return;

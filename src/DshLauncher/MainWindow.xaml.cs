@@ -55,6 +55,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly VersionSettingsService _versionSettingsService = new();
     private readonly DshUpdateNoticeService _updateNotice = new();
     private readonly VersionSwitchHistoryService _switchHistory = new();
+    private readonly LauncherTaskService _tasks = new();
     /// <summary>当前选中实例的版本设置（与 SelectedInstance 同步刷新），避免每次重读磁盘。</summary>
     private VersionSettingsData _selectedVersionSettings = new();
     private readonly VersionHealthService _versionHealthService;
@@ -162,6 +163,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 用“无法优雅关闭”保证 Launcher 重开后不会出现第二次 Node MSI 与残留安装重叠。
         _nodeInstaller.LingeringInstallerCompleted += OnLingeringInstallerCompleted;
         InitializeComponent();
+        _tasks.Changed += (_, _) => Dispatcher.Invoke(UpdateTaskBadge);
+        UpdateTaskBadge();
         WindowSizeHelper.FitInitialSize(this);
         _windowStateRestored = _windowStateStore.TryRestore(this);
         DataContext = this;
@@ -2100,7 +2103,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         handoffPluginFailure: SendPluginFailureToCurrentInstanceAsync,
                         versionSettingsService: _versionSettingsService,
                         versionSnapshotService: _versionSnapshotService,
-                        openPluginMatrix: ShowPluginMatrix),
+                        openPluginMatrix: ShowPluginMatrix,
+                        taskService: _tasks),
                     "Agent" => new ExtensionWindow(
                         instance,
                         _extensionService,
@@ -2110,7 +2114,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         skillMarketService: _skillMarketService,
                         versionSettingsService: _versionSettingsService,
                         versionSnapshotService: _versionSnapshotService,
-                        openPluginMatrix: ShowPluginMatrix),
+                        openPluginMatrix: ShowPluginMatrix,
+                        taskService: _tasks),
                     _ => new ConversationWindow(
                         instance,
                         _conversationService,
@@ -2122,6 +2127,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 };
                 ShowEmbeddedPage(page);
             }
+        }
+        else if (section == "任务")
+        {
+            PageTitle = "任务";
+            PageSubtitle = "运行中的长任务与最近 50 条历史（只读台账 + 取消）";
+            ShowEmbeddedPage(new LauncherTaskWindow(_tasks));
         }
         else
         {
@@ -2248,7 +2259,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 ApplySelectedVersionSettings(SelectedInstance);
             },
-            _windowCancellation.Token));
+            taskService: _tasks,
+            cancellationToken: _windowCancellation.Token));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -4240,6 +4252,49 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task<bool> PrepareRuntimeAsync(string sourceName, string nodeDistBase, string? npmRegistry, ManagerInstance? target)
     {
+        using var task = _tasks.Begin(
+            LauncherTaskKind.RuntimePrepare,
+            "准备运行环境",
+            target?.Name,
+            "正在检测 Node 与 DSh…");
+        try
+        {
+            var ready = await PrepareRuntimeCoreAsync(sourceName, nodeDistBase, npmRegistry, target, task);
+            if (ready)
+            {
+                task.Complete("运行环境已就绪");
+            }
+            else if (task.IsCancellationRequested)
+            {
+                task.MarkCancelled();
+            }
+            else
+            {
+                task.Fail("运行环境未就绪");
+            }
+
+            return ready;
+        }
+        catch (OperationCanceledException)
+        {
+            task.MarkCancelled();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            task.Fail(ex.Message);
+            throw;
+        }
+    }
+
+    /// <summary>运行环境准备/修复的实际流程（由 <see cref="PrepareRuntimeAsync"/> 立账后调用）。</summary>
+    private async Task<bool> PrepareRuntimeCoreAsync(
+        string sourceName,
+        string nodeDistBase,
+        string? npmRegistry,
+        ManagerInstance? target,
+        LauncherTaskHandle task)
+    {
         if (_isRuntimePrepareInProgress)
         {
             return false;
@@ -4272,6 +4327,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _isRuntimePrepareInProgress = true;
         OnPropertyChanged(nameof(CanStartInstance));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        using var taskLink = task.LinkTo(cancellation);
         var progressWindow = new RuntimeProgressWindow(this, cancellation);
         progressWindow.Show();
         try
@@ -4290,6 +4346,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 progressWindow.SetStatus(_nodeRuntime.IsAvailable
                     ? $"当前 Node.js {_nodeRuntime.VersionText} 不满足要求，正在通过 {sourceName} 下载便携版 Node.js（免管理员）…"
                     : $"正在通过 {sourceName} 下载便携版 Node.js（免管理员）…");
+                task.Report($"正在下载便携版 Node.js（{sourceName}，免管理员）…");
                 var nodeResult = await _portableNodeInstaller.InstallAsync(
                     nodeDistBase,
                     progress,
@@ -4395,6 +4452,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 RevealRuntimeAfterBootstrap(TestRuntimeKind.Dsh);
                 progressWindow.SetStatus("DSh 安装完成，正在重新检测…");
+                task.Report("DSh 安装完成，正在重新检测…");
                 for (var attempt = 0; attempt < 5 && !_dshRuntime.IsAvailable; attempt++)
                 {
                     await RefreshDshAsync(forceRefresh: true);
@@ -4661,6 +4719,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return true;
     }
+    /// <summary>顶栏「任务」角标：只在有运行中任务时出现（数量取自任务台账）。</summary>
+    private void UpdateTaskBadge()
+    {
+        var running = _tasks.RunningCount;
+        TaskBadge.Visibility = running == 0 ? Visibility.Collapsed : Visibility.Visible;
+        TaskBadgeText.Text = running > 9 ? "9+" : running.ToString();
+    }
+
     private void SetNavigationSelection(string section)
     {
         var buttons = new[]
@@ -4669,6 +4735,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             NavigationExtensions,
             NavigationAgent,
             NavigationConversations,
+            NavigationTasks,
             NavigationSettings
         };
         foreach (var button in buttons)
@@ -4698,7 +4765,45 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task<IReadOnlyList<ManagerInstance>> ScanAndRegisterRuntimeDirectoryAsync(string selectedDirectory)
     {
+        using var task = _tasks.Begin(
+            LauncherTaskKind.InstanceImport,
+            "扫描并导入实例",
+            detail: "正在查找所选目录里的 DSH Desktop、npm 安装与源码目录…");
+        try
+        {
+            var instances = await ScanAndRegisterRuntimeDirectoryCoreAsync(selectedDirectory, task);
+            if (task.IsCancellationRequested)
+            {
+                task.MarkCancelled("已取消扫描");
+            }
+            else
+            {
+                task.Complete(instances.Count == 0
+                    ? "没有发现可导入的实例"
+                    : $"已导入或更新 {instances.Count} 个实例");
+            }
+
+            return instances;
+        }
+        catch (OperationCanceledException)
+        {
+            task.MarkCancelled("已取消扫描");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            task.Fail(ex.Message);
+            throw;
+        }
+    }
+
+    /// <summary>目录扫描与注册的实际流程（由 <see cref="ScanAndRegisterRuntimeDirectoryAsync"/> 立账后调用）。</summary>
+    private async Task<IReadOnlyList<ManagerInstance>> ScanAndRegisterRuntimeDirectoryCoreAsync(
+        string selectedDirectory,
+        LauncherTaskHandle task)
+    {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
+        using var taskLink = task.LinkTo(cancellation);
         var progressWindow = new RuntimeProgressWindow(
             this,
             cancellation,
@@ -4710,7 +4815,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             var progress = new Progress<DshRuntimeScanProgress>(item =>
-                progressWindow.SetProgress(item.Completed, item.Total, item.Message));
+            {
+                progressWindow.SetProgress(item.Completed, item.Total, item.Message);
+                task.Report(item.Message);
+            });
             var scan = await _dshDetector.ScanDirectoryAsync(
                 selectedDirectory,
                 progress,

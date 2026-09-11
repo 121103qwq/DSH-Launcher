@@ -17,6 +17,7 @@ public partial class VersionSwitchWindow : Window
     private readonly InstanceVersionSwitchService _switchService;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntimeProvider;
     private readonly VersionSettingsService _settingsService;
+    private readonly LauncherTaskService? _taskService;
     private readonly List<string> _installedVersions = new();
     private readonly CancellationTokenSource _cancellation = new();
     private InstanceVersionTargetResolution? _target;
@@ -29,9 +30,11 @@ public partial class VersionSwitchWindow : Window
         InstanceVersionSwitchService switchService,
         Func<NodeRuntimeInfo?> nodeRuntimeProvider,
         VersionSettingsService settingsService,
-        string? preselectVersion = null)
+        string? preselectVersion = null,
+        LauncherTaskService? taskService = null)
     {
         InitializeComponent();
+        _taskService = taskService;
         Owner = owner;
         _instance = instance;
         _switchService = switchService;
@@ -320,7 +323,17 @@ public partial class VersionSwitchWindow : Window
         SwitchButton.IsEnabled = false;
         CheckButton.IsEnabled = false;
         RefreshButton.IsEnabled = false;
-        var progress = new Progress<string>(message => StatusText.Text = message);
+        using var task = _taskService?.Begin(
+            LauncherTaskKind.VersionSwitch,
+            $"更换运行版本 · {_instance.Name}",
+            _instance.Name,
+            "正在准备切换…");
+        using var taskLink = task?.LinkTo(_cancellation);
+        var progress = new Progress<string>(message =>
+        {
+            StatusText.Text = message;
+            task?.Report(message);
+        });
         try
         {
             string? backupDirectory = null;
@@ -344,6 +357,7 @@ public partial class VersionSwitchWindow : Window
             {
                 ReportText.Text = $"切换失败：{result.Error}";
                 StatusText.Text = "切换失败。";
+                task?.Fail(result.Error ?? "切换失败");
                 return;
             }
 
@@ -351,11 +365,13 @@ public partial class VersionSwitchWindow : Window
             ReportText.Text = result.Summary
                 + (backupDirectory is null ? string.Empty : $"\n会话备份目录：{backupDirectory}");
             StatusText.Text = "切换完成。";
+            task?.Complete($"已切换到 {result.Instance.DetectedVersion ?? "目标版本"}");
             DialogResult = true;
         }
         catch (OperationCanceledException)
         {
             StatusText.Text = "已取消。";
+            task?.MarkCancelled("已取消切换");
         }
         finally
         {

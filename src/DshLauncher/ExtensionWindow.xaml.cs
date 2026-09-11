@@ -18,6 +18,7 @@ public partial class ExtensionWindow : UserControl
 {
     private const string FeaturedCategoryKey = "__featured__";
     private ManagerInstance _instance;
+    private readonly LauncherTaskService? _taskService;
     private readonly ExtensionService _service;
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
     private readonly Func<PluginInstallMode> _pluginInstallMode;
@@ -71,8 +72,10 @@ public partial class ExtensionWindow : UserControl
         VersionSettingsService? versionSettingsService = null,
         VersionSnapshotService? versionSnapshotService = null,
         Action? openPluginMatrix = null,
-        UiStateStore? uiStateStore = null)
+        UiStateStore? uiStateStore = null,
+        LauncherTaskService? taskService = null)
     {
+        _taskService = taskService;
         _instance = instance;
         _service = service;
         _nodeRuntime = nodeRuntime;
@@ -309,11 +312,18 @@ public partial class ExtensionWindow : UserControl
         _isSkillMarketMutating = true;
         SkillMarketStatusText.Text = $"正在下载并安装 {viewModel.Item.Repository}…";
         using var operationCancellation = new CancellationTokenSource();
+        using var task = _taskService?.Begin(
+            LauncherTaskKind.Plugin,
+            $"安装 Skill · {viewModel.Item.Name}",
+            _instance.Name,
+            "正在连接 GitHub 下载 Skill…");
+        using var taskLink = task?.LinkTo(operationCancellation);
         var progressWindow = new PluginProgressWindow(
             Window.GetWindow(this),
             operationCancellation,
             $"安装 Skill · {viewModel.Item.Name}",
-            "正在连接 GitHub 下载 Skill…");
+            "正在连接 GitHub 下载 Skill…",
+            task);
         progressWindow.Show();
         progressWindow.SetIndeterminate("正在连接 GitHub 下载 Skill…");
         try
@@ -1020,6 +1030,8 @@ public partial class ExtensionWindow : UserControl
         }
 
         using var operationCancellation = new CancellationTokenSource();
+        LauncherTaskHandle? task = null;
+        IDisposable? taskLink = null;
         PluginProgressWindow? progressWindow = null;
         try
         {
@@ -1029,11 +1041,18 @@ public partial class ExtensionWindow : UserControl
                 ? "正在检查当前实例的 dsh-market…"
                 : item.IsInstalled ? "正在准备更新 Plugin…" : "正在检查 Plugin…";
             BeginMarketplaceMutation(initialStatus);
+            task = _taskService?.Begin(
+                LauncherTaskKind.Plugin,
+                item.IsInstalled ? $"更新 Plugin · {item.Name}" : $"安装 Plugin · {item.Name}",
+                _instance.Name,
+                initialStatus);
+            taskLink = task?.LinkTo(operationCancellation);
             progressWindow = new PluginProgressWindow(
                 Window.GetWindow(this),
                 operationCancellation,
                 item.IsInstalled ? $"更新 Plugin · {item.Name}" : $"安装 Plugin · {item.Name}",
-                initialStatus);
+                initialStatus,
+                task);
             progressWindow.Show();
             progressWindow.SetIndeterminate(initialStatus);
             if (useDshMarket)
@@ -1281,6 +1300,8 @@ public partial class ExtensionWindow : UserControl
         }
         finally
         {
+            taskLink?.Dispose();
+            task?.Dispose();
             EndMarketplaceMutation();
         }
     }
@@ -1639,11 +1660,18 @@ public partial class ExtensionWindow : UserControl
         var source = TextPromptWindow.Show(Window.GetWindow(this), "安装 Plugin", "输入 npm 包名、Git 仓库或本地路径：");
         if (string.IsNullOrWhiteSpace(source)) return;
         using var operationCancellation = new CancellationTokenSource();
+        using var task = _taskService?.Begin(
+            LauncherTaskKind.Plugin,
+            "安装 Plugin",
+            _instance.Name,
+            "正在准备 Plugin 安装…");
+        using var taskLink = task?.LinkTo(operationCancellation);
         var progressWindow = new PluginProgressWindow(
             Window.GetWindow(this),
             operationCancellation,
             "安装 Plugin",
-            "正在准备 Plugin 安装…");
+            "正在准备 Plugin 安装…",
+            task);
         progressWindow.Show();
         progressWindow.SetIndeterminate("正在准备 Plugin 安装…");
         var snapshot = string.Empty;

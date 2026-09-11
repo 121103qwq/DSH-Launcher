@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using DshLauncher.Models;
+using DshLauncher.Services;
 using Button = System.Windows.Controls.Button;
 using ProgressBar = System.Windows.Controls.ProgressBar;
 using TextBox = System.Windows.Controls.TextBox;
@@ -12,6 +13,7 @@ namespace DshLauncher;
 internal sealed class PluginProgressWindow : Window
 {
     private readonly CancellationTokenSource _cancellation;
+    private readonly LauncherTaskHandle? _task;
     private readonly TextBlock _statusText;
     private readonly ProgressBar _progressBar;
     private readonly TextBlock _progressText;
@@ -24,8 +26,10 @@ internal sealed class PluginProgressWindow : Window
         Window? owner,
         CancellationTokenSource cancellation,
         string title,
-        string initialStatus)
+        string initialStatus,
+        LauncherTaskHandle? task = null)
     {
+        _task = task;
         _cancellation = cancellation;
         _ownerInitialState = owner?.WindowState ?? WindowState.Normal;
         Title = title;
@@ -118,7 +122,11 @@ internal sealed class PluginProgressWindow : Window
         WindowSizeHelper.FitInitialSize(this);
     }
 
-    public void SetStatus(string message) => _statusText.Text = message;
+    public void SetStatus(string message)
+    {
+        _statusText.Text = message;
+        _task?.Report(message);
+    }
 
     public void SetProgress(double percentage, string message)
     {
@@ -134,6 +142,7 @@ internal sealed class PluginProgressWindow : Window
         _statusText.Text = message;
         _progressBar.IsIndeterminate = true;
         _progressText.Text = detail;
+        _task?.Report(message);
     }
 
     public void SetDownloadProgress(SkillInstallProgress progress, string itemName)
@@ -181,6 +190,7 @@ internal sealed class PluginProgressWindow : Window
         _actionButton.Content = "关闭";
         _actionButton.IsEnabled = true;
         PresentResult();
+        _task?.Complete(message);
     }
 
     public void Fail(string message)
@@ -195,6 +205,7 @@ internal sealed class PluginProgressWindow : Window
         _actionButton.IsEnabled = true;
         Height = Math.Min(420, SystemParameters.WorkArea.Height * 0.8);
         PresentResult();
+        _task?.Fail(message);
     }
 
     public void Canceled(string message)
@@ -206,6 +217,7 @@ internal sealed class PluginProgressWindow : Window
         _actionButton.Content = "关闭";
         _actionButton.IsEnabled = true;
         PresentResult();
+        _task?.MarkCancelled(message);
     }
 
     internal static double ClampProgress(double percentage) =>
