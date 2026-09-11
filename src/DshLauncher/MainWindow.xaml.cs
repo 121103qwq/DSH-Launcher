@@ -143,7 +143,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _marketplaceService = new();
         _skillMarketService = new(
             _extensionService,
-            customSources: () => _marketSourceSettings.Read(MarketSourceKind.Skill));
+            customSources: () => _marketSourceSettings.ReadEnabled(MarketSourceKind.Skill));
         _versionPackageService = new(_instanceRegistry);
         _detectedRuntimeRegistrationService = new(_instanceRegistry);
         _scannedHomeImporter = new(_instanceRegistry);
@@ -2477,8 +2477,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var isPlugin = kind == MarketSourceKind.Plugin;
         var hint = isPlugin
-            ? "自定义插件目录：本地目录 JSON 文件，或指向目录 JSON 的网址。内置来源：awesome-dsh-plugin 目录 + GitHub。"
-            : "自定义 Skill 来源：GitHub 仓库（owner/repo，扫描其中的 SKILL.md）会立即生效；本地目录 JSON 文件与网址已保存但暂未接入扫描（见 work-log/64）。内置来源：GitHub 仓库搜索。";
+            ? "自定义插件目录：本地目录 JSON 文件，或指向目录 JSON 的网址。内置默认来源：awesome 目录（GitHub 仓库，中文官网即它的延伸）。"
+            : "自定义 Skill 来源：GitHub 仓库（owner/repo，扫描其中的 SKILL.md）已即时生效；本地目录 JSON 与网址已保存、扫描接入见 work-log/64。内置来源：GitHub 仓库搜索。";
 
         var content = new StackPanel();
         content.Children.Add(new TextBlock
@@ -2489,14 +2489,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
         content.Children.Add(new TextBlock
         {
-            Text = hint,
+            Text = hint + " 来源只用于「发现」，安装仍会读取包元数据校验。",
             Foreground = (WpfBrush)FindResource("MutedBrush"),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 0)
         });
 
-        var rows = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var rowStack = new StackPanel();
+        content.Children.Add(new Border
+        {
+            // 固定高度 + 内部滚动：来源多时不会把设置页撑长。
+            Height = 158,
+            Margin = new Thickness(0, 12, 0, 0),
+            Background = (WpfBrush)FindResource("HoverSurfaceBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10, 8, 10, 8),
+            Child = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = rowStack
+            }
+        });
+
         var status = new TextBlock
         {
             Foreground = (WpfBrush)FindResource("BlueBrush"),
@@ -2507,48 +2525,68 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         void Render(string? message = null)
         {
-            rows.Children.Clear();
-            var entries = _marketSourceSettings.Read(kind);
+            rowStack.Children.Clear();
+            var entries = _marketSourceSettings.ReadEntries(kind);
             if (entries.Count == 0)
             {
-                rows.Children.Add(new TextBlock
+                rowStack.Children.Add(new TextBlock
                 {
-                    Text = "还没有自定义来源。",
+                    Text = "还没有自定义来源；内置来源照常可用（下面可添加）。",
                     Foreground = (WpfBrush)FindResource("MutedBrush"),
-                    FontSize = 11
+                    FontSize = 11,
+                    Margin = new Thickness(2, 4, 0, 0)
                 });
             }
 
-            foreach (var value in entries)
+            foreach (var setting in entries)
             {
-                var entry = MarketSourceSettingsService.Describe(kind, value);
+                var entry = MarketSourceSettingsService.Describe(kind, setting.Value);
                 var probeStatus = new TextBlock
                 {
                     Foreground = (WpfBrush)FindResource("MutedBrush"),
                     FontSize = 11,
                     TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 3, 0, 0)
+                    Margin = new Thickness(0, 2, 0, 0)
+                };
+                var toggle = new System.Windows.Controls.CheckBox
+                {
+                    Content = "启用",
+                    IsChecked = setting.Enabled,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(10, 0, 0, 0),
+                    ToolTip = "停用后市场不再使用这条来源（文件仍保留，可随时再开）"
+                };
+                toggle.Checked += (_, _) =>
+                {
+                    _marketSourceSettings.TrySetEnabled(kind, setting.Value, true, out var enabledMessage);
+                    Render(enabledMessage);
+                };
+                toggle.Unchecked += (_, _) =>
+                {
+                    _marketSourceSettings.TrySetEnabled(kind, setting.Value, false, out var disabledMessage);
+                    Render(disabledMessage);
                 };
                 var testButton = new System.Windows.Controls.Button
                 {
                     Content = "测试",
-                    Padding = new Thickness(10, 3, 10, 3)
+                    Padding = new Thickness(10, 3, 10, 3),
+                    Margin = new Thickness(8, 0, 0, 0)
                 };
                 testButton.Click += async (_, _) =>
                 {
                     probeStatus.Text = "测试中…";
-                    var result = await _marketSourceSettings.ProbeAsync(kind, value);
+                    var result = await _marketSourceSettings.ProbeAsync(kind, setting.Value);
                     probeStatus.Text = (result.Ok ? "✓ " : "✗ ") + result.Message;
                 };
                 var removeButton = new System.Windows.Controls.Button
                 {
-                    Content = "移除",
+                    Content = "删除",
                     Padding = new Thickness(10, 3, 10, 3),
                     Margin = new Thickness(6, 0, 0, 0)
                 };
                 removeButton.Click += (_, _) =>
                 {
-                    _marketSourceSettings.TryRemove(kind, value, out var removeMessage);
+                    _marketSourceSettings.TryRemove(kind, setting.Value, out var removeMessage);
                     Render(removeMessage);
                 };
 
@@ -2562,7 +2600,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 });
                 label.Children.Add(new TextBlock
                 {
-                    Text = entry.TypeText,
+                    Text = entry.TypeText + (setting.Enabled ? string.Empty : " · 已停用"),
                     Foreground = (WpfBrush)FindResource("MutedBrush"),
                     FontSize = 11
                 });
@@ -2572,15 +2610,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 grid.Children.Add(label);
-                Grid.SetColumn(testButton, 1);
+                Grid.SetColumn(toggle, 1);
+                grid.Children.Add(toggle);
+                Grid.SetColumn(testButton, 2);
                 grid.Children.Add(testButton);
-                Grid.SetColumn(removeButton, 2);
+                Grid.SetColumn(removeButton, 3);
                 grid.Children.Add(removeButton);
-                rows.Children.Add(grid);
+                rowStack.Children.Add(grid);
             }
 
-            status.Text = message ?? $"来源文件：{_marketSourceSettings.FilePath(kind)}";
+            status.Text = message ?? $"来源文件：{_marketSourceSettings.FilePath(kind)}（列表固定高度、内部滚动；改动在下次市场刷新时生效）";
         }
 
         var input = new System.Windows.Controls.TextBox
@@ -2633,7 +2674,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         actions.Children.Add(addButton);
         actions.Children.Add(openDirectoryButton);
 
-        content.Children.Add(rows);
         content.Children.Add(actions);
         content.Children.Add(status);
         parent.Children.Add(new Border

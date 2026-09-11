@@ -1367,11 +1367,29 @@ public sealed class MarketplaceService
                 {
                     foreach (var entry in document.RootElement.EnumerateArray())
                     {
-                        if (entry.ValueKind == JsonValueKind.String
-                            && Uri.TryCreate(entry.GetString(), UriKind.Absolute, out var uri)
-                            && uri.Scheme == Uri.UriSchemeHttps)
+                        // 兼容两种写法：纯字符串（旧）或 {"value":…,"enabled":false}（带开关）。
+                        var value = entry.ValueKind == JsonValueKind.String
+                            ? entry.GetString()
+                            : entry.ValueKind == JsonValueKind.Object
+                                && entry.TryGetProperty("value", out var valueElement)
+                                && valueElement.ValueKind == JsonValueKind.String
+                                    ? valueElement.GetString()
+                                    : null;
+                        var enabled = !entry.TryGetProperty("enabled", out var enabledElement)
+                            || enabledElement.ValueKind != JsonValueKind.False;
+                        if (string.IsNullOrWhiteSpace(value) || !enabled)
+                        {
+                            continue;
+                        }
+
+                        var trimmed = value.Trim();
+                        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
                         {
                             result.Add((false, uri.ToString()));
+                        }
+                        else if (trimmed.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                        {
+                            result.Add((true, trimmed));
                         }
                     }
                 }

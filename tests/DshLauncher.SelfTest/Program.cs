@@ -287,6 +287,16 @@ Check("sources/去重 / 落盘读回 / 移除",
     && MarketSourceSettingsService.Describe(MarketSourceKind.Skill, "owner/repo").IsGitHubRepository
     && sourceSettings.TryRemove(MarketSourceKind.Skill, "owner/repo", out _)
     && sourceSettings.Read(MarketSourceKind.Skill).Count == 0);
+Check("sources/开关状态：停用不删除、只影响启用列表，并能落盘读回（对象格式）",
+    sourceSettings.TrySetEnabled(MarketSourceKind.Plugin, "D:/x/catalog.json", false, out _)
+    && sourceSettings.ReadEntries(MarketSourceKind.Plugin) is [{ Enabled: true }, { Enabled: false }]
+    && sourceSettings.ReadEnabled(MarketSourceKind.Plugin).Count == 1
+    && File.ReadAllText(sourceSettings.FilePath(MarketSourceKind.Plugin), Encoding.UTF8).Contains("enabled", StringComparison.Ordinal));
+// 旧格式（纯字符串数组）仍要能读，并按启用处理
+File.WriteAllText(sourceSettings.FilePath(MarketSourceKind.Skill), """["owner/legacy"]""", Encoding.UTF8);
+Check("sources/兼容旧的纯字符串数组格式（一律视为启用）",
+    sourceSettings.ReadEntries(MarketSourceKind.Skill) is [{ Value: "owner/legacy", Enabled: true }]
+    && sourceSettings.ReadEnabled(MarketSourceKind.Skill).Count == 1);
 File.WriteAllText(sourceSettings.FilePath(MarketSourceKind.Plugin), "{ broken", Encoding.UTF8);
 Check("sources/文件损坏按“没有来源”处理（不影响市场与设置页）",
     sourceSettings.Read(MarketSourceKind.Plugin).Count == 0);

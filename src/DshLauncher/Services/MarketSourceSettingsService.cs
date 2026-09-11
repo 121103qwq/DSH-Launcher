@@ -13,6 +13,9 @@ public enum MarketSourceKind
     Skill
 }
 
+/// <summary>一条自定义来源（值 + 是否启用）。</summary>
+public sealed record MarketSourceSetting(string Value, bool Enabled);
+
 /// <summary>一条自定义来源在界面上的展示信息。</summary>
 public sealed record MarketSourceEntry(string Value, string TypeText, bool IsUrl, bool IsGitHubRepository)
 {
@@ -48,31 +51,87 @@ public sealed partial class MarketSourceSettingsService
         ? _paths.MarketplaceSourcesPath
         : Path.Combine(_paths.RootDirectory, "skill-market-sources.json");
 
-    /// <summary>读取自定义来源；文件缺失/损坏一律当作"没有自定义来源"。</summary>
-    public IReadOnlyList<string> Read(MarketSourceKind kind)
+    /// <summary>读取自定义来源（含启用状态）；缺失/损坏按"没有来源"。</summary>
+    public IReadOnlyList<MarketSourceSetting> ReadEntries(MarketSourceKind kind)
     {
         var path = FilePath(kind);
         try
         {
             if (!File.Exists(path))
             {
-                return Array.Empty<string>();
+                return Array.Empty<MarketSourceSetting>();
             }
 
-            var values = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(path, Encoding.UTF8));
-            return (values ?? new List<string>())
-                .Select(value => Normalize(kind, value))
-                .Where(value => value is not null)
-                .Select(value => value!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(MaximumSources)
-                .ToArray();
+            using var document = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<MarketSourceSetting>();
+            }
+
+            var result = new List<MarketSourceSetting>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                string? value;
+                var enabled = true;
+                if (entry.ValueKind == JsonValueKind.String)
+                {
+                    value = entry.GetString();
+                }
+                else if (entry.ValueKind == JsonValueKind.Object)
+                {
+                    value = entry.TryGetProperty("value", out var valueElement) && valueElement.ValueKind == JsonValueKind.String
+                        ? valueElement.GetString()
+                        : null;
+                    enabled = !entry.TryGetProperty("enabled", out var enabledElement)
+                        || enabledElement.ValueKind != JsonValueKind.False;
+                }
+                else
+                {
+                    continue;
+                }
+
+                if (Normalize(kind, value) is { } normalized && seen.Add(normalized))
+                {
+                    result.Add(new MarketSourceSetting(normalized, enabled));
+                }
+
+                if (result.Count >= MaximumSources)
+                {
+                    break;
+                }
+            }
+
+            return result;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            return Array.Empty<string>();
+            return Array.Empty<MarketSourceSetting>();
         }
     }
+
+    /// <summary>只取启用的来源（市场与技能扫描消费这个）。</summary>
+    public IReadOnlyList<string> ReadEnabled(MarketSourceKind kind) =>
+        ReadEntries(kind).Where(entry => entry.Enabled).Select(entry => entry.Value).ToArray();
+
+    /// <summary>开关一条来源（不删除）。</summary>
+    public bool TrySetEnabled(MarketSourceKind kind, string value, bool enabled, out string message)
+    {
+        var entries = ReadEntries(kind).ToList();
+        var index = entries.FindIndex(entry => string.Equals(entry.Value, value, StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            message = "这条来源不在列表里。";
+            return false;
+        }
+
+        entries[index] = entries[index] with { Enabled = enabled };
+        return TryWriteEntries(kind, entries, out message);
+    }
+
+    /// <summary>读取自定义来源的值（含停用项）；缺失/损坏按"没有来源"。</summary>
+    public IReadOnlyList<string> Read(MarketSourceKind kind) =>
+        ReadEntries(kind).Select(entry => entry.Value).ToArray();
 
     /// <summary>添加一条自定义来源；非法或重复时返回 false 并给出原因。</summary>
     public bool TryAdd(MarketSourceKind kind, string? value, out string message)
@@ -86,8 +145,8 @@ public sealed partial class MarketSourceSettingsService
             return false;
         }
 
-        var current = Read(kind).ToList();
-        if (current.Any(item => string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase)))
+        var current = ReadEntries(kind).ToList();
+        if (current.Any(item => string.Equals(item.Value, normalized, StringComparison.OrdinalIgnoreCase)))
         {
             message = "这条来源已经在列表里。";
             return false;
@@ -99,30 +158,33 @@ public sealed partial class MarketSourceSettingsService
             return false;
         }
 
-        current.Add(normalized);
-        return TryWrite(kind, current, out message);
+        current.Add(new MarketSourceSetting(normalized, true));
+        return TryWriteEntries(kind, current, out message);
     }
 
     public bool TryRemove(MarketSourceKind kind, string value, out string message)
     {
-        var current = Read(kind)
-            .Where(item => !string.Equals(item, value, StringComparison.OrdinalIgnoreCase))
+        var current = ReadEntries(kind)
+            .Where(item => !string.Equals(item.Value, value, StringComparison.OrdinalIgnoreCase))
             .ToList();
-        return TryWrite(kind, current, out message);
+        return TryWriteEntries(kind, current, out message);
     }
 
-    private bool TryWrite(MarketSourceKind kind, IReadOnlyList<string> values, out string message)
+    private bool TryWriteEntries(MarketSourceKind kind, IReadOnlyList<MarketSourceSetting> entries, out string message)
     {
         try
         {
             Directory.CreateDirectory(_paths.RootDirectory);
+            // 写成对象数组（{"value":…,"enabled":…}）；读侧兼容旧的纯字符串数组。
+            var payload = entries.Select(entry => new { value = entry.Value, enabled = entry.Enabled }).ToArray();
             File.WriteAllText(
                 FilePath(kind),
-                JsonSerializer.Serialize(values, new JsonSerializerOptions { WriteIndented = true }),
+                JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }),
                 new UTF8Encoding(false));
-            message = values.Count == 0
+            var enabledCount = entries.Count(entry => entry.Enabled);
+            message = entries.Count == 0
                 ? "已保存（列表为空）。"
-                : $"已保存 {values.Count} 条来源；市场下次刷新时生效。";
+                : $"已保存 {entries.Count} 条来源（启用 {enabledCount} 条）；市场下次刷新时生效。";
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
