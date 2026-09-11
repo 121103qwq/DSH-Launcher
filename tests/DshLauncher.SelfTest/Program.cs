@@ -2045,6 +2045,30 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && !candidates[1].Matches);
 }
 
+{
+    Check("surface/判据：bundles 优先判定 web/tui/headless，profile 名兜底，未知不硬套",
+        PresentationSurfaceService.Detect("web", new[] { "@deepseek-ai/dsh-web-app" }) == PresentationSurface.Web
+        && PresentationSurfaceService.Detect("dsh-tui", null) == PresentationSurface.Terminal
+        && PresentationSurfaceService.Detect("my-profile", new[] { "@deepseek-harness-tui/dsh-tui" }) == PresentationSurface.Terminal
+        && PresentationSurfaceService.Detect("headless", new[] { "@deepseek-ai/dsh-headless" }) == PresentationSurface.Headless
+        && PresentationSurfaceService.Detect("weird", new[] { "some-plugin" }) == PresentationSurface.Unknown
+        && PresentationSurfaceService.Detect(null, null) == PresentationSurface.Unknown);
+
+    Check("surface/只有终端面允许在终端打开，且标签正确",
+        PresentationSurfaceService.SupportsTerminalLaunch(PresentationSurface.Terminal)
+        && !PresentationSurfaceService.SupportsTerminalLaunch(PresentationSurface.Web)
+        && !PresentationSurfaceService.SupportsTerminalLaunch(PresentationSurface.Unknown)
+        && PresentationSurfaceService.Describe(PresentationSurface.Terminal) == "终端面"
+        && PresentationSurfaceService.Describe(PresentationSurface.Unknown) == "未识别");
+
+    var surfaceArgs = PresentationSurfaceService.BuildWindowsTerminalArguments("C:/x/dsh.cmd", "dsh-tui", "C:/work");
+    Check("surface/终端参数：-d 工作目录 + dsh 入口 + --profile；缺参数返回 null（不猜）",
+        surfaceArgs is not null
+        && string.Join(" ", surfaceArgs) == "-d C:/work C:/x/dsh.cmd --profile dsh-tui"
+        && PresentationSurfaceService.BuildWindowsTerminalArguments(null, "dsh-tui", "C:/work") is null
+        && PresentationSurfaceService.BuildWindowsTerminalArguments("C:/x/dsh.cmd", null, null) is null);
+}
+
 // ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================

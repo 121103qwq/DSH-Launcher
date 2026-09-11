@@ -3496,6 +3496,92 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _ => "提示"
     };
 
+    /// <summary>
+    /// 呈现面为终端时（如 dsh-tui profile）：交给 Windows Terminal 打开（work-log/80）。
+    /// 刻意不做终端仿真：dsh-TUI 是终端原生插件，作者定义的用法就是 `dsh --profile dsh-tui`。
+    /// </summary>
+    private void OpenInTerminal_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedInstance is not { } instance)
+        {
+            ShowNotice("请先选择一个实例。");
+            return;
+        }
+
+        var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+        var surface = PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
+        if (!PresentationSurfaceService.SupportsTerminalLaunch(surface))
+        {
+            ShowNotice($"实例「{instance.Name}」的呈现面是「{PresentationSurfaceService.Describe(surface)}」，不是终端面；"
+                + "「在终端打开」只适用于 dsh-tui 这类终端面 profile。");
+            return;
+        }
+
+        var terminal = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WindowsApps", "wt.exe");
+        if (!File.Exists(terminal))
+        {
+            ShowNotice("未找到 Windows Terminal（wt.exe）；请先安装 Windows Terminal 再试「在终端打开」。");
+            return;
+        }
+
+        var arguments = PresentationSurfaceService.BuildWindowsTerminalArguments(
+            instance.DshExecutablePath, profileName, instance.RootPath);
+        if (arguments is null)
+        {
+            ShowNotice("该实例缺少可用的 dsh 入口，无法在终端打开；请先在版本控制里修复运行目录。");
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = terminal,
+                Arguments = string.Join(" ", arguments.Select(value => value.Contains(' ') ? "\"" + value + "\"" : value)),
+                UseShellExecute = true
+            });
+            ShowNotice($"已在终端打开实例「{instance.Name}」（profile：{profileName}）。");
+        }
+        catch (Exception ex)
+        {
+            ShowNotice("在终端打开失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>只读读取某个 profile 的 dsh.profile.bundles（读不到返回空，判定侧会回退到 profile 名）。</summary>
+    private static IReadOnlyList<string> ReadProfileBundles(ManagerInstance instance, string profileName)
+    {
+        try
+        {
+            var path = Path.Combine(instance.DshHome, "profiles", profileName, "package.json");
+            if (!File.Exists(path))
+            {
+                return Array.Empty<string>();
+            }
+
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            if (document.RootElement.TryGetProperty("dsh", out var dsh)
+                && dsh.TryGetProperty("profile", out var profile)
+                && profile.TryGetProperty("bundles", out var bundles)
+                && bundles.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                return bundles.EnumerateArray()
+                    .Where(item => item.ValueKind == System.Text.Json.JsonValueKind.String)
+                    .Select(item => item.GetString() ?? string.Empty)
+                    .Where(value => value.Length > 0)
+                    .ToList();
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            // 读不到就当作"无 bundles"，由调用方按 profile 名兜底；不打扰用户。
+        }
+
+        return Array.Empty<string>();
+    }
+
     private void AddCredentialAuditSection(StackPanel panel)
     {
         panel.Children.Add(new TextBlock

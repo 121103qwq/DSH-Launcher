@@ -557,6 +557,12 @@
                                                         Padding="15,0"
                                                         Margin="0,0,8,8"
                                                         ToolTip="使用当前版本的 DSH_HOME 打开 DSH Desktop 原生窗口" />
+                                                <Button Content="在终端打开"
+                                                        Click="OpenInTerminal_Click"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8"
+                                                        ToolTip="呈现面为终端（如 dsh-tui profile）时，用 Windows Terminal 启动该实例；其它呈现面会提示原因" />
                                             </WrapPanel>
                                         </StackPanel>
                                     </Grid>
