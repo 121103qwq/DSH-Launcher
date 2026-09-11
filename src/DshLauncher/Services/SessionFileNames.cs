@@ -13,6 +13,13 @@ namespace DshLauncher.Services;
 /// </summary>
 internal static class SessionFileNames
 {
+    /// <summary>
+    /// 启动器已核对过的最高会话格式版本（= dsh 0.1.5-rc 的 <c>SESSION_FORMAT_VERSION</c>）。
+    /// 上游发布更高版本时，harness 的契约哨兵会失败，提醒先核对格式再放开；
+    /// 启动器本体按“任意版本”宽容处理，不依赖该常量做判断。
+    /// </summary>
+    public const int KnownMaxFormatVersion = 3;
+
     private const string Stem = "session";
     private const string JsonlSuffix = ".jsonl";
     private const string ZstdSuffix = ".zstd";

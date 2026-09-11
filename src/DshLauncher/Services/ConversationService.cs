@@ -930,7 +930,13 @@ public sealed class ConversationService
     private static string ProjectDirectory(string root, string? cwd) =>
         Path.Combine(root, cwd is null ? "_no-cwd" : ProjectKey(cwd));
 
-    private static string ProjectKey(string cwd)
+    /// <summary>
+    /// dsh 的项目目录名编码（与 dsh <c>projectKey</c> 同源，见 docs/DSH_CONTRACT_INVENTORY.md C4）：
+    /// 分隔符（<c>/ \ :</c>）折叠为单个 <c>-</c>，不安全码元转 <c>~XXXX</c>（大写四位十六进制，
+    /// 与 session id 同一套转义），去掉前导 <c>-</c>，空结果取 <c>root</c>，截断到 251，
+    /// 最后包成 <c>--…--</c>。harness 契约哨兵用上游测试向量回归它。
+    /// </summary>
+    internal static string ProjectKey(string cwd)
     {
         if (cwd.Length == 0)
         {
@@ -963,7 +969,12 @@ public sealed class ConversationService
         return $"--{(value.Length == 0 ? "root" : value[..Math.Min(value.Length, 251)])}--";
     }
 
-    private static string EncodeSegment(string value)
+    /// <summary>
+    /// session id 的目录名编码（与 dsh <c>encodeSegment</c> 同源）：安全字符
+    /// <c>[A-Za-z0-9._-]</c> 原样保留，其余（含 <c>~</c> 自身）转 <c>~XXXX</c>；
+    /// <c>.</c>/<c>..</c> 特例转义以消除路径穿越。
+    /// </summary>
+    internal static string EncodeSegment(string value)
     {
         if (value.Length == 0)
         {

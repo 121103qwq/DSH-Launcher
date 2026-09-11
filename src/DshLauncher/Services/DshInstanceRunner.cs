@@ -25,7 +25,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     /// `dsh web: http://127.0.0.1:&lt;port&gt;/?token=…`。裸地址请求返回 401，
     /// 必须携带 token（或换取 cookie）才能加载页面；该 token 每次进程启动生成。
     /// </summary>
-    private static readonly Regex AuthenticatedUrlPattern = new(
+    internal static readonly Regex AuthenticatedUrlPattern = new(
         @"dsh\s+web:\s*(https?://\S+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
