@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using DshLauncher.Models;
 using DshLauncher.Services;
 
@@ -300,6 +301,48 @@ Check("sources/兼容旧的纯字符串数组格式（一律视为启用）",
 File.WriteAllText(sourceSettings.FilePath(MarketSourceKind.Plugin), "{ broken", Encoding.UTF8);
 Check("sources/文件损坏按“没有来源”处理（不影响市场与设置页）",
     sourceSettings.Read(MarketSourceKind.Plugin).Count == 0);
+
+// ===========================================================================
+// 9. 中文插件源适配器（deepseek1024.com，借鉴 #16）
+// ===========================================================================
+var zhSourceJson = """{"plugins":[{"id":"owner/repo/packages/dsh-x","name":"dsh-x","owner":"owner","repository":"repo","url":"https://github.com/owner/repo","category":"ui","description":{"zh":"中文描述","en":"English"},"install":"npm:dsh-x","stars":12,"installCount":73,"failureCount":5,"added":"2026-09-01T00:00:00Z"}]}""";
+using (var zhDocument = JsonDocument.Parse(zhSourceJson))
+{
+    var mapped = Deepseek1024CatalogService.TryMap(zhDocument.RootElement.GetProperty("plugins")[0]);
+    Check("zh1024/映射：中文描述优先、来源种类为 ZhCatalog、安装统计进来源名",
+        mapped is { SourceKind: MarketplaceSourceKind.ZhCatalog, Name: "dsh-x", PackageName: "dsh-x", InstallSpec: "npm:dsh-x", Stars: 12 }
+        && mapped!.Description == "中文描述"
+        && mapped.RepositoryUrl == "https://github.com/owner/repo"
+        && mapped.SourceName.Contains("安装 73 次", StringComparison.Ordinal)
+        && mapped.SourceName.Contains("失败 5 次", StringComparison.Ordinal));
+}
+
+using (var minimalDocument = JsonDocument.Parse("""{"id":"o/r","name":"r"}"""))
+{
+    Check("zh1024/映射：缺 install 时用仓库兜底成 github: 安装标识（安装前仍会校验 package.json）",
+        Deepseek1024CatalogService.TryMap(minimalDocument.RootElement) is { InstallSpec: "github:o/r", Name: "r" });
+}
+
+using (var blankDocument = JsonDocument.Parse("""{"id":"only-owner"}"""))
+{
+    Check("zh1024/映射：信息不足（无名字）返回 null，不往市场里塞垃圾条目",
+        Deepseek1024CatalogService.TryMap(blankDocument.RootElement) is null);
+}
+
+var zhCachePaths = new LauncherPaths(Path.Combine(scratch, "zh1024"));
+var zhService = new Deepseek1024CatalogService(zhCachePaths);
+Directory.CreateDirectory(zhCachePaths.RootDirectory);
+File.WriteAllText(
+    zhService.CachePath,
+    """{"savedAt":"2999-01-01T00:00:00+00:00","source":"test","items":[{"id":"o/r","name":"r","description":"d","install":"npm:r"}]}""",
+    Encoding.UTF8);
+var zhCached = await zhService.LoadAsync();
+Check("zh1024/未过期缓存直接命中（不联网；TTL 30 分钟）",
+    zhCached.Count == 1 && zhCached[0].Name == "r" && zhService.LastStatus.Contains("缓存", StringComparison.Ordinal));
+File.WriteAllText(zhService.CachePath, "{ broken", Encoding.UTF8);
+var zhBroken = await new Deepseek1024CatalogService(zhCachePaths).LoadAsync(new CancellationTokenSource(TimeSpan.FromSeconds(12)).Token);
+Check("zh1024/缓存损坏时不抛异常（拉取失败则返回空列表，不拖垮插件市场）",
+    zhBroken.Count == 0);
 
 // ===========================================================================
 // 8. 核心 bundle 常量

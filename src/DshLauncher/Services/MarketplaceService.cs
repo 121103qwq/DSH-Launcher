@@ -50,17 +50,23 @@ public sealed class MarketplaceService
     };
     private readonly HttpClient _httpClient;
     private readonly LauncherPaths _paths;
+    private readonly Deepseek1024CatalogService? _chineseCatalog;
+    private readonly Func<bool> _chineseCatalogEnabled;
     private readonly IReadOnlyList<Uri> _customSources;
     private readonly Dictionary<string, ThemeReadmePreview> _themePreviewCache = new(StringComparer.OrdinalIgnoreCase);
 
     public MarketplaceService(
         LauncherPaths? paths = null,
         HttpClient? httpClient = null,
-        IEnumerable<Uri>? customSources = null)
+        IEnumerable<Uri>? customSources = null,
+        Deepseek1024CatalogService? chineseCatalog = null,
+        Func<bool>? chineseCatalogEnabled = null)
     {
         _paths = paths ?? new LauncherPaths();
         _httpClient = httpClient ?? CreateHttpClient();
         _customSources = customSources?.Where(uri => uri.IsAbsoluteUri).ToArray() ?? Array.Empty<Uri>();
+        _chineseCatalog = chineseCatalog;
+        _chineseCatalogEnabled = chineseCatalogEnabled ?? (() => false);
     }
 
     public async Task<MarketplaceSearchResult> SearchAsync(
@@ -119,6 +125,37 @@ public sealed class MarketplaceService
                 warnings.ToArray(),
                 sourcesChecked));
             wrapped = wrapped.Where(item => !ReferenceEquals(item, done)).ToArray();
+        }
+
+        // 中文插件源（默认关闭；见设置 →「插件与技能来源」）：第三方源不可用只记一条告警。
+        if (_chineseCatalog is not null && _chineseCatalogEnabled())
+        {
+            sourcesChecked++;
+            try
+            {
+                var chineseItems = await _chineseCatalog.LoadAsync(cancellationToken);
+                if (chineseItems.Count > 0)
+                {
+                    items.AddRange(chineseItems);
+                }
+                else
+                {
+                    warnings.Add($"中文插件源不可用：{_chineseCatalog.LastStatus}");
+                }
+
+                progress?.Report(new MarketplaceRefreshProgress(
+                    MergeItems(items),
+                    warnings.ToArray(),
+                    sourcesChecked));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException or InvalidOperationException)
+            {
+                warnings.Add($"中文插件源读取失败：{ex.Message}");
+            }
         }
 
         IReadOnlyList<(bool IsFile, string Value)> customSources;

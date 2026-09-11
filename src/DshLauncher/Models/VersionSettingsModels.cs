@@ -145,6 +145,12 @@ public sealed class LauncherSettingsData
 
     public PluginInstallMode PluginInstallMode { get; set; } = PluginInstallMode.Fast;
 
+    /// <summary>
+    /// 是否启用中文插件源（deepseek1024.com，约 1.3 万条）。默认关闭：第三方来源由用户显式打开，
+    /// 见 work-log/63 的评估与 65 号的来源管理界面。
+    /// </summary>
+    public bool UseChinesePluginSource { get; set; }
+
     /// <summary>点击主窗口 × 时的行为。</summary>
     [JsonConverter(typeof(CloseBehaviorConverter))]
     public CloseBehavior CloseBehavior { get; set; } = CloseBehavior.MinimizeToTray;
