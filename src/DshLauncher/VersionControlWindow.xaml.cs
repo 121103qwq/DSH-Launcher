@@ -656,73 +656,14 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             var downloadFiles = manifest.Files;
             var downloadBytes = downloadFiles.Sum(file => file.Size);
 
-            var lines = new List<string>
+            var importDialog = new PackImportWindow(Window.GetWindow(this), archive, plan, template);
+            if (importDialog.ShowDialog() != true)
             {
-                $"整合包：{manifest.ResolveDisplayName(null)} {manifest.PackVersion}"
-                    + $"（manifest v{(int)manifest.Version}）",
-                $"形态：{(manifest.Type == PackManifestType.DshHome ? "整个 DSH_HOME 快照（只能新建实例）" : "profile 整合包")}",
-                $"要求 DSh：{plan.RequiredDshVersion ?? "未声明"}"
-                    + $"（当前模板 {template.DetectedVersion ?? "未知"}：{(plan.TemplateVersionMatches ? "匹配" : "不匹配，将拒绝导入")}）",
-                $"将创建新实例：{plan.InstanceName}（profile：{plan.ProfileName}）",
-                $"profile 文件：{plan.ProfileFiles.Count} 个"
-                    + (plan.ProfileFiles.Count > 0
-                        ? $"（如 {string.Join("、", plan.ProfileFiles.Take(6))}{(plan.ProfileFiles.Count > 6 ? " …" : string.Empty)}）"
-                        : string.Empty),
-                $"home 文件：{plan.HomeFiles.Count} 个",
-                $"bundles：{manifest.Bundles.Count} 个；依赖：{manifest.Dependencies.Count} 条"
-            };
-            if (downloadFiles.Count > 0)
-            {
-                lines.Add($"需联网下载：{downloadFiles.Count} 个文件（合计 {downloadBytes / 1024.0 / 1024.0:F1} MB）");
-                lines.AddRange(downloadFiles.Take(8).Select(file =>
-                    $"   · {file.Path}（{file.Size / 1024.0:F0} KB，sha256 {file.Sha256[..Math.Min(12, file.Sha256.Length)]}…）"));
-                if (downloadFiles.Count > 8)
-                {
-                    lines.Add($"   · …共 {downloadFiles.Count} 个");
-                }
-            }
-            else
-            {
-                lines.Add("需联网下载：无（全部载荷都在包内）");
-            }
-
-            if (plan.Warnings.Count > 0)
-            {
-                lines.Add("提示：" + string.Join("；", plan.Warnings));
-            }
-
-            lines.Add(string.Empty);
-            lines.Add("导入只会新建独立实例，不覆盖任何现有版本。");
-
-            if (downloadFiles.Count > 0)
-            {
-                // Q2：默认不允许下载；必须显式同意才按包内 https 地址下载（强制 sha256 校验）。
-                var consent = System.Windows.MessageBox.Show(
-                    Window.GetWindow(this),
-                    string.Join("\n", lines)
-                        + $"\n\n该整合包包含 {downloadFiles.Count} 个需要联网下载的文件。"
-                        + "\n选『是』= 同意按包内声明的 https 地址下载，并强制 sha256 校验（校验不过则整体回滚）。"
-                        + "\n选『否』= 取消导入，不产生任何文件。",
-                    "导入整合包（需要下载）",
-                    System.Windows.MessageBoxButton.YesNo,
-                    System.Windows.MessageBoxImage.Warning);
-                if (consent != System.Windows.MessageBoxResult.Yes)
-                {
-                    SetStatus("已取消导入：该整合包需要联网下载文件，未获得同意。");
-                    return;
-                }
-            }
-            else if (System.Windows.MessageBox.Show(
-                    Window.GetWindow(this),
-                    string.Join("\n", lines) + "\n\n确认导入吗？",
-                    "导入整合包预览",
-                    System.Windows.MessageBoxButton.YesNo,
-                    System.Windows.MessageBoxImage.Information) != System.Windows.MessageBoxResult.Yes)
-            {
+                SetStatus("已取消导入：未确认整合包内容。");
                 return;
             }
 
-            var allowDownloads = downloadFiles.Count > 0;
+            var allowDownloads = downloadFiles.Count > 0 && importDialog.AllowDownloads;
             task = _taskService?.Begin(
                 LauncherTaskKind.InstanceImport,
                 $"导入整合包 {manifest.ResolveDisplayName(null)}",
