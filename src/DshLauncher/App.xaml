@@ -137,12 +137,21 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!-- 菜单分隔线：与卡片风格一致的 1px 线（此前没有样式，走系统默认外观） -->
-        <Style TargetType="Separator">
-            <Setter Property="Background" Value="{StaticResource LineBrush}" />
-            <Setter Property="Height" Value="1" />
-            <Setter Property="Margin" Value="10,4" />
+        <!-- 菜单分隔线：默认模板不吃 Background/Margin（实测会出现"白线左右顶满"），
+             所以自带模板自绘 1px 线；做成 keyed 样式以便在弹出层里显式引用。 -->
+        <Style x:Key="MenuSeparatorStyle" TargetType="Separator">
+            <Setter Property="Margin" Value="10,6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Separator">
+                        <Border Height="1"
+                                Background="{StaticResource LineBrush}"
+                                SnapsToDevicePixels="True" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
+        <Style TargetType="Separator" BasedOn="{StaticResource MenuSeparatorStyle}" />
         <Style x:Key="ContextInstanceMenuItemStyle" TargetType="MenuItem">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="Background" Value="Transparent" />

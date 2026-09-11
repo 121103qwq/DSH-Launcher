@@ -106,7 +106,7 @@
                                     <MenuItem Header="从快捷方式导入" Click="ScanInstanceShortcut_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
                                     <MenuItem Header="从源码目录导入" Click="ImportSourceProject_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
                                     <MenuItem Header="扫描本机 DSH 环境" Click="ScanEnvironment_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
-                                    <Separator />
+                                    <Separator Style="{StaticResource MenuSeparatorStyle}" />
                                     <MenuItem Header="导入整合包（.dshpack / .dspack / .tgz）" Click="ImportPackage_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
                                 </ContextMenu>
                             </Button.ContextMenu>
