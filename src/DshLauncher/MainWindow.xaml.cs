@@ -144,9 +144,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _watchdog.HttpHealthDegraded += OnHttpHealthDegraded;
         _marketplaceService = new(
             chineseCatalog: _chineseCatalog,
-            chineseCatalogEnabled: () => _versionSettingsService.ReadLauncherSettings().UseChinesePluginSource,
             dshfindCatalog: _dshfindCatalog,
-            dshfindCatalogEnabled: () => _versionSettingsService.ReadLauncherSettings().UseDshfindPluginSource);
+            pluginCustomSources: () => _marketSourceSettings.ReadEnabled(MarketSourceKind.Plugin));
         _skillMarketService = new(
             _extensionService,
             customSources: () => _marketSourceSettings.ReadEnabled(MarketSourceKind.Skill));
@@ -2502,31 +2501,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 4, 0, 0)
         });
 
-        if (isPlugin)
-        {
-            var chineseToggle = new System.Windows.Controls.CheckBox
-            {
-                Content = "启用中文插件源（deepseek1024.com，约 1.3 万条，默认关）",
-                Margin = new Thickness(0, 10, 0, 0),
-                IsChecked = _versionSettingsService.ReadLauncherSettings().UseChinesePluginSource,
-                ToolTip = "第三方来源，只作发现层；安装前仍会读取 package.json 校验"
-            };
-            chineseToggle.Checked += (_, _) => SaveChinesePluginSource(true);
-            chineseToggle.Unchecked += (_, _) => SaveChinesePluginSource(false);
-            content.Children.Add(chineseToggle);
-
-            var dshfindToggle = new System.Windows.Controls.CheckBox
-            {
-                Content = "启用 dshfind.com 中文源（约 1.4 万条，默认关）",
-                Margin = new Thickness(0, 6, 0, 0),
-                IsChecked = _versionSettingsService.ReadLauncherSettings().UseDshfindPluginSource,
-                ToolTip = "第三方来源；一次拉全量约 8 MB，带 TTL 缓存与单飞；已归档的插件会被排除"
-            };
-            dshfindToggle.Checked += (_, _) => SaveDshfindPluginSource(true);
-            dshfindToggle.Unchecked += (_, _) => SaveDshfindPluginSource(false);
-            content.Children.Add(dshfindToggle);
-        }
-
         var rowStack = new StackPanel();
         content.Children.Add(new Border
         {
@@ -2719,38 +2693,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         Render();
-    }
-
-    /// <summary>保存「启用中文插件源」开关（启动器级设置；市场下次刷新生效）。</summary>
-    private void SaveChinesePluginSource(bool enabled)
-    {
-        var settings = _versionSettingsService.ReadLauncherSettings();
-        if (settings.UseChinesePluginSource == enabled)
-        {
-            return;
-        }
-
-        settings.UseChinesePluginSource = enabled;
-        _versionSettingsService.SaveLauncherSettings(settings);
-        ShowNotice(enabled
-            ? "已启用中文插件源（deepseek1024.com）；下次刷新插件市场时并入。"
-            : "已停用中文插件源。");
-    }
-
-    /// <summary>保存「启用 dshfind 中文源」开关（启动器级设置；市场下次刷新生效）。</summary>
-    private void SaveDshfindPluginSource(bool enabled)
-    {
-        var settings = _versionSettingsService.ReadLauncherSettings();
-        if (settings.UseDshfindPluginSource == enabled)
-        {
-            return;
-        }
-
-        settings.UseDshfindPluginSource = enabled;
-        _versionSettingsService.SaveLauncherSettings(settings);
-        ShowNotice(enabled
-            ? "已启用 dshfind.com 中文源；下次刷新插件市场时并入（首次会拉全量约 8 MB）。"
-            : "已停用 dshfind.com 中文源。");
     }
 
     private FrameworkElement CreateSettingsPage()

@@ -51,9 +51,8 @@ public sealed class MarketplaceService
     private readonly HttpClient _httpClient;
     private readonly LauncherPaths _paths;
     private readonly Deepseek1024CatalogService? _chineseCatalog;
-    private readonly Func<bool> _chineseCatalogEnabled;
     private readonly DshfindCatalogService? _dshfindCatalog;
-    private readonly Func<bool> _dshfindCatalogEnabled;
+    private readonly Func<IReadOnlyList<string>> _pluginCustomSources;
     private readonly IReadOnlyList<Uri> _customSources;
     private readonly Dictionary<string, ThemeReadmePreview> _themePreviewCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -62,17 +61,15 @@ public sealed class MarketplaceService
         HttpClient? httpClient = null,
         IEnumerable<Uri>? customSources = null,
         Deepseek1024CatalogService? chineseCatalog = null,
-        Func<bool>? chineseCatalogEnabled = null,
         DshfindCatalogService? dshfindCatalog = null,
-        Func<bool>? dshfindCatalogEnabled = null)
+        Func<IReadOnlyList<string>>? pluginCustomSources = null)
     {
         _paths = paths ?? new LauncherPaths();
         _httpClient = httpClient ?? CreateHttpClient();
         _customSources = customSources?.Where(uri => uri.IsAbsoluteUri).ToArray() ?? Array.Empty<Uri>();
         _chineseCatalog = chineseCatalog;
-        _chineseCatalogEnabled = chineseCatalogEnabled ?? (() => false);
         _dshfindCatalog = dshfindCatalog;
-        _dshfindCatalogEnabled = dshfindCatalogEnabled ?? (() => false);
+        _pluginCustomSources = pluginCustomSources ?? (() => Array.Empty<string>());
     }
 
     public async Task<MarketplaceSearchResult> SearchAsync(
@@ -134,7 +131,9 @@ public sealed class MarketplaceService
         }
 
         // 中文插件源（默认关闭；见设置 →「插件与技能来源」）：第三方源不可用只记一条告警。
-        if (_chineseCatalog is not null && _chineseCatalogEnabled())
+        var configuredPluginSources = _pluginCustomSources();
+        if (_chineseCatalog is not null
+            && configuredPluginSources.Contains(MarketSourceSettingsService.AdapterZh1024, StringComparer.OrdinalIgnoreCase))
         {
             sourcesChecked++;
             try
@@ -165,7 +164,8 @@ public sealed class MarketplaceService
         }
 
         // 第二个中文源 dshfind.com（同样默认关闭；8 MB 全量载荷由服务内部单飞 + TTL 处理）。
-        if (_dshfindCatalog is not null && _dshfindCatalogEnabled())
+        if (_dshfindCatalog is not null
+            && configuredPluginSources.Contains(MarketSourceSettingsService.AdapterDshfind, StringComparer.OrdinalIgnoreCase))
         {
             sourcesChecked++;
             try

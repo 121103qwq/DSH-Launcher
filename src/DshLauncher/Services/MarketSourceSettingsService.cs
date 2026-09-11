@@ -54,6 +54,7 @@ public sealed partial class MarketSourceSettingsService
     /// <summary>读取自定义来源（含启用状态）；缺失/损坏按"没有来源"。</summary>
     public IReadOnlyList<MarketSourceSetting> ReadEntries(MarketSourceKind kind)
     {
+        SeedBuiltInAdaptersIfMissing(kind);
         var path = FilePath(kind);
         try
         {
@@ -194,6 +195,31 @@ public sealed partial class MarketSourceSettingsService
         }
     }
 
+    /// <summary>内置中文源适配器令牌（唯一固定来源是 GitHub；这两个由用户按需开关）。</summary>
+    public const string AdapterZh1024 = "adapter:zh1024";
+
+    public const string AdapterDshfind = "adapter:dshfind";
+
+    public static readonly IReadOnlyList<string> BuiltInAdapterTokens = new[] { AdapterZh1024, AdapterDshfind };
+
+    public static bool IsAdapterToken(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && BuiltInAdapterTokens.Contains(value.Trim(), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>首次使用时把两个中文适配器写进自定义列表（默认停用，由用户自己开）。</summary>
+    private void SeedBuiltInAdaptersIfMissing(MarketSourceKind kind)
+    {
+        if (kind != MarketSourceKind.Plugin || File.Exists(FilePath(kind)))
+        {
+            return;
+        }
+
+        TryWriteEntries(
+            kind,
+            BuiltInAdapterTokens.Select(token => new MarketSourceSetting(token, false)).ToArray(),
+            out _);
+    }
+
     /// <summary>规范化并校验一条来源；非法返回 null。</summary>
     public static string? Normalize(MarketSourceKind kind, string? value)
     {
@@ -206,6 +232,11 @@ public sealed partial class MarketSourceSettingsService
         if (trimmed.Length > MaximumValueLength || trimmed.Any(char.IsControl))
         {
             return null;
+        }
+
+        if (kind == MarketSourceKind.Plugin && IsAdapterToken(trimmed))
+        {
+            return trimmed;
         }
 
         if (TryParseHttpUri(trimmed, out _))
@@ -234,9 +265,11 @@ public sealed partial class MarketSourceSettingsService
         var isRepo = !isUrl && kind == MarketSourceKind.Skill && GitHubRepositoryPattern().IsMatch(value);
         var type = isUrl
             ? "网址目录"
-            : isRepo
-                ? "GitHub 仓库（扫描其中的 SKILL.md）"
-                : "本地目录文件";
+            : IsAdapterToken(value)
+                ? "内置中文源（源自 GitHub 目录，可关可删）"
+                : isRepo
+                    ? "GitHub 仓库（扫描其中的 SKILL.md）"
+                    : "本地目录文件";
         return new MarketSourceEntry(value, type, isUrl, isRepo);
     }
 
@@ -250,6 +283,30 @@ public sealed partial class MarketSourceSettingsService
         if (normalized is null)
         {
             return new MarketSourceProbeResult(false, "格式不合法");
+        }
+
+        if (IsAdapterToken(normalized))
+        {
+            // 令牌探测＝直接探它背后的真实接口。
+            var probeUrl = normalized.Equals(AdapterZh1024, StringComparison.OrdinalIgnoreCase)
+                ? "https://deepseek1024.com/api/v2/plugins?page=1&limit=200"
+                : "https://dshfind.com/api/plugins-data";
+            try
+            {
+                using var adapterTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                adapterTimeout.CancelAfter(ProbeTimeout);
+                using var adapterResponse = await SharedClient.GetAsync(new Uri(probeUrl), adapterTimeout.Token);
+                var length = adapterResponse.Content.Headers.ContentLength;
+                return new MarketSourceProbeResult(
+                    adapterResponse.IsSuccessStatusCode,
+                    adapterResponse.IsSuccessStatusCode
+                        ? $"HTTP {(int)adapterResponse.StatusCode}{(length is null ? string.Empty : $"，{length} 字节")}"
+                        : $"HTTP {(int)adapterResponse.StatusCode}");
+            }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or InvalidOperationException or UriFormatException)
+            {
+                return new MarketSourceProbeResult(false, ex.Message);
+            }
         }
 
         var entry = Describe(kind, normalized);

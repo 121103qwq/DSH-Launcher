@@ -270,9 +270,13 @@ Check("ui/ForMessageBox 收敛长文本：显式上限逐行生效，默认上�
 // ===========================================================================
 var sourcePaths = new LauncherPaths(Path.Combine(scratch, "sources"));
 var sourceSettings = new MarketSourceSettingsService(sourcePaths);
-Check("sources/没有配置文件时按“没有自定义来源”处理",
-    sourceSettings.Read(MarketSourceKind.Plugin).Count == 0
-    && sourceSettings.Read(MarketSourceKind.Skill).Count == 0);
+Check("sources/首次使用会预置两个中文适配器（默认停用，Skill 侧为空）",
+    sourceSettings.ReadEntries(MarketSourceKind.Plugin) is [{ Value: "adapter:zh1024", Enabled: false }, { Value: "adapter:dshfind", Enabled: false }]
+    && sourceSettings.ReadEnabled(MarketSourceKind.Plugin).Count == 0
+    && sourceSettings.Read(MarketSourceKind.Skill).Count == 0
+    && MarketSourceSettingsService.IsAdapterToken("adapter:zh1024")
+    && !MarketSourceSettingsService.IsAdapterToken("https://example.com/catalog.json")
+    && MarketSourceSettingsService.Describe(MarketSourceKind.Plugin, "adapter:dshfind").TypeText.Contains("内置中文源", StringComparison.Ordinal));
 Check("sources/校验规则：插件只收 .json 或网址，Skill 还收 owner/repo",
     sourceSettings.TryAdd(MarketSourceKind.Plugin, "https://example.com/catalog.json", out _)
     && sourceSettings.TryAdd(MarketSourceKind.Plugin, "D:/x/catalog.json", out _)
@@ -282,7 +286,7 @@ Check("sources/校验规则：插件只收 .json 或网址，Skill 还收 owner/
 Check("sources/去重 / 落盘读回 / 移除",
     !sourceSettings.TryAdd(MarketSourceKind.Plugin, "https://example.com/catalog.json", out var duplicateMessage)
     && duplicateMessage.Contains("已经在列表里", StringComparison.Ordinal)
-    && sourceSettings.Read(MarketSourceKind.Plugin).Count == 2
+    && sourceSettings.Read(MarketSourceKind.Plugin).Count == 4
     && File.Exists(sourceSettings.FilePath(MarketSourceKind.Plugin))
     && sourceSettings.Read(MarketSourceKind.Skill) is ["owner/repo"]
     && MarketSourceSettingsService.Describe(MarketSourceKind.Skill, "owner/repo").IsGitHubRepository
@@ -290,7 +294,7 @@ Check("sources/去重 / 落盘读回 / 移除",
     && sourceSettings.Read(MarketSourceKind.Skill).Count == 0);
 Check("sources/开关状态：停用不删除、只影响启用列表，并能落盘读回（对象格式）",
     sourceSettings.TrySetEnabled(MarketSourceKind.Plugin, "D:/x/catalog.json", false, out _)
-    && sourceSettings.ReadEntries(MarketSourceKind.Plugin) is [{ Enabled: true }, { Enabled: false }]
+    && sourceSettings.ReadEntries(MarketSourceKind.Plugin).Any(entry => entry.Value == "D:/x/catalog.json" && !entry.Enabled)
     && sourceSettings.ReadEnabled(MarketSourceKind.Plugin).Count == 1
     && File.ReadAllText(sourceSettings.FilePath(MarketSourceKind.Plugin), Encoding.UTF8).Contains("enabled", StringComparison.Ordinal));
 // 旧格式（纯字符串数组）仍要能读，并按启用处理
