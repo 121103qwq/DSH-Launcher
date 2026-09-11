@@ -116,7 +116,6 @@
                                 IsEnabled="{Binding CanCreateVersion}"
                                 Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,0,8" />
-                        <Button Content="导入整合包" Click="ImportPackage_Click" />
                     </StackPanel>
                 </Grid>
                 </Border>
