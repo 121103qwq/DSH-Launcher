@@ -1268,6 +1268,43 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
     rtPackage?.Dispose();
 }
 
+
+// ===========================================================================
+// 16. 页面错误文本记录规则（PageErrorText，work-log/71 事故回归）
+// ===========================================================================
+{
+    // 这次事故的真实文本：旧实现截到 120 字符，正好切在 "…client-modules: bun"，
+    // 把排查方向带到了"缺 bun 运行时"。下面这条断言就是防止它再发生。
+    var petReal = string.Join("\n", new[]
+    {
+        "HARNESS",
+        "Failed to load plugins",
+        "failed to import loader entry 1c8adf4c (@deepseek-ai/dsh-client-hmr): client-modules: bundle script /plugins/??"
+            + string.Join(",", Enumerable.Range(0, 40).Select(i => $"@deepseek-ai/plugin-{i}/client.js"))
+            + "&rev=f90d8e180337 failed to load"
+    });
+    var petKept = PageErrorText.DescribeProbeFailure(petReal);
+    Check("pageerror/事故回归：页面错误文本不再被切在单词中间（关键片段必须保留）",
+        petReal.Length > 120
+        && petKept.Contains("bundle script", StringComparison.Ordinal)
+        && petKept.Contains("failed to load", StringComparison.Ordinal)
+        && petKept.Contains("@deepseek-ai/dsh-client-hmr", StringComparison.Ordinal)
+        && !petKept.Contains("已截断", StringComparison.Ordinal));
+
+    var petLong = new string('x', PageErrorText.DefaultMaximumLength + 500);
+    var petTruncated = PageErrorText.ForEvidence(petLong);
+    Check("pageerror/超长文本：截断到上限并显式标注（不再静默切掉）",
+        petTruncated.StartsWith(new string('x', PageErrorText.DefaultMaximumLength), StringComparison.Ordinal)
+        && petTruncated.Contains("已截断", StringComparison.Ordinal)
+        && petTruncated.Contains((PageErrorText.DefaultMaximumLength + 500).ToString(), StringComparison.Ordinal));
+
+    Check("pageerror/归一化：CRLF 转 LF、去首尾空白、空值返回空串",
+        PageErrorText.ForEvidence("  a\r\nb  ") == "a\nb"
+        && PageErrorText.ForEvidence(null) == string.Empty
+        && PageErrorText.ForEvidence("   ") == string.Empty
+        && PageErrorText.ForEvidence("short") == "short");
+}
+
 // ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================

@@ -5,6 +5,8 @@ using System.Windows;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 
+using DshLauncher.Services;
+
 namespace DshLauncher;
 
 /// <summary>页面层探针结果：Ok=页面可用；Failed=导航失败/根节点缺失/命中错误签名；Unknown=探针异常（绝不判死）。</summary>
@@ -185,7 +187,7 @@ public partial class ChatWindow : Window
                 {
                     return new PageProbeResult(
                         PageProbeStatus.Failed,
-                        $"页面出现错误提示：{text[..Math.Min(120, text.Length)]}");
+                        PageErrorText.DescribeProbeFailure(text));
                 }
             }
 
