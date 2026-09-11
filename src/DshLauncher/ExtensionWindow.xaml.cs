@@ -906,7 +906,8 @@ public partial class ExtensionWindow : UserControl
 
         var remaining = viewer.ExtentHeight - (viewer.VerticalOffset + viewer.ViewportHeight);
         _marketplaceScrollEventCount++;
-        if (_marketplaceScrollEventCount <= 30 || _marketplaceScrollEventCount % 20 == 0)
+        if (string.Equals(Environment.GetEnvironmentVariable("DSH_LAUNCHER_MARKET_SCROLL_DIAG"), "1", StringComparison.Ordinal)
+            && (_marketplaceScrollEventCount <= 30 || _marketplaceScrollEventCount % 20 == 0))
         {
             LauncherLog.Info(
                 "市场滚动诊断",
