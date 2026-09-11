@@ -128,8 +128,8 @@
                             </Border>
                             <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource CardPadding}" Margin="0,14,0,0">
                                 <StackPanel>
-                                    <TextBlock Text="绑定打开方式" FontWeight="SemiBold" />
-                                    <TextBlock Text="Web 启动：dsh 原生运行方式，由 dsh 在默认浏览器打开 WebUI；Desktop 启动：启动器所带的方式，用内部窗口承载 WebUI（不会重复弹浏览器）；或手动绑定 EXE/BAT/CMD/PowerShell 脚本和 LNK 快捷方式。"
+                                    <TextBlock Text="更多打开方式" FontWeight="SemiBold" />
+                                    <TextBlock Text="实例卡片上的「启动」按钮右侧 ▼ 可快捷切换启动方式；这里用于查看与手动绑定。Web 启动：dsh 原生运行方式，由 dsh 在默认浏览器打开 WebUI；Desktop 启动：启动器所带的方式，用内部窗口承载 WebUI（不会重复弹浏览器）；或手动绑定 EXE/BAT/CMD/PowerShell 脚本和 LNK 快捷方式。"
                                                Foreground="{StaticResource MutedBrush}"
                                                TextWrapping="Wrap"
                                                FontSize="11"
