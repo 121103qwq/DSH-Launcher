@@ -3123,9 +3123,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             ("运行环境", runtimePanel),
             ("常规", generalPanel),
+            ("插件与技能来源", sourcesPanel),
             ("网络与账户", networkPanel),
-            ("诊断与日志", diagnosePanel),
-            ("插件与技能来源", sourcesPanel)
+            ("诊断与日志", diagnosePanel)
         };
         var navButtons = new List<System.Windows.Controls.Button>();
         var scrollOffsets = new double[categories.Length];
