@@ -346,6 +346,24 @@ public sealed class VersionPackageService
     private (string RootPath, InstanceKind Kind, string? DshExecutablePath, DshRuntimeLaunchSpec? LaunchSpec, string? PackageManager)
         ResolveImportRuntime(ManagerInstance template)
     {
+        // 优先用**模板实例自己的运行目录**：导入创建的新实例本来就绑定它（规范整合包导入路径也是这么做的），
+        // 而设置里的安装目录可能是 `dsh_runtime` 这种"版本父目录"，TryResolvePackageRoot 解析不到 → 会误报"没有可用运行时"。
+        var templatePackageRoot = DshRuntimeDetector.TryResolvePackageRoot(template.RootPath);
+        if (templatePackageRoot is not null)
+        {
+            var templateSpec = DshRuntimeDetector.CreateLaunchSpecForPackageRoot(templatePackageRoot)
+                ?? template.EffectiveDshLaunchSpec;
+            if (DshRuntimeCommandFactory.IsUsable(templateSpec))
+            {
+                return (
+                    templatePackageRoot,
+                    InstanceKind.Installed,
+                    template.DshExecutablePath,
+                    templateSpec,
+                    template.PackageManager);
+            }
+        }
+
         var configuredInstallDirectory = _versionSettingsService.ResolveDshInstallDirectory();
         var packageRoot = DshRuntimeDetector.TryResolvePackageRoot(configuredInstallDirectory);
         if (packageRoot is null || !Directory.Exists(packageRoot))
