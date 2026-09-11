@@ -6395,6 +6395,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         Close();
     }
 
+    /// <summary>
+    /// 自动化（harness / UI 冒烟）跳过退出确认：避免模态框把无人值守的测试挂住。
+    /// 仅当环境变量 DSH_LAUNCHER_SUPPRESS_CLOSE_CONFIRM=1 时生效。
+    /// </summary>
+    private static bool IsCloseConfirmSuppressed =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("DSH_LAUNCHER_SUPPRESS_CLOSE_CONFIRM"),
+            "1",
+            StringComparison.Ordinal);
+
+    /// <summary>退出确认只弹一次：确认后再次 Close() 不再重复询问。</summary>
+    private bool _closeConfirmedWithRunningInstances;
+
+    /// <summary>退出确认面板正在显示，避免重复触发。</summary>
+    private bool _closeConfirmShowing;
+
     protected override async void OnClosing(CancelEventArgs e)
     {
         if (_blockWindowCloseForMsi)
@@ -6431,6 +6447,51 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             e.Cancel = true;
             Hide();
+            return;
+        }
+
+        // 防呆（用户要求 2026-09-11）：有实例还在运行时，"彻底关闭"必须先确认，且可取消。
+        // 注意：关闭主窗口=隐藏到托盘那条路径在上面已返回，不会走到这里（实例不受影响，无需打扰）。
+        var runningForClose = Instances.Where(item => _instanceRunner.IsRunning(item.Id)).ToArray();
+        if (!_closeConfirmedWithRunningInstances
+            && runningForClose.Length > 0
+            && !IsCloseConfirmSuppressed)
+        {
+            e.Cancel = true;
+            if (_closeConfirmShowing)
+            {
+                return;
+            }
+
+            _closeConfirmShowing = true;
+            bool confirmed;
+            try
+            {
+                var names = string.Join("、", runningForClose.Select(item => item.Name).Take(5));
+                var more = runningForClose.Length > 5 ? $"（等 {runningForClose.Length} 个）" : string.Empty;
+                var message = $"{runningForClose.Length} 个实例正在运行：{names}{more}。"
+                    + "\n退出启动器会先停止这些实例，未保存的会话内容可能中断。"
+                    + "\n\n确定要退出吗？";
+                confirmed = System.Windows.MessageBox.Show(
+                    this,
+                    DialogText.ForMessageBox(message),
+                    "退出启动器",
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Warning) == MessageBoxResult.OK;
+            }
+            finally
+            {
+                _closeConfirmShowing = false;
+            }
+
+            if (!confirmed)
+            {
+                // 取消：窗口保持打开，实例继续运行（不做任何清理）。
+                return;
+            }
+
+            _closeConfirmedWithRunningInstances = true;
+            Close();
             return;
         }
 
