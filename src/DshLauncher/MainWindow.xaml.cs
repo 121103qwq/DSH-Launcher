@@ -47,6 +47,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
     private readonly DshEnvironmentScanner _environmentScanner = new();
     private readonly ScannedHomeImportService _scannedHomeImporter;
+    private readonly DshPackImportService _packImportService;
     private readonly DshInstanceRunner _instanceRunner;
     private readonly ExtensionService _extensionService;
     private readonly MarketplaceService _marketplaceService;
@@ -152,6 +153,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _versionPackageService = new(_instanceRegistry);
         _detectedRuntimeRegistrationService = new(_instanceRegistry);
         _scannedHomeImporter = new(_instanceRegistry);
+        _packImportService = new(_instanceRegistry);
         _instanceVersionSwitchService = new InstanceVersionSwitchService(
             _versionSettingsService,
             registry: _instanceRegistry,
@@ -2269,7 +2271,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ApplySelectedVersionSettings(SelectedInstance);
             },
             taskService: _tasks,
-            cancellationToken: _windowCancellation.Token));
+            cancellationToken: _windowCancellation.Token,
+            packImportService: _packImportService,
+            resolveInstance: id => _instanceRegistry.Load()
+                .FirstOrDefault(instance => string.Equals(instance.Id, id, StringComparison.Ordinal))));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }

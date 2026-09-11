@@ -1470,6 +1470,17 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && !File.Exists(rejectedTarget));
 }
 
+{
+    Check("packspec/规范整合包扩展名判定（.dspack/.tgz 走规范链路，自家 .dshpack 不受影响）",
+        PackArchiveReader.IsSpecPackPath("C:/x/a.dspack")
+        && PackArchiveReader.IsSpecPackPath("C:/x/a.tgz")
+        && PackArchiveReader.IsSpecPackPath("C:/x/A.DSPACK")
+        && !PackArchiveReader.IsSpecPackPath("C:/x/a.dshpack")
+        && !PackArchiveReader.IsSpecPackPath("C:/x/a.zip")
+        && !PackArchiveReader.IsSpecPackPath(null)
+        && !PackArchiveReader.IsSpecPackPath(string.Empty));
+}
+
 // ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================

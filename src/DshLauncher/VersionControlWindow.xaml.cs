@@ -35,6 +35,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly DshInstallService _dshInstallService = new();
     private readonly DshVersionCatalogService _dshVersionCatalogService = new();
     private readonly VersionSettingsService _versionSettingsService;
+    private readonly DshPackImportService? _packImportService;
+    private readonly Func<string, ManagerInstance?>? _resolveInstance;
     private readonly LauncherTaskService? _taskService;
     private readonly CancellationTokenSource _lifetimeCancellation;
     private VersionHealthReport? _healthReport;
@@ -63,7 +65,9 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Func<ManagerInstance, ManagerInstance> versionUpdated,
         Action versionContentChanged,
         LauncherTaskService? taskService = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        DshPackImportService? packImportService = null,
+        Func<string, ManagerInstance?>? resolveInstance = null)
     {
         _packageService = packageService;
         _templateProvider = templateProvider;
@@ -80,6 +84,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _updateNotice = updateNotice;
         _versionSettingsService = versionSettingsService;
         _taskService = taskService;
+        _packImportService = packImportService;
+        _resolveInstance = resolveInstance;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _dshRuntimeProvider = dshRuntimeProvider;
         _isRunning = isRunning;
@@ -622,6 +628,156 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         };
     }
 
+    /// <summary>
+    /// C4：导入**规范格式**整合包（.dspack v2/v3 或旧 .tgz）。读包校验 → 确认面板（实例名/profile/
+    /// 文件清单与体积/dshVersion）→ files[] 需联网下载时必须显式同意 → 导入（失败整体回滚）。
+    /// 长任务接任务中心（C5），可取消。
+    /// </summary>
+    private async Task ImportSpecPackAsync(string filePath, ManagerInstance template)
+    {
+        if (_packImportService is null)
+        {
+            SetStatus("整合包导入组件未就绪，无法导入规范格式整合包。");
+            return;
+        }
+
+        SetBusy(true);
+        LauncherTaskHandle? task = null;
+        try
+        {
+            if (!PackArchiveReader.TryRead(filePath, out var archive, out var outcome, out var readError) || archive is null)
+            {
+                SetStatus($"整合包无法使用（{outcome}）：{readError}");
+                return;
+            }
+
+            var manifest = archive.Manifest;
+            var plan = _packImportService.BuildPlan(archive, Versions.ToArray(), template);
+            var downloadFiles = manifest.Files;
+            var downloadBytes = downloadFiles.Sum(file => file.Size);
+
+            var lines = new List<string>
+            {
+                $"整合包：{manifest.ResolveDisplayName(null)} {manifest.PackVersion}"
+                    + $"（manifest v{(int)manifest.Version}）",
+                $"形态：{(manifest.Type == PackManifestType.DshHome ? "整个 DSH_HOME 快照（只能新建实例）" : "profile 整合包")}",
+                $"要求 DSh：{plan.RequiredDshVersion ?? "未声明"}"
+                    + $"（当前模板 {template.DetectedVersion ?? "未知"}：{(plan.TemplateVersionMatches ? "匹配" : "不匹配，将拒绝导入")}）",
+                $"将创建新实例：{plan.InstanceName}（profile：{plan.ProfileName}）",
+                $"profile 文件：{plan.ProfileFiles.Count} 个"
+                    + (plan.ProfileFiles.Count > 0
+                        ? $"（如 {string.Join("、", plan.ProfileFiles.Take(6))}{(plan.ProfileFiles.Count > 6 ? " …" : string.Empty)}）"
+                        : string.Empty),
+                $"home 文件：{plan.HomeFiles.Count} 个",
+                $"bundles：{manifest.Bundles.Count} 个；依赖：{manifest.Dependencies.Count} 条"
+            };
+            if (downloadFiles.Count > 0)
+            {
+                lines.Add($"需联网下载：{downloadFiles.Count} 个文件（合计 {downloadBytes / 1024.0 / 1024.0:F1} MB）");
+                lines.AddRange(downloadFiles.Take(8).Select(file =>
+                    $"   · {file.Path}（{file.Size / 1024.0:F0} KB，sha256 {file.Sha256[..Math.Min(12, file.Sha256.Length)]}…）"));
+                if (downloadFiles.Count > 8)
+                {
+                    lines.Add($"   · …共 {downloadFiles.Count} 个");
+                }
+            }
+            else
+            {
+                lines.Add("需联网下载：无（全部载荷都在包内）");
+            }
+
+            if (plan.Warnings.Count > 0)
+            {
+                lines.Add("提示：" + string.Join("；", plan.Warnings));
+            }
+
+            lines.Add(string.Empty);
+            lines.Add("导入只会新建独立实例，不覆盖任何现有版本。");
+
+            if (downloadFiles.Count > 0)
+            {
+                // Q2：默认不允许下载；必须显式同意才按包内 https 地址下载（强制 sha256 校验）。
+                var consent = System.Windows.MessageBox.Show(
+                    Window.GetWindow(this),
+                    string.Join("\n", lines)
+                        + $"\n\n该整合包包含 {downloadFiles.Count} 个需要联网下载的文件。"
+                        + "\n选『是』= 同意按包内声明的 https 地址下载，并强制 sha256 校验（校验不过则整体回滚）。"
+                        + "\n选『否』= 取消导入，不产生任何文件。",
+                    "导入整合包（需要下载）",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Warning);
+                if (consent != System.Windows.MessageBoxResult.Yes)
+                {
+                    SetStatus("已取消导入：该整合包需要联网下载文件，未获得同意。");
+                    return;
+                }
+            }
+            else if (System.Windows.MessageBox.Show(
+                    Window.GetWindow(this),
+                    string.Join("\n", lines) + "\n\n确认导入吗？",
+                    "导入整合包预览",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Information) != System.Windows.MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            var allowDownloads = downloadFiles.Count > 0;
+            task = _taskService?.Begin(
+                LauncherTaskKind.InstanceImport,
+                $"导入整合包 {manifest.ResolveDisplayName(null)}",
+                template.Name,
+                Path.GetFileName(filePath));
+            task?.Report($"正在导入（{plan.ProfileFiles.Count} 个 profile 文件 / {plan.HomeFiles.Count} 个 home 文件）");
+
+            var importOutcome = await _packImportService.ImportAsync(
+                archive,
+                template,
+                Versions.ToArray(),
+                preferredLanguage: null,
+                allowDownloads: allowDownloads,
+                cancellationToken: task?.Token ?? _lifetimeCancellation.Token);
+
+            if (!importOutcome.Succeeded)
+            {
+                task?.Fail(importOutcome.Error);
+                SetStatus($"导入整合包失败：{importOutcome.Error}");
+                return;
+            }
+
+            task?.Report("正在登记新实例");
+            var created = importOutcome.InstanceId is { Length: > 0 } id ? _resolveInstance?.Invoke(id) : null;
+            if (created is not null && Versions.All(existing => !string.Equals(existing.Id, created.Id, StringComparison.Ordinal)))
+            {
+                Versions.Add(created);
+                SelectedVersion = created;
+                _versionCreated(created);
+            }
+
+            task?.Complete($"已导入为新实例 {importOutcome.InstanceName}");
+            var warningText = importOutcome.Warnings.Count > 0
+                ? "（提示：" + string.Join("；", importOutcome.Warnings) + "）"
+                : string.Empty;
+            SetStatus($"整合包已导入为新实例：{importOutcome.InstanceName}"
+                + $"（写入 {importOutcome.FilesWritten} 个文件，profile：{importOutcome.ProfileName}）{warningText}");
+        }
+        catch (OperationCanceledException)
+        {
+            task?.MarkCancelled("导入已取消");
+            SetStatus("导入整合包已取消，未完成的部分已回滚。");
+        }
+        catch (Exception ex)
+        {
+            task?.Fail(ex.Message);
+            SetStatus($"导入整合包失败：{ex.Message}");
+        }
+        finally
+        {
+            task?.Dispose();
+            SetBusy(false);
+        }
+    }
+
     private async void ImportPackage_Click(object sender, RoutedEventArgs e)
     {
         var template = SelectedVersion ?? _templateProvider();
@@ -634,12 +790,24 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         using var dialog = new Forms.OpenFileDialog
         {
             Title = "导入 DSH Launcher 整合包",
-            Filter = $"DSH 整合包 (*{_packageService.PackageExtension})|*{_packageService.PackageExtension}|所有文件|*.*",
+            Filter = $"所有整合包 (*{_packageService.PackageExtension};*.dspack;*.tgz)"
+                + $"|*{_packageService.PackageExtension};*.dspack;*.tgz"
+                + "|DSH 规范整合包 (*.dspack;*.tgz)|*.dspack;*.tgz"
+                + $"|Launcher 旧格式 (*{_packageService.PackageExtension})|*{_packageService.PackageExtension}"
+                + "|所有文件|*.*",
             CheckFileExists = true,
             Multiselect = false
         };
         if (dialog.ShowDialog() != Forms.DialogResult.OK)
         {
+            return;
+        }
+
+        // C4：按扩展名分流——规范整合包（.dspack / .tgz）走 PackArchiveReader + DshPackImportService；
+        // 自家 v1 格式（.dshpack）保持原链路，互不影响。
+        if (PackArchiveReader.IsSpecPackPath(dialog.FileName))
+        {
+            await ImportSpecPackAsync(dialog.FileName, template);
             return;
         }
 

@@ -267,6 +267,17 @@ public static class PackArchiveReader
     };
 
     /// <summary>读取并校验整合包；失败时给出可直接展示的原因。</summary>
+    /// <summary>
+    /// 规范整合包扩展名判定（.dspack = pack-structure v2/v3，.tgz = 旧 gzip+tar）。
+    /// 注意与 Launcher 自家旧格式 .dshpack 区分：两者只差一个字母，这里是唯一判据。
+    /// </summary>
+    public static bool IsSpecPackPath(string? filePath)
+    {
+        var extension = Path.GetExtension(filePath ?? string.Empty);
+        return string.Equals(extension, ".dspack", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".tgz", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool TryRead(string filePath, out PackArchive? archive, out PackArchiveOutcome outcome, out string? error)
     {
         archive = null;
