@@ -227,4 +227,154 @@ public static class ProfileHygiene
             return null;
         }
     }
+
+    /// <summary>去掉 pnpm-workspace.yaml 里的 allowBuilds 段（含其缩进块）。</summary>
+    public static string StripAllowBuilds(string workspaceText)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceText))
+        {
+            return workspaceText;
+        }
+
+        var kept = new List<string>();
+        var skipping = false;
+        foreach (var rawLine in workspaceText.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (rawLine.StartsWith("allowBuilds:", StringComparison.Ordinal))
+            {
+                skipping = true;
+                continue;
+            }
+
+            if (skipping)
+            {
+                // 段内所有缩进行都属于它；回到顶格（非空）即结束。
+                if (rawLine.Length > 0 && !char.IsWhiteSpace(rawLine[0]))
+                {
+                    skipping = false;
+                }
+                else
+                {
+                    continue;
+                }
+            }
+
+            kept.Add(rawLine);
+        }
+
+        // 折叠因删除产生的多余空行（最多保留一个）。
+        var text = string.Join('\n', kept);
+        while (text.Contains("\n\n\n", StringComparison.Ordinal))
+        {
+            text = text.Replace("\n\n\n", "\n\n");
+        }
+
+        return text;
+    }
+
+    /// <summary>给 package.json 补空的 dependencies 键（在 private 之后）。</summary>
+    public static string EnsureDependenciesProperty(string packageJsonText)
+    {
+        if (HasDependenciesProperty(packageJsonText))
+        {
+            return packageJsonText;
+        }
+
+        const string marker = "\"private\": true";
+        var index = packageJsonText.IndexOf(marker, StringComparison.Ordinal);
+        if (index < 0)
+        {
+            return packageJsonText;
+        }
+
+        var afterValue = index + marker.Length;
+        var probe = afterValue;
+        while (probe < packageJsonText.Length && char.IsWhiteSpace(packageJsonText[probe]))
+        {
+            probe++;
+        }
+
+        // 已有尾逗号 → 插在逗号之后；private 是最后一个键 → 自己补逗号。
+        if (probe < packageJsonText.Length && packageJsonText[probe] == ',')
+        {
+            var insertAt = probe + 1;
+            return packageJsonText[..insertAt] + "\n  \"dependencies\": {}," + packageJsonText[insertAt..];
+        }
+
+        return packageJsonText[..afterValue] + ",\n  \"dependencies\": {}" + packageJsonText[afterValue..];
+    }
+
+    /// <summary>
+    /// 一键复位：**先快照**（把涉及的文件原样拷进 <paramref name="snapshotDirectory"/>），
+    /// 再移走空 lock、清 allowBuilds 残留、补 dependencies 键。
+    /// 只碰这三个配置文件，**不动 node_modules、不动会话/凭据**。
+    /// </summary>
+    public static bool TryReset(
+        string? profileDirectory,
+        string snapshotDirectory,
+        out IReadOnlyList<string> actions,
+        out string? error)
+    {
+        var done = new List<string>();
+        actions = done;
+        error = null;
+        if (string.IsNullOrWhiteSpace(profileDirectory) || !Directory.Exists(profileDirectory))
+        {
+            error = "profile 目录不存在。";
+            return false;
+        }
+
+        var issues = Inspect(profileDirectory);
+        if (issues.Count == 0)
+        {
+            done.Add("没有需要复位的内容。");
+            return true;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(snapshotDirectory);
+            foreach (var issue in issues)
+            {
+                if (File.Exists(issue.Path))
+                {
+                    var backupName = Path.GetFileName(issue.Path) + ".bak";
+                    File.Copy(issue.Path, Path.Combine(snapshotDirectory, backupName), overwrite: true);
+                }
+            }
+
+            done.Add($"已快照 {issues.Count} 个文件 → {snapshotDirectory}");
+
+            foreach (var issue in issues)
+            {
+                switch (issue.Kind)
+                {
+                    case IssueEmptyLock:
+                        var lockTarget = Path.Combine(snapshotDirectory, "pnpm-lock.yaml.removed");
+                        File.Move(issue.Path, lockTarget, overwrite: true);
+                        done.Add("已移走空的 pnpm-lock.yaml（备份在快照目录）");
+                        break;
+
+                    case IssueAllowBuildsResidue:
+                        var workspace = File.ReadAllText(issue.Path);
+                        File.WriteAllText(issue.Path, StripAllowBuilds(workspace));
+                        done.Add("已清除 pnpm-workspace.yaml 的 allowBuilds 残留");
+                        break;
+
+                    case IssueMissingDependencies:
+                        var package = File.ReadAllText(issue.Path);
+                        File.WriteAllText(issue.Path, EnsureDependenciesProperty(package));
+                        done.Add("已补 package.json 的空 dependencies 键");
+                        break;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
 }

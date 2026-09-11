@@ -1355,6 +1355,54 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 18. profile 卫生复位（ProfileHygiene.TryReset，A3 收尾）
+// ===========================================================================
+{
+    var resetRoot = Path.Combine(scratch, "hygiene-reset");
+    var resetProfile = Path.Combine(resetRoot, "profile");
+    var resetSnapshot = Path.Combine(resetRoot, "snapshot");
+    Directory.CreateDirectory(resetProfile);
+    Directory.CreateDirectory(Path.Combine(resetProfile, "node_modules"));
+    File.WriteAllText(Path.Combine(resetProfile, "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: false\n\nimporters:\n\n  .: {}\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(resetProfile, "pnpm-workspace.yaml"),
+        "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\nallowBuilds:\n  '@ash-qw/dsh-theme-prts': true\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(resetProfile, "package.json"),
+        "{\n  \"name\": \"dsh-profile-web\",\n  \"private\": true\n}\n", new UTF8Encoding(false));
+    // 哨兵：复位绝不能碰用户数据 / node_modules / 其它文件
+    File.WriteAllText(Path.Combine(resetProfile, "cordis.patch.yml"), "[]\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(resetProfile, "node_modules", "sentinel.txt"), "keep-me", new UTF8Encoding(false));
+
+    var resetOk = ProfileHygiene.TryReset(resetProfile, resetSnapshot, out var resetActions, out var resetError);
+    var afterReset = ProfileHygiene.Inspect(resetProfile);
+    Check("hygiene-reset/一键复位：三处残留全部处理干净（复位后再检查为零问题）",
+        resetOk
+        && resetError is null
+        && afterReset.Count == 0
+        && resetActions.Count >= 4,
+        resetError ?? string.Join("；", afterReset.Select(issue => issue.Kind)));
+
+    Check("hygiene-reset/复位前先快照：原文件与被移走的 lock 都在快照目录里",
+        File.Exists(Path.Combine(resetSnapshot, "package.json.bak"))
+        && File.Exists(Path.Combine(resetSnapshot, "pnpm-workspace.yaml.bak"))
+        && File.Exists(Path.Combine(resetSnapshot, "pnpm-lock.yaml.removed"))
+        && !File.Exists(Path.Combine(resetProfile, "pnpm-lock.yaml")));
+
+    Check("hygiene-reset/只碰那三个文件：node_modules 与其它配置原样保留（安全断言）",
+        File.Exists(Path.Combine(resetProfile, "node_modules", "sentinel.txt"))
+        && File.ReadAllText(Path.Combine(resetProfile, "node_modules", "sentinel.txt")) == "keep-me"
+        && File.ReadAllText(Path.Combine(resetProfile, "cordis.patch.yml")) == "[]\n"
+        && !File.ReadAllText(Path.Combine(resetProfile, "pnpm-workspace.yaml")).Contains("allowBuilds", StringComparison.Ordinal)
+        && File.ReadAllText(Path.Combine(resetProfile, "package.json")).Contains("\"dependencies\": {}", StringComparison.Ordinal));
+
+    Check("hygiene-reset/干净的 profile 复位是空操作（不误伤、不建无用快照）",
+        ProfileHygiene.TryReset(Path.Combine(scratch, "hygiene", "healthy"), Path.Combine(resetRoot, "snapshot2"), out var noopActions, out _)
+        && noopActions.Count == 1
+        && noopActions[0].Contains("没有需要复位", StringComparison.Ordinal)
+        && !Directory.Exists(Path.Combine(resetRoot, "snapshot2")));
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",

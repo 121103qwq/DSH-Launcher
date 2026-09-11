@@ -674,6 +674,10 @@
                                         Content="定位肇事插件"
                                         Click="BisectPlugins_Click"
                                         Style="{StaticResource PrimaryButton}" />
+                                <Button x:Name="ProfileHygieneButton"
+                                        Content="检查并复位 profile 残留"
+                                        Margin="8,0,0,0"
+                                        ToolTip="检查 profile 里已卸载插件留下的残留（空的 pnpm-lock.yaml、allowBuilds 残留、缺 dependencies 键）；复位前自动快照，只动这三个配置文件" />
                                 <Button x:Name="DisableCulpritButton"
                                         Content="禁用该插件并正常启动"
                                         Click="DisableCulprit_Click"

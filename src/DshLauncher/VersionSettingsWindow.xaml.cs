@@ -502,6 +502,56 @@ public partial class VersionSettingsWindow : UserControl
             : $"当前有 {thirdParty.Count} 个第三方插件：{string.Join("、", thirdParty)}";
     }
 
+    /// <summary>A3 收尾：检查并复位 profile 残留（work-log/71 事故预防）。复位前自动快照。</summary>
+    private void ProfileHygiene_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        if (_healthProviders?.IsInstanceRunning?.Invoke(_instance) == true)
+        {
+            BisectStatusText.Text = "请先停止实例，再检查/复位 profile 配置。";
+            return;
+        }
+
+        var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
+        var profileDirectory = Path.Combine(_instance.DshHome, "profiles", profileName);
+        var issues = ProfileHygiene.Inspect(profileDirectory);
+        if (issues.Count == 0)
+        {
+            BisectStatusText.Text = $"profile「{profileName}」配置干净，没有发现残留。";
+            return;
+        }
+
+        var lines = string.Join("\n", issues.Select(issue => "· " + issue.Detail));
+        var confirmed = System.Windows.MessageBox.Show(
+            $"profile「{profileName}」发现 {issues.Count} 处残留：\n\n{lines}\n\n"
+            + "复位会先快照，然后：移走空的 pnpm-lock.yaml、清除 allowBuilds 残留、补空 dependencies 键。\n"
+            + "只动这三个配置文件，不会碰 node_modules、会话与凭据。\n\n确定要复位吗？",
+            "复位 profile 配置残留",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning) == MessageBoxResult.OK;
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var snapshotDirectory = Path.Combine(
+            new LauncherPaths().RootDirectory,
+            "backups",
+            $"profile-hygiene-{DateTime.Now:yyyyMMdd-HHmmss}");
+        if (!ProfileHygiene.TryReset(profileDirectory, snapshotDirectory, out var actions, out var error))
+        {
+            BisectStatusText.Text = $"复位失败：{error}";
+            return;
+        }
+
+        BisectStatusText.Text = "复位完成：" + string.Join("；", actions);
+        LauncherLog.Info("profile 卫生复位完成。", "E3002", new { profileDirectory, snapshotDirectory, actions });
+    }
+
     private async void BisectPlugins_Click(object sender, RoutedEventArgs e)
     {
         if (_instance is null || _healthProviders?.RunPluginBisect is null)
