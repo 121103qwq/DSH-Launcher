@@ -2735,7 +2735,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         AddPageHeader(runtimePanel, "运行环境", "Node.js 与 DeepSeek Harness 的检测、安装位置与准备。");
         AddPageHeader(generalPanel, "常规", "插件安装方式、关闭行为、版本同步与实例守护。");
         AddPageHeader(networkPanel, "网络与账户", "代理设置与 DeepSeek 余额显示。");
-        AddPageHeader(diagnosePanel, "诊断与日志", "导出脱敏诊断包、查看日志与错误码。");
+        AddPageHeader(diagnosePanel, "诊断与日志", "导出脱敏诊断包、查看日志与错误码，以及凭据泄露体检。");
         BuildMarketSourcesSection(sourcesPanel, MarketSourceKind.Plugin);
         BuildMarketSourcesSection(sourcesPanel, MarketSourceKind.Skill);
 
@@ -3092,6 +3092,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         AddProxySection(networkPanel);
         AddBalanceSection(networkPanel);
         AddDiagnoseSection(diagnosePanel);
+        AddCredentialAuditSection(diagnosePanel);
 
         // 左侧分类 + 右侧内容（与版本设置页同一套导航外观，见 docs/UI-DESIGN.md）
         var host = new Grid();
@@ -3481,6 +3482,201 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ShowNotice($"保存余额显示设置失败：{ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// #20 安全体检（增量 2）：被动凭据检查的页面分区。
+    /// 纯内存视图（关窗即丢，Q6）；默认不显示任何凭据片段，脱敏预览需显式勾选（Q5 (ii)）。
+    /// </summary>
+    private void AddCredentialAuditSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "安全体检（凭据泄露检查）",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        content.Children.Add(new TextBlock
+        {
+            Text = "不安装插件、不联网、不写盘：只按固定范围检查所选实例的 DSH_HOME（跳过 node_modules / sessions / storages），"
+                + "报告疑似密钥出现的**位置**，并列出凭据文件的存在性与修改时间。默认不显示任何凭据片段。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12
+        });
+
+        var previewCheck = new System.Windows.Controls.CheckBox
+        {
+            Content = "显示脱敏预览（仅前 3 + 后 4 位，例如 sk-••••••7890）",
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        content.Children.Add(previewCheck);
+
+        var runButton = new System.Windows.Controls.Button
+        {
+            Content = "立即体检",
+            Style = (Style)FindResource("PrimaryButton"),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+        var exportButton = new System.Windows.Controls.Button
+        {
+            Content = "导出体检结果 JSON…",
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            Margin = new Thickness(8, 12, 0, 0),
+            IsEnabled = false
+        };
+        var buttonRow = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+        buttonRow.Children.Add(runButton);
+        buttonRow.Children.Add(exportButton);
+        content.Children.Add(buttonRow);
+
+        var statusText = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Margin = new Thickness(0, 12, 0, 0),
+            Text = "尚未体检。体检只读本机数据，不会修改任何文件。"
+        };
+        content.Children.Add(statusText);
+
+        var resultPanel = new StackPanel();
+        content.Children.Add(resultPanel);
+
+        CredentialAuditReport? lastReport = null;
+
+        runButton.Click += async (_, _) =>
+        {
+            var instance = SelectedInstance;
+            if (instance is null)
+            {
+                statusText.Text = "请先在版本控制里选择一个实例。";
+                return;
+            }
+
+            runButton.IsEnabled = false;
+            exportButton.IsEnabled = false;
+            resultPanel.Children.Clear();
+            statusText.Text = "正在体检…";
+            try
+            {
+                var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+                var includePreview = previewCheck.IsChecked == true;
+                var report = await Task.Run(() => CredentialAuditService.Run(
+                    new CredentialAuditService.CredentialAuditRequest(instance.DshHome, profileName, includePreview)));
+                lastReport = report;
+
+                statusText.Text = $"实例「{instance.Name}」· profile「{profileName}」：{CredentialAuditService.Summarize(report)}";
+
+                foreach (var hit in report.Hits)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = "· " + CredentialAuditService.DescribeHit(hit),
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 12,
+                        Margin = new Thickness(0, 6, 0, 0),
+                        Foreground = report.Hits.Count > 0 ? (WpfBrush)FindResource("DangerBrush") : (WpfBrush)FindResource("TextBrush")
+                    });
+                }
+
+                foreach (var file in report.Files)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = "· " + CredentialAuditService.DescribeFileInfo(file),
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 12,
+                        Margin = new Thickness(0, 6, 0, 0),
+                        Foreground = (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
+                foreach (var note in report.Notes)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = "· " + note,
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 11,
+                        Margin = new Thickness(0, 4, 0, 0),
+                        Foreground = (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
+                exportButton.IsEnabled = report.Hits.Count > 0 || report.Files.Count > 0;
+            }
+            catch (Exception ex)
+            {
+                statusText.Text = "体检失败：" + ex.Message;
+            }
+            finally
+            {
+                runButton.IsEnabled = true;
+            }
+        };
+
+        exportButton.Click += (_, _) =>
+        {
+            if (lastReport is null)
+            {
+                return;
+            }
+
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "导出体检结果",
+                Filter = "JSON (*.json)|*.json",
+                FileName = $"credential-audit-{DateTime.Now:yyyyMMdd-HHmmss}.json",
+                AddExtension = true,
+                DefaultExt = ".json"
+            };
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            var confirmed = System.Windows.MessageBox.Show(
+                this,
+                "导出文件包含本机文件路径、行号与模式名。默认不含任何凭据片段，但仍属敏感信息："
+                    + "请勿分享，它也不会进入诊断包或整合包。\n\n继续导出吗？",
+                "导出体检结果",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) == MessageBoxResult.OK;
+            if (!confirmed)
+            {
+                return;
+            }
+
+            try
+            {
+                System.IO.File.WriteAllText(
+                    dialog.FileName,
+                    System.Text.Json.JsonSerializer.Serialize(
+                        lastReport,
+                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
+                    new System.Text.UTF8Encoding(false));
+                statusText.Text = "已导出体检结果：" + dialog.FileName;
+            }
+            catch (Exception ex)
+            {
+                statusText.Text = "导出失败：" + ex.Message;
+            }
+        };
+
+        panel.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
     }
 
     private void AddDiagnoseSection(StackPanel panel)

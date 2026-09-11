@@ -1621,6 +1621,27 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
     Check("credential-audit/DSH_HOME 不存在：给出说明而不是抛异常",
         missingHomeReport.Hits.Count == 0
         && missingHomeReport.Notes.Any(note => note.Contains("不存在", StringComparison.Ordinal)));
+
+    // 反证 D（UI 文本层）：页面展示文本也不得含凭据值或中段特征；同时自校准"确实渲染了预览与位置"
+    var describedText = string.Join("\n", previewReport.Hits.Select(CredentialAuditService.DescribeHit));
+    Check("credential-audit/反证D（UI 文本）：展示文本不含凭据值/中段特征，且确实渲染了脱敏预览与命中位置",
+        describedText.Contains("•", StringComparison.Ordinal)
+        && describedText.Contains(".credentials.yaml:2:", StringComparison.Ordinal)
+        && !describedText.Contains(FakeOpenAi, StringComparison.Ordinal)
+        && !describedText.Contains(OpenAiMiddle, StringComparison.Ordinal)
+        && !describedText.Contains(GithubMiddle, StringComparison.Ordinal)
+        && !describedText.Contains(GenericMiddle, StringComparison.Ordinal));
+
+    var describedDefaultText = string.Join("\n", auditReport.Hits.Select(CredentialAuditService.DescribeHit));
+    Check("credential-audit/默认模式的展示文本：只有位置与模式名，一个遮蔽符都没有",
+        !describedDefaultText.Contains("•", StringComparison.Ordinal)
+        && describedDefaultText.Contains("GitHub 令牌", StringComparison.Ordinal)
+        && CredentialAuditService.Summarize(auditReport).Contains("未含任何前缀/片段", StringComparison.Ordinal)
+        && CredentialAuditService.Summarize(previewReport).Contains("含脱敏预览", StringComparison.Ordinal));
+
+    Check("credential-audit/文件清单展示文本：含类型、大小与修改时间",
+        CredentialAuditService.DescribeFileInfo(auditReport.Files[0]).Contains("B", StringComparison.Ordinal)
+        && CredentialAuditService.DescribeFileInfo(auditReport.Files[0]).Contains("修改于", StringComparison.Ordinal));
 }
 
 // ===========================================================================

@@ -314,6 +314,36 @@ public static class CredentialAuditService
     }
 
     /// <summary>
+    /// 命中项的**展示文本**：只含位置与模式名；有脱敏预览时追加预览（≤13 字符）。
+    /// 该函数只接收 <see cref="CredentialAuditHit"/>（其本身不携带原值），因此不可能泄漏完整凭据。
+    /// </summary>
+    public static string DescribeHit(CredentialAuditHit hit)
+    {
+        ArgumentNullException.ThrowIfNull(hit);
+        var location = $"{hit.FilePath}:{hit.Line}:{hit.Column}";
+        return hit.RedactedPreview is { Length: > 0 } preview
+            ? $"{location} · {hit.PatternName} · 预览 {preview}"
+            : $"{location} · {hit.PatternName}";
+    }
+
+    /// <summary>凭据/配置文件清单的展示文本。</summary>
+    public static string DescribeFileInfo(CredentialAuditFileInfo info)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        var size = info.Size < 1024 ? $"{info.Size} B" : $"{info.Size / 1024.0:F1} KB";
+        var flags = info.Flags.Count > 0 ? "（" + string.Join("；", info.Flags) + "）" : string.Empty;
+        return $"{info.Kind}：{info.FilePath} · {size} · 修改于 {info.LastWriteTimeUtc.ToLocalTime():yyyy-MM-dd HH:mm}{flags}";
+    }
+
+    /// <summary>一行摘要（用于页面顶部与日志无关的纯展示）。</summary>
+    public static string Summarize(CredentialAuditReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        return $"疑似凭据命中 {report.Hits.Count} 处 · 凭据/配置文件 {report.Files.Count} 个 · 已扫描 {report.FilesScanned} 个文件"
+            + (report.RedactedPreviewsIncluded ? " · 含脱敏预览" : " · 未含任何前缀/片段");
+    }
+
+    /// <summary>
     /// 脱敏预览：最多保留前 3 + 后 4 个字符，中间用 <c>•</c> 遮蔽（最多 6 个）。
     /// 短值一律全遮蔽。**除本函数外，服务内任何地方都不得引用 match.Value。**
     /// </summary>
