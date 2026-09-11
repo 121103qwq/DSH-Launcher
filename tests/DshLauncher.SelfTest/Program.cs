@@ -393,6 +393,183 @@ Check("dshfind/缓存损坏时仍能正常工作（要么拉取成功、要么�
     dshfindBroken.Count == 0 || dshfindBroken.Count > 1000, $"count={dshfindBroken.Count}");
 
 // ===========================================================================
+// 11. 整合包格式解析层（PackFormat，#24 / work-log-70）
+// ===========================================================================
+using (var v3Document = JsonDocument.Parse("""
+{
+  "manifestVersion": 3,
+  "name": "all-about-whales",
+  "version": "1.0.0",
+  "displayName": { "zh-CN": "大肥鱼套装", "en-US": "All About Whales" },
+  "description": "make dsh smell like whales",
+  "dshVersion": "0.1.1-rc.2",
+  "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"],
+  "dependencies": { "github:DViridescent/dafy-whale-theme": "99e8c57", "dsh-pet": "0.2.0" },
+  "patch": "plugins:\n  x: {}"
+}
+"""))
+{
+    var ok = PackFormat.TryParseManifest(v3Document.RootElement.GetRawText(), out var packV3, out var packV3Error);
+    Check("packformat/v3：解析成功、命名与字段归一（profileName 缺省 pack、patch 内联）",
+        ok
+        && packV3 is not null
+        && packV3.Version == PackManifestVersion.V3
+        && packV3.Type == PackManifestType.Profile
+        && packV3.Name == "all-about-whales"
+        && packV3.ProfileName == "pack"
+        && packV3.Bundles.Count == 2
+        && packV3.Bundles[0] == "@deepseek-ai/dsh-base"
+        && packV3.Dependencies["github:DViridescent/dafy-whale-theme"] == "99e8c57"
+        && packV3.Patch is not null
+        && packV3.ResolveDisplayName() == "大肥鱼套装"
+        && packV3.ResolveDisplayName("en-US") == "All About Whales"
+        && packV3.ResolveDescription() == "make dsh smell like whales",
+        packV3Error ?? string.Empty);
+}
+
+using (var v2Document = JsonDocument.Parse("""
+{
+  "manifestVersion": 2,
+  "name": "legacy-pack",
+  "version": "0.9.0",
+  "displayName": "旧包",
+  "dshVersion": ">=0.1.0",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": { "dsh-pet": "^0.2.0" }
+}
+"""))
+{
+    var ok = PackFormat.TryParseManifest(v2Document.RootElement.GetRawText(), out var v2, out var v2Error);
+    Check("packformat/v2：dshVersion 范围取下限、原始 spec 原样透传、并记一条兼容性提示",
+        ok
+        && v2 is not null
+        && v2.Version == PackManifestVersion.V2
+        && v2.DshVersion == "0.1.0"
+        && v2.DshVersionRaw == ">=0.1.0"
+        && v2.Dependencies["dsh-pet"] == "^0.2.0"
+        && v2.Notes.Any(note => note.Contains("下限", StringComparison.Ordinal))
+        && v2.Notes.Any(note => note.Contains("原样透传", StringComparison.Ordinal)),
+        v2Error ?? string.Empty);
+}
+
+using (var v4Document = JsonDocument.Parse("""
+{
+  "manifestVersion": 4,
+  "type": "profile",
+  "name": "whale-files",
+  "version": "1.0.0",
+  "dshVersion": "0.1.1-rc.2",
+  "profileName": "whale",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": { "github:owner/repo#path:/packages/theme": "abcdef1" },
+  "files": [
+    { "path": "data/models/whale.bin", "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "size": 5242880, "urls": ["https://example.com/whale.bin", "ftp://bad/whale.bin"] }
+  ]
+}
+"""))
+{
+    var ok = PackFormat.TryParseManifest(v4Document.RootElement.GetRawText(), out var v4, out var v4Error);
+    Check("packformat/v4：files[] 解析（只保留 http(s) 镜像）、profileName 生效",
+        ok
+        && v4 is not null
+        && v4.Version == PackManifestVersion.V4
+        && v4.ProfileName == "whale"
+        && v4.Files.Count == 1
+        && v4.Files[0].Path == "data/models/whale.bin"
+        && v4.Files[0].Size == 5242880
+        && v4.Files[0].Urls.Count == 1
+        && v4.Files[0].Urls[0] == "https://example.com/whale.bin",
+        v4Error ?? string.Empty);
+}
+
+Check("packformat/依赖坐标三条转换规则（规范原文）",
+    PackFormat.TryConvertToPackageJsonEntry("dsh-pet", "0.2.0", out var npmName, out var npmSpec)
+    && npmName == "dsh-pet" && npmSpec == "0.2.0"
+    && PackFormat.TryConvertToPackageJsonEntry("github:HanaAyane/dsh-reasoning-effort", "83bc8c5", out var gitName, out var gitSpec)
+    && gitName == "dsh-reasoning-effort" && gitSpec == "github:HanaAyane/dsh-reasoning-effort#83bc8c5"
+    && PackFormat.TryConvertToPackageJsonEntry("github:owner/repo#path:/packages/theme", "abcdef1", out var subName, out var subSpec)
+    && subName == "theme" && subSpec == "github:owner/repo#abcdef1&path:packages/theme");
+
+Check("packformat/依赖坐标可往返（导出用反方向转换）",
+    PackFormat.TryConvertToPackageJsonEntry("github:owner/repo#path:/packages/theme", "abcdef1", out var fName, out var fSpec)
+    && PackFormat.TryParsePackageJsonEntry(fName, fSpec, out var coordinate, out var pinned)
+    && coordinate == "github:owner/repo#path:/packages/theme"
+    && pinned == "abcdef1");
+
+Check("packformat/files[] 校验：sha256 / size / urls / 路径越界都必须被拒",
+    !PackFormat.TryParseManifest("""{"manifestVersion":4,"name":"x","version":"1","dshVersion":"0.1.1","bundles":[],"dependencies":{},"files":[{"path":"a.bin","sha256":"ABCDEF","size":1,"urls":["https://e.com/a"]}]}""", out _, out var badSha)
+    && badSha!.Contains("sha256", StringComparison.Ordinal)
+    && !PackFormat.TryParseManifest("""{"manifestVersion":4,"name":"x","version":"1","dshVersion":"0.1.1","bundles":[],"dependencies":{},"files":[{"path":"a.bin","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":0,"urls":["https://e.com/a"]}]}""", out _, out var badSize)
+    && badSize!.Contains("size", StringComparison.Ordinal)
+    && !PackFormat.TryParseManifest("""{"manifestVersion":4,"name":"x","version":"1","dshVersion":"0.1.1","bundles":[],"dependencies":{},"files":[{"path":"a.bin","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":8,"urls":[]}]}""", out _, out var badUrls)
+    && badUrls!.Contains("urls", StringComparison.Ordinal)
+    && !PackFormat.TryParseManifest("""{"manifestVersion":4,"name":"x","version":"1","dshVersion":"0.1.1","bundles":[],"dependencies":{},"files":[{"path":"../escape.bin","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":8,"urls":["https://e.com/a"]}]}""", out _, out var badPath)
+    && badPath!.Contains("path", StringComparison.Ordinal));
+
+Check("packformat/路径安全：只接受相对、无 .. 、无反斜杠、无盘符",
+    PackFormat.IsSafeRelativePath("data/models/a.bin")
+    && PackFormat.IsSafeRelativePath("a/b/c")
+    && !PackFormat.IsSafeRelativePath("/abs/a.bin")
+    && !PackFormat.IsSafeRelativePath("a/../b.bin")
+    && !PackFormat.IsSafeRelativePath("C:/x.bin")
+    && !PackFormat.IsSafeRelativePath("a\\b.bin")
+    && !PackFormat.IsSafeRelativePath("")
+    && PackFormat.IsSimpleName("whale") && !PackFormat.IsSimpleName("..") && !PackFormat.IsSimpleName(".hidden"));
+
+Check("packformat/容器标记：v2/v3 接受，v4 与非 dspack 拒绝",
+    PackFormat.TryParseContainerMarker("""{"format":"dspack","version":2}""", out var containerV2, out _) && containerV2 == PackContainerKind.DspackV2
+    && PackFormat.TryParseContainerMarker("""{"format":"dspack","version":3}""", out var containerV3, out _) && containerV3 == PackContainerKind.DspackV3
+    && !PackFormat.TryParseContainerMarker("""{"format":"dspack","version":4}""", out _, out var containerError)
+    && containerError!.Contains("2-3", StringComparison.Ordinal)
+    && !PackFormat.TryParseContainerMarker("""{"format":"zip","version":2}""", out _, out var formatError)
+    && formatError!.Contains("format", StringComparison.Ordinal));
+
+Check("packformat/配对校验：manifestVersion 5 必须配 .dspack v3",
+    PackFormat.TryParseManifest("""{"manifestVersion":5,"type":"profile","name":"p","version":"1","dshVersion":"0.1.1","bundles":[],"dependencies":{}}""", out var v5Profile, out var v5Error)
+    && v5Profile is not null && v5Profile.RequiresDspackV3
+    && PackFormat.ValidatePairing(v5Profile, PackContainerKind.DspackV3, out _)
+    && !PackFormat.ValidatePairing(v5Profile, PackContainerKind.DspackV2, out var pairingError)
+    && pairingError!.Contains("配对校验失败", StringComparison.Ordinal)
+    && !PackFormat.ValidatePairing(v5Profile, PackContainerKind.LegacyTgz, out _),
+    v5Error ?? string.Empty);
+
+var homeParsed = PackFormat.TryParseManifest("""{"manifestVersion":5,"type":"dshhome","name":"h","version":"1","dshVersion":"0.1.1","defaultProfile":"pack","profiles":{"pack":{"bundles":["@deepseek-ai/dsh-base"],"dependencies":{"github:o/r":"abc1234"}},"extra":{"bundles":[],"dependencies":{}}},"skills":[{"path":"skills/whale.md","sha256":null,"urls":["https://e.com/s"]}],"instructions":"AGENTS.md"}""", out var home, out var homeError);
+Check("packformat/dshhome：profiles 不得含 web / headless，缺 defaultProfile 必须拒",
+    !PackFormat.TryParseManifest("""{"manifestVersion":5,"type":"dshhome","name":"h","version":"1","dshVersion":"0.1.1","defaultProfile":"web","profiles":{"web":{"bundles":["@deepseek-ai/dsh-web-app"],"dependencies":{}}}}""", out _, out var webError)
+    && webError!.Contains("基线 profile", StringComparison.Ordinal)
+    && !PackFormat.TryParseManifest("""{"manifestVersion":5,"type":"dshhome","name":"h","version":"1","dshVersion":"0.1.1","profiles":{"pack":{"bundles":[],"dependencies":{}}}}""", out _, out var missingDefault)
+    && missingDefault!.Contains("defaultProfile", StringComparison.Ordinal)
+    && homeParsed
+    && home is not null
+    && home.Type == PackManifestType.DshHome
+    && home.DefaultProfile == "pack"
+    && home.HomeProfiles.Count == 2
+    && home.HomeProfiles[0].Dependencies["github:o/r"] == "abc1234"
+    && home.Skills.Count == 1
+    && home.Skills[0].Path == "skills/whale.md"
+    && home.Instructions == "AGENTS.md",
+    homeError ?? string.Empty);
+
+Check("packformat/collection 暂未支持；未知版本报「支持 2-5」",
+    !PackFormat.TryParseManifest("""{"manifestVersion":4,"type":"collection","name":"c","version":"1"}""", out _, out var collectionError)
+    && collectionError!.Contains("暂未支持", StringComparison.Ordinal)
+    && !PackFormat.TryParseManifest("""{"manifestVersion":6,"name":"n","version":"1"}""", out _, out var versionError)
+    && versionError!.Contains("支持 2-5", StringComparison.Ordinal)
+    && !PackFormat.TryParseManifest("""{"manifestVersion":1,"name":"n","version":"1"}""", out _, out var oldError)
+    && oldError!.Contains("支持 2-5", StringComparison.Ordinal));
+
+Check("packformat/dshhome 形态只能配 v5（低版本写 dshhome 必须拒）",
+    !PackFormat.TryParseManifest("""{"manifestVersion":4,"type":"dshhome","name":"h","version":"1","defaultProfile":"pack","profiles":{"pack":{"bundles":[],"dependencies":{}}}}""", out _, out var wrongVersion)
+    && wrongVersion!.Contains("需要 manifestVersion 5", StringComparison.Ordinal));
+
+Check("packformat/文件头判定：ZIP（.dspack）与 gzip（旧 .tgz）",
+    PackFormat.HasZipHeader(new byte[] { 0x50, 0x4B, 0x03, 0x04 })
+    && PackFormat.HasGzipHeader(new byte[] { 0x1F, 0x8B })
+    && PackFormat.DetectFromHeader(new byte[] { 0x1F, 0x8B }) == PackContainerKind.LegacyTgz
+    && !PackFormat.HasZipHeader(new byte[] { 0x50, 0x4B })
+    && PackFormat.DetectFromHeader(new byte[] { 0x00, 0x01 }) == PackContainerKind.Unknown);
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",
