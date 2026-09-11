@@ -1306,6 +1306,55 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 17. profile 卫生检查（ProfileHygiene，work-log/71 事故预防）
+// ===========================================================================
+{
+    var hygieneRoot = Path.Combine(scratch, "hygiene");
+    var brokenProfile = Path.Combine(hygieneRoot, "broken");
+    var healthyProfile = Path.Combine(hygieneRoot, "healthy");
+    Directory.CreateDirectory(brokenProfile);
+    Directory.CreateDirectory(healthyProfile);
+
+    // 事故现场的三样残留
+    File.WriteAllText(Path.Combine(brokenProfile, "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: false\n  excludeLinksFromLockfile: false\n\nimporters:\n\n  .: {}\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(brokenProfile, "pnpm-workspace.yaml"),
+        "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\nallowBuilds:\n  '@ash-qw/dsh-theme-prts': true\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(brokenProfile, "package.json"),
+        "{\n  \"name\": \"dsh-profile-web\",\n  \"private\": true,\n  \"dsh\": { \"profile\": { \"bundles\": [\"@deepseek-ai/dsh-base\"] } }\n}\n", new UTF8Encoding(false));
+
+    // dsh 自己新建的健康 profile
+    File.WriteAllText(Path.Combine(healthyProfile, "pnpm-workspace.yaml"),
+        "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(healthyProfile, "package.json"),
+        "{\n  \"name\": \"dsh-profile-web\",\n  \"private\": true,\n  \"dependencies\": {},\n  \"dsh\": { \"profile\": { \"bundles\": [\"@deepseek-ai/dsh-base\"] } }\n}\n", new UTF8Encoding(false));
+
+    var hygieneBroken = ProfileHygiene.Inspect(brokenProfile);
+    var hygieneHealthy = ProfileHygiene.Inspect(healthyProfile);
+    Check("profilehygiene/能查出事故现场的三样残留，且都标为可自动复位",
+        hygieneBroken.Count == 3
+        && hygieneBroken.All(issue => issue.AutoFixable)
+        && hygieneBroken.Any(issue => issue.Kind == ProfileHygiene.IssueEmptyLock)
+        && hygieneBroken.Any(issue => issue.Kind == ProfileHygiene.IssueAllowBuildsResidue)
+        && hygieneBroken.Any(issue => issue.Kind == ProfileHygiene.IssueMissingDependencies));
+
+    Check("profilehygiene/dsh 新建的健康 profile 零问题（不误报）",
+        hygieneHealthy.Count == 0,
+        string.Join("；", hygieneHealthy.Select(issue => issue.Kind)));
+
+    Check("profilehygiene/空 lock 判定：真有依赖(packages 段/非空 importer)不算空",
+        ProfileHygiene.IsEmptyLockfile("lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n")
+        && ProfileHygiene.IsEmptyLockfile("{}")
+        && !ProfileHygiene.IsEmptyLockfile("lockfileVersion: '9.0'\npackages:\n\n  dsh-pet@0.2.0:\n    resolution: {integrity: sha512-x}\n")
+        && !ProfileHygiene.IsEmptyLockfile("lockfileVersion: '9.0'\nimporters:\n\n  .:\n    dependencies:\n      dsh-pet: 0.2.0\n"));
+
+    Check("profilehygiene/allowBuilds 解析：多行与内联两种写法都能取到包名",
+        ProfileHygiene.ReadAllowBuildsPackages("packages:\n  - .\nallowBuilds:\n  '@a/b': true\n  c-d: false\n").SequenceEqual(new[] { "@a/b", "c-d" })
+        && ProfileHygiene.ReadAllowBuildsPackages("allowBuilds: ['x']\n").Count == 1
+        && ProfileHygiene.ReadAllowBuildsPackages("packages:\n  - .\n").Count == 0);
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",
