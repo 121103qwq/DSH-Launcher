@@ -40,11 +40,57 @@ public sealed class ConversationService
         var result = new List<ConversationEntry>();
         var titles = ReadSessionTitles(instance);
         Walk(root, root, result, titles, instance.Name);
+        // dsh 的模型：一个会话目录 = 一个会话，目录里的 session[.vN].jsonl 是同会话的不同代际，
+        // dsh 自己读“编号最高的代际”（0.1.5 安装物 dsh-session-persistence-jsonl/lib/index.js:3160/3185）。
+        // 因此列表按会话目录归并、只列最高代际，并在条目上标出还有多少历史代际，避免同一会话出现多行
+        // （旧代际内容是升级前的旧状态，导出/删除按行操作很容易选错）。
+        return result
+            .GroupBy(
+                entry => Path.GetDirectoryName(entry.FullPath) ?? string.Empty,
+                StringComparer.OrdinalIgnoreCase)
+            .Select(KeepHighestGeneration)
+            .OrderByDescending(entry => entry.UpdatedAt)
+            .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// 列出 sessions 根下**每个 canonical 会话文件**（含同一会话目录里的历史代际），
+    /// 供「降级前一键导出」这类需要全量备份的场景使用；界面列表请看 <see cref="List"/>（按目录归并）。
+    /// </summary>
+    public IReadOnlyList<ConversationEntry> EnumerateAllSessionFiles(ManagerInstance instance)
+    {
+        var root = GetSessionsRoot(instance);
+        if (!Directory.Exists(root) || IsReparsePoint(root))
+        {
+            return Array.Empty<ConversationEntry>();
+        }
+
+        var result = new List<ConversationEntry>();
+        Walk(root, root, result, ReadSessionTitles(instance), instance.Name);
         return result
             .OrderByDescending(entry => entry.UpdatedAt)
             .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    /// <summary>同一会话目录的多个代际里只留最高的一代，其余计数记在 <c>GenerationCount</c> 上。</summary>
+    private static ConversationEntry KeepHighestGeneration(IGrouping<string, ConversationEntry> group)
+    {
+        var latest = group
+            .OrderByDescending(entry => GradeOf(entry))
+            .ThenByDescending(entry => entry.UpdatedAt)
+            .First();
+        var generation = SessionFileNames.HighestGeneration(Path.GetDirectoryName(latest.FullPath) ?? string.Empty);
+        return latest with
+        {
+            GenerationVersion = generation >= 0 ? generation : latest.GenerationVersion,
+            GenerationCount = group.Count()
+        };
+    }
+
+    private static int GradeOf(ConversationEntry entry) =>
+        SessionFileNames.TryParse(Path.GetFileName(entry.FullPath), out var version, out _) ? version : -1;
 
     /// <summary>全文检索单文件解压后读取上限（32 MiB，超出部分不扫）。</summary>
     public const int MaxSearchBytes = 32 * 1024 * 1024;
@@ -366,7 +412,9 @@ public sealed class ConversationService
             throw new ArgumentException("导出目录不能为空。", nameof(destinationDirectory));
         }
 
-        var entries = List(instance);
+        // 降级前的“全量备份”：必须**逐代际**导出，不能只导出列表里的最高代际——
+        // 降级到旧 dsh 后只能读低代际（如 v0），只有旧代际才能把会话带回旧运行时。
+        var entries = EnumerateAllSessionFiles(instance);
         if (entries.Count == 0)
         {
             return 0;

@@ -196,7 +196,12 @@ public partial class ConversationWindow : UserControl
                     string.Equals(entry.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
             }
 
-            StatusText.Text = $"已读取 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。压缩 session.jsonl.zstd 可查看、打开和导入。";
+            var historical = Entries.Sum(entry => entry.HistoricalGenerationCount);
+            StatusText.Text = $"已读取 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。"
+                + (historical > 0
+                    ? $"另有 {historical} 个历史代际未列出（dsh 读最高代际；降级前备份会一并导出）。"
+                    : string.Empty)
+                + "压缩 session.jsonl.zstd 可查看、打开和导入。";
             UpdateSelection();
         }
         catch (Exception ex)
@@ -553,7 +558,12 @@ public partial class ConversationWindow : UserControl
 
         if (System.Windows.MessageBox.Show(
                 Window.GetWindow(this),
-                $"确定删除会话文件“{entry.RelativePath}”？此操作不可由 Launcher 撤销。",
+                DialogText.ForMessageBox(entry.HasHistoricalGenerations
+                    ? $"确定删除会话文件“{entry.RelativePath}”？\n\n"
+                      + $"该会话目录里还有 {entry.HistoricalGenerationCount} 个更早的代际。"
+                      + $"删掉当前代际（v{entry.GenerationVersion}）后，dsh 会退回到更早的那一代，"
+                      + "也就是升级前的旧内容。此操作不可由 Launcher 撤销。"
+                    : $"确定删除会话文件“{entry.RelativePath}”？此操作不可由 Launcher 撤销。"),
                 "确认删除",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
