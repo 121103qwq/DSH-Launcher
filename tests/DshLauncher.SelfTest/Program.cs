@@ -1,4 +1,6 @@
+using System.Formats.Tar;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using DshLauncher.Models;
@@ -568,6 +570,244 @@ Check("packformat/文件头判定：ZIP（.dspack）与 gzip（旧 .tgz）",
     && PackFormat.DetectFromHeader(new byte[] { 0x1F, 0x8B }) == PackContainerKind.LegacyTgz
     && !PackFormat.HasZipHeader(new byte[] { 0x50, 0x4B })
     && PackFormat.DetectFromHeader(new byte[] { 0x00, 0x01 }) == PackContainerKind.Unknown);
+
+// ===========================================================================
+// 12. 整合包容器读取（PackArchiveReader，#24 第 2 步）
+// ===========================================================================
+var packSamples = Path.Combine(scratch, "pack-samples");
+Directory.CreateDirectory(packSamples);
+
+void WriteZipText(ZipArchive zip, string path, string content)
+{
+    var entry = zip.CreateEntry(path);
+    using var stream = entry.Open();
+    using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+    writer.Write(content);
+}
+
+string BuildDspack(string fileName, int containerVersion, string manifestJson, params (string Path, string Content)[] files)
+{
+    var path = Path.Combine(packSamples, fileName);
+    using var file = File.Create(path);
+    using var zip = new ZipArchive(file, ZipArchiveMode.Create);
+    WriteZipText(zip, "dspack.json", "{\"format\":\"dspack\",\"version\":" + containerVersion + "}");
+    WriteZipText(zip, "manifest.json", manifestJson);
+    foreach (var (entryPath, content) in files)
+    {
+        WriteZipText(zip, entryPath, content);
+    }
+
+    return path;
+}
+
+string BuildTgz(string fileName, params (string Path, string Content)[] files)
+{
+    var path = Path.Combine(packSamples, fileName);
+    using var file = File.Create(path);
+    using var gzip = new GZipStream(file, CompressionLevel.Optimal);
+    using var tar = new TarWriter(gzip, TarEntryFormat.Pax);
+    foreach (var (entryPath, content) in files)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        tar.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, entryPath)
+        {
+            DataStream = new MemoryStream(bytes)
+        });
+    }
+
+    return path;
+}
+
+const string V4Manifest = """
+{
+  "manifestVersion": 4,
+  "type": "profile",
+  "name": "whale",
+  "version": "1.0.0",
+  "displayName": { "zh-CN": "大肥鱼" },
+  "dshVersion": "0.1.1-rc.2",
+  "profileName": "whale",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": { "dsh-pet": "0.2.0" }
+}
+""";
+
+const string V5ProfileManifest = """
+{
+  "manifestVersion": 5,
+  "type": "profile",
+  "name": "whale5",
+  "version": "1.0.0",
+  "dshVersion": "0.1.1-rc.2",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": {}
+}
+""";
+
+var dspackV2 = BuildDspack(
+    "whale.dspack",
+    2,
+    V4Manifest,
+    ("package.json", "{\"name\":\"snapshot\"}"),
+    ("pnpm-lock.yaml", "lockfileVersion: '9.0'"),
+    ("overrides/cordis.patch.yml", "plugins:\n  whale: {}\n"));
+
+{
+    var ok = PackArchiveReader.TryRead(dspackV2, out var archive, out var outcome, out var readError);
+    Check("packarchive/.dspack v2：容器识别 + 清单 + overrides 列表 + 文本条目读回",
+        ok
+        && outcome == PackArchiveOutcome.Ok
+        && archive is not null
+        && archive.Container == PackContainerKind.DspackV2
+        && archive.Manifest.Version == PackManifestVersion.V4
+        && archive.HasPackageJson
+        && archive.HasPnpmLock
+        && !archive.HasPnpmWorkspace
+        && archive.OverridePaths.Count == 1
+        && archive.OverridePaths[0] == "cordis.patch.yml"
+        && archive.TotalSize > 0
+        && archive.TryReadTextEntry("overrides/cordis.patch.yml", out var patchText, out _)
+        && patchText!.Contains("whale", StringComparison.Ordinal),
+        readError ?? string.Empty);
+}
+
+Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
+    PackArchiveReader.TryRead(BuildDspack("v5v3.dspack", 3, V5ProfileManifest), out var v5Archive, out var v5Outcome, out _)
+    && v5Outcome == PackArchiveOutcome.Ok
+    && v5Archive!.Container == PackContainerKind.DspackV3
+    && v5Archive.Manifest.RequiresDspackV3
+    && !PackArchiveReader.TryRead(BuildDspack("v5v2.dspack", 2, V5ProfileManifest), out _, out var mismatchOutcome, out var mismatchError)
+    && mismatchOutcome == PackArchiveOutcome.ContainerRejected
+    && mismatchError!.Contains("配对校验失败", StringComparison.Ordinal));
+
+{
+    var plainZip = Path.Combine(packSamples, "plain.dspack");
+    using (var file = File.Create(plainZip))
+    using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+    {
+        WriteZipText(zip, "manifest.json", V4Manifest);
+    }
+
+    var badMarker = Path.Combine(packSamples, "badv.dspack");
+    using (var file = File.Create(badMarker))
+    using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+    {
+        WriteZipText(zip, "dspack.json", "{\"format\":\"dspack\",\"version\":4}");
+        WriteZipText(zip, "manifest.json", V4Manifest);
+    }
+
+    Check("packarchive/容器层拒绝：缺 dspack.json 与容器版本 4（报「支持 2-3」）",
+        !PackArchiveReader.TryRead(plainZip, out _, out var noMarkerOutcome, out var noMarkerError)
+        && noMarkerOutcome == PackArchiveOutcome.ContainerRejected
+        && noMarkerError!.Contains("缺少 dspack.json", StringComparison.Ordinal)
+        && !PackArchiveReader.TryRead(badMarker, out _, out var badVersionOutcome, out var badVersionError)
+        && badVersionOutcome == PackArchiveOutcome.ContainerRejected
+        && badVersionError!.Contains("2-3", StringComparison.Ordinal));
+}
+
+{
+    var escapeZip = Path.Combine(packSamples, "escape.dspack");
+    using (var file = File.Create(escapeZip))
+    using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+    {
+        WriteZipText(zip, "dspack.json", "{\"format\":\"dspack\",\"version\":2}");
+        WriteZipText(zip, "manifest.json", V4Manifest);
+        WriteZipText(zip, "../escape.txt", "boom");
+    }
+
+    var tooManyZip = Path.Combine(packSamples, "toomany.dspack");
+    using (var file = File.Create(tooManyZip))
+    using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+    {
+        WriteZipText(zip, "dspack.json", "{\"format\":\"dspack\",\"version\":2}");
+        WriteZipText(zip, "manifest.json", V4Manifest);
+        for (var index = 0; index < PackArchiveLimits.MaximumEntries; index++)
+        {
+            WriteZipText(zip, $"filler/{index}.txt", "x");
+        }
+    }
+
+    Check("packarchive/路径越界与条目数超限必须被拒（zip-slip / 资源上限）",
+        !PackArchiveReader.TryRead(escapeZip, out _, out var escapeOutcome, out var escapeError)
+        && escapeOutcome == PackArchiveOutcome.EntryPathRejected
+        && escapeError!.Contains("escape.txt", StringComparison.Ordinal)
+        && !PackArchiveReader.TryRead(tooManyZip, out _, out var manyOutcome, out var manyError)
+        && manyOutcome == PackArchiveOutcome.LimitsExceeded
+        && manyError!.Contains("条目数超过上限", StringComparison.Ordinal));
+}
+
+{
+    var tgz = BuildTgz(
+        "legacy.tgz",
+        ("manifest.json", """
+{
+  "manifestVersion": 3,
+  "name": "legacy-pack",
+  "version": "0.9.0",
+  "displayName": "旧包",
+  "dshVersion": "0.1.1-rc.2",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": { "dsh-pet": "0.2.0" }
+}
+"""),
+        ("package.json", "{\"name\":\"legacy\"}"),
+        ("cordis.patch.yml", "plugins:\n  legacy: {}\n"));
+
+    var ok = PackArchiveReader.TryRead(tgz, out var archive, out var outcome, out var readError);
+    Check("packarchive/旧 .tgz：gzip+tar 识别、扁平 cordis.patch.yml 文本读回",
+        ok
+        && outcome == PackArchiveOutcome.Ok
+        && archive is not null
+        && archive.Container == PackContainerKind.LegacyTgz
+        && archive.Manifest.Version == PackManifestVersion.V3
+        && archive.Manifest.Name == "legacy-pack"
+        && archive.HasCordisPatch
+        && archive.HasPackageJson
+        && archive.TryReadTextEntry("cordis.patch.yml", out var patch, out _)
+        && patch!.Contains("legacy", StringComparison.Ordinal),
+        readError ?? string.Empty);
+}
+
+{
+    var notArchive = Path.Combine(packSamples, "plain.txt");
+    File.WriteAllText(notArchive, "hello", new UTF8Encoding(false));
+    var missing = Path.Combine(packSamples, "nope.dspack");
+
+    Check("packarchive/非归档与不存在文件：分类明确、不抛异常",
+        !PackArchiveReader.TryRead(notArchive, out _, out var notArchiveOutcome, out var notArchiveError)
+        && notArchiveOutcome == PackArchiveOutcome.NotAnArchive
+        && notArchiveError!.Contains("无法识别", StringComparison.Ordinal)
+        && !PackArchiveReader.TryRead(missing, out _, out _, out var missingError)
+        && missingError!.Contains("不存在", StringComparison.Ordinal));
+}
+
+{
+    var homePack = BuildDspack(
+        "home.dspack",
+        3,
+        """
+{
+  "manifestVersion": 5,
+  "type": "profile",
+  "name": "with-home",
+  "version": "1.0.0",
+  "dshVersion": "0.1.1-rc.2",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": {}
+}
+""",
+        ("home/AGENTS.md", "# agents"),
+        ("home/skills/whale.md", "whale skill"));
+
+    Check("packarchive/v5 profile 可携带 home/ 覆盖（home 条目单独列出，不混入 overrides）",
+        PackArchiveReader.TryRead(homePack, out var homeArchive, out var homeOutcome, out var homePackError)
+        && homeOutcome == PackArchiveOutcome.Ok
+        && homeArchive!.HomePaths.Count == 2
+        && homeArchive.HomePaths.Contains("AGENTS.md", StringComparer.Ordinal)
+        && homeArchive.HomePaths.Contains("skills/whale.md", StringComparer.Ordinal)
+        && homeArchive.OverridePaths.Count == 0,
+        homePackError ?? string.Empty);
+}
 
 // ===========================================================================
 // 8. 核心 bundle 常量
