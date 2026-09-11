@@ -694,7 +694,39 @@ public sealed class MarketplaceService
             File.Copy(source, Path.Combine(directory, Path.GetFileName(source)), overwrite: false);
         }
 
+        PrunePluginSnapshots(Path.GetDirectoryName(directory)!, directory);
         return directory;
+    }
+
+    /// <summary>插件回滚点保留上限（与自动快照 10 份同口径，work-log/61）。</summary>
+    private const int MaximumPluginSnapshots = 10;
+
+    /// <summary>只保留最近 N 份插件回滚点；正在新建的那份永远保留。</summary>
+    private static void PrunePluginSnapshots(string root, string newestDirectory)
+    {
+        try
+        {
+            var snapshots = Directory.EnumerateDirectories(root)
+                .Select(path => new DirectoryInfo(path))
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .ThenByDescending(info => info.Name, StringComparer.Ordinal)
+                .ToArray();
+            var kept = 0;
+            foreach (var snapshot in snapshots)
+            {
+                if (++kept <= MaximumPluginSnapshots
+                    || string.Equals(snapshot.FullName, newestDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                snapshot.Delete(recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 回收失败不影响本次插件操作。
+        }
     }
 
     public bool RestorePluginSnapshot(ManagerInstance instance, string snapshotPath)

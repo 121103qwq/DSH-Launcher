@@ -132,6 +132,32 @@ public partial class App : System.Windows.Application
         e.Handled = true;
     }
 
+    /// <summary>崩溃日志单文件上限；超过就轮转成 <c>crash.log.old</c>（只保留一份）。</summary>
+    private const long MaxCrashLogBytes = 2_000_000;
+
+    /// <summary>每个进程最多写多少条崩溃；超过后只留一行说明。</summary>
+    private const int MaxCrashEntriesPerProcess = 200;
+
+    /// <summary>同一签名的异常在这个窗口内只记第一条，其余累加计数（防止异常循环写满磁盘）。</summary>
+    private static readonly TimeSpan CrashThrottleWindow = TimeSpan.FromSeconds(60);
+
+    private static readonly object CrashLogGate = new();
+    private static readonly Dictionary<string, CrashSignatureState> CrashSignatures = new(StringComparer.Ordinal);
+    private static int _crashEntriesWritten;
+    private static bool _crashCapNoticeWritten;
+
+    private sealed class CrashSignatureState
+    {
+        public DateTimeOffset WindowStart { get; set; }
+
+        public int Suppressed { get; set; }
+    }
+
+    /// <summary>
+    /// 写崩溃日志。历史教训（work-log/61）：扫描页模板 TwoWay 绑定到只读属性时，
+    /// 每次渲染都抛一次异常、异常处理又继续运行，3 毫秒一轮 → 两天写出 1.2 GB。
+    /// 因此这里必须同时有**轮转**、**同类异常节流**和**每进程上限**三重保险。
+    /// </summary>
     private static void WriteCrashLog(Exception exception)
     {
         try
@@ -139,14 +165,98 @@ public partial class App : System.Windows.Application
             // 与主日志同一目录（可被 DSH_LAUNCHER_LOG_ROOT 覆盖）。
             var logDirectory = LauncherLog.LogDirectory;
             Directory.CreateDirectory(logDirectory);
-            File.AppendAllText(
-                Path.Combine(logDirectory, "crash.log"),
-                $"[{DateTimeOffset.Now:O}] {exception}{Environment.NewLine}");
+            var path = Path.Combine(logDirectory, "crash.log");
+            lock (CrashLogGate)
+            {
+                var now = DateTimeOffset.Now;
+                if (_crashEntriesWritten >= MaxCrashEntriesPerProcess)
+                {
+                    if (_crashCapNoticeWritten)
+                    {
+                        return;
+                    }
+
+                    _crashCapNoticeWritten = true;
+                    AppendCrashLog(
+                        path,
+                        $"[{now:O}] 本进程已记录 {MaxCrashEntriesPerProcess} 条崩溃，后续不再写入（避免异常循环写满磁盘；完整细节见下一条实际异常）。{Environment.NewLine}");
+                    return;
+                }
+
+                var signature = BuildCrashSignature(exception);
+                if (CrashSignatures.TryGetValue(signature, out var state))
+                {
+                    if (now - state.WindowStart < CrashThrottleWindow)
+                    {
+                        state.Suppressed++;
+                        return;
+                    }
+
+                    if (state.Suppressed > 0)
+                    {
+                        AppendCrashLog(
+                            path,
+                            $"[{now:O}] 上一条同类异常在 {CrashThrottleWindow.TotalSeconds:F0} 秒内共出现 {state.Suppressed + 1} 次，已折叠。{Environment.NewLine}");
+                        state.Suppressed = 0;
+                    }
+
+                    state.WindowStart = now;
+                }
+                else
+                {
+                    CrashSignatures[signature] = new CrashSignatureState { WindowStart = now };
+                }
+
+                AppendCrashLog(path, $"[{now:O}] {exception}{Environment.NewLine}");
+                _crashEntriesWritten++;
+            }
         }
         catch
         {
             // 日志失败不影响兜底行为。
         }
+    }
+
+    private static void AppendCrashLog(string path, string content)
+    {
+        RotateCrashLogIfNeeded(path);
+        File.AppendAllText(path, content);
+    }
+
+    private static void RotateCrashLogIfNeeded(string path)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length < MaxCrashLogBytes)
+        {
+            return;
+        }
+
+        try
+        {
+            var oldPath = path + ".old";
+            if (File.Exists(oldPath))
+            {
+                File.Delete(oldPath);
+            }
+
+            File.Move(path, oldPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 轮转失败不能反过来抛异常：崩溃处理必须继续可用。
+        }
+    }
+
+    /// <summary>同类异常签名：类型 + 消息前 120 字符 + 栈首行（去掉时间与地址差异）。</summary>
+    private static string BuildCrashSignature(Exception exception)
+    {
+        var type = exception.GetType().FullName ?? exception.GetType().Name;
+        var message = exception.Message.Length > 120 ? exception.Message[..120] : exception.Message;
+        var firstFrame = exception.StackTrace?
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault() ?? string.Empty;
+        return $"{type}: {message} @ {firstFrame}";
     }
 
     protected override void OnExit(ExitEventArgs e)

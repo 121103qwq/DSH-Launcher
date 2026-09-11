@@ -3278,9 +3278,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Content = "打开日志目录",
             Margin = new Thickness(8, 0, 0, 0)
         };
+        var storageButton = new System.Windows.Controls.Button
+        {
+            Content = "存储与清理",
+            Margin = new Thickness(8, 0, 0, 0),
+            ToolTip = "清点 Launcher 自有文件（崩溃日志/轮转旧日志/市场缓存/插件回滚点/会话备份/换版本导出）；" +
+                      "会话、凭据、实例数据、自动快照不在清理范围内，删除走回收站"
+        };
+        var storagePreviewed = false;
         var buttons = new WrapPanel();
         buttons.Children.Add(exportButton);
         buttons.Children.Add(openLogButton);
+        buttons.Children.Add(storageButton);
         var status = new TextBlock
         {
             Foreground = (WpfBrush)FindResource("BlueBrush"),
@@ -3289,6 +3298,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             TextWrapping = TextWrapping.Wrap,
             Text = "诊断包包含 Launcher 日志、崩溃/守护日志、环境与版本、设置与状态文件（已脱敏）；" +
                    "不包含 .credentials.yaml / 会话内容，产物只落在本机，由你自行决定是否分享。"
+        };
+        storageButton.Click += (_, _) =>
+        {
+            var storage = new LauncherStorageService(instances: Instances);
+            if (!storagePreviewed)
+            {
+                var categories = storage.Scan().Where(item => item.Cleanable).ToArray();
+                var totalBytes = categories.Sum(item => item.SizeBytes);
+                var totalFiles = categories.Sum(item => item.FileCount);
+                status.Text = "可清理项：" + string.Join(
+                        "；",
+                        categories.Select(item => $"{item.Title} {item.SizeText}/{item.FileCount} 个文件"))
+                    + $"。合计 {totalBytes / 1024.0:F1} KB / {totalFiles} 个文件，删除走回收站（可恢复）。"
+                    + "再点一次「存储与清理」执行。";
+                storagePreviewed = true;
+                storageButton.Content = "确认清理？";
+                return;
+            }
+
+            storagePreviewed = false;
+            storageButton.Content = "存储与清理";
+            var result = storage.Clean(storage.Scan().Where(item => item.Cleanable).Select(item => item.Id));
+            var failureText = result.Failures.Count == 0
+                ? string.Empty
+                : "；跳过：" + string.Join("；", result.Failures.Take(3));
+            status.Text = $"已清理 {result.RemovedCount} 个文件，释放 {result.FreedBytes / 1024.0:F1} KB"
+                + (string.IsNullOrEmpty(failureText) ? "。" : $"（{failureText}）")
+                + " 删除的文件在回收站，可恢复。";
         };
         content.Children.Add(buttons);
         content.Children.Add(status);
