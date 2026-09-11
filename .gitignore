@@ -6,3 +6,7 @@ dist/
 *.WebView2/
 src/DshLauncher.Watchdog/bin/
 src/DshLauncher.Watchdog/obj/
+
+# 仓库自测工程（变更集 83）：与产品工程同样的构建产物忽略规则
+tests/DshLauncher.SelfTest/bin/
+tests/DshLauncher.SelfTest/obj/

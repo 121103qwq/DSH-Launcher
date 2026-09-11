@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- 启动器工程是自包含的（csproj 内置 SelfContained/PublishSingleFile），引用它的工程
+         必须同样自包含，否则报 NETSDK1151。 -->
+    <SelfContained>true</SelfContained>
+    <AssemblyName>DshLauncher.SelfTest</AssemblyName>
+    <RootNamespace>DshLauncher.SelfTest</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DshLauncher\DshLauncher.csproj" />
+  </ItemGroup>
+
+</Project>

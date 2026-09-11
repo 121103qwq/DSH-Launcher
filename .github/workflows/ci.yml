@@ -1,0 +1,39 @@
+name: CI
+
+# 说明：本仓库目前在本地开发（无远端/无 Release 渠道）。这份工作流的作用是：
+#   * 把"构建 + 仓库自测"这条质量门写成可执行的文件，将来推到任何远端（含私有仓库）即生效；
+#   * 即使在本地，也可以照抄下面的命令当作提交前检查清单。
+# 注意：_verify-p0 工作区级 harness 依赖本机已安装的 dsh 与真实环境，不进 CI。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-selftest:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore src/DshLauncher/DshLauncher.csproj
+
+      # 产品工程是自包含单文件（csproj 内置 SelfContained/PublishSingleFile），
+      # 因此构建与自测都按 win-x64 走。
+      - name: Build
+        run: dotnet build src/DshLauncher/DshLauncher.csproj -c Release --no-restore
+
+      - name: SelfTest（仓库自带纯逻辑自测：命名规则 / 版本比较 / profile / 任务台账 / 存储边界 / 会话代际）
+        run: dotnet run --project tests/DshLauncher.SelfTest/DshLauncher.SelfTest.csproj -c Release
+
+      - name: Publish
+        run: dotnet publish src/DshLauncher/DshLauncher.csproj -c Release -o dist
