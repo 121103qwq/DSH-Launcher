@@ -115,6 +115,7 @@ public sealed class VersionSettingsService
                 : new Dictionary<string, string>(settings.EnvironmentVariables, StringComparer.Ordinal),
             AutoStopWhenIdle = settings.AutoStopWhenIdle,
             AutoStopIdleMinutes = settings.AutoStopIdleMinutes,
+            CheckDshUpdates = settings.CheckDshUpdates,
             CrashPolicy = settings.CrashPolicy,
             CrashRestartLimit = settings.CrashRestartLimit
         };

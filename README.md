@@ -99,6 +99,7 @@ dsh-launcher-dev/
 | 71 | `Services/DshEnvironmentScanner.cs`（新）+ `Services/ScannedHomeImportService.cs`（新）+ `EnvironmentScanWindow.xaml(.cs)`（新）+ `VersionControlWindow.xaml(.cs)` + `MainWindow.xaml.cs` | **#14 本机 DSH 环境扫描导入（work-log/50）**：扫描 `%USERPROFILE%\.dsh*` + `DSH_HOME`，按 `dsh.profile.bundles` 分类 web/tui/other；勾选后一 home 一实例（只收 `profiles/web`，重复源跳过、失败回滚）；「导入实例」菜单新增「扫描本机 DSH 环境」与接上死代码的「从源码目录导入」 |
 | 72 | `Services/DshEnvironmentScanner.cs` + `Services/ScannedHomeImportService.cs` + `Services/DshHomeImportService.cs` + `EnvironmentScanWindow.xaml(.cs)` | **清理：移除 WSL 扫描冗余**（work-log/50 第五节）：本机 WSL 服务被禁用（`Wsl/0x80070422`），WSL 分支无法验证且无使用场景，删除发行版枚举/`sh` 清单协议/UNC 转换/WSL 源跳过插件包复制/UI 标签与文案；harness 255 PASS |
 | 73 | `Services/SessionFileNames.cs`（新）+ `Services/ConversationService.cs` + `Services/ConversationSyncService.cs` + `EnvironmentScanWindow.xaml` | **dsh 0.1.5-rc 会话格式兼容（work-log/51）**：① 会话头接受任意版本（0..N，含 `isSeeded` 可选）；② 文件名识别 dsh canonical 规则（`session.jsonl[.zstd]` = v0、`session.vN.jsonl[.zstd]`），导入按**头部版本**命名、编码跟随目标实例（不一致时流式转码）；③ 旧 dsh 实例拒绝 vN 导入并明确报错；④ 跨实例同步按会话目录归并、取最高代际、跨编码/不支持版本时跳过；⑤ 修掉变更集 71 扫描页 `Run Text` TwoWay 绑定导致的 57 条 E9001 XamlParseException |
+| 74 | `Services/InstanceVersionSwitchService.cs`（新）+ `Services/InstanceRuntimeRebinder.cs` + `Services/PluginCompatibility.cs` + `Services/ConversationService.cs` + `Services/SessionFileNames.cs` + `Models/VersionSettingsModels.cs` + `Services/VersionSettingsService.cs` + `VersionSwitchWindow.xaml(.cs)`（新）+ `VersionSettingsWindow.xaml(.cs)` + `MainWindow.xaml.cs` | **更换实例运行版本（升级/降级，work-log/52）**：入口并入「版本设置 → 版本与快照」页（与原「快照回滚」同页，页面因此改名）；解析目标（候选目录：`versions/<v>` → 主运行根 → 实例当前根，缺则从官方 npm 下载）→ 预检（Node 引擎 / 插件核心 peerDeps / 会话代际 / 方向）→ 可选快照与「一键导出会话」→ 强制重绑定（只改 RootPath/入口/启动描述/版本号，DSH_HOME 不变）→ 失败回滚原绑定；另加实例级「DSh 更新提示」开关（默认关） |
 
 ## 行为变化（相对上游）
 
@@ -183,6 +184,9 @@ dsh-launcher-dev/
 79. **不含 `profiles/web` 的 home 不可导入**：列表里标红说明（TUI profile 需 #19 支持后才能启动）
 80. **会话格式跟随 dsh 版本**：对话页/检索/导出/备份/删除/同步都能识别 `session.v<N>.jsonl[.zstd]`（dsh 0.1.5-rc 起的命名），会话头接受 v0..当前 与新增的 `isSeeded`；导入/恢复按头部版本命名并跟随目标实例的压缩编码（只换容器、不改内容），交给 dsh 自己的格式迁移链处理旧版本
 81. **旧版实例不接收新格式会话**：目标实例的 DSh 读不了 vN（无 format catalog）时，导入会明确报错而不是写出坏文件
+82. **更换实例运行版本（升级/降级）**：「版本设置 → 版本与快照」页的「运行版本」卡片 →「更换运行版本」；只改运行时绑定（DSH_HOME / 配置 / 插件 / 会话全部保留），支持自动下载未安装版本，失败自动回滚原绑定
+83. **降级保护**：目标版本读不了现有 `session.vN` 会话时明确警告，并提供「导出现有会话备份」；不做会话格式转换（迁移交给 dsh）
+84. **DSh 更新提示（可选）**：实例级开关（默认关）；开启后在运行版本区块联网显示“官方最新 x.y.z”与升降级建议
 
 ## 待办（功能完成后统一处理）
 

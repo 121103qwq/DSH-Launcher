@@ -354,6 +354,53 @@ public sealed class ConversationService
         return restored;
     }
 
+    /// <summary>
+    /// 一键导出实例的全部会话到目录（更换运行版本前的降级备份用）：文件名取自会话相对路径，
+    /// 重名自动加序号；返回导出文件数。不修改会话本身。
+    /// </summary>
+    public int ExportAll(ManagerInstance instance, string destinationDirectory)
+    {
+        EnsureStopped(instance);
+        if (string.IsNullOrWhiteSpace(destinationDirectory))
+        {
+            throw new ArgumentException("导出目录不能为空。", nameof(destinationDirectory));
+        }
+
+        var entries = List(instance);
+        if (entries.Count == 0)
+        {
+            return 0;
+        }
+
+        var directory = Path.GetFullPath(destinationDirectory.Trim());
+        Directory.CreateDirectory(directory);
+        var exported = 0;
+        foreach (var entry in entries)
+        {
+            var extension = entry.IsCompressed ? ".jsonl.zstd" : ".jsonl";
+            var stem = SafeFileName(entry.RelativePath
+                .Replace(Path.DirectorySeparatorChar, '_')
+                .Replace(Path.AltDirectorySeparatorChar, '_'));
+            if (stem.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            {
+                stem = stem[..^extension.Length];
+            }
+
+            var candidate = Path.Combine(directory, stem + extension);
+            for (var index = 2; File.Exists(candidate) && index < 1000; index++)
+            {
+                candidate = Path.Combine(directory, $"{stem}-{index}{extension}");
+            }
+
+            if (Export(instance, entry, candidate) is not null)
+            {
+                exported++;
+            }
+        }
+
+        return exported;
+    }
+
     public string Export(ManagerInstance instance, ConversationEntry entry, string destinationPath)
     {
         EnsureStopped(instance);

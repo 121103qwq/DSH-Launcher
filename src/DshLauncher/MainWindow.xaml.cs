@@ -55,6 +55,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly VersionSettingsService _versionSettingsService = new();
     private readonly VersionHealthService _versionHealthService;
     private readonly VersionSnapshotService _versionSnapshotService;
+    private readonly InstanceVersionSwitchService _instanceVersionSwitchService;
     private readonly ConversationService _conversationService;
     private readonly ConversationSyncService _conversationSyncService;
     private readonly ModelService _modelService;
@@ -137,6 +138,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _versionPackageService = new(_instanceRegistry);
         _detectedRuntimeRegistrationService = new(_instanceRegistry);
         _scannedHomeImporter = new(_instanceRegistry);
+        _instanceVersionSwitchService = new InstanceVersionSwitchService(
+            _versionSettingsService,
+            registry: _instanceRegistry,
+            snapshots: _versionSnapshotService,
+            conversations: new ConversationService(isRunning: id => _instanceRunner.IsRunning(id)),
+            isRunning: id => _instanceRunner.IsRunning(id));
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _conversationSyncService = new(_versionSettingsService, id => _instanceRunner.IsRunning(id));
         _modelService = new(id => _instanceRunner.IsRunning(id));
@@ -2206,6 +2213,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 var updated = current with { Name = name };
                 UpdateInstance(updated);
+                var saved = Instances.First(instance =>
+                    string.Equals(instance.Id, current.Id, StringComparison.Ordinal));
+                PageTitle = $"版本设置 - {saved.Name}";
+                PageSubtitle = $"当前实例：{saved.Name} · 管理个性化、配置、插件和分享导出";
+                OnPropertyChanged(nameof(PageTitle));
+                OnPropertyChanged(nameof(PageSubtitle));
+                return saved;
+            },
+            _instanceVersionSwitchService,
+            current =>
+            {
+                UpdateInstance(current);
                 var saved = Instances.First(instance =>
                     string.Equals(instance.Id, current.Id, StringComparison.Ordinal));
                 PageTitle = $"版本设置 - {saved.Name}";

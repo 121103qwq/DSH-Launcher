@@ -86,6 +86,9 @@ public sealed class VersionSettingsData
     /// <summary>空闲时自动停止该实例（仅对 Launcher 托管的运行中实例生效）。</summary>
     public bool AutoStopWhenIdle { get; set; }
 
+    /// <summary>是否在该实例设置页显示 DSh 版本更新提示（联网查询官方版本，默认关）。</summary>
+    public bool CheckDshUpdates { get; set; }
+
     /// <summary>空闲阈值（分钟，5–240，默认 30）。</summary>
     public int? AutoStopIdleMinutes { get; set; }
 

@@ -47,7 +47,7 @@
                         Click="Plugins_Click"
                         Style="{StaticResource NavButton}" />
                 <Button x:Name="SnapshotsButton"
-                        Content="↶   快照回滚"
+                        Content="↶   版本与快照"
                         Click="Snapshots_Click"
                         Style="{StaticResource NavButton}" />
                 <Button x:Name="HealthButton"
@@ -389,6 +389,44 @@
                 </StackPanel>
 
                 <StackPanel x:Name="SnapshotPage" Visibility="Collapsed">
+                    <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource CardPadding}" Margin="0,0,0,14">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="运行版本" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="RuntimeVersionText"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,5,0,0" />
+                                </StackPanel>
+                                <Button Grid.Column="1"
+                                        x:Name="SwitchVersionButton"
+                                        Content="更换运行版本"
+                                        Click="SwitchVersion_Click"
+                                        Padding="12,7"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Top" />
+                            </Grid>
+                            <CheckBox x:Name="CheckDshUpdatesBox"
+                                      Content="显示 DSh 版本更新提示（联网查询官方版本，含预发布）"
+                                      Click="CheckDshUpdates_Click"
+                                      Margin="0,12,0,0" />
+                            <TextBlock x:Name="DshUpdateHintText"
+                                       Foreground="{StaticResource BlueBrush}"
+                                       TextWrapping="Wrap"
+                                       Visibility="Collapsed"
+                                       Margin="0,6,0,0" />
+                            <TextBlock Text="更换运行版本只改 dsh 运行程序与启动入口，保留该版本的 DSH_HOME（配置 / 插件 / 会话）；降级前建议导出会话备份。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                        </StackPanel>
+                    </Border>
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1"

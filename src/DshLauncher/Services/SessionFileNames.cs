@@ -159,10 +159,10 @@ internal static class SessionFileNames
             }
         }
 
+        // 版本兑底：>= 0.1.5-0 视为带 format catalog。
+        // 注意用直接比较而不是 Satisfies：npm 的预发布规则不会让 0.1.6-rc.1 命中 “>=0.1.5-0”。
         return !string.IsNullOrWhiteSpace(detectedVersion)
-            && PluginCompatibility.Satisfies(
-                detectedVersion.Trim().TrimStart('v', 'V'),
-                ">=0.1.5-0");
+            && PluginCompatibility.Compare(detectedVersion.Trim().TrimStart('v', 'V'), "0.1.5-0") >= 0;
     }
 
     /// <summary>目录里最高的一代（没有 canonical 会话文件时返回 -1）。</summary>

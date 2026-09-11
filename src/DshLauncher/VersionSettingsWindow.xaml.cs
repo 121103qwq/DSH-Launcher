@@ -23,6 +23,8 @@ public partial class VersionSettingsWindow : UserControl
     private readonly VersionPackageService _packageService;
     private readonly VersionSnapshotService _snapshotService;
     private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
+    private readonly InstanceVersionSwitchService _versionSwitchService;
+    private readonly Func<ManagerInstance, ManagerInstance> _runtimeChanged;
     private readonly Action _settingsSaved;
     private readonly bool _openPluginPage;
     private readonly InstanceHealthProviders? _healthProviders;
@@ -41,6 +43,8 @@ public partial class VersionSettingsWindow : UserControl
         VersionPackageService packageService,
         VersionSnapshotService snapshotService,
         Func<ManagerInstance, string, ManagerInstance> renameVersion,
+        InstanceVersionSwitchService versionSwitchService,
+        Func<ManagerInstance, ManagerInstance> runtimeChanged,
         Action settingsSaved,
         bool openPluginPage = false,
         InstanceHealthProviders? healthProviders = null)
@@ -54,6 +58,8 @@ public partial class VersionSettingsWindow : UserControl
         _packageService = packageService;
         _snapshotService = snapshotService;
         _renameVersion = renameVersion;
+        _versionSwitchService = versionSwitchService;
+        _runtimeChanged = runtimeChanged;
         _settingsSaved = settingsSaved;
         _openPluginPage = openPluginPage;
 
@@ -83,6 +89,8 @@ public partial class VersionSettingsWindow : UserControl
         DshHomeText.Text = _instance?.DshHome ?? "尚未创建 DSH_HOME";
         PackageExtensionBox.Text = _packageService.PackageExtension;
         NodeRuntimeText.Text = FormatNodeRuntime();
+        RefreshRuntimeVersion();
+        _ = RefreshDshUpdateHintAsync();
 
         LoadWorkspaceNames();
         LoadConfigurationControls();
@@ -103,6 +111,111 @@ public partial class VersionSettingsWindow : UserControl
         }
 
         await LoadPluginsAsync();
+    }
+
+    /// <summary>刷新“运行版本”区域（当前 dsh 版本 + 更新提示开关）。</summary>
+    private void RefreshRuntimeVersion()
+    {
+        RuntimeVersionText.Text = _instance is null
+            ? "尚未选择版本"
+            : $"DSh {_instance.DetectedVersion ?? "未知"} · {_instance.EffectiveDshLaunchSpec?.HostPath ?? _instance.RootPath}";
+        CheckDshUpdatesBox.IsChecked = _settings.CheckDshUpdates;
+        SwitchVersionButton.IsEnabled = _instance is { Kind: InstanceKind.Installed };
+    }
+
+    /// <summary>“显示 DSh 版本更新提示”开关：写实例设置 + 刷新提示。</summary>
+    private void CheckDshUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        _settings.CheckDshUpdates = CheckDshUpdatesBox.IsChecked == true;
+        try
+        {
+            _settingsService.Save(_instance, _settings);
+            _settingsSaved?.Invoke();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            PersonalizationStatusText.Text = $"保存更新提示设置失败：{ex.Message}";
+            return;
+        }
+
+        _ = RefreshDshUpdateHintAsync();
+    }
+
+    /// <summary>开启更新提示时联网查官方版本，与当前版本比较后显示一行提示；失败也给出明确文案。</summary>
+    private async Task RefreshDshUpdateHintAsync()
+    {
+        var instance = _instance;
+        if (instance is null || !_settings.CheckDshUpdates)
+        {
+            DshUpdateHintText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var catalog = new DshVersionCatalogService();
+            var versions = await catalog.ReadOfficialVersionsAsync(timeout.Token);
+            if (_instance?.Id != instance.Id || !_settings.CheckDshUpdates)
+            {
+                return;
+            }
+
+            var latest = versions.FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(latest))
+            {
+                DshUpdateHintText.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            var current = instance.DetectedVersion?.Trim().TrimStart('v', 'V') ?? string.Empty;
+            DshUpdateHintText.Text = PluginCompatibility.Compare(latest, current) > 0
+                ? $"官方最新：{latest}（当前 {current}）——可在「更换运行版本」里升级或降级。"
+                : $"已是最新（官方最新 {latest}）。";
+            DshUpdateHintText.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex) when (ex is System.Net.Http.HttpRequestException
+            or TaskCanceledException
+            or OperationCanceledException
+            or InvalidDataException)
+        {
+            DshUpdateHintText.Text = "官方版本查询失败（不影响其它功能）。";
+            DshUpdateHintText.Visibility = Visibility.Visible;
+        }
+    }
+
+    /// <summary>“更换运行版本”：弹对话框，成功后回写实例。</summary>
+    private void SwitchVersion_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        var dialog = new VersionSwitchWindow(
+            Window.GetWindow(this),
+            _instance,
+            _versionSwitchService,
+            _nodeRuntimeProvider,
+            _settingsService);
+        if (dialog.ShowDialog() != true || dialog.SwitchedInstance is null)
+        {
+            return;
+        }
+
+        _instance = _runtimeChanged(dialog.SwitchedInstance);
+        VersionIdentityText.Text = _instance.Name;
+        PersonalizationVersionText.Text = _instance.Name;
+        VersionNameBox.Text = _instance.Name;
+        PersonalizationDetailsText.Text = $"{_instance.KindText} · {_instance.RootPath}\n状态：{_instance.StatusText}";
+        RefreshRuntimeVersion();
+        _ = RefreshDshUpdateHintAsync();
+        PersonalizationStatusText.Text = $"已更换运行版本：DSh {_instance.DetectedVersion}。";
     }
 
     private void SaveVersionName_Click(object sender, RoutedEventArgs e)
@@ -894,6 +1007,8 @@ public partial class VersionSettingsWindow : UserControl
 
     private void Snapshots_Click(object sender, RoutedEventArgs e)
     {
+        RefreshRuntimeVersion();
+        _ = RefreshDshUpdateHintAsync();
         RefreshSnapshots();
         ShowPage(SnapshotsButton);
     }
@@ -936,7 +1051,7 @@ public partial class VersionSettingsWindow : UserControl
             : activeButton == PluginsButton
                 ? "插件管理"
                 : activeButton == SnapshotsButton
-                    ? "快照回滚"
+                    ? "版本与快照"
                 : activeButton == HealthButton
                     ? "运行状况"
                 : activeButton == ExportButton
@@ -947,7 +1062,7 @@ public partial class VersionSettingsWindow : UserControl
             : activeButton == PluginsButton
                 ? "像 PCL2 的 Mod 管理一样，在当前版本快速启用、禁用或删除 Plugin。"
                 : activeButton == SnapshotsButton
-                    ? "创建加密配置快照，或把当前版本恢复到先前状态。"
+                    ? "更换这个实例使用的 DSh 运行版本（升级/降级），或创建加密配置快照并回滚到先前状态。"
                 : activeButton == ExportButton
                     ? "导出可以分享的版本设计，不带隐私内容和会话。"
                     : activeButton == HealthButton

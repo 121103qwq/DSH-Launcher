@@ -369,6 +369,17 @@ internal static class PluginCompatibility
         return true;
     }
 
+    /// <summary>
+    /// 比较两个版本号（npm semver，含预发布顺序：预发布 &lt; 正式版）。
+    /// 任一无法解析时返回 0（调用方自行决定降级/中性处理）。
+    /// </summary>
+    public static int Compare(string? left, string? right)
+    {
+        var first = ParseVersion((left ?? string.Empty).Trim().TrimStart('v', 'V'));
+        var second = ParseVersion((right ?? string.Empty).Trim().TrimStart('v', 'V'));
+        return first is null || second is null ? 0 : first.CompareTo(second);
+    }
+
     private static SemVersion? ParseVersion(string value)
     {
         var text = value.Trim().TrimStart('v', 'V');
