@@ -97,7 +97,7 @@
                                 Content="导入实例"
                                 Click="AddInstance_Click"
                                 IsEnabled="{Binding CanAddInstance}"
-                                ToolTip="点击选择：从文件夹导入 / 从快捷方式导入 / 从源码目录导入 / 扫描本机 DSH 环境"
+                                ToolTip="点击选择：从文件夹导入 / 从快捷方式导入 / 从源码目录导入 / 扫描本机 DSH 环境 / 导入整合包"
                                 Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,0,8">
                             <Button.ContextMenu>
@@ -106,6 +106,8 @@
                                     <MenuItem Header="从快捷方式导入" Click="ScanInstanceShortcut_Click" />
                                     <MenuItem Header="从源码目录导入" Click="ImportSourceProject_Click" />
                                     <MenuItem Header="扫描本机 DSH 环境" Click="ScanEnvironment_Click" />
+                                    <Separator />
+                                    <MenuItem Header="导入整合包（.dshpack / .dspack / .tgz）" Click="ImportPackage_Click" />
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
