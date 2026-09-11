@@ -3677,6 +3677,60 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     });
                 }
 
+                // 探针时间轴（#20 增量 3；未装探针则空态，不引导安装）
+                var timeline = AuditProbeTimelineService.Run(instance.DshHome, includeKeyPreview: previewCheck.IsChecked == true);
+                resultPanel.Children.Add(new TextBlock
+                {
+                    Text = "—— 行为时间轴（社区探针）——",
+                    FontWeight = FontWeights.SemiBold,
+                    FontSize = 12,
+                    Margin = new Thickness(0, 16, 0, 0)
+                });
+                resultPanel.Children.Add(new TextBlock
+                {
+                    Text = "· " + AuditProbeTimelineService.Summarize(timeline),
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = 12,
+                    Margin = new Thickness(0, 6, 0, 0)
+                });
+
+                foreach (var probeEvent in timeline.Events.TakeLast(100))
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = "· " + AuditProbeTimelineService.DescribeEvent(probeEvent),
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 11,
+                        Margin = new Thickness(0, 3, 0, 0),
+                        Foreground = probeEvent.HasCredentialFlag
+                            ? (WpfBrush)FindResource("DangerBrush")
+                            : (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
+                if (timeline.Events.Count > 100)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = $"· （只显示最近 100 条，共 {timeline.Events.Count} 条）",
+                        FontSize = 11,
+                        Margin = new Thickness(0, 4, 0, 0),
+                        Foreground = (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
+                foreach (var probeNote in timeline.Notes)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = "· " + probeNote,
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 11,
+                        Margin = new Thickness(0, 4, 0, 0),
+                        Foreground = (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
                 exportButton.IsEnabled = report.Hits.Count > 0 || report.Files.Count > 0 || dangerous.Findings.Count > 0;
             }
             catch (Exception ex)

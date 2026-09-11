@@ -32,6 +32,8 @@
 | **C16** | 遥测默认导出口域名 `harness-telemetry.deepseeksvc.com`（官方域判据） | 同上 | `DangerousConfigAuditService`（非官方域 → 危险） | **假报警**：上游换域后官方域会被当成"第三方外发" | `contract: 遥测默认域仍是 *.deepseeksvc.com（C16）` |
 | **C17** | 凭据文件名 `.credentials.yaml`（含 `.yml` 变体）与"只报元数据、不回显值"策略 | C13 的固定文件名 + 本仓安全契约（work-log/73） | `CredentialAuditService`、`DangerousConfigAuditService`（凭据可写检查） | 清单为空 → 看起来"本机没有凭据文件" | 由 SelfTest 断言覆盖（凭据文件清单 + 4 组安全反证；未单独设 harness 哨兵） |
 
+| **C19** | 社区探针审计文件格式：`<DSH_HOME>/audit/<DSH_AUDIT_PROFILE\|session>.jsonl`，每行 `{t,sid,seq,type,actor,h[,flags,sev,key,raw]}`（`@marcog-h/dsh-audit` 0.1.5，MIT，第三方可选） | 探针源码 `lib/index.js`（`_repro/probe-audit/` 留有 tarball 备查） | `AuditProbeTimelineService`（#20 增量 3） | 字段改名 → 时间轴少字段或空态；**因我们只读白名单字段，最坏是显示变少，不会崩** | 无 harness 哨兵（第三方可选数据源、非我方依赖；解析容错 + 字段白名单 + 反证 F/G 覆盖） |
+
 ## 二、降级方向（0.1.5 → 0.1.2）为什么是单向的
 
 **两个已安装运行时的实物证据（2026-09-11 核对）**：
