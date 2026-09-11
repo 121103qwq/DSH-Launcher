@@ -1857,6 +1857,49 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
     Check("danger-config/DSH_HOME 不存在：给说明而不是抛异常",
         DangerousConfigAuditService.Run(Path.Combine(dangerRoot, "missing"), "web").Notes
             .Any(note => note.Contains("不存在", StringComparison.Ordinal)));
+
+    // ---- 第 3 项：sandbox workspaceRoot 过宽（2026-09-11 用户点头补做）----
+    var rootHome = Path.Combine(dangerRoot, "workspace-root-home");
+    var rootProfile = Path.Combine(rootHome, "profiles", "web");
+    Directory.CreateDirectory(rootProfile);
+    var neutralEnv = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["DSH_PERMISSION_MODE"] = null,
+        ["DSH_TELEMETRY_MODE"] = null,
+        ["DSH_TELEMETRY_OTLP_URL"] = null
+    };
+
+    void WriteWorkspaceRoot(string value) => File.WriteAllText(
+        Path.Combine(rootProfile, "cordis.yml"),
+        string.Join("\n", new[] { "- id: sandbox-policy", "  config:", "    mode: workspace-write", "    workspaceRoot: " + value }) + "\n",
+        new UTF8Encoding(false));
+
+    WriteWorkspaceRoot("C:/");
+    var driveRootReport = DangerousConfigAuditService.Run(rootHome, "web", neutralEnv);
+    Check("danger-config/3-盘符根 workspaceRoot：判定为「危险」（沙箱等于全盘）",
+        driveRootReport.Findings.Any(finding => finding.Id == "workspace-root-too-broad"
+            && finding.Severity == DangerousConfigSeverity.Danger),
+        string.Join(" | ", driveRootReport.Findings.Select(finding => finding.Id)));
+
+    WriteWorkspaceRoot(rootHome.Replace('\\', '/'));
+    var containsHomeReport = DangerousConfigAuditService.Run(rootHome, "web", neutralEnv);
+    Check("danger-config/3-沙箱包含 DSH_HOME：判定为「危险」（凭据文件进入沙箱可达范围）",
+        containsHomeReport.Findings.Any(finding => finding.Id == "workspace-root-too-broad"
+            && finding.Evidence.Contains("DSH_HOME", StringComparison.Ordinal)),
+        string.Join(" | ", containsHomeReport.Findings.Select(finding => finding.Id)));
+
+    WriteWorkspaceRoot("C:/work/projects/demo");
+    var deepRootReport = DangerousConfigAuditService.Run(rootHome, "web", neutralEnv);
+    Check("danger-config/3-具体项目目录：不报（反方向自校准，避免噪声告警）",
+        deepRootReport.Findings.All(finding => finding.Id != "workspace-root-too-broad")
+        && deepRootReport.Findings.Count == 0,
+        string.Join(" | ", deepRootReport.Findings.Select(finding => finding.Id)));
+
+    WriteWorkspaceRoot("!!js process.cwd()");
+    var expressionRootReport = DangerousConfigAuditService.Run(rootHome, "web", neutralEnv);
+    Check("danger-config/3-表达式 workspaceRoot：记 Notes 不猜、不误报",
+        expressionRootReport.Findings.Count == 0
+        && expressionRootReport.Notes.Any(note => note.Contains("!!js", StringComparison.Ordinal)));
 }
 
 // ===========================================================================

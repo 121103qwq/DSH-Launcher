@@ -115,6 +115,55 @@ public static class DangerousConfigAuditService
             notes.Add("未在 profile 层/settings.yaml 里找到 sandbox-policy.mode（可能仍是出厂默认 workspace-write）。");
         }
 
+        // ---- 3：sandbox-policy.workspaceRoot 过宽 ----
+        checkedItems.Add("sandbox-policy.workspaceRoot（沙箱范围）");
+        var workspaceRoot = ReadPluginValue(allText, "sandbox-policy", "workspaceRoot");
+        if (workspaceRoot is { Length: > 0 } && workspaceRoot.Contains("!!js", StringComparison.Ordinal))
+        {
+            notes.Add("sandbox-policy.workspaceRoot 是表达式（!!js），静态读不出最终值。");
+        }
+        else if (workspaceRoot is { Length: > 0 })
+        {
+            // 归一化分隔符：YAML 里常见正斜杠，而 Path.GetFullPath 给的路径在本机是反斜杠，
+            // 不归一化会让"包含关系"判断永远为 false（自测抓到的真实缺陷）。
+            var trimmedRoot = workspaceRoot
+                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+                .TrimEnd(Path.DirectorySeparatorChar);
+            var homePrefix = home.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var isDriveRoot = string.Equals(
+                Path.GetPathRoot(trimmedRoot),
+                trimmedRoot,
+                StringComparison.OrdinalIgnoreCase);
+            var containsDshHome = homePrefix.StartsWith(trimmedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(homePrefix, trimmedRoot, StringComparison.OrdinalIgnoreCase);
+            var relativeSegments = trimmedRoot
+                .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+                .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+                .Length;
+
+            if (isDriveRoot || containsDshHome)
+            {
+                findings.Add(new DangerousConfigFinding(
+                    "workspace-root-too-broad",
+                    DangerousConfigSeverity.Danger,
+                    "沙箱工作区范围过大",
+                    $"sandbox-policy.config.workspaceRoot: {workspaceRoot}"
+                        + (isDriveRoot ? "（盘符根）" : "（包含本实例的 DSH_HOME）"),
+                    "沙箱在这个范围内不做写入限制。指向盘根等于全盘可写；"
+                        + "包含 DSH_HOME 则意味着 .credentials.yaml 也在沙箱内可达。"
+                        + "建议指向具体项目目录。"));
+            }
+            else if (relativeSegments <= 1)
+            {
+                findings.Add(new DangerousConfigFinding(
+                    "workspace-root-broad",
+                    DangerousConfigSeverity.Warning,
+                    "沙箱工作区范围偏宽",
+                    $"sandbox-policy.config.workspaceRoot: {workspaceRoot}（目录层级很浅）",
+                    "范围越宽，可写面越大。建议指向具体项目目录而不是公共父目录。"));
+            }
+        }
+
         // ---- 4：approval.policy ----
         checkedItems.Add("approval.policy（profile 层与 settings.yaml）");
         var approvalPolicy = ReadPluginValue(allText, "approval", "policy");
