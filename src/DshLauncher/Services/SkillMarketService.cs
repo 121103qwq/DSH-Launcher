@@ -39,13 +39,16 @@ public sealed class SkillMarketService
 
     private readonly ExtensionService _extensionService;
     private readonly LauncherPaths _paths;
+    private readonly Func<IReadOnlyList<string>>? _customSources;
     private readonly HttpClient _httpClient;
 
     public SkillMarketService(
         ExtensionService extensionService,
         LauncherPaths? paths = null,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        Func<IReadOnlyList<string>>? customSources = null)
     {
+        _customSources = customSources;
         _extensionService = extensionService;
         _paths = paths ?? new LauncherPaths();
         if (httpClient is null)
@@ -121,6 +124,7 @@ public sealed class SkillMarketService
             try
             {
                 candidates = await SearchRepositoriesAsync(searchCancellation.Token);
+                candidates = await AppendCustomSourceCandidatesAsync(candidates, AddWarning, cancellationToken);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -418,6 +422,67 @@ public sealed class SkillMarketService
             {
             }
         }
+    }
+
+    /// <summary>
+    /// 把「设置 → 插件与技能来源」里配置的 GitHub 仓库并进候选（再按原流程扫描 SKILL.md）。
+    /// 本地目录文件 / 网址类 Skill 来源暂未接入扫描（work-log/64 记为下一步），这里静默跳过。
+    /// </summary>
+    private async Task<List<SkillMarketItem>> AppendCustomSourceCandidatesAsync(
+        List<SkillMarketItem> candidates,
+        Action<string> warn,
+        CancellationToken cancellationToken)
+    {
+        var configured = _customSources?.Invoke() ?? Array.Empty<string>();
+        if (configured.Count == 0)
+        {
+            return candidates;
+        }
+
+        var known = new HashSet<string>(candidates.Select(item => item.Repository), StringComparer.OrdinalIgnoreCase);
+        foreach (var value in configured)
+        {
+            if (MarketSourceSettingsService.Normalize(MarketSourceKind.Skill, value) is not { } normalized
+                || !MarketSourceSettingsService.Describe(MarketSourceKind.Skill, normalized).IsGitHubRepository
+                || !known.Add(normalized))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(RepositoryScanTimeout);
+                using var response = await SendWithRetryAsync(
+                    new Uri($"https://api.github.com/repos/{normalized}"), timeout.Token);
+                if (!response.IsSuccessStatusCode)
+                {
+                    warn($"自定义 Skill 来源 {normalized}：GitHub 返回 {(int)response.StatusCode}，已跳过。");
+                    continue;
+                }
+
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+                var root = document.RootElement;
+                candidates.Add(new SkillMarketItem(
+                    normalized,
+                    root.TryGetProperty("name", out var name) ? name.GetString() ?? normalized : normalized,
+                    root.TryGetProperty("description", out var description) ? description.GetString() : null,
+                    root.TryGetProperty("stargazers_count", out var stars) ? stars.GetInt32() : 0,
+                    root.TryGetProperty("default_branch", out var branch) ? branch.GetString() ?? "main" : "main",
+                    root.TryGetProperty("pushed_at", out var pushed)
+                        && DateTimeOffset.TryParse(pushed.GetString(), out var updated)
+                            ? updated
+                            : null,
+                    false));
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException
+                or OperationCanceledException or InvalidOperationException)
+            {
+                warn($"自定义 Skill 来源 {normalized} 读取失败（{ex.Message}），已跳过。");
+            }
+        }
+
+        return candidates;
     }
 
     private async Task<List<SkillMarketItem>> SearchRepositoriesAsync(CancellationToken cancellationToken)

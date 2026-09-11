@@ -265,6 +265,33 @@ Check("ui/ForMessageBox 收敛长文本：显式上限逐行生效，默认上�
     && collapsed.Length < longText.Length / 10);
 
 // ===========================================================================
+// 8. 自定义来源（设置 → 插件与技能来源）
+// ===========================================================================
+var sourcePaths = new LauncherPaths(Path.Combine(scratch, "sources"));
+var sourceSettings = new MarketSourceSettingsService(sourcePaths);
+Check("sources/没有配置文件时按“没有自定义来源”处理",
+    sourceSettings.Read(MarketSourceKind.Plugin).Count == 0
+    && sourceSettings.Read(MarketSourceKind.Skill).Count == 0);
+Check("sources/校验规则：插件只收 .json 或网址，Skill 还收 owner/repo",
+    sourceSettings.TryAdd(MarketSourceKind.Plugin, "https://example.com/catalog.json", out _)
+    && sourceSettings.TryAdd(MarketSourceKind.Plugin, "D:/x/catalog.json", out _)
+    && !sourceSettings.TryAdd(MarketSourceKind.Plugin, "owner/repo", out _)
+    && sourceSettings.TryAdd(MarketSourceKind.Skill, "owner/repo", out _)
+    && !sourceSettings.TryAdd(MarketSourceKind.Skill, "not a source", out _));
+Check("sources/去重 / 落盘读回 / 移除",
+    !sourceSettings.TryAdd(MarketSourceKind.Plugin, "https://example.com/catalog.json", out var duplicateMessage)
+    && duplicateMessage.Contains("已经在列表里", StringComparison.Ordinal)
+    && sourceSettings.Read(MarketSourceKind.Plugin).Count == 2
+    && File.Exists(sourceSettings.FilePath(MarketSourceKind.Plugin))
+    && sourceSettings.Read(MarketSourceKind.Skill) is ["owner/repo"]
+    && MarketSourceSettingsService.Describe(MarketSourceKind.Skill, "owner/repo").IsGitHubRepository
+    && sourceSettings.TryRemove(MarketSourceKind.Skill, "owner/repo", out _)
+    && sourceSettings.Read(MarketSourceKind.Skill).Count == 0);
+File.WriteAllText(sourceSettings.FilePath(MarketSourceKind.Plugin), "{ broken", Encoding.UTF8);
+Check("sources/文件损坏按“没有来源”处理（不影响市场与设置页）",
+    sourceSettings.Read(MarketSourceKind.Plugin).Count == 0);
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",

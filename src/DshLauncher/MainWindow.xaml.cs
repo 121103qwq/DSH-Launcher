@@ -51,6 +51,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly ExtensionService _extensionService;
     private readonly MarketplaceService _marketplaceService;
     private readonly SkillMarketService _skillMarketService;
+    private readonly MarketSourceSettingsService _marketSourceSettings = new();
     private readonly VersionPackageService _versionPackageService;
     private readonly VersionSettingsService _versionSettingsService = new();
     private readonly DshUpdateNoticeService _updateNotice = new();
@@ -140,7 +141,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _watchdog.ResourcesUpdated += OnResourcesUpdated;
         _watchdog.HttpHealthDegraded += OnHttpHealthDegraded;
         _marketplaceService = new();
-        _skillMarketService = new(_extensionService);
+        _skillMarketService = new(
+            _extensionService,
+            customSources: () => _marketSourceSettings.Read(MarketSourceKind.Skill));
         _versionPackageService = new(_instanceRegistry);
         _detectedRuntimeRegistrationService = new(_instanceRegistry);
         _scannedHomeImporter = new(_instanceRegistry);
@@ -2466,6 +2469,187 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RefreshRunningInstances();
     }
 
+    /// <summary>
+    /// 设置 → 「插件与技能来源」：插件与 Skill 两块结构平行（同一套操作：列表 / 添加 / 测试 / 移除）。
+    /// 只用于「发现」——来源里的文本绝不当作安装命令（安装仍走包元数据 + package.json 校验）。
+    /// </summary>
+    private void BuildMarketSourcesSection(StackPanel parent, MarketSourceKind kind)
+    {
+        var isPlugin = kind == MarketSourceKind.Plugin;
+        var hint = isPlugin
+            ? "自定义插件目录：本地目录 JSON 文件，或指向目录 JSON 的网址。内置来源：awesome-dsh-plugin 目录 + GitHub。"
+            : "自定义 Skill 来源：GitHub 仓库（owner/repo，扫描其中的 SKILL.md）会立即生效；本地目录 JSON 文件与网址已保存但暂未接入扫描（见 work-log/64）。内置来源：GitHub 仓库搜索。";
+
+        var content = new StackPanel();
+        content.Children.Add(new TextBlock
+        {
+            Text = isPlugin ? "插件来源" : "Skill 来源",
+            FontSize = 18,
+            FontWeight = FontWeights.SemiBold
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = hint,
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0)
+        });
+
+        var rows = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+
+        void Render(string? message = null)
+        {
+            rows.Children.Clear();
+            var entries = _marketSourceSettings.Read(kind);
+            if (entries.Count == 0)
+            {
+                rows.Children.Add(new TextBlock
+                {
+                    Text = "还没有自定义来源。",
+                    Foreground = (WpfBrush)FindResource("MutedBrush"),
+                    FontSize = 11
+                });
+            }
+
+            foreach (var value in entries)
+            {
+                var entry = MarketSourceSettingsService.Describe(kind, value);
+                var probeStatus = new TextBlock
+                {
+                    Foreground = (WpfBrush)FindResource("MutedBrush"),
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 3, 0, 0)
+                };
+                var testButton = new System.Windows.Controls.Button
+                {
+                    Content = "测试",
+                    Padding = new Thickness(10, 3, 10, 3)
+                };
+                testButton.Click += async (_, _) =>
+                {
+                    probeStatus.Text = "测试中…";
+                    var result = await _marketSourceSettings.ProbeAsync(kind, value);
+                    probeStatus.Text = (result.Ok ? "✓ " : "✗ ") + result.Message;
+                };
+                var removeButton = new System.Windows.Controls.Button
+                {
+                    Content = "移除",
+                    Padding = new Thickness(10, 3, 10, 3),
+                    Margin = new Thickness(6, 0, 0, 0)
+                };
+                removeButton.Click += (_, _) =>
+                {
+                    _marketSourceSettings.TryRemove(kind, value, out var removeMessage);
+                    Render(removeMessage);
+                };
+
+                var label = new StackPanel();
+                label.Children.Add(new TextBlock
+                {
+                    Text = entry.Value,
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    ToolTip = entry.TypeText
+                });
+                label.Children.Add(new TextBlock
+                {
+                    Text = entry.TypeText,
+                    Foreground = (WpfBrush)FindResource("MutedBrush"),
+                    FontSize = 11
+                });
+                label.Children.Add(probeStatus);
+
+                var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.Children.Add(label);
+                Grid.SetColumn(testButton, 1);
+                grid.Children.Add(testButton);
+                Grid.SetColumn(removeButton, 2);
+                grid.Children.Add(removeButton);
+                rows.Children.Add(grid);
+            }
+
+            status.Text = message ?? $"来源文件：{_marketSourceSettings.FilePath(kind)}";
+        }
+
+        var input = new System.Windows.Controls.TextBox
+        {
+            MinWidth = 420,
+            Padding = new Thickness(8, 5, 8, 5),
+            Margin = new Thickness(0, 0, 8, 0),
+            ToolTip = isPlugin
+                ? "例如 D:/plugins/my-catalog.json 或 https://example.com/catalog.json"
+                : "例如 owner/repo、D:/skills/my-catalog.json 或 https://example.com/catalog.json"
+        };
+        var addButton = new System.Windows.Controls.Button
+        {
+            Content = "添加",
+            Style = (Style)FindResource("PrimaryButton"),
+            Padding = new Thickness(12, 5, 12, 5)
+        };
+        addButton.Click += (_, _) =>
+        {
+            _marketSourceSettings.TryAdd(kind, input.Text, out var addMessage);
+            if (addMessage.StartsWith("已保存", StringComparison.Ordinal))
+            {
+                input.Text = string.Empty;
+            }
+
+            Render(addMessage);
+        };
+        var openDirectoryButton = new System.Windows.Controls.Button
+        {
+            Content = "打开来源文件位置",
+            Padding = new Thickness(12, 5, 12, 5),
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        openDirectoryButton.Click += (_, _) =>
+        {
+            try
+            {
+                var directory = Path.GetDirectoryName(_marketSourceSettings.FilePath(kind))!;
+                Directory.CreateDirectory(directory);
+                Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                ShowNotice($"打开来源文件位置失败：{ex.Message}");
+            }
+        };
+
+        var actions = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
+        actions.Children.Add(input);
+        actions.Children.Add(addButton);
+        actions.Children.Add(openDirectoryButton);
+
+        content.Children.Add(rows);
+        content.Children.Add(actions);
+        content.Children.Add(status);
+        parent.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(16),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+
+        Render();
+    }
+
     private FrameworkElement CreateSettingsPage()
     {
         StackPanel NewCategoryPanel() => new()
@@ -2497,10 +2681,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var generalPanel = NewCategoryPanel();
         var networkPanel = NewCategoryPanel();
         var diagnosePanel = NewCategoryPanel();
+        var sourcesPanel = NewCategoryPanel();
         AddPageHeader(runtimePanel, "运行环境", "Node.js 与 DeepSeek Harness 的检测、安装位置与准备。");
         AddPageHeader(generalPanel, "常规", "插件安装方式、关闭行为、版本同步与实例守护。");
         AddPageHeader(networkPanel, "网络与账户", "代理设置与 DeepSeek 余额显示。");
         AddPageHeader(diagnosePanel, "诊断与日志", "导出脱敏诊断包、查看日志与错误码。");
+        BuildMarketSourcesSection(sourcesPanel, MarketSourceKind.Plugin);
+        BuildMarketSourcesSection(sourcesPanel, MarketSourceKind.Skill);
 
         var nodeStatus = new TextBlock
         {
@@ -2892,7 +3079,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ("运行环境", runtimePanel),
             ("常规", generalPanel),
             ("网络与账户", networkPanel),
-            ("诊断与日志", diagnosePanel)
+            ("诊断与日志", diagnosePanel),
+            ("插件与技能来源", sourcesPanel)
         };
         var navButtons = new List<System.Windows.Controls.Button>();
         var scrollOffsets = new double[categories.Length];
