@@ -177,11 +177,19 @@ public sealed class ConversationSyncService
                     continue;
                 }
 
+                // 同一会话的不同代际（v0/v1/…/vN）共用一个会话目录，按目录归并身份。
+                var sessionKey = SessionFileNames.DirectoryKey(relativePath);
+                if (sessionKey.Length == 0)
+                {
+                    errors.Add($"{version.Name}/{relativePath}：会话不在会话目录内，已跳过。");
+                    continue;
+                }
+
                 var normalizedFile = file with { RelativePath = relativePath };
-                if (!files.TryGetValue(relativePath, out var candidates))
+                if (!files.TryGetValue(sessionKey, out var candidates))
                 {
                     candidates = new List<SessionFile>();
-                    files[relativePath] = candidates;
+                    files[sessionKey] = candidates;
                 }
 
                 candidates.Add(normalizedFile);
@@ -189,24 +197,24 @@ public sealed class ConversationSyncService
         }
 
         var copied = 0;
-        var paths = new HashSet<string>(files.Keys, StringComparer.OrdinalIgnoreCase);
-        paths.UnionWith(tombstones.Keys);
-        foreach (var relativePath in paths)
+        var sessionKeys = new HashSet<string>(files.Keys, StringComparer.OrdinalIgnoreCase);
+        sessionKeys.UnionWith(tombstones.Keys);
+        foreach (var sessionKey in sessionKeys)
         {
-            files.TryGetValue(relativePath, out var candidates);
+            files.TryGetValue(sessionKey, out var candidates);
             candidates ??= new List<SessionFile>();
-            if (tombstones.TryGetValue(relativePath, out var deletedAt))
+            if (tombstones.TryGetValue(sessionKey, out var deletedAt))
             {
                 candidates = candidates
                     .Where(candidate => candidate.LastWriteTimeUtc > deletedAt)
                     .ToList();
                 if (candidates.Count == 0)
                 {
-                    ApplyTombstone(stopped, relativePath, deletedAt, errors);
+                    ApplyTombstone(stopped, sessionKey, deletedAt, errors);
                     continue;
                 }
 
-                ClearTombstone(stopped, relativePath, errors);
+                ClearTombstone(stopped, sessionKey, errors);
             }
 
             if (candidates.Count == 0)
@@ -214,8 +222,10 @@ public sealed class ConversationSyncService
                 continue;
             }
 
+            // 同一会话多代际共存时取版本最高的一代（避免把旧代际回灌到已升级的实例）。
             var source = candidates
-                .OrderByDescending(candidate => candidate.LastWriteTimeUtc)
+                .OrderByDescending(candidate => candidate.Generation)
+                .ThenByDescending(candidate => candidate.LastWriteTimeUtc)
                 .ThenByDescending(candidate => candidate.Length)
                 .ThenBy(candidate => candidate.Instance.Id, StringComparer.Ordinal)
                 .First();
@@ -227,14 +237,45 @@ public sealed class ConversationSyncService
                     continue;
                 }
 
-                var targetPath = Path.Combine(
-                    SessionsRoot(targetVersion),
-                    relativePath.Replace('/', Path.DirectorySeparatorChar));
                 try
                 {
-                    if (HasReparsePointInPath(targetPath, SessionsRoot(targetVersion)))
+                    var targetRoot = SessionsRoot(targetVersion);
+                    var targetDirectory = Path.Combine(
+                        targetRoot,
+                        sessionKey.Replace('/', Path.DirectorySeparatorChar));
+                    var targetPath = Path.Combine(targetDirectory, Path.GetFileName(source.RelativePath));
+                    if (HasReparsePointInPath(targetPath, targetRoot))
                     {
                         throw new IOException("目标会话路径包含重解析点。");
+                    }
+
+                    // 目标已有同代或更新代际：不降级、不重复复制。
+                    var existingGeneration = SessionFileNames.HighestGeneration(targetDirectory);
+                    if (existingGeneration >= source.Generation)
+                    {
+                        continue;
+                    }
+
+                    // 新增一代：编码必须与目标一致（dsh 同一 sessions 根不允许混用），
+                    // 且目标 dsh 能读该版本（v>=1 需要 0.1.5+ 的 format catalog）。
+                    var targetCompressed = SessionFileNames.ResolveCompression(targetRoot);
+                    var sourceCompressed = source.RelativePath.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase);
+                    if (targetCompressed != sourceCompressed)
+                    {
+                        errors.Add($"{targetVersion.Name}/{source.RelativePath}：目标实例会话编码为"
+                            + $"{(targetCompressed ? "zstd" : "plain")}、源为{(sourceCompressed ? "zstd" : "plain")}，已跳过。");
+                        continue;
+                    }
+
+                    if (source.Generation > 0
+                        && !SessionFileNames.SupportsVersionedGenerations(
+                            targetVersion.RootPath,
+                            targetVersion.DetectedVersion,
+                            targetRoot))
+                    {
+                        errors.Add($"{targetVersion.Name}/{source.RelativePath}：目标实例的 DSh 版本较旧、"
+                            + $"读不了 v{source.Generation} 会话，已跳过。");
+                        continue;
                     }
 
                     if (File.Exists(targetPath) && FilesEqual(source.FullPath, targetPath))
@@ -320,8 +361,7 @@ public sealed class ConversationSyncService
                 }
 
                 var fileName = Path.GetFileName(entry);
-                if (!fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-                    && !fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase))
+                if (!SessionFileNames.TryParse(fileName, out var generation, out _))
                 {
                     continue;
                 }
@@ -334,6 +374,7 @@ public sealed class ConversationSyncService
                         instance,
                         entry,
                         Path.GetRelativePath(root, entry),
+                        generation,
                         info.Length,
                         info.LastWriteTimeUtc);
                 }
@@ -463,10 +504,17 @@ public sealed class ConversationSyncService
                         continue;
                     }
 
-                    if (!result.TryGetValue(relativePath, out var existing)
+                    // 删除记录按会话目录归并（旧状态文件里的完整文件路径也归一化到这里）。
+                    var sessionKey = SessionFileNames.DirectoryKey(relativePath);
+                    if (sessionKey.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (!result.TryGetValue(sessionKey, out var existing)
                         || item.Value > existing)
                     {
-                        result[relativePath] = item.Value;
+                        result[sessionKey] = item.Value;
                     }
                 }
             }
@@ -481,7 +529,7 @@ public sealed class ConversationSyncService
 
     private static void ApplyTombstone(
         IEnumerable<ManagerInstance> versions,
-        string relativePath,
+        string sessionKey,
         DateTime deletedAt,
         ICollection<string> errors)
     {
@@ -489,57 +537,66 @@ public sealed class ConversationSyncService
         {
             try
             {
-                DeleteSessionFile(version, relativePath);
-                UpdateDeletionState(version, relativePath, deletedAt, deleted: true);
+                DeleteSessionFile(version, sessionKey);
+                UpdateDeletionState(version, sessionKey, deletedAt, deleted: true);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
-                errors.Add($"{version.Name}/{relativePath}：{ex.Message}");
+                errors.Add($"{version.Name}/{sessionKey}：{ex.Message}");
             }
         }
     }
 
     private static void ClearTombstone(
         IEnumerable<ManagerInstance> versions,
-        string relativePath,
+        string sessionKey,
         ICollection<string> errors)
     {
         foreach (var version in versions)
         {
             try
             {
-                UpdateDeletionState(version, relativePath, DateTime.MinValue, deleted: false);
+                UpdateDeletionState(version, sessionKey, DateTime.MinValue, deleted: false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
-                errors.Add($"{version.Name}/{relativePath}：清理会话删除状态失败：{ex.Message}");
+                errors.Add($"{version.Name}/{sessionKey}：清理会话删除状态失败：{ex.Message}");
             }
         }
     }
 
-    private static void DeleteSessionFile(ManagerInstance instance, string relativePath)
+    /// <summary>删除一个会话目录下的全部代际文件（同一会话的 v0/v3… 都算同一会话）。</summary>
+    private static void DeleteSessionFile(ManagerInstance instance, string sessionKey)
     {
         var root = SessionsRoot(instance);
-        var target = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var target = Path.Combine(root, sessionKey.Replace('/', Path.DirectorySeparatorChar));
         if (HasReparsePointInPath(target, root))
         {
             throw new IOException("目标会话路径包含重解析点。");
         }
 
-        if (Directory.Exists(target))
+        if (!Directory.Exists(target))
         {
-            throw new IOException("目标会话路径不是文件。");
+            if (File.Exists(target))
+            {
+                throw new IOException("目标会话路径不是目录。");
+            }
+
+            return;
         }
 
-        if (File.Exists(target))
+        foreach (var path in Directory.EnumerateFiles(target))
         {
-            File.Delete(target);
+            if (SessionFileNames.TryParse(Path.GetFileName(path), out _, out _))
+            {
+                File.Delete(path);
+            }
         }
     }
 
     private static void UpdateDeletionState(
         ManagerInstance instance,
-        string relativePath,
+        string sessionKey,
         DateTime deletedAt,
         bool deleted)
     {
@@ -564,11 +621,11 @@ public sealed class ConversationSyncService
 
         if (deleted)
         {
-            state.Deleted[relativePath] = deletedAt;
+            state.Deleted[sessionKey] = deletedAt;
         }
         else
         {
-            state.Deleted.Remove(relativePath);
+            state.Deleted.Remove(sessionKey);
         }
 
         var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
@@ -607,8 +664,7 @@ public sealed class ConversationSyncService
         }
 
         var fileName = normalized[(normalized.LastIndexOf('/') + 1)..];
-        return fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-            || fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase)
+        return SessionFileNames.TryParse(fileName, out _, out _)
             ? normalized
             : null;
     }
@@ -656,6 +712,7 @@ public sealed class ConversationSyncService
         ManagerInstance Instance,
         string FullPath,
         string RelativePath,
+        int Generation,
         long Length,
         DateTime LastWriteTimeUtc);
 

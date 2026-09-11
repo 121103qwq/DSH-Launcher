@@ -152,9 +152,9 @@
                                                                         Padding="6,1"
                                                                         Margin="0,0,6,0">
                                                                     <TextBlock FontSize="11" Foreground="{Binding KindBrush}">
-                                                                        <Run Text="{Binding Name}" />
+                                                                        <Run Text="{Binding Name, Mode=OneWay}" />
                                                                         <Run Text=" · " />
-                                                                        <Run Text="{Binding KindText}" />
+                                                                        <Run Text="{Binding KindText, Mode=OneWay}" />
                                                                     </TextBlock>
                                                                 </Border>
                                                             </DataTemplate>

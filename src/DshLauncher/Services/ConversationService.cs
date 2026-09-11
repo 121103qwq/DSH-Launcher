@@ -10,12 +10,13 @@ namespace DshLauncher.Services;
 /// <summary>
 /// File-level conversation management for DSh's JSONL persistence backend.
 /// It reads only the header for listings and never rewrites an append-only log.
+/// 会话格式版本（会话头 <c>version</c>）：启动器不解释事件体，只按头部版本命名文件
+/// 并把迁移交给 dsh 自己的 format catalog（work-log/51）。
 /// </summary>
 public sealed class ConversationService
 {
     private const int MaxHeaderBytes = 256_000;
     private const int ZstdReadBufferSize = 64 * 1024;
-    private const int SupportedSessionFormatVersion = 0;
     private const long MaxSafeInteger = 9_007_199_254_740_991;
     private readonly LauncherPaths _paths;
     private readonly Func<string, bool> _isRunning;
@@ -52,7 +53,7 @@ public sealed class ConversationService
     private const int SnippetAfter = 140;
 
     /// <summary>
-    /// 会话全文检索：扫多个实例的 session.jsonl / session.jsonl.zstd 正文。
+    /// 会话全文检索：扫多个实例的 session.jsonl / session.v&lt;N&gt;.jsonl（含 .zstd）正文。
     /// 单个文件损坏/不可读只跳过该文件；不改写任何文件；不触碰上游 SQLite。
     /// 排序：命中次数降序 → 更新时间降序。
     /// </summary>
@@ -397,13 +398,19 @@ public sealed class ConversationService
         var compressed = source.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase);
         if (!compressed && !source.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
         {
-            throw new NotSupportedException("当前导入入口只接受 session.jsonl 或 session.jsonl.zstd。");
+            throw new NotSupportedException("当前导入入口只接受 session.jsonl / session.v&lt;N&gt;.jsonl（可带 .zstd）。");
         }
 
         var header = ReadHeader(source);
         if (header is null)
         {
-            throw new InvalidDataException("导入文件不是可识别的 DSh session.jsonl。");
+            throw new InvalidDataException("导入文件不是可识别的 DSh session 文件。");
+        }
+
+        if (header.Version > 0 && !SupportsVersionedSessionFiles(instance))
+        {
+            throw new NotSupportedException(
+                $"该会话是 v{header.Version} 格式，目标实例的 DSh 版本较旧、读不了；请导入到 0.1.5 及以上的实例。");
         }
 
         var sessionsRoot = GetSessionsRoot(instance);
@@ -413,10 +420,12 @@ public sealed class ConversationService
             : header.WorkingDirectory;
         var projectDirectory = ProjectDirectory(sessionsRoot, effectiveWorkingDirectory);
         var sessionDirectory = Path.Combine(projectDirectory, EncodeSegment(header.SessionId));
-        var target = Path.Combine(sessionDirectory, compressed ? "session.jsonl.zstd" : "session.jsonl");
+        // 文件名版本必须等于头部版本（dsh 会逐字校对），编码跟随目标实例，避免 dsh 的encodingMismatch。
+        var targetCompressed = ResolveTargetSessionCompression(instance);
+        var target = Path.Combine(sessionDirectory, SessionFileNames.Build(header.Version, targetCompressed));
         EnsurePathDoesNotEscape(target, sessionsRoot);
         EnsureNoReparseComponents(sessionDirectory, sessionsRoot);
-        if (File.Exists(target) || Directory.Exists(target))
+        if (File.Exists(target) || SessionDirectoryHasSessionFile(sessionDirectory))
         {
             throw new IOException($"实例中已经存在相同会话 ID：{header.SessionId}");
         }
@@ -425,7 +434,7 @@ public sealed class ConversationService
         var temporary = $"{target}.{Guid.NewGuid():N}.tmp";
         try
         {
-            File.Copy(source, temporary, overwrite: false);
+            WriteSessionFile(source, temporary, compressed, targetCompressed);
             File.Move(temporary, target, overwrite: false);
         }
         finally
@@ -469,8 +478,7 @@ public sealed class ConversationService
                 }
 
                 var fileName = Path.GetFileName(entry);
-                if (!fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-                    && !fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase))
+                if (!SessionFileNames.TryParse(fileName, out _, out _))
                 {
                     continue;
                 }
@@ -627,6 +635,57 @@ public sealed class ConversationService
         return new DateTimeOffset(info.CreationTimeUtc, TimeSpan.Zero);
     }
 
+    /// <summary>
+    /// 目标实例的会话编码：跟随该实例已有会话（dsh 同一 sessions 根不允许混用编码，
+    /// 否则 dsh 会抛 encodingMismatch）；一个都没有时用 dsh 默认值 zstd。
+    /// </summary>
+    private static bool ResolveTargetSessionCompression(ManagerInstance instance) =>
+        SessionFileNames.ResolveCompression(GetSessionsRoot(instance));
+
+    /// <summary>
+    /// 目标实例的 DSh 是否支持带版本号的会话代际（0.1.5+ 的 format catalog）。
+    /// </summary>
+    private static bool SupportsVersionedSessionFiles(ManagerInstance instance) =>
+        SessionFileNames.SupportsVersionedGenerations(
+            instance.RootPath,
+            instance.DetectedVersion,
+            GetSessionsRoot(instance));
+
+    /// <summary>该会话目录里是否已经有 canonical 会话文件（同一会话的不同代际共用一个目录）。</summary>
+    private static bool SessionDirectoryHasSessionFile(string sessionDirectory) =>
+        SessionFileNames.DirectoryHasSessionFile(sessionDirectory);
+
+    /// <summary>
+    /// 写入会话文件：编码一致时直接复制，不一致时流式换容器。
+    /// 只改外层压缩，不动会话头与任何事件行（迁移交给 dsh）。
+    /// </summary>
+    private static void WriteSessionFile(
+        string source,
+        string destination,
+        bool sourceCompressed,
+        bool targetCompressed)
+    {
+        if (sourceCompressed == targetCompressed)
+        {
+            File.Copy(source, destination, overwrite: false);
+            return;
+        }
+
+        using var input = new FileStream(
+            source,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using Stream decoded = sourceCompressed
+            ? new DecompressionStream(input, ZstdReadBufferSize, checkEndOfStream: false, leaveOpen: true)
+            : input;
+        using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using Stream encoded = targetCompressed
+            ? new CompressionStream(output, leaveOpen: true)
+            : output;
+        decoded.CopyTo(encoded, ZstdReadBufferSize);
+    }
+
     private static bool IsSessionFileName(string path)
     {
         var fileName = Path.GetFileName(path);
@@ -645,10 +704,9 @@ public sealed class ConversationService
         }
 
         var fileName = Path.GetFileName(source);
-        if (!fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-            && !fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase))
+        if (!SessionFileNames.TryParse(fileName, out _, out _))
         {
-            throw new InvalidDataException("只能操作 DSh session.jsonl 文件。");
+            throw new InvalidDataException("只能操作 DSh session.jsonl / session.v&lt;N&gt;.jsonl 文件。");
         }
 
         return source;
@@ -715,7 +773,7 @@ public sealed class ConversationService
             || !root.TryGetProperty("version", out var version)
             || version.ValueKind != JsonValueKind.Number
             || !version.TryGetInt32(out var versionNumber)
-            || versionNumber != SupportedSessionFormatVersion
+            || versionNumber < 0
             || !root.TryGetProperty("id", out var id)
             || id.ValueKind != JsonValueKind.String
             || string.IsNullOrWhiteSpace(id.GetString())
@@ -765,7 +823,7 @@ public sealed class ConversationService
             return null;
         }
 
-        return new HeaderInfo(sessionId, cwd);
+        return new HeaderInfo(sessionId, cwd, versionNumber);
     }
 
     private static bool IsSafeNonNegativeInteger(JsonElement value) =>
@@ -962,5 +1020,5 @@ public sealed class ConversationService
         }
     }
 
-    private sealed record HeaderInfo(string SessionId, string? WorkingDirectory);
+    private sealed record HeaderInfo(string SessionId, string? WorkingDirectory, int Version);
 }

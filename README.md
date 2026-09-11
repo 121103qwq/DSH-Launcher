@@ -98,6 +98,7 @@ dsh-launcher-dev/
 | 70 | `Services/PluginCompatibility.cs`（新）+ `Models/DshCoreBundles.cs`（新）+ `Services/MarketplaceService.cs` + `Models/MarketplaceModels.cs` + `ExtensionWindow.xaml.cs` + `Services/DshInstanceRunner.cs` + `Models/ManagerInstance.cs` + `Services/ExtensionService.cs` + `Services/PluginMatrixService.cs` + `Services/SafeProfileService.cs` + `MainWindow.xaml.cs` | **46 号遗留 4 项（work-log/48 验证、49 实施）**：① **装前/更新前兼容性预检**——新增 `PluginCompatibility`（npm 语义化范围匹配含预发布规则 + 实例内实际版本解析），手动安装/市场安装/单条更新/批量更新均检查 `@deepseek-ai/*` peerDependencies，不兼容返回 `Incompatible` 并警告（computer-user 这类“装完就崩”会被拦住；批量更新自动跳过）；② **生命周期日志**——启动/停止写 `launcher.log`（实例名/端口/PID/normal|safe）；③ **核心包口径统一**——新增 `DshCoreBundles`（计数/列表/矩阵/安全模式共用），实例卡片不再把核心算成插件、插件管理/扩展页不再列核心；④ **harness 隔离**——`ExtensionWindow.UiStateStore` 可注入，UI 冒烟用临时目录，不再污染真实 `ui-state.json` |
 | 71 | `Services/DshEnvironmentScanner.cs`（新）+ `Services/ScannedHomeImportService.cs`（新）+ `EnvironmentScanWindow.xaml(.cs)`（新）+ `VersionControlWindow.xaml(.cs)` + `MainWindow.xaml.cs` | **#14 本机 DSH 环境扫描导入（work-log/50）**：扫描 `%USERPROFILE%\.dsh*` + `DSH_HOME`，按 `dsh.profile.bundles` 分类 web/tui/other；勾选后一 home 一实例（只收 `profiles/web`，重复源跳过、失败回滚）；「导入实例」菜单新增「扫描本机 DSH 环境」与接上死代码的「从源码目录导入」 |
 | 72 | `Services/DshEnvironmentScanner.cs` + `Services/ScannedHomeImportService.cs` + `Services/DshHomeImportService.cs` + `EnvironmentScanWindow.xaml(.cs)` | **清理：移除 WSL 扫描冗余**（work-log/50 第五节）：本机 WSL 服务被禁用（`Wsl/0x80070422`），WSL 分支无法验证且无使用场景，删除发行版枚举/`sh` 清单协议/UNC 转换/WSL 源跳过插件包复制/UI 标签与文案；harness 255 PASS |
+| 73 | `Services/SessionFileNames.cs`（新）+ `Services/ConversationService.cs` + `Services/ConversationSyncService.cs` + `EnvironmentScanWindow.xaml` | **dsh 0.1.5-rc 会话格式兼容（work-log/51）**：① 会话头接受任意版本（0..N，含 `isSeeded` 可选）；② 文件名识别 dsh canonical 规则（`session.jsonl[.zstd]` = v0、`session.vN.jsonl[.zstd]`），导入按**头部版本**命名、编码跟随目标实例（不一致时流式转码）；③ 旧 dsh 实例拒绝 vN 导入并明确报错；④ 跨实例同步按会话目录归并、取最高代际、跨编码/不支持版本时跳过；⑤ 修掉变更集 71 扫描页 `Run Text` TwoWay 绑定导致的 57 条 E9001 XamlParseException |
 
 ## 行为变化（相对上游）
 
@@ -180,6 +181,8 @@ dsh-launcher-dev/
 77. **扫描本机 DSH 环境**：「版本控制 → 导入实例 → 扫描本机 DSH 环境」列出 `%USERPROFILE%\.dsh*` 与 `DSH_HOME` 指向的 home（带 web/tui/other 分类与「已登记」标记），勾选后按 home 建实例；已登记源自动跳过，重复导入不产生副本
 78. **从源码目录导入**：「导入实例」菜单补上原本悬空的源码导入入口（之前只有提示文字指向不存在的按钮）
 79. **不含 `profiles/web` 的 home 不可导入**：列表里标红说明（TUI profile 需 #19 支持后才能启动）
+80. **会话格式跟随 dsh 版本**：对话页/检索/导出/备份/删除/同步都能识别 `session.v<N>.jsonl[.zstd]`（dsh 0.1.5-rc 起的命名），会话头接受 v0..当前 与新增的 `isSeeded`；导入/恢复按头部版本命名并跟随目标实例的压缩编码（只换容器、不改内容），交给 dsh 自己的格式迁移链处理旧版本
+81. **旧版实例不接收新格式会话**：目标实例的 DSh 读不了 vN（无 format catalog）时，导入会明确报错而不是写出坏文件
 
 ## 待办（功能完成后统一处理）
 
