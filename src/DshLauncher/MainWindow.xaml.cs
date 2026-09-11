@@ -5261,6 +5261,56 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         await StartSelectedInstanceAsync();
     }
 
+    /// <summary>
+    /// 隔离启动（A2，work-log/71）：主界面显式入口。复用崩溃恢复用的安全模式启动链路
+    /// （隔离 profile + 分层降级 + 零污染校验 + 启动证据），不改用户任何配置。
+    /// </summary>
+    private async void IsolatedStart_Click(object sender, RoutedEventArgs e)
+    {
+        var instance = SelectedInstance;
+        if (instance is null)
+        {
+            ShowNotice("请先选择一个实例。");
+            return;
+        }
+
+        var confirmed = System.Windows.MessageBox.Show(
+            this,
+            $"用隔离 profile 启动实例 {instance.Name}？\n\n"
+            + $"· 会生成 {SafeProfileService.SafeProfileName}（隔离 profile）：剥离第三方插件、保留 dsh 核心；\n"
+            + "· 不会修改你的 profile 与配置；\n"
+            + "· 适合排查“打不开 / 插件加载失败”，先确认核心链路是否正常。",
+            "隔离启动",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Question) == MessageBoxResult.OK;
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var openBrowser = GetSelectedOpenMode() == VersionOpenMode.Web;
+        foreach (var tier in new[] { SafeProfileTier.Tier1KeepDeepSeekCore, SafeProfileTier.Tier2Minimal })
+        {
+            var result = await _instanceRunner.StartAsync(
+                instance,
+                _nodeRuntime,
+                _windowCancellation.Token,
+                openBrowser,
+                tier);
+            RecordStartupEvidence(instance, result, $"隔离启动（{tier}）");
+            if (IsStartSuccess(result))
+            {
+                ApplySuccessfulStart(instance, result, openBrowser);
+                ShowNotice(result.ZeroPollution
+                    ? $"已用隔离 profile 启动（{tier}）：第三方插件未加载，你的配置未被修改。"
+                    : $"已用隔离 profile 启动（{tier}），但零污染校验发现用户文件被改动，请查看运行日志。");
+                return;
+            }
+        }
+
+        ShowNotice("隔离启动失败：已尝试两级隔离 profile 都未成功，请查看「运行状况 → 运行日志」。");
+    }
+
     private async Task StartSelectedInstanceAsync()
     {
         if (SelectedInstance is null)

@@ -544,6 +544,12 @@
                                                         Height="40"
                                                         Padding="15,0"
                                                         Margin="0,0,8,8" />
+                                                <Button Content="隔离启动"
+                                                        Click="IsolatedStart_Click"
+                                                        ToolTip="用隔离 profile 启动：剥离第三方插件、保留 dsh 核心，不修改你的任何配置（排查“打不开/插件加载失败”时用）"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
                                                 <Button Content="打开窗口"
                                                         Click="OpenDesktopShell_Click"
                                                         Visibility="{Binding DesktopShellVisibility}"
