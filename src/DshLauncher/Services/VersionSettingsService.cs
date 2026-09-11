@@ -102,6 +102,7 @@ public sealed class VersionSettingsService
         new()
         {
             SyncAllConfiguration = settings.SyncAllConfiguration,
+            ActiveProfile = settings.ActiveProfile,
             ConversationSyncMode = settings.ConversationSyncMode,
             ConversationWorkspace = settings.ConversationWorkspace,
             SyncModelProviders = settings.SyncModelProviders,

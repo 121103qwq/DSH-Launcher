@@ -127,7 +127,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _crashRecovery = new CrashRecoveryService(id => ResolveInstanceById(Instances, id)?.DshHome);
         _extensionService = new(
             id => _instanceRunner!.IsRunning(id),
-            snapshotService: _versionSnapshotService);
+            snapshotService: _versionSnapshotService,
+            activeProfile: instance => DshProfileService.ResolveActiveName(instance, _versionSettingsService));
         _instanceRunner = new(
             extensionService: _extensionService,
             proxySettings: () => ProxySettings.From(_versionSettingsService.ReadLauncherSettings()));
@@ -4125,6 +4126,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var updated = new VersionSettingsData
                 {
                     SyncAllConfiguration = versionSyncAll.IsChecked == true,
+                    ActiveProfile = current.ActiveProfile,
                     ConversationSyncMode = workspaceRadio.IsChecked == true
                         ? ConversationSyncMode.Workspace
                         : allRadio.IsChecked == true

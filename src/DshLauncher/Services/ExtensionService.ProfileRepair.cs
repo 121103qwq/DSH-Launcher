@@ -67,7 +67,7 @@ public sealed partial class ExtensionService
             throw new InvalidOperationException(
                 $"插件依赖恢复失败（退出码 {output.ExitCode}）：pnpm install 未成功。"
                 + FormatProcessOutput(output, failure: true)
-                + $"请运行 dsh plugin --profile {ProfileName} add <插件标识> 手动恢复。");
+                + $"请运行 dsh plugin --profile {_activeProfile(instance)} add <插件标识> 手动恢复。");
         }
 
         var stillMissing = FindMissingBundlePackages(profilePath, root, out _);

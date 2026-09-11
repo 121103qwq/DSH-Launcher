@@ -23,6 +23,8 @@ public partial class ExtensionWindow : UserControl
     private readonly Func<NodeRuntimeInfo?> _nodeRuntime;
     private readonly Func<PluginInstallMode> _pluginInstallMode;
     private readonly bool _agentOnly;
+    private readonly DshProfileService _profiles = new();
+    private bool _profileSelectorLoading;
     private readonly MarketplaceService? _marketplaceService;
     private readonly Func<ManagerInstance, CancellationToken, Task<bool>>? _stopInstanceForPluginRetry;
     private readonly Func<ManagerInstance, string, Task<bool>>? _handoffPluginFailure;
@@ -91,6 +93,7 @@ public partial class ExtensionWindow : UserControl
         // 默认用真实数据根；测试/冒烟可注入临时目录，避免污染用户 ui-state.json。
         _uiStateStore = uiStateStore ?? new UiStateStore();
         InitializeComponent();
+        ProfilePanel.Visibility = agentOnly ? Visibility.Collapsed : Visibility.Visible;
         _uiStateSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _uiStateSaveTimer.Tick += (_, _) =>
         {
@@ -397,6 +400,7 @@ public partial class ExtensionWindow : UserControl
         // 以抑制恢复过程中的渲染与重复保存。
         RestoreMarketplaceUiState();
         _controlLoaded = true;
+        RefreshProfileSelector();
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
         MarketplaceList.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(MarketplaceList_ScrollChanged));
@@ -510,6 +514,68 @@ public partial class ExtensionWindow : UserControl
             Margin = new Thickness(0, 8, 0, 0)
         });
         return new System.Windows.Controls.ToolTip { Style = (Style)FindResource("PathCardToolTip"), Content = panel };
+    }
+
+    /// <summary>
+    /// 填充「当前 Profile」选择器：只列实例里**已存在**的 profile（work-log/60 Q3），
+    /// 但设置里指向的名字即使还没有目录也保留显示——shipped 名字由 dsh 首次使用时初始化。
+    /// </summary>
+    private void RefreshProfileSelector()
+    {
+        _profileSelectorLoading = true;
+        try
+        {
+            var active = DshProfileService.ResolveActiveName(_instance, _versionSettingsService);
+            var items = _profiles.List(_instance).ToList();
+            var matched = items.FirstOrDefault(item =>
+                string.Equals(item.Name, active, StringComparison.OrdinalIgnoreCase));
+            if (matched is null)
+            {
+                items.Insert(0, _profiles.Describe(_instance, active));
+                matched = items[0];
+            }
+
+            ProfileComboBox.ItemsSource = items;
+            ProfileComboBox.SelectedItem = matched;
+            ProfileHintText.Text = BuildProfileHint(_profiles.Describe(_instance, active));
+        }
+        finally
+        {
+            _profileSelectorLoading = false;
+        }
+    }
+
+    private static string BuildProfileHint(DshProfileInfo info)
+    {
+        var reload = info.PatchReload is null ? string.Empty : $" · patchReload={info.PatchReload}";
+        var notInitialized = info.Exists
+            ? string.Empty
+            : "（尚未初始化：dsh 首次使用该 profile 时会生成）";
+        return info.UnstartableReason ?? $"{info.BundlesText} · {info.SourceText}{notInitialized}{reload}";
+    }
+
+    private async void ProfileComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_profileSelectorLoading || _agentOnly || ProfileComboBox.SelectedItem is not DshProfileInfo info)
+        {
+            return;
+        }
+
+        var current = DshProfileService.ResolveActiveName(_instance, _versionSettingsService);
+        if (string.Equals(current, info.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (_versionSettingsService is { } settingsService)
+        {
+            var settings = settingsService.Read(_instance);
+            settings.ActiveProfile = info.Name;
+            settingsService.Save(_instance, settings);
+        }
+
+        RefreshProfileSelector();
+        await RefreshAsync();
     }
 
     private async Task RefreshAsync()

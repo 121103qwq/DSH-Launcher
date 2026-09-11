@@ -24,7 +24,6 @@ public sealed record PluginRollbackResult(bool Changed, IReadOnlyList<string> Re
 /// </summary>
 internal sealed class PluginProfileResidue
 {
-    private const string ProfileName = "web";
     private readonly string _profileDirectory;
     private readonly IReadOnlyList<string> _moduleRoots;
     private readonly IReadOnlyList<string> _candidates;
@@ -52,7 +51,10 @@ internal sealed class PluginProfileResidue
     }
 
     /// <summary>捕获操作前的 profile 状态；读取失败返回 null（不阻塞安装本身）。</summary>
-    public static PluginProfileResidue? TryCapture(ManagerInstance instance, string packageSpec)
+    public static PluginProfileResidue? TryCapture(
+        ManagerInstance instance,
+        string packageSpec,
+        string profileName = DshProfileService.DefaultProfileName)
     {
         try
         {
@@ -62,7 +64,7 @@ internal sealed class PluginProfileResidue
                 return null;
             }
 
-            var profileDirectory = Path.Combine(instance.DshHome, "profiles", ProfileName);
+            var profileDirectory = Path.Combine(instance.DshHome, "profiles", profileName);
             var moduleRoots = new[]
             {
                 Path.Combine(profileDirectory, "node_modules"),

@@ -1167,9 +1167,22 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             : DshRuntimeCommandFactory.Resolve(instance)
                 ?? throw new InvalidOperationException("实例没有可用的 DSh 启动描述。");
         var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
+        // 常规启动走实例当前 profile（未配置时仍是 dsh 的 web 别名，行为不变）；
+        // 安全模式 / 逐插件定位 / 显式覆盖优先。
+        var profileName = profileOverride
+            ?? (safeProfile is not null ? SafeProfileService.SafeProfileName : null);
+        if (profileName is null)
+        {
+            var activeProfile = DshProfileService.ResolveActiveName(instance, _settingsService);
+            if (!string.Equals(activeProfile, DshProfileService.DefaultProfileName, StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureProfileCanStart(instance, activeProfile);
+                profileName = activeProfile;
+            }
+        }
+
         var arguments = BuildStartArguments(
-            profileName: profileOverride
-                ?? (safeProfile is not null ? SafeProfileService.SafeProfileName : null),
+            profileName: profileName,
             supportsNoOpen: SupportsNoOpen(instance.DetectedVersion),
             patchPath: IsRegularFile(patchPath) ? patchPath : null,
             port: port);
@@ -1193,6 +1206,20 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
 
         return startInfo;
+    }
+
+    /// <summary>
+    /// 常规启动前的 profile 校验：只有带 Web App bundle 的 profile 才能由 Launcher 启动
+    /// （Launcher 的界面就是 dsh 的 Web App；headless/acp/sdk 这类没有界面可显示）。
+    /// 见 work-log/60 Q4。
+    /// </summary>
+    private static void EnsureProfileCanStart(ManagerInstance instance, string profileName)
+    {
+        var info = new DshProfileService().Describe(instance, profileName);
+        if (info.UnstartableReason is { } reason)
+        {
+            throw new InvalidOperationException(reason);
+        }
     }
 
     /// <summary>

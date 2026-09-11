@@ -16,7 +16,8 @@ namespace DshLauncher.Services;
 /// </summary>
 public sealed partial class ExtensionService
 {
-    private const string ProfileName = "web";
+    /// <summary>没有配置时的默认 profile（dsh 的 <c>web</c> 别名）。</summary>
+    private const string DefaultProfileName = DshProfileService.DefaultProfileName;
     private const string McpPackage = "@deepseek-ai/dsh-mcp-client";
     private const string BuiltInBase = DshCoreBundles.Base;
     private const string BuiltInWeb = DshCoreBundles.WebApp;
@@ -33,6 +34,8 @@ public sealed partial class ExtensionService
     private static readonly Regex PnpmProgressLine = new(
         "Progress:\\s*resolved\\s+(?<resolved>\\d+),\\s*reused\\s+(?<reused>\\d+),\\s*downloaded\\s+(?<downloaded>\\d+),\\s*added\\s+(?<added>\\d+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    /// <summary>该实例当前生效的 profile 名（<c>$DSH_HOME/profiles/&lt;name&gt;</c>）。</summary>
+    private readonly Func<ManagerInstance, string> _activeProfile;
     private readonly Func<string, bool> _isRunning;
     private readonly SourceProjectInspector _sourceInspector;
     private readonly VersionSnapshotService? _snapshotService;
@@ -40,8 +43,10 @@ public sealed partial class ExtensionService
     public ExtensionService(
         Func<string, bool>? isRunning = null,
         SourceProjectInspector? sourceInspector = null,
-        VersionSnapshotService? snapshotService = null)
+        VersionSnapshotService? snapshotService = null,
+        Func<ManagerInstance, string>? activeProfile = null)
     {
+        _activeProfile = activeProfile ?? (_ => DefaultProfileName);
         _isRunning = isRunning ?? (_ => false);
         _sourceInspector = sourceInspector ?? new SourceProjectInspector();
         _snapshotService = snapshotService;
@@ -762,7 +767,7 @@ public sealed partial class ExtensionService
         // 失败安装会留下"声明了但装不出来"的依赖，下次启动 include-loader 会
         // 直接崩；先记录操作前状态，失败后只回滚本次新增的部分。
         var residue = action is "add" or "update"
-            ? PluginProfileResidue.TryCapture(instance, packageSpec)
+            ? PluginProfileResidue.TryCapture(instance, packageSpec, _activeProfile(instance))
             : null;
         using var pnpmEnvironment = PreparePnpmEnvironment(instance, nodeRuntime);
         var startInfo = CreatePluginStartInfo(
@@ -795,7 +800,7 @@ public sealed partial class ExtensionService
                 LauncherLog.Warn(
                     $"Plugin {actionText}失败，已回滚本次失败安装的残留。",
                     ErrorCodes.E2005,
-                    new { package = packageSpec, removed = rollback.RemovedNames.ToArray(), profile = ProfileName });
+                    new { package = packageSpec, removed = rollback.RemovedNames.ToArray(), profile = _activeProfile(instance) });
             }
 
             throw new PluginCommandFailedException(
@@ -948,7 +953,7 @@ public sealed partial class ExtensionService
                 ?? throw new InvalidOperationException("实例没有 DSh 启动描述。");
         }
 
-        var arguments = new List<string> { "plugin", "--profile", ProfileName, action, packageSpec };
+        var arguments = new List<string> { "plugin", "--profile", _activeProfile(instance), action, packageSpec };
         AddPnpmOptions(arguments, action, allowBuildPackageName, installMode);
         return DshRuntimeCommandFactory.Create(
             spec,
@@ -985,9 +990,9 @@ public sealed partial class ExtensionService
         }
     }
 
-    internal static bool ResolvePendingPnpmBuildDecisions(ManagerInstance instance)
+    internal bool ResolvePendingPnpmBuildDecisions(ManagerInstance instance)
     {
-        var workspacePath = Path.Combine(instance.DshHome, "profiles", ProfileName, "pnpm-workspace.yaml");
+        var workspacePath = Path.Combine(instance.DshHome, "profiles", _activeProfile(instance), "pnpm-workspace.yaml");
         if (!File.Exists(workspacePath))
         {
             return false;
@@ -1366,8 +1371,8 @@ public sealed partial class ExtensionService
         }
     }
 
-    private static string GetProfileManifestPath(ManagerInstance instance) =>
-        Path.Combine(instance.DshHome, "profiles", ProfileName, "package.json");
+    private string GetProfileManifestPath(ManagerInstance instance) =>
+        Path.Combine(instance.DshHome, "profiles", _activeProfile(instance), "package.json");
 
     private static JsonObject ReadJsonObject(string path)
     {

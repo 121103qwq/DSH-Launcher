@@ -53,6 +53,12 @@ public sealed class VersionSettingsData
 {
     public bool SyncAllConfiguration { get; set; }
 
+    /// <summary>
+    /// 该实例当前使用的 dsh profile（<c>$DSH_HOME/profiles/&lt;name&gt;</c>）。
+    /// 空值＝沿用 dsh 的 <c>web</c> 别名（历史行为）。见 work-log/60。
+    /// </summary>
+    public string? ActiveProfile { get; set; }
+
     public ConversationSyncMode ConversationSyncMode { get; set; } = ConversationSyncMode.Independent;
 
     public string? ConversationWorkspace { get; set; }

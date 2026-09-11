@@ -73,6 +73,19 @@
                                 Click="PathLink_Click"
                                 Margin="0,3,0,0" />
                     </StackPanel>
+                    <StackPanel x:Name="ProfilePanel" Margin="0,10,0,0">
+                        <TextBlock Text="当前 Profile" FontSize="11" Foreground="{StaticResource MutedBrush}" />
+                        <ComboBox x:Name="ProfileComboBox"
+                                  Margin="0,4,0,0"
+                                  DisplayMemberPath="DisplayText"
+                                  SelectionChanged="ProfileComboBox_SelectionChanged"
+                                  ToolTip="dsh profile（$DSH_HOME/profiles/&lt;name&gt;）：决定插件装进哪套 bundle，以及实例用哪套启动" />
+                        <TextBlock x:Name="ProfileHintText"
+                                   FontSize="11"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
                 </StackPanel>
 
                 <StackPanel Grid.Row="1" Margin="0,14,0,8">
