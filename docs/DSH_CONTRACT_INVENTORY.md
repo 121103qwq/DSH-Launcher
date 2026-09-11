@@ -1,5 +1,7 @@
 # 与 dsh 的契约清单（DSH Contract Inventory）
 
+> 相关：[架构决策记录](ARCHITECTURE_DECISIONS.md)（为什么这么做）、[行为×验证矩阵](BEHAVIOR_MATRIX.md)（哪些行为有自动化保护）。
+
 > 目的：把启动器对 dsh 的**全部依赖点**写成一张表，并为每条配一个**哨兵测试**。
 > 背景：本仓已被 dsh 升级打断过多次（`--no-open`、token 401、会话格式 0→3），
 > 靠"升完再发现"代价很高；这张表是止血工具（借鉴清单 #23）。
