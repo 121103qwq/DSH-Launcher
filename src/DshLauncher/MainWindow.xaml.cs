@@ -3488,6 +3488,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// #20 安全体检（增量 2）：被动凭据检查的页面分区。
     /// 纯内存视图（关窗即丢，Q6）；默认不显示任何凭据片段，脱敏预览需显式勾选（Q5 (ii)）。
     /// </summary>
+    /// <summary>危险配置级别的中文标签（页面展示用）。</summary>
+    private static string DescribeDangerSeverity(DangerousConfigSeverity severity) => severity switch
+    {
+        DangerousConfigSeverity.Danger => "危险",
+        DangerousConfigSeverity.Warning => "警告",
+        _ => "提示"
+    };
+
     private void AddCredentialAuditSection(StackPanel panel)
     {
         panel.Children.Add(new TextBlock
@@ -3608,7 +3616,68 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     });
                 }
 
-                exportButton.IsEnabled = report.Hits.Count > 0 || report.Files.Count > 0;
+                // 危险配置检查（#20 增量 5；用户勾选范围 1/2/4/5/8/9/10）
+                var dangerous = DangerousConfigAuditService.Run(instance.DshHome, profileName);
+                statusText.Text += $" · 危险配置提示 {dangerous.Findings.Count} 项";
+                resultPanel.Children.Add(new TextBlock
+                {
+                    Text = "—— 危险配置检查 ——",
+                    FontWeight = FontWeights.SemiBold,
+                    FontSize = 12,
+                    Margin = new Thickness(0, 16, 0, 0)
+                });
+
+                if (dangerous.Findings.Count == 0)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = "· 未发现需要提示的危险配置。",
+                        FontSize = 12,
+                        Margin = new Thickness(0, 6, 0, 0),
+                        Foreground = (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
+                foreach (var finding in dangerous.Findings)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = $"[{DescribeDangerSeverity(finding.Severity)}] {finding.Title}"
+                            + "\n" + finding.Evidence
+                            + "\n建议：" + finding.Advice,
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 12,
+                        Margin = new Thickness(0, 8, 0, 0),
+                        Foreground = finding.Severity == DangerousConfigSeverity.Danger
+                            ? (WpfBrush)FindResource("DangerBrush")
+                            : finding.Severity == DangerousConfigSeverity.Warning
+                                ? (WpfBrush)FindResource("TextBrush")
+                                : (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
+                resultPanel.Children.Add(new TextBlock
+                {
+                    Text = "检查项：" + string.Join("、", dangerous.CheckedItems),
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = 11,
+                    Margin = new Thickness(0, 10, 0, 0),
+                    Foreground = (WpfBrush)FindResource("MutedBrush")
+                });
+
+                foreach (var note in dangerous.Notes)
+                {
+                    resultPanel.Children.Add(new TextBlock
+                    {
+                        Text = "· " + note,
+                        TextWrapping = TextWrapping.Wrap,
+                        FontSize = 11,
+                        Margin = new Thickness(0, 4, 0, 0),
+                        Foreground = (WpfBrush)FindResource("MutedBrush")
+                    });
+                }
+
+                exportButton.IsEnabled = report.Hits.Count > 0 || report.Files.Count > 0 || dangerous.Findings.Count > 0;
             }
             catch (Exception ex)
             {
