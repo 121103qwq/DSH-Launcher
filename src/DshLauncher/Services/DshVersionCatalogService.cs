@@ -52,35 +52,21 @@ public sealed class DshVersionCatalogService : IDisposable
     {
         public static DshVersionComparer Instance { get; } = new();
 
+        /// <summary>
+        /// 单一口径：与「更换运行版本」和插件兼容性共用 semver 比较
+        /// （预发布标签参与排序：alpha &lt; beta &lt; rc，正式版高于同号预发布）。
+        /// 旧实现只比尾号（alpha.2 与 rc.2 视为相等）→ 官方列表顺序随机，
+        /// 导致“官方最新”被算成 0.1.5-alpha.2（变更集 77 修复）。
+        /// 无法解析时插件侧比较器返回 0，此时退回序号比较，保证仍是确定顺序。
+        /// </summary>
         public int Compare(string? left, string? right)
         {
-            var leftKey = Parse(left);
-            var rightKey = Parse(right);
-            var result = leftKey.Base.CompareTo(rightKey.Base);
-            if (result != 0)
-            {
-                return result;
-            }
-
-            result = leftKey.Stable.CompareTo(rightKey.Stable);
-            return result != 0 ? result : leftKey.PreRelease.CompareTo(rightKey.PreRelease);
-        }
-
-        private static (Version Base, int Stable, int PreRelease) Parse(string? value)
-        {
-            var parts = (value ?? string.Empty).Split('-', 2);
-            var baseVersion = Version.TryParse(parts[0], out var parsed) ? parsed : new Version();
-            if (parts.Length == 1)
-            {
-                return (baseVersion, 1, int.MaxValue);
-            }
-
-            var suffix = parts[1];
-            var lastDot = suffix.LastIndexOf('.');
-            var number = lastDot >= 0 && int.TryParse(suffix[(lastDot + 1)..], out var parsedNumber)
-                ? parsedNumber
-                : 0;
-            return (baseVersion, 0, number);
+            var leftText = left ?? string.Empty;
+            var rightText = right ?? string.Empty;
+            var result = PluginCompatibility.Compare(leftText, rightText);
+            return result != 0 || string.Equals(leftText, rightText, StringComparison.Ordinal)
+                ? result
+                : string.CompareOrdinal(leftText, rightText);
         }
     }
 }

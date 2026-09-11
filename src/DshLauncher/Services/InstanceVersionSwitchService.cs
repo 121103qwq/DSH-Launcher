@@ -75,6 +75,7 @@ public sealed class InstanceVersionSwitchService
     private readonly VersionSnapshotService? _snapshots;
     private readonly ConversationService _conversations;
     private readonly Func<string, bool> _isRunning;
+    private readonly VersionSwitchHistoryService? _history;
 
     public InstanceVersionSwitchService(
         VersionSettingsService? settings = null,
@@ -82,7 +83,8 @@ public sealed class InstanceVersionSwitchService
         InstanceRegistry? registry = null,
         VersionSnapshotService? snapshots = null,
         ConversationService? conversations = null,
-        Func<string, bool>? isRunning = null)
+        Func<string, bool>? isRunning = null,
+        VersionSwitchHistoryService? history = null)
     {
         _settings = settings ?? new VersionSettingsService();
         _installer = installer ?? new DshInstallService();
@@ -90,6 +92,7 @@ public sealed class InstanceVersionSwitchService
         _snapshots = snapshots;
         _conversations = conversations ?? new ConversationService();
         _isRunning = isRunning ?? (_ => false);
+        _history = history;
     }
 
     /// <summary>
@@ -337,6 +340,17 @@ public sealed class InstanceVersionSwitchService
             var persisted = _registry.Update(rebound);
             var summary = $"{precheck.DirectionText}完成：{instance.DetectedVersion ?? "未知"} → {persisted.DetectedVersion}"
                 + "。DSH_HOME 未改动，配置/插件/会话保留。";
+            // 留痕供「切换历史 + 一键回退」使用；写失败不影响切换结果。
+            _history?.Append(new VersionSwitchRecord(
+                persisted.Id,
+                persisted.Name,
+                instance.DetectedVersion ?? "未知",
+                persisted.DetectedVersion ?? "未知",
+                precheck.DirectionText,
+                target.PackageRoot,
+                createSnapshot,
+                sessionBackupDirectory,
+                DateTimeOffset.UtcNow));
             return InstanceVersionSwitchResult.Success(persisted, summary);
         }
         catch (OperationCanceledException)

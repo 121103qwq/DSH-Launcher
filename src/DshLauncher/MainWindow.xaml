@@ -346,6 +346,21 @@
                                                            FontSize="12"
                                                            FontWeight="SemiBold" />
                                             </Border>
+                                            <Border Visibility="{Binding SelectedInstanceUpdateVisibility}"
+                                                    Background="{StaticResource InfoBackgroundBrush}"
+                                                    BorderBrush="{StaticResource BlueBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="{StaticResource PanelCornerRadius}"
+                                                    Padding="9,3"
+                                                    Margin="0,0,8,0"
+                                                    ToolTip="{Binding SelectedInstanceUpdateTooltip}"
+                                                    SnapsToDevicePixels="True"
+                                                    UseLayoutRounding="True">
+                                                <TextBlock Text="有新版本"
+                                                           Foreground="{StaticResource BlueBrush}"
+                                                           FontSize="12"
+                                                           FontWeight="SemiBold" />
+                                            </Border>
                                             <Border HorizontalAlignment="Right"
                                                     Background="{Binding SelectedInstanceStatusBackgroundBrush}"
                                                     BorderBrush="{Binding SelectedInstanceStatusBrush}"

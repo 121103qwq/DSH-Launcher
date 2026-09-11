@@ -53,6 +53,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SkillMarketService _skillMarketService;
     private readonly VersionPackageService _versionPackageService;
     private readonly VersionSettingsService _versionSettingsService = new();
+    private readonly DshUpdateNoticeService _updateNotice = new();
+    private readonly VersionSwitchHistoryService _switchHistory = new();
+    /// <summary>当前选中实例的版本设置（与 SelectedInstance 同步刷新），避免每次重读磁盘。</summary>
+    private VersionSettingsData _selectedVersionSettings = new();
     private readonly VersionHealthService _versionHealthService;
     private readonly VersionSnapshotService _versionSnapshotService;
     private readonly InstanceVersionSwitchService _instanceVersionSwitchService;
@@ -143,7 +147,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             registry: _instanceRegistry,
             snapshots: _versionSnapshotService,
             conversations: new ConversationService(isRunning: id => _instanceRunner.IsRunning(id)),
-            isRunning: id => _instanceRunner.IsRunning(id));
+            isRunning: id => _instanceRunner.IsRunning(id),
+            history: _switchHistory);
         _conversationService = new(isRunning: id => _instanceRunner.IsRunning(id));
         _conversationSyncService = new(_versionSettingsService, id => _instanceRunner.IsRunning(id));
         _modelService = new(id => _instanceRunner.IsRunning(id));
@@ -244,6 +249,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceResourceText));
             OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
             OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceUpdateVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceUpdateTooltip));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
@@ -258,6 +265,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 RefreshBalanceAsync();
                 _ = RefreshNodeAsync();
+                _ = RefreshUpdateBadgeAsync(_selectedInstance);
             }
         }
     }
@@ -432,6 +440,61 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         SelectedInstance is { } instance && _safeProfileService.SafeProfileExists(instance)
             ? Visibility.Visible
             : Visibility.Collapsed;
+
+    /// <summary>当前实例有官方新版本（卡片上的“有新版本”徽标；仅当该实例开启了更新提示开关）。</summary>
+    public Visibility SelectedInstanceUpdateVisibility =>
+        _selectedVersionSettings.CheckDshUpdates
+        && SelectedInstance is { } instance
+        && TryGetUpdateNotice(instance, out var notice)
+        && notice!.UpdateAvailable
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public string SelectedInstanceUpdateTooltip
+    {
+        get
+        {
+            if (SelectedInstance is { } instance && TryGetUpdateNotice(instance, out var notice))
+            {
+                return $"官方最新 {notice!.LatestVersion}（当前 {notice.CurrentVersion}）。"
+                    + "在「实例设置 → 版本与快照 → 更换运行版本」里升级或降级。";
+            }
+
+            return "该实例开启了 DSh 版本更新提示；正在查询官方最新版本。";
+        }
+    }
+
+    private bool TryGetUpdateNotice(ManagerInstance instance, out DshUpdateNotice? notice) =>
+        _updateNotice.TryPeek(instance.DetectedVersion, out notice);
+
+    /// <summary>选中实例时按需查询官方版本（只查开了更新提示的实例；结果带 6 小时缓存）。</summary>
+    private async Task RefreshUpdateBadgeAsync(ManagerInstance? instance)
+    {
+        if (instance is null || instance.Kind != InstanceKind.Installed || !_selectedVersionSettings.CheckDshUpdates)
+        {
+            return;
+        }
+
+        try
+        {
+            var notice = await _updateNotice.CheckAsync(instance.DetectedVersion, _windowCancellation.Token);
+            if (notice is null || !notice.UpdateAvailable || SelectedInstance?.Id != instance.Id)
+            {
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is System.Net.Http.HttpRequestException
+            or TaskCanceledException
+            or OperationCanceledException
+            or InvalidDataException)
+        {
+            // 徽标只是提示：查询失败保持不显示。
+            return;
+        }
+
+        OnPropertyChanged(nameof(SelectedInstanceUpdateVisibility));
+        OnPropertyChanged(nameof(SelectedInstanceUpdateTooltip));
+    }
 
     /// <summary>当前实例处于崩溃冷却（卡片上的“崩溃冷却”徽标）。</summary>
     public Visibility SelectedInstanceCooldownVisibility =>
@@ -1064,6 +1127,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RefreshRunningInstances();
             _instancesLoadedSuccessfully = true;
             OnPropertyChanged(nameof(CanStartInstance));
+            // 启动时若当前实例开了更新提示，开一次（带缓存的）查询让卡片徽标能出现。
+            _ = RefreshUpdateBadgeAsync(SelectedInstance);
         }
         catch (Exception ex)
         {
@@ -2266,7 +2331,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     : Array.Empty<string>(),
                 instance => _instanceRunner.IsRunning(instance.Id),
                 RunPluginBisectAsync,
-                DisablePluginAndStartAsync)));
+                DisablePluginAndStartAsync),
+            switchHistory: _switchHistory,
+            updateNotice: _updateNotice));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -2292,6 +2359,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (instance is null)
         {
+            _selectedVersionSettings = new VersionSettingsData();
             Title = "DSH Launcher";
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(LauncherStartVisibility));
@@ -2301,12 +2369,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            var title = _versionSettingsService.Read(instance).WindowTitle;
+            _selectedVersionSettings = _versionSettingsService.Read(instance);
+            var title = _selectedVersionSettings.WindowTitle;
             Title = string.IsNullOrWhiteSpace(title) ? "DSH Launcher" : title;
         }
         catch
         {
+            _selectedVersionSettings = new VersionSettingsData();
             Title = "DSH Launcher";
+        }
+
+        OnPropertyChanged(nameof(SelectedInstanceUpdateVisibility));
+        OnPropertyChanged(nameof(SelectedInstanceUpdateTooltip));
+        // 设置页里刚打开/关掉更新提示开关后也要立刻查询，否则徽标要等下次切实例才出现。
+        if (IsLoaded && _selectedVersionSettings.CheckDshUpdates)
+        {
+            _ = RefreshUpdateBadgeAsync(instance);
         }
 
         OnPropertyChanged(nameof(StartInstanceButtonText));

@@ -28,7 +28,8 @@ public partial class VersionSwitchWindow : Window
         ManagerInstance instance,
         InstanceVersionSwitchService switchService,
         Func<NodeRuntimeInfo?> nodeRuntimeProvider,
-        VersionSettingsService settingsService)
+        VersionSettingsService settingsService,
+        string? preselectVersion = null)
     {
         InitializeComponent();
         Owner = owner;
@@ -36,11 +37,15 @@ public partial class VersionSwitchWindow : Window
         _switchService = switchService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _settingsService = settingsService;
+        _preselectVersion = preselectVersion;
         InstanceText.Text = $"实例：{instance.Name}（Kind: {instance.KindText}）"
             + $"\n当前 DSh：{instance.DetectedVersion ?? "未知"} · DSH_HOME 保留：{instance.DshHome}";
         Closed += (_, _) => _cancellation.Cancel();
         Loaded += async (_, _) => await RefreshVersionsAsync();
     }
+
+    /// <summary>预选版本（"一键回退"传入上一条历史的起点版本）；为空时选当前版本。</summary>
+    private readonly string? _preselectVersion;
 
     /// <summary>切换成功后的实例（已写入台账）；失败为 null。</summary>
     public ManagerInstance? SwitchedInstance { get; private set; }
@@ -120,10 +125,13 @@ public partial class VersionSwitchWindow : Window
             }
 
             candidates.Sort(static (left, right) => PluginCompatibility.Compare(right, left));
-            var preferred = !string.IsNullOrWhiteSpace(_instance.DetectedVersion)
-                && candidates.Contains(_instance.DetectedVersion, StringComparer.OrdinalIgnoreCase)
-                    ? _instance.DetectedVersion
-                    : candidates.FirstOrDefault();
+            var preferred = !string.IsNullOrWhiteSpace(_preselectVersion)
+                && candidates.Contains(_preselectVersion!, StringComparer.OrdinalIgnoreCase)
+                    ? _preselectVersion
+                    : !string.IsNullOrWhiteSpace(_instance.DetectedVersion)
+                        && candidates.Contains(_instance.DetectedVersion, StringComparer.OrdinalIgnoreCase)
+                            ? _instance.DetectedVersion
+                            : candidates.FirstOrDefault();
             TargetVersionBox.ItemsSource = candidates;
             TargetVersionBox.SelectedItem = preferred;
             _target = null;

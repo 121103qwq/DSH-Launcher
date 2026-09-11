@@ -410,6 +410,16 @@
                                         Padding="12,7"
                                         HorizontalAlignment="Right"
                                         VerticalAlignment="Top" />
+                                <Button Grid.Column="1"
+                                        x:Name="RollbackVersionButton"
+                                        Content="回退到上一版本"
+                                        Click="RollbackVersion_Click"
+                                        IsEnabled="False"
+                                        Padding="12,7"
+                                        Margin="0,44,0,0"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Top"
+                                        ToolTip="用上一条切换历史的起点版本预选切换向导（仍需检查与确认，不会静默切换）。" />
                             </Grid>
                             <CheckBox x:Name="CheckDshUpdatesBox"
                                       Content="显示 DSh 版本更新提示（联网查询官方版本，含预发布）"
@@ -421,6 +431,25 @@
                                        Visibility="Collapsed"
                                        Margin="0,6,0,0" />
                             <TextBlock Text="更换运行版本只改 dsh 运行程序与启动入口，保留该版本的 DSH_HOME（配置 / 插件 / 会话）；降级前建议导出会话备份。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource CardPadding}" Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="切换历史" FontWeight="SemiBold" />
+                            <TextBlock Text="只记录由本启动器完成的更换（时间、前→后版本、是否建快照/导出会话）。「回退到上一版本」把上一条历史的起点版本预选进切换向导，仍需你检查并确认。"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="0,5,0,0" />
+                            <ListBox x:Name="SwitchHistoryList"
+                                     Height="120"
+                                     Margin="0,10,0,0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                            <TextBlock x:Name="SwitchHistoryStatusText"
                                        Foreground="{StaticResource MutedBrush}"
                                        FontSize="11"
                                        TextWrapping="Wrap"

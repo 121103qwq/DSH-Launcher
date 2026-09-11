@@ -24,6 +24,8 @@ public partial class VersionSettingsWindow : UserControl
     private readonly VersionSnapshotService _snapshotService;
     private readonly Func<ManagerInstance, string, ManagerInstance> _renameVersion;
     private readonly InstanceVersionSwitchService _versionSwitchService;
+    private readonly VersionSwitchHistoryService _switchHistory;
+    private readonly DshUpdateNoticeService _updateNotice;
     private readonly Func<ManagerInstance, ManagerInstance> _runtimeChanged;
     private readonly Action _settingsSaved;
     private readonly bool _openPluginPage;
@@ -47,7 +49,9 @@ public partial class VersionSettingsWindow : UserControl
         Func<ManagerInstance, ManagerInstance> runtimeChanged,
         Action settingsSaved,
         bool openPluginPage = false,
-        InstanceHealthProviders? healthProviders = null)
+        InstanceHealthProviders? healthProviders = null,
+        VersionSwitchHistoryService? switchHistory = null,
+        DshUpdateNoticeService? updateNotice = null)
     {
         _healthProviders = healthProviders;
         _instance = instance;
@@ -59,6 +63,8 @@ public partial class VersionSettingsWindow : UserControl
         _snapshotService = snapshotService;
         _renameVersion = renameVersion;
         _versionSwitchService = versionSwitchService;
+        _switchHistory = switchHistory ?? new VersionSwitchHistoryService();
+        _updateNotice = updateNotice ?? new DshUpdateNoticeService();
         _runtimeChanged = runtimeChanged;
         _settingsSaved = settingsSaved;
         _openPluginPage = openPluginPage;
@@ -96,6 +102,7 @@ public partial class VersionSettingsWindow : UserControl
         LoadConfigurationControls();
         LoadPluginSettingsControls();
         RefreshSnapshots();
+        RefreshSwitchHistory();
         ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
 
         if (_instance is null)
@@ -158,25 +165,24 @@ public partial class VersionSettingsWindow : UserControl
 
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            using var catalog = new DshVersionCatalogService();
-            var versions = await catalog.ReadOfficialVersionsAsync(timeout.Token);
+            // 复用带 6 小时缓存的提示服务：实例设置页与实例卡片徽标共享同一次查询结论。
+            // 超时由服务内部统一控制（10s），这里不额外绑定窗口生命周期。
+            var notice = await _updateNotice.CheckAsync(instance.DetectedVersion, CancellationToken.None);
             if (_instance?.Id != instance.Id || !_settings.CheckDshUpdates)
             {
                 return;
             }
 
-            var latest = versions.FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(latest))
+            if (notice is null)
             {
-                DshUpdateHintText.Visibility = Visibility.Collapsed;
+                DshUpdateHintText.Text = "未能获取官方版本（网络不可用或版本号无法解析）。";
+                DshUpdateHintText.Visibility = Visibility.Visible;
                 return;
             }
 
-            var current = instance.DetectedVersion?.Trim().TrimStart('v', 'V') ?? string.Empty;
-            DshUpdateHintText.Text = PluginCompatibility.Compare(latest, current) > 0
-                ? $"官方最新：{latest}（当前 {current}）——可在「更换运行版本」里升级或降级。"
-                : $"已是最新（官方最新 {latest}）。";
+            DshUpdateHintText.Text = notice.UpdateAvailable
+                ? $"官方最新：{notice.LatestVersion}（当前 {notice.CurrentVersion}）——可在「更换运行版本」里升级或降级。"
+                : $"已是最新（官方最新 {notice.LatestVersion}）。";
             DshUpdateHintText.Visibility = Visibility.Visible;
         }
         catch (Exception ex) when (ex is System.Net.Http.HttpRequestException
@@ -189,6 +195,42 @@ public partial class VersionSettingsWindow : UserControl
         }
     }
 
+    /// <summary>刷新「切换历史」卡：列表 + 回退按钮可用性（历史来自 Launcher 数据根的 version-switch-history.json）。</summary>
+    private void RefreshSwitchHistory()
+    {
+        var records = _instance is null
+            ? Array.Empty<VersionSwitchRecord>()
+            : _switchHistory.LoadForInstance(_instance.Id).ToArray();
+        SwitchHistoryList.ItemsSource = records.Select(record => record.DisplayText).ToArray();
+        var latest = records.FirstOrDefault();
+        // 回退只在 Installed 实例上有意义（Source 实例没有可切换的运行版本）。
+        RollbackVersionButton.IsEnabled = latest is not null
+            && !string.IsNullOrWhiteSpace(latest.FromVersion)
+            && _instance is { Kind: InstanceKind.Installed };
+        SwitchHistoryStatusText.Text = records.Length == 0
+            ? "还没有切换记录（每次从这里更换运行版本后会写一条）。"
+            : $"共 {records.Length} 条；回退目标：DSh {latest!.FromVersion}"
+                + (records.Length > 1 ? "（只回退一步）" : string.Empty);
+    }
+
+    /// <summary>「回退到上一版本」：把上一条历史的起点版本预选进切换向导，仍需检查 + 确认。</summary>
+    private void RollbackVersion_Click(object sender, RoutedEventArgs e)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        var latest = _switchHistory.LatestForInstance(_instance.Id);
+        if (latest is null)
+        {
+            SwitchHistoryStatusText.Text = "没有可回退的记录。";
+            return;
+        }
+
+        OpenSwitchDialog(latest.FromVersion);
+    }
+
     /// <summary>“更换运行版本”：弹对话框，成功后回写实例。</summary>
     private void SwitchVersion_Click(object sender, RoutedEventArgs e)
     {
@@ -197,25 +239,42 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
+        OpenSwitchDialog(null);
+    }
+
+    private void OpenSwitchDialog(string? preselectVersion)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        var previousVersion = _instance.DetectedVersion;
         var dialog = new VersionSwitchWindow(
             Window.GetWindow(this),
             _instance,
             _versionSwitchService,
             _nodeRuntimeProvider,
-            _settingsService);
+            _settingsService,
+            preselectVersion);
         if (dialog.ShowDialog() != true || dialog.SwitchedInstance is null)
         {
             return;
         }
 
+        // 换过版本后旧更新提示作废，避免继续显示“已是最新/有新版”的旧结论。
+        _updateNotice.Invalidate(previousVersion);
+        _updateNotice.Invalidate(dialog.SwitchedInstance.DetectedVersion);
         _instance = _runtimeChanged(dialog.SwitchedInstance);
         VersionIdentityText.Text = _instance.Name;
         PersonalizationVersionText.Text = _instance.Name;
         VersionNameBox.Text = _instance.Name;
         PersonalizationDetailsText.Text = $"{_instance.KindText} · {_instance.RootPath}\n状态：{_instance.StatusText}";
         RefreshRuntimeVersion();
+        RefreshSwitchHistory();
         _ = RefreshDshUpdateHintAsync();
         PersonalizationStatusText.Text = $"已更换运行版本：DSh {_instance.DetectedVersion}。";
+        SwitchHistoryStatusText.Text = $"已完成一次切换；最新：{_instance.DetectedVersion}。";
     }
 
     private void SaveVersionName_Click(object sender, RoutedEventArgs e)
@@ -1007,9 +1066,9 @@ public partial class VersionSettingsWindow : UserControl
 
     private void Snapshots_Click(object sender, RoutedEventArgs e)
     {
-        RefreshRuntimeVersion();
         _ = RefreshDshUpdateHintAsync();
         RefreshSnapshots();
+        RefreshSwitchHistory();
         ShowPage(SnapshotsButton);
     }
 
