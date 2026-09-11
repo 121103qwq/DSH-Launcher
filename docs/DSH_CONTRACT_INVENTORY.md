@@ -59,3 +59,43 @@ dotnet bin\Release\net8.0-windows\win-x64\VerifyP0.dll --ui
 - 输出里 `contract:` 开头的 PASS/FAIL 即哨兵；上游克隆缺失时整段 SKIP（不会误报失败）。
 - **FAIL 的处理流程**：先看该条对应的 C# 编号 → 在上游找到新定义 → 判断是"启动器要跟改"还是"记录新版本" → 改代码/常量 → 更新本表"最近核对" → 重跑。
 - 哨兵只覆盖**可从源码静态核对**的契约；`C12`/`C13` 与真实启动行为仍靠端到端用例（`--ui` 的 UI 段 + `func-check/` 探针）。
+
+---
+
+## 整合包格式（#24，work-log/70 §E；规范来源 `repo-review-dsh-plugins/docs/PACK_MANIFEST.md`）
+
+### 容器
+
+| 容器 | 结构 | 我方 |
+|---|---|---|
+| `.dspack`（pack-structure **v2**） | ZIP：根 `dspack.json` = `{"format":"dspack","version":2}` + `manifest.json` + 可选 `package.json`/`pnpm-workspace.yaml`/`pnpm-lock.yaml` + `overrides/` | **读写**（导出用 v2） |
+| `.dspack` **v3** | 同上，`dspack.json.version = 3`；**manifestVersion 5 必须配 v3** | **读**（配对校验） |
+| 旧 `.tgz`（pack-structure v1） | gzip+tar，扁平 `manifest.json` / `package.json` / `cordis.patch.yml` / 可选 lock/workspace | **读** |
+
+### manifest 兼容矩阵
+
+| 版本 | 关键差异 | 我方 |
+|---|---|---|
+| **v2** | `displayName`/`description` 仅字符串；`dshVersion` 是**范围**（导入取**下限**）；`dependencies` 为 pnpm 原始 spec **原样透传** | 读 |
+| **v3** | 依赖坐标钉死（npm 精确版本 / git commit sha）；`dshVersion` 精确；内联 `patch` | 读 |
+| **v4** | 新增 `type`（`profile`；`collection` 报"暂未支持"）与 `files[]`（`{path,sha256,size,urls[]}`，与 `overrides/` 同路径时 **files[] 胜**） | **读 + 写（导出用 v4）** |
+| **v5** | `type: profile`（可带 `home/` 覆盖 `$DSH_HOME/xxx`）与 `type: dshhome`（整个 HOME 快照：`defaultProfile` + `profiles`（≥1，**不得含 web/headless**）+ 可选 `presets`/`skills`/`instructions`）；仅支持**新建实例** | 读 |
+
+### 依赖坐标三条转换规则
+
+| manifest 坐标 | package.json 条目 |
+|---|---|
+| `dsh-pet: "0.2.0"` | `"dsh-pet": "0.2.0"` |
+| `github:owner/repo: "<sha>"` | `"repo": "github:owner/repo#<sha>"` |
+| `github:owner/repo#path:/pkg: "<sha>"` | `"pkg": "github:owner/repo#<sha>&path:pkg"` |
+
+### 我方实现与安全边界
+
+| 关注点 | 实现 |
+|---|---|
+| 读取 | `Services/DshPackArchive.cs`：条目数 4096 / 单条 32 MB / 总 256 MB；**任一条目路径非法（zip-slip）即整体拒载** |
+| 解析 | `Services/DshPackFormat.cs`：容器标记、manifest v2–v5、`files[]` 校验（64 位小写 sha256、正整数 size、http(s) urls）、路径安全、配对校验 |
+| 导入 | `Services/DshPackImportService.cs`：**一律新建实例**（HOME 强制在 Launcher 的 `instances/` 下）；`package.json` 由 manifest **权威重建**；失败**整体回滚**（注销实例 + 删 HOME + 清空目录） |
+| `files[]` 下载 | `Services/DshPackFileDownloader.cs`：**默认拒绝**（须显式同意）；按 `urls[]` 试镜像；**sha256 + size 双校验通过才落位**；单文件上限 64 MB |
+| 导出 | `Services/DshPackWriter.cs`（规范写盘）+ `Services/PackExportService.cs`（从实例 profile 组装）；自家 v1 导出保留为旧格式 |
+| 未做 | `pnpm install` 与按 `dshVersion` 自动安装（版本不符时**明确拒绝**，见 work-log/70 §G）；真实第三方样本包验证（仍缺） |
