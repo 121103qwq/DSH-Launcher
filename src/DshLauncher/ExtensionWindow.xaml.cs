@@ -785,7 +785,16 @@ public partial class ExtensionWindow : UserControl
 
     private int _marketplaceRenderVersion;
     private const int MarketplacePageSize = 150;
-    private int _marketplaceVisibleCount = MarketplacePageSize;
+
+    /// <summary>
+    /// 首次渲染/切换筛选时直接展开的条目上限（2026-09-11 用户反馈"拉到底不刷新"后调整）：
+    /// 增量显示依赖"滚动事件 + 内层 ScrollViewer 几何"，该链路一旦不生效就表现为**永远卡在 150 条**
+    /// （实测插件市场 150/3168）。列表已开启虚拟化（VirtualizingStackPanel + Recycling），
+    /// 一次多展开的代价主要体现在可见项实现上，故把初始展开放宽到 5000：
+    /// 常见目录规模可一次显示完，超出部分仍走原有滚动增量逻辑。
+    /// </summary>
+    private const int MarketplaceInitialVisibleCount = 5000;
+    private int _marketplaceVisibleCount = MarketplaceInitialVisibleCount;
     private string _marketplaceFilterKey = string.Empty;
 
     private void RenderMarketplaceItems(string? restoreCategoryKey = null)
@@ -814,7 +823,7 @@ public partial class ExtensionWindow : UserControl
         {
             // 筛选条件变化：批量加载回到底部一次；否则保留已展开的条数。
             _marketplaceFilterKey = filterKey;
-            _marketplaceVisibleCount = MarketplacePageSize;
+            _marketplaceVisibleCount = MarketplaceInitialVisibleCount;
         }
 
         var visibleCount = _marketplaceVisibleCount;
