@@ -3651,7 +3651,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         Foreground = finding.Severity == DangerousConfigSeverity.Danger
                             ? (WpfBrush)FindResource("DangerBrush")
                             : finding.Severity == DangerousConfigSeverity.Warning
-                                ? (WpfBrush)FindResource("TextBrush")
+                                ? (WpfBrush)FindResource("WarningTextBrush")
                                 : (WpfBrush)FindResource("MutedBrush")
                     });
                 }

@@ -101,13 +101,13 @@
                                 Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,0,8">
                             <Button.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="从文件夹导入" Click="ScanInstanceFolder_Click" />
-                                    <MenuItem Header="从快捷方式导入" Click="ScanInstanceShortcut_Click" />
-                                    <MenuItem Header="从源码目录导入" Click="ImportSourceProject_Click" />
-                                    <MenuItem Header="扫描本机 DSH 环境" Click="ScanEnvironment_Click" />
+                                <ContextMenu Style="{StaticResource ContextInstanceMenuStyle}">
+                                    <MenuItem Header="从文件夹导入" Click="ScanInstanceFolder_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
+                                    <MenuItem Header="从快捷方式导入" Click="ScanInstanceShortcut_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
+                                    <MenuItem Header="从源码目录导入" Click="ImportSourceProject_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
+                                    <MenuItem Header="扫描本机 DSH 环境" Click="ScanEnvironment_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
                                     <Separator />
-                                    <MenuItem Header="导入整合包（.dshpack / .dspack / .tgz）" Click="ImportPackage_Click" />
+                                    <MenuItem Header="导入整合包（.dshpack / .dspack / .tgz）" Click="ImportPackage_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
