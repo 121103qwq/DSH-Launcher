@@ -3500,6 +3500,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     /// 呈现面为终端时（如 dsh-tui profile）：交给 Windows Terminal 打开（work-log/80）。
     /// 刻意不做终端仿真：dsh-TUI 是终端原生插件，作者定义的用法就是 `dsh --profile dsh-tui`。
     /// </summary>
+    /// <summary>启动按钮右侧 ▼：展开启动方式菜单（work-log/81）。</summary>
+    private void LaunchModeMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { ContextMenu: { } menu } button)
+        {
+            menu.PlacementTarget = button;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+    }
+
     private void OpenInTerminal_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedInstance is not { } instance)
