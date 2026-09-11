@@ -810,6 +810,205 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 13. 整合包导入（DshPackImportService，#24 第 3 步）——全部在注入的临时数据根里跑
+// ===========================================================================
+{
+    var importPaths = new LauncherPaths(Path.Combine(scratch, "import-root"));
+    Directory.CreateDirectory(importPaths.RootDirectory);
+    var importRegistry = new InstanceRegistry(importPaths);
+    var importService = new DshPackImportService(importRegistry);
+
+    var templateRoot = Path.Combine(scratch, "import-template");
+    Directory.CreateDirectory(templateRoot);
+    var templateExe = Path.Combine(templateRoot, "dsh.cmd");
+    File.WriteAllText(templateExe, "@echo off", new UTF8Encoding(false));
+    var template = importRegistry.Register(
+        "模板实例",
+        templateRoot,
+        InstanceKind.Installed,
+        templateExe,
+        "0.1.1-rc.2",
+        "pnpm");
+
+    var packPath = BuildDspack(
+        "import-ok.dspack",
+        2,
+        """
+{
+  "manifestVersion": 4,
+  "type": "profile",
+  "name": "whale-pack",
+  "version": "1.0.0",
+  "displayName": { "zh-CN": "大肥鱼套装" },
+  "dshVersion": "0.1.1-rc.2",
+  "profileName": "whale",
+  "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"],
+  "dependencies": {
+    "dsh-pet": "0.2.0",
+    "github:HanaAyane/dsh-reasoning-effort": "83bc8c5",
+    "github:owner/repo#path:/packages/theme": "abcdef1"
+  }
+}
+""",
+        ("package.json", "{\"name\":\"snapshot-should-be-ignored\"}"),
+        ("pnpm-workspace.yaml", "packages:\n  - .\n"),
+        ("overrides/cordis.patch.yml", "plugins:\n  whale: {}\n"),
+        ("home/AGENTS.md", "# agents root"));
+
+    PackFormat.TryParseManifest("""
+{
+  "manifestVersion": 4,
+  "name": "rebuild",
+  "version": "1.0.0",
+  "dshVersion": "0.1.1-rc.2",
+  "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"],
+  "dependencies": {
+    "dsh-pet": "0.2.0",
+    "github:HanaAyane/dsh-reasoning-effort": "83bc8c5",
+    "github:owner/repo#path:/packages/theme": "abcdef1"
+  }
+}
+""", out var rebuildManifest, out _);
+    var rebuiltJson = DshPackImportService.BuildPackageJson(rebuildManifest!, "whale");
+    using var rebuiltDocument = JsonDocument.Parse(rebuiltJson);
+    var rebuiltRoot = rebuiltDocument.RootElement;
+    var rebuiltDependencies = rebuiltRoot.GetProperty("dependencies");
+    Check("packimport/package.json 权威重建：name=dsh-profile-*、bundles 进 dsh.profile、三条依赖规则齐全",
+        rebuiltRoot.GetProperty("name").GetString() == "dsh-profile-whale"
+        && rebuiltRoot.GetProperty("private").GetBoolean()
+        && rebuiltRoot.GetProperty("dsh").GetProperty("profile").GetProperty("bundles").GetArrayLength() == 2
+        && rebuiltDependencies.GetProperty("dsh-pet").GetString() == "0.2.0"
+        && rebuiltDependencies.GetProperty("dsh-reasoning-effort").GetString() == "github:HanaAyane/dsh-reasoning-effort#83bc8c5"
+        && rebuiltDependencies.GetProperty("theme").GetString() == "github:owner/repo#abcdef1&path:packages/theme");
+
+    var importOk = PackArchiveReader.TryRead(packPath, out var importArchive, out _, out var importReadError);
+    var plan = importService.BuildPlan(importArchive!, importRegistry.Load(), template);
+    Check("packimport/计划：实例名取本地化显示名、profile 名、待写文件清单、dshhome 形态一律新建实例",
+        importOk
+        && plan.InstanceName == "大肥鱼套装"
+        && plan.ProfileName == "whale"
+        && plan.RequiresNewInstance
+        && plan.TemplateVersionMatches
+        && plan.ProfileFiles.Contains("package.json", StringComparer.Ordinal)
+        && plan.ProfileFiles.Contains("cordis.patch.yml", StringComparer.Ordinal)
+        && plan.ProfileFiles.Contains("pnpm-workspace.yaml", StringComparer.Ordinal)
+        && plan.HomeFiles.Contains("AGENTS.md", StringComparer.Ordinal),
+        importReadError ?? string.Empty);
+
+    var outcome = importService.ImportAsync(importArchive!, template, importRegistry.Load()).GetAwaiter().GetResult();
+    var imported = importRegistry.Load().FirstOrDefault(instance => instance.Id == outcome.InstanceId);
+    var importedProfile = imported is null ? null : Path.Combine(imported.DshHome, "profiles", "whale");
+    Check("packimport/导入成功：新建实例 + 专属 HOME + 落盘 profile（package.json/patch/home 覆盖）",
+        outcome.Succeeded
+        && imported is not null
+        && imported.Name == "大肥鱼套装"
+        && imported.DshHome.Contains($"{Path.DirectorySeparatorChar}instances{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+        && importedProfile is not null
+        && File.Exists(Path.Combine(importedProfile, "package.json"))
+        && File.Exists(Path.Combine(importedProfile, "cordis.patch.yml"))
+        && File.Exists(Path.Combine(importedProfile, "pnpm-workspace.yaml"))
+        && File.Exists(Path.Combine(imported.DshHome, "AGENTS.md"))
+        && File.ReadAllText(Path.Combine(importedProfile, "package.json")).Contains("github:HanaAyane/dsh-reasoning-effort#83bc8c5", StringComparison.Ordinal)
+        && File.ReadAllText(Path.Combine(importedProfile, "cordis.patch.yml")).Contains("whale", StringComparison.Ordinal)
+        && outcome.Warnings.Any(warning => warning.Contains("package.json 快照", StringComparison.Ordinal))
+        && outcome.FilesWritten >= 4,
+        outcome.Error ?? string.Empty);
+
+    var importedCount = importRegistry.Load().Count;
+
+    // 重名：同名整合包再导一次 → 名字加序号，两个实例都在
+    var secondPlan = importService.BuildPlan(importArchive!, importRegistry.Load(), template);
+    var secondOutcome = importService.ImportAsync(importArchive!, template, importRegistry.Load()).GetAwaiter().GetResult();
+    Check("packimport/重名去重：第二个实例名为「… 2」，两个实例同时在台账里",
+        secondOutcome.Succeeded
+        && secondPlan.InstanceName == "大肥鱼套装 2"
+        && importRegistry.Load().Count == importedCount + 1,
+        secondOutcome.Error ?? string.Empty);
+
+    // 版本不符：必须拒绝，且不得留下任何实例/目录
+    var mismatched = BuildDspack(
+        "import-v9.dspack",
+        2,
+        """
+{
+  "manifestVersion": 4,
+  "type": "profile",
+  "name": "future-pack",
+  "version": "1.0.0",
+  "dshVersion": "9.9.9",
+  "profileName": "future",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": {}
+}
+""");
+    var countBeforeMismatch = importRegistry.Load().Count;
+    PackArchiveReader.TryRead(mismatched, out var mismatchArchive, out _, out _);
+    var versionMismatchOutcome = importService.ImportAsync(mismatchArchive!, template, importRegistry.Load()).GetAwaiter().GetResult();
+    Check("packimport/版本不符：明确拒绝（不假装成功、不自动装别的版本），台账与目录零变化",
+        !versionMismatchOutcome.Succeeded
+        && versionMismatchOutcome.Error!.Contains("9.9.9", StringComparison.Ordinal)
+        && importRegistry.Load().Count == countBeforeMismatch
+        && Directory.GetDirectories(importPaths.InstancesDirectory).Length == importRegistry.Load().Count);
+
+    // 写盘中途失败：overrides 里 package.json/child.txt 与已写出的 package.json 文件冲突 → 必须回滚
+    var rollbackPack = BuildDspack(
+        "import-rollback.dspack",
+        2,
+        """
+{
+  "manifestVersion": 4,
+  "type": "profile",
+  "name": "rollback-pack",
+  "version": "1.0.0",
+  "dshVersion": "0.1.1-rc.2",
+  "profileName": "rollback",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": {}
+}
+""",
+        ("overrides/package.json/child.txt", "conflict"));
+    PackArchiveReader.TryRead(rollbackPack, out var rollbackArchive, out _, out _);
+    var countBeforeRollback = importRegistry.Load().Count;
+    var rollbackOutcome = importService.ImportAsync(rollbackArchive!, template, importRegistry.Load()).GetAwaiter().GetResult();
+    var leftover = importRegistry.Load()
+        .Where(instance => instance.Name.StartsWith("rollback-pack", StringComparison.Ordinal))
+        .ToArray();
+    Check("packimport/写盘中途失败：整体回滚（注销实例 + 删除新建 HOME，不留半成品）",
+        !rollbackOutcome.Succeeded
+        && rollbackOutcome.Error!.Contains("已回滚", StringComparison.Ordinal)
+        && importRegistry.Load().Count == countBeforeRollback
+        && leftover.Length == 0
+        && Directory.GetDirectories(importPaths.InstancesDirectory).Length == importRegistry.Load().Count,
+        rollbackOutcome.Error ?? string.Empty);
+
+    // 二进制条目：本步只导入文本配置，必须明确拒绝而不是写坏文件
+    var binaryPack = BuildDspack(
+        "import-binary.dspack",
+        2,
+        """
+{
+  "manifestVersion": 4,
+  "type": "profile",
+  "name": "binary-pack",
+  "version": "1.0.0",
+  "dshVersion": "0.1.1-rc.2",
+  "profileName": "binary",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": {}
+}
+""",
+        ("overrides/blob.bin", "PK\u0000\u0001binary"));
+    PackArchiveReader.TryRead(binaryPack, out var binaryArchive, out _, out _);
+    var countBeforeBinary = importRegistry.Load().Count;
+    var binaryOutcome = importService.ImportAsync(binaryArchive!, template, importRegistry.Load()).GetAwaiter().GetResult();
+    Check("packimport/二进制条目：拒绝导入（本步只落文本配置），台账与目录零变化",
+        !binaryOutcome.Succeeded
+        && binaryOutcome.Error!.Contains("二进制", StringComparison.Ordinal)
+        && importRegistry.Load().Count == countBeforeBinary
+        && Directory.GetDirectories(importPaths.InstancesDirectory).Length == importRegistry.Load().Count);
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",
