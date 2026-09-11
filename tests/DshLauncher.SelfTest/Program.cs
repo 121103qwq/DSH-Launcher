@@ -1009,6 +1009,146 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 14. files[] 下载（DshPackFileDownloader + 导入同意门，#24 第 4 步）
+// ===========================================================================
+{
+    var dlRoot = Path.Combine(scratch, "downloads");
+    Directory.CreateDirectory(dlRoot);
+    var dlPayload = Encoding.UTF8.GetBytes("whale-binary-payload-0123456789");
+    var dlSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(dlPayload)).ToLowerInvariant();
+    var dlOther = Encoding.UTF8.GetBytes("tampered-content");
+
+    // 假取流：按 url 返回不同内容（或抛错），用来验证镜像回退与校验，不联网
+    Func<Uri, CancellationToken, Task<Stream>> FakeFetch(params (string? Url, byte[]? Bytes, bool Throw)[] routes) =>
+        (uri, _) =>
+        {
+            var route = routes.FirstOrDefault(r => string.Equals(uri.ToString(), r.Url, StringComparison.Ordinal));
+            if (route.Throw || route.Url is null)
+            {
+                throw new System.Net.Http.HttpRequestException("fake: unreachable");
+            }
+
+            return Task.FromResult<Stream>(new MemoryStream(route.Bytes!));
+        };
+
+    var firstUrl = "https://mirror-one.example.com/whale.bin";
+    var secondUrl = "https://mirror-two.example.com/whale.bin";
+    var thirdUrl = "https://mirror-three.example.com/whale.bin";
+    var dlEntry = new PackFileEntry("data/whale.bin", dlSha, dlPayload.Length, new[] { firstUrl, secondUrl, thirdUrl });
+
+    var dlFirst = new PackFileDownloader(FakeFetch((firstUrl, null, true), (secondUrl, dlPayload, false)));
+    var dlFirstPath = Path.Combine(dlRoot, "fallback.bin");
+    var dlFirstResult = dlFirst.DownloadAsync(dlEntry, dlFirstPath).GetAwaiter().GetResult();
+    Check("packdownload/镜像回退：第一个地址不通 → 用第二个，落位内容与校验一致、临时文件不残留",
+        dlFirstResult.Succeeded
+        && dlFirstResult.UsedUrl == secondUrl
+        && File.Exists(dlFirstPath)
+        && File.ReadAllBytes(dlFirstPath).SequenceEqual(dlPayload)
+        && !File.Exists(dlFirstPath + ".download"),
+        dlFirstResult.Error ?? string.Empty);
+
+    var dlTampered = new PackFileDownloader(FakeFetch((firstUrl, dlOther, false), (secondUrl, dlPayload, false)));
+    var dlTamperedPath = Path.Combine(dlRoot, "tampered.bin");
+    var dlTamperedResult = dlTampered.DownloadAsync(dlEntry, dlTamperedPath).GetAwaiter().GetResult();
+    Check("packdownload/哈希不符必须拒收并换镜像（不落位被篡改的内容）",
+        dlTamperedResult.Succeeded
+        && dlTamperedResult.UsedUrl == secondUrl
+        && File.ReadAllBytes(dlTamperedPath).SequenceEqual(dlPayload),
+        dlTamperedResult.Error ?? string.Empty);
+
+    var dlAllBad = new PackFileDownloader(FakeFetch((firstUrl, dlOther, false), (secondUrl, dlOther, false), (thirdUrl, null, true)));
+    var dlAllBadPath = Path.Combine(dlRoot, "bad.bin");
+    var dlAllBadResult = dlAllBad.DownloadAsync(dlEntry, dlAllBadPath).GetAwaiter().GetResult();
+    Check("packdownload/全部镜像都不合格：失败、目标不存在、临时文件清理干净",
+        !dlAllBadResult.Succeeded
+        && !File.Exists(dlAllBadPath)
+        && !File.Exists(dlAllBadPath + ".download")
+        && dlAllBadResult.Error!.Contains(firstUrl, StringComparison.Ordinal)
+        && dlAllBadResult.Error.Contains(secondUrl, StringComparison.Ordinal)
+        && dlAllBadResult.Error.Contains("unreachable", StringComparison.Ordinal),
+        dlAllBadResult.Error ?? string.Empty);
+
+    var dlSizeEntry = new PackFileEntry("data/whale.bin", dlSha, dlPayload.Length + 4096, new[] { secondUrl });
+    var dlSizeResult = new PackFileDownloader(FakeFetch((secondUrl, dlPayload, false)))
+        .DownloadAsync(dlSizeEntry, Path.Combine(dlRoot, "size.bin")).GetAwaiter().GetResult();
+    var dlTooBig = Encoding.UTF8.GetBytes(new string('x', 200));
+    var dlTooBigEntry = new PackFileEntry("data/whale.bin", dlSha, 100, new[] { secondUrl });
+    var dlTooBigResult = new PackFileDownloader(FakeFetch((secondUrl, dlTooBig, false)))
+        .DownloadAsync(dlTooBigEntry, Path.Combine(dlRoot, "toobig.bin")).GetAwaiter().GetResult();
+    Check("packdownload/大小不符（少下或多下）都必须失败并清理",
+        !dlSizeResult.Succeeded
+        && dlSizeResult.Error!.Contains("大小不符", StringComparison.Ordinal)
+        && !File.Exists(Path.Combine(dlRoot, "size.bin"))
+        && !dlTooBigResult.Succeeded
+        && !File.Exists(Path.Combine(dlRoot, "toobig.bin"))
+        && !File.Exists(Path.Combine(dlRoot, "toobig.bin.download")),
+        dlSizeResult.Error ?? string.Empty);
+
+    // ---- 与导入服务联动：同意门 / 允许下载 ----
+    var filePackManifest = """
+{
+  "manifestVersion": 4,
+  "type": "profile",
+  "name": "with-files",
+  "version": "1.0.0",
+  "dshVersion": "0.1.1-rc.2",
+  "profileName": "files",
+  "bundles": ["@deepseek-ai/dsh-base"],
+  "dependencies": {},
+  "files": [
+    { "path": "data/whale.bin", "sha256": "SHA_PLACEHOLDER", "size": SIZE_PLACEHOLDER, "urls": ["URL_PLACEHOLDER"] }
+  ]
+}
+""".Replace("SHA_PLACEHOLDER", dlSha, StringComparison.Ordinal)
+   .Replace("SIZE_PLACEHOLDER", dlPayload.Length.ToString(), StringComparison.Ordinal)
+   .Replace("URL_PLACEHOLDER", secondUrl, StringComparison.Ordinal);
+
+    var dlPack = BuildDspack("with-files.dspack", 2, filePackManifest);
+    PackArchiveReader.TryRead(dlPack, out var fileArchive, out _, out _);
+
+    var filePaths = new LauncherPaths(Path.Combine(scratch, "file-import-root"));
+    Directory.CreateDirectory(filePaths.RootDirectory);
+    var fileRegistry = new InstanceRegistry(filePaths);
+    var dlTemplateRoot = Path.Combine(scratch, "download-template");
+    Directory.CreateDirectory(dlTemplateRoot);
+    var dlTemplateExe = Path.Combine(dlTemplateRoot, "dsh.cmd");
+    File.WriteAllText(dlTemplateExe, "@echo off", new UTF8Encoding(false));
+    var fileTemplate = fileRegistry.Register(
+        "文件模板",
+        dlTemplateRoot,
+        InstanceKind.Installed,
+        dlTemplateExe,
+        "0.1.1-rc.2",
+        "pnpm");
+    var fileService = new DshPackImportService(
+        fileRegistry,
+        new PackFileDownloader(FakeFetch((secondUrl, dlPayload, false))));
+
+    var refused = fileService.ImportAsync(fileArchive!, fileTemplate, fileRegistry.Load()).GetAwaiter().GetResult();
+    Check("packdownload/默认不下载：整包拒绝而不是交付半成品（零副作用）",
+        !refused.Succeeded
+        && refused.Error!.Contains("显式允许下载", StringComparison.Ordinal)
+        && fileRegistry.Load().Count == 1
+        && Directory.GetDirectories(filePaths.InstancesDirectory).Length == 1,
+        refused.Error ?? string.Empty);
+
+    var allowed = fileService
+        .ImportAsync(fileArchive!, fileTemplate, fileRegistry.Load(), allowDownloads: true)
+        .GetAwaiter().GetResult();
+    var allowedInstance = fileRegistry.Load().FirstOrDefault(instance => instance.Id == allowed.InstanceId);
+    var allowedFile = allowedInstance is null
+        ? null
+        : Path.Combine(allowedInstance.DshHome, "profiles", "files", "data", "whale.bin");
+    Check("packdownload/显式同意后：下载产物落到 profile 内的相对路径（并计入写入数）",
+        allowed.Succeeded
+        && allowedFile is not null
+        && File.Exists(allowedFile)
+        && File.ReadAllBytes(allowedFile).SequenceEqual(dlPayload)
+        && !File.Exists(allowedFile + ".download"),
+        allowed.Error ?? string.Empty);
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",

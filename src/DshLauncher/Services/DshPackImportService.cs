@@ -51,9 +51,12 @@ public sealed class DshPackImportService
 
     private readonly InstanceRegistry _registry;
 
-    public DshPackImportService(InstanceRegistry? registry = null)
+    private readonly PackFileDownloader _downloader;
+
+    public DshPackImportService(InstanceRegistry? registry = null, PackFileDownloader? downloader = null)
     {
         _registry = registry ?? new InstanceRegistry();
+        _downloader = downloader ?? new PackFileDownloader();
     }
 
     /// <summary>按 manifest 权威重建 profile 的 package.json（规范：package.json 由 manifest 重建）。</summary>
@@ -152,11 +155,12 @@ public sealed class DshPackImportService
     }
 
     /// <summary>执行导入；失败时回滚（注销实例 + 删除新建的 HOME 目录）。</summary>
-    public Task<DshPackImportOutcome> ImportAsync(
+    public async Task<DshPackImportOutcome> ImportAsync(
         PackArchive archive,
         ManagerInstance template,
         IReadOnlyList<ManagerInstance> existingInstances,
         string? preferredLanguage = null,
+        bool allowDownloads = false,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -164,23 +168,33 @@ public sealed class DshPackImportService
         if (template.Kind != InstanceKind.Installed
             || !DshRuntimeCommandFactory.IsUsable(template.EffectiveDshLaunchSpec))
         {
-            return Task.FromResult(DshPackImportOutcome.Failed("没有可用的 DSh 运行版本，无法导入整合包。"));
+            return DshPackImportOutcome.Failed("没有可用的 DSh 运行版本，无法导入整合包。");
         }
 
         var plan = BuildPlan(archive, existingInstances, template, preferredLanguage);
         if (!plan.TemplateVersionMatches)
         {
             // 稳定优先：本步不自动下载其它 DSh 版本（第 4/5 步再接），先明确拒绝而不是装作成功。
-            return Task.FromResult(DshPackImportOutcome.Failed(
+            return DshPackImportOutcome.Failed(
                 $"整合包要求 DSh {plan.RequiredDshVersion}，当前模板实例是 {template.DetectedVersion ?? "未知"}；"
                 + "请先安装并使用该版本，或改用对应版本的整合包。",
-                plan.Warnings));
+                plan.Warnings);
+        }
+
+        if (archive.Manifest.Files.Count > 0 && !allowDownloads)
+        {
+            // 用户决策 Q2：默认只认包内载荷，下载必须显式同意（这里宁可拒绝，也不交付半成品实例）。
+            return DshPackImportOutcome.Failed(
+                $"该整合包还有 {archive.Manifest.Files.Count} 个需要下载的文件（合计约 "
+                + $"{archive.Manifest.Files.Sum(file => file.Size) / 1024 / 1024} MB），按安全约定默认不下载；"
+                + "请在导入确认里显式允许下载后重试。",
+                plan.Warnings);
         }
 
         if (existingInstances.Any(instance =>
                 string.Equals(instance.Name, plan.InstanceName, StringComparison.OrdinalIgnoreCase)))
         {
-            return Task.FromResult(DshPackImportOutcome.Failed($"实例名已被占用：{plan.InstanceName}", plan.Warnings));
+            return DshPackImportOutcome.Failed($"实例名已被占用：{plan.InstanceName}", plan.Warnings);
         }
 
         var warnings = new List<string>(plan.Warnings);
@@ -189,14 +203,14 @@ public sealed class DshPackImportService
         {
             if (!archive.TryReadTextEntry(relative, out var text, out var readError))
             {
-                return Task.FromResult(DshPackImportOutcome.Failed($"读取条目失败：{readError}", warnings));
+                return DshPackImportOutcome.Failed($"读取条目失败：{readError}", warnings);
             }
 
             if (text!.Contains('\0'))
             {
-                return Task.FromResult(DshPackImportOutcome.Failed(
+                return DshPackImportOutcome.Failed(
                     $"条目 {relative} 看起来是二进制内容；本步只导入文本配置（二进制载荷走后续步骤）。",
-                    warnings));
+                    warnings);
             }
 
             textEntries[relative] = text;
@@ -271,6 +285,18 @@ public sealed class DshPackImportService
                 written++;
             }
 
+            foreach (var file in archive.Manifest.Files)
+            {
+                var destination = Path.Combine(profileDirectory, file.Path.Replace('/', Path.DirectorySeparatorChar));
+                var download = await _downloader.DownloadAsync(file, destination, cancellationToken).ConfigureAwait(false);
+                if (!download.Succeeded)
+                {
+                    throw new InvalidDataException($"下载失败：{file.Path}（{download.Error}）");
+                }
+
+                written++;
+            }
+
             foreach (var path in archive.HomePaths)
             {
                 if (!textEntries.TryGetValue($"{PackFormat.HomeDirectoryName}/{path}", out var content))
@@ -284,20 +310,20 @@ public sealed class DshPackImportService
                 written++;
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
         {
             Rollback(instance);
-            return Task.FromResult(DshPackImportOutcome.Failed($"导入失败并已回滚：{ex.Message}", warnings));
+            return DshPackImportOutcome.Failed($"导入失败并已回滚：{ex.Message}", warnings);
         }
 
-        return Task.FromResult(new DshPackImportOutcome(
+        return new DshPackImportOutcome(
             true,
             instance?.Id,
             instance?.Name,
             plan.ProfileName,
             written,
             warnings,
-            null));
+            null);
     }
 
     /// <summary>回滚：删除新建的实例 HOME 并注销实例记录（顺序：先注销再删目录，避免留下台账孤儿）。</summary>
