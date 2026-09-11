@@ -3502,7 +3502,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         content.Children.Add(new TextBlock
         {
             Text = "不安装插件、不联网、不写盘：只按固定范围检查所选实例的 DSH_HOME（跳过 node_modules / sessions / storages），"
-                + "报告疑似密钥出现的**位置**，并列出凭据文件的存在性与修改时间。默认不显示任何凭据片段。",
+                + "报告疑似密钥出现的**位置**，并列出凭据文件的存在性与修改时间。默认不显示任何凭据片段。"
+                + "导出默认落在 Launcher 数据根的 audit/ 目录，纳入「存储清理」（保留最近 20 份，清理走回收站）。",
             Foreground = (WpfBrush)FindResource("MutedBrush"),
             TextWrapping = TextWrapping.Wrap,
             FontSize = 12
@@ -3626,11 +3627,23 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
+            var storage = new LauncherStorageService(instances: Instances);
+            var auditDirectory = storage.AuditExportDirectory;
+            try
+            {
+                Directory.CreateDirectory(auditDirectory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 建不出来就退回系统默认目录，不阻断导出。
+            }
+
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
                 Title = "导出体检结果",
                 Filter = "JSON (*.json)|*.json",
                 FileName = $"credential-audit-{DateTime.Now:yyyyMMdd-HHmmss}.json",
+                InitialDirectory = auditDirectory,
                 AddExtension = true,
                 DefaultExt = ".json"
             };
@@ -3659,7 +3672,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         lastReport,
                         new System.Text.Json.JsonSerializerOptions { WriteIndented = true }),
                     new System.Text.UTF8Encoding(false));
-                statusText.Text = "已导出体检结果：" + dialog.FileName;
+                var pruned = storage.PruneAuditExports();
+                statusText.Text = "已导出体检结果：" + dialog.FileName
+                    + (pruned > 0
+                        ? $"（已按保留上限回收 {pruned} 份旧导出，可在「存储清理」里恢复）"
+                        : string.Empty);
             }
             catch (Exception ex)
             {

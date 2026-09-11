@@ -63,6 +63,12 @@ public sealed class LauncherStorageService
     /// <summary>Launcher 数据根（用于「打开目录」）。</summary>
     public string RootDirectory => _paths.RootDirectory;
 
+    /// <summary>安全体检导出物的保留份数上限（超出后回收最旧的，走回收站可恢复）。</summary>
+    public const int MaximumAuditExports = 20;
+
+    /// <summary>安全体检导出目录（Q7）：设置页导出的体检结果 JSON 默认落在这里，纳入本服务的清理与保留策略。</summary>
+    public string AuditExportDirectory => Path.Combine(_paths.RootDirectory, "audit");
+
     public IReadOnlyList<LauncherStorageCategory> Scan()
     {
         var logDirectory = LauncherLog.LogDirectory;
@@ -105,6 +111,14 @@ public sealed class LauncherStorageService
                 cleanable: true,
                 note: null)
         };
+
+        categories.Add(BuildDirectoryCategory(
+            "audit-exports",
+            "安全体检导出物",
+            $"在设置页导出的体检结果 JSON（保留最近 {MaximumAuditExports} 份）",
+            new[] { AuditExportDirectory },
+            cleanable: true,
+            note: "含本机文件路径与行号（默认不含凭据片段）；走回收站可恢复"));
 
         categories.Add(BuildDirectoryCategory(
             "plugin-snapshots",
@@ -216,6 +230,58 @@ public sealed class LauncherStorageService
         {
             failures.Add($"crash.log：{ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 安全体检导出物的保留上限：只保留最近 <see cref="MaximumAuditExports"/> 份（按修改时间倒序），
+    /// 其余回收。默认走回收站（可恢复）；<paramref name="deleteOverride"/> 仅供自测注入。
+    /// 只处理 <c>*.json</c>，不碰目录里的其它文件。
+    /// </summary>
+    public int PruneAuditExports(Action<string>? deleteOverride = null)
+    {
+        var directory = AuditExportDirectory;
+        if (!Directory.Exists(directory))
+        {
+            return 0;
+        }
+
+        List<FileInfo> files;
+        try
+        {
+            files = new DirectoryInfo(directory)
+                .EnumerateFiles("*.json", SearchOption.TopDirectoryOnly)
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .ThenByDescending(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+
+        var pruned = 0;
+        foreach (var file in files.Skip(MaximumAuditExports))
+        {
+            try
+            {
+                if (deleteOverride is not null)
+                {
+                    deleteOverride(file.FullName);
+                }
+                else
+                {
+                    SendFileToRecycleBin(file.FullName);
+                }
+
+                pruned++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 保留上限是"尽力而为"：单个文件删不掉不影响导出本身。
+            }
+        }
+
+        return pruned;
     }
 
     private void RemoveFiles(LauncherStorageCategory category, ref int removed, ref long freed, List<string> failures)

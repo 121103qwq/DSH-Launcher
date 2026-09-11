@@ -1645,6 +1645,62 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 21. #20 增量 4：体检导出物的保留上限与存储清理分类（Q7）
+// ===========================================================================
+{
+    var q7Root = Path.Combine(scratch, "audit-storage");
+    var q7Paths = new LauncherPaths(Path.Combine(q7Root, "root"));
+    Directory.CreateDirectory(q7Paths.RootDirectory);
+    var q7Storage = new LauncherStorageService(q7Paths);
+    var q7AuditDir = q7Storage.AuditExportDirectory;
+    Directory.CreateDirectory(q7AuditDir);
+
+    var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    for (var index = 0; index < 25; index++)
+    {
+        var file = Path.Combine(q7AuditDir, $"credential-audit-{index:D2}.json");
+        File.WriteAllText(file, "{\"index\":" + index + "}", new UTF8Encoding(false));
+        File.SetLastWriteTimeUtc(file, baseTime.AddMinutes(index));
+    }
+
+    File.WriteAllText(Path.Combine(q7AuditDir, "note.txt"), "not-a-json", new UTF8Encoding(false));
+
+    var prunedCount = q7Storage.PruneAuditExports(File.Delete);
+    var remaining = Directory.EnumerateFiles(q7AuditDir, "*.json")
+        .Select(Path.GetFileName)
+        .Where(name => name is not null)
+        .Select(name => name!)
+        .OrderBy(name => name, StringComparer.Ordinal)
+        .ToArray();
+    Check("audit-storage/保留上限：25 份导出只留最近 20 份（回收最旧 5 份），非 json 文件不动",
+        prunedCount == 5
+        && remaining.Length == LauncherStorageService.MaximumAuditExports
+        && remaining.Contains("credential-audit-24.json", StringComparer.Ordinal)
+        && !remaining.Contains("credential-audit-04.json", StringComparer.Ordinal)
+        && File.Exists(Path.Combine(q7AuditDir, "note.txt")));
+
+    // 幂等：再跑一次不应再回收任何文件（同时自校准：上限不是"每次删 5 个"）
+    Check("audit-storage/保留上限幂等：已在上限内时不再回收",
+        q7Storage.PruneAuditExports(File.Delete) == 0);
+
+    var q7Category = q7Storage.Scan().FirstOrDefault(item => item.Id == "audit-exports");
+    Check("audit-storage/存储清理分类：audit-exports 存在、可清理、统计到 20 份 JSON",
+        q7Category is not null
+        && q7Category!.Cleanable
+        && q7Category.FileCount >= 20
+        && q7Category.SizeBytes > 0
+        && q7Category.Title.Contains("安全体检", StringComparison.Ordinal),
+        q7Category is null
+            ? "未找到 audit-exports 分类"
+            : $"FileCount={q7Category.FileCount} SizeBytes={q7Category.SizeBytes} Cleanable={q7Category.Cleanable}");
+
+    // 目录不存在时是空操作，不抛异常
+    var q7EmptyStorage = new LauncherStorageService(new LauncherPaths(Path.Combine(q7Root, "empty")));
+    Check("audit-storage/导出目录不存在：回收是空操作且不抛异常",
+        q7EmptyStorage.PruneAuditExports(File.Delete) == 0);
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",
