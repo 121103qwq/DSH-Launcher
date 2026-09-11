@@ -27,6 +27,11 @@
 | **C12** | `--no-open` 引入版本 | 历史事实：0.1.0-rc.8 起；**无法从代码验证**，只能靠实测 | `DshInstanceRunner.SupportsNoOpen` | 旧版启动弹浏览器（有浏览器守卫兜底） | 文档记录（不设哨兵） |
 | **C13** | DSH_HOME 内固定文件名 | `settings.yaml`、`.credentials.yaml`、`profiles/`、`sessions/`、`storages/` | 快照/导出/同步/设置写入 | 快照缺内容、导出不完整 | 部分由真实端到端覆盖 |
 
+| **C14** | 权限模型键位：`sandbox-policy.config.mode` / `workspaceRoot`、`approval.config.policy`、`permission.config.presets`（三档含 `danger-full-access` + `approval: never`） | 已安装运行时出厂层：`<version>/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-base/cordis.patch.yml` | `DangerousConfigAuditService`（#20 增量 5） | **静默失效**：危险配置检查永远"未发现"，用户误以为体检通过 | `contract: 权限模型键位仍在出厂层（C14）` |
+| **C15** | 安全体检依赖的环境变量名：`DSH_PERMISSION_MODE`、`DSH_TELEMETRY_MODE`、`DSH_TELEMETRY_OTLP_URL` | 同上（出厂层里的 `!!js process.env.…` 表达式） | `DangerousConfigAuditService` | 环境变量类风险不再被检出（同样是静默失效） | `contract: 安全体检依赖的环境变量名仍在出厂层（C15）` |
+| **C16** | 遥测默认导出口域名 `harness-telemetry.deepseeksvc.com`（官方域判据） | 同上 | `DangerousConfigAuditService`（非官方域 → 危险） | **假报警**：上游换域后官方域会被当成"第三方外发" | `contract: 遥测默认域仍是 *.deepseeksvc.com（C16）` |
+| **C17** | 凭据文件名 `.credentials.yaml`（含 `.yml` 变体）与"只报元数据、不回显值"策略 | C13 的固定文件名 + 本仓安全契约（work-log/73） | `CredentialAuditService`、`DangerousConfigAuditService`（凭据可写检查） | 清单为空 → 看起来"本机没有凭据文件" | 由 SelfTest 断言覆盖（凭据文件清单 + 4 组安全反证；未单独设 harness 哨兵） |
+
 ## 二、降级方向（0.1.5 → 0.1.2）为什么是单向的
 
 **两个已安装运行时的实物证据（2026-09-11 核对）**：
@@ -48,6 +53,13 @@
 |---|---|---|
 | 多代际会话目录在**对话页**列多行 | `ConversationService.List` 按文件列（同目录 v2+v3 → 2 行）；跨实例同步服务已按"会话目录归并、取最高代际" | 从 0.1.2 升级上来的实例会看到重复会话行；纯 v3 实例不受影响。见 work-log/53 F1（待决定） |
 | 启动器对会话头的校验比 dsh **宽松** | dsh 在 v3 要求 `isSeeded`；启动器缺失也接受（保证旧格式与半成品文件可读） | 有意为之：宽松读、按头部版本命名写，宁可多读不误判"损坏" |
+
+### 二之三、已确认的上游行为事实（实现选择的依据）
+
+- **`dsh --dump-config` 会写盘**：在空 `DSH_HOME` 里执行 `dsh --profile web --dump-config`（"不启动"），
+  仍会生成 `profiles/web/{cordis.yml, cordis.patch.yml, package.json, pnpm-workspace.yaml}`（work-log/74 实测）。
+  → 因此**安全体检一律直接读文件**（profile 层 + `settings.yaml` + 运行时出厂层），
+  绝不调用 CLI 取配置；若上游哪天改成不写盘，可再评估是否简化为调 CLI。
 
 ## 三、哨兵怎么跑、失败了怎么办
 
