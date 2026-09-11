@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using DshLauncher.Services;
 using DshLauncher.Watchdog;
 
 namespace DshLauncher;
@@ -135,9 +136,8 @@ public partial class App : System.Windows.Application
     {
         try
         {
-            var logDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DeepSeek", "launcher");
+            // 与主日志同一目录（可被 DSH_LAUNCHER_LOG_ROOT 覆盖）。
+            var logDirectory = LauncherLog.LogDirectory;
             Directory.CreateDirectory(logDirectory);
             File.AppendAllText(
                 Path.Combine(logDirectory, "crash.log"),

@@ -3,9 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="更换运行版本"
         Width="660"
-        Height="640"
+        Height="680"
         MinWidth="560"
-        MinHeight="480"
+        MinHeight="520"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
         Background="{StaticResource PageBrush}"
@@ -17,6 +17,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -53,9 +54,11 @@
 
         <StackPanel Grid.Row="2" Margin="0,14,0,0">
             <CheckBox x:Name="SnapshotBox"
-                      Content="切换前创建配置快照（默认关闭；快照含设置/凭据引用/插件清单与锁文件，不含会话）" />
+                      Content="切换前创建配置快照（默认关闭；快照含设置/凭据引用/插件清单与锁文件，不含会话）"
+                      Click="Option_Click" />
             <CheckBox x:Name="SessionBackupBox"
                       Content="导出现有会话备份（目标版本读不了这些会话时建议勾选）"
+                      Click="Option_Click"
                       Visibility="Collapsed"
                       Margin="0,6,0,0" />
         </StackPanel>
@@ -81,7 +84,39 @@
                    TextWrapping="Wrap"
                    Margin="0,10,0,0" />
 
-        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+        <!-- 确认步骤用窗口内自绘面板，不用 MessageBox：可被 UIA 定点定位、无模态嵌套、
+             还能把「勾选项/预检警告」与确认放在同一屏（work-log/54 B1）。 -->
+        <Border x:Name="ConfirmPanel"
+                Grid.Row="5"
+                Background="{StaticResource InfoBackgroundBrush}"
+                BorderBrush="{StaticResource BlueBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource PanelCornerRadius}"
+                Padding="14"
+                Margin="0,10,0,0"
+                Visibility="Collapsed">
+            <StackPanel>
+                <TextBlock Text="确认更换运行版本" FontWeight="SemiBold" />
+                <TextBlock x:Name="ConfirmText"
+                           TextWrapping="Wrap"
+                           Margin="0,6,0,0" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                    <Button x:Name="ConfirmCancelButton"
+                            Content="返回"
+                            Click="ConfirmCancel_Click"
+                            Padding="16,7"
+                            Margin="0,0,8,0" />
+                    <Button x:Name="ConfirmButton"
+                            Content="确认切换"
+                            Click="Confirm_Click"
+                            IsDefault="True"
+                            Style="{StaticResource PrimaryButton}"
+                            Padding="16,7" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="取消" IsCancel="True" Padding="18,8" Margin="0,0,8,0" />
             <Button x:Name="CheckButton" Content="检查" Click="Check_Click" Padding="18,8" Margin="0,0,8,0" />
             <Button x:Name="SwitchButton"

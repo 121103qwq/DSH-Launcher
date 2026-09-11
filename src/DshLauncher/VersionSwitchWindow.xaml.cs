@@ -151,6 +151,8 @@ public partial class VersionSwitchWindow : Window
         _precheck = null;
         SwitchButton.IsEnabled = false;
         SessionBackupBox.Visibility = Visibility.Collapsed;
+        // 换版本/重新检查后旧确认作废，避免拿着一屏的旧文案确认新目标。
+        ConfirmPanel.Visibility = Visibility.Collapsed;
         if (TargetVersionBox.SelectedItem is not string version)
         {
             return;
@@ -226,19 +228,82 @@ public partial class VersionSwitchWindow : Window
             return;
         }
 
-        var confirm = System.Windows.MessageBox.Show(
-            this,
-            $"把实例「{_instance.Name}」的运行版本从 {_instance.DetectedVersion ?? "未知"} 换到 {_target.Version}？\n\n"
-            + "• 只改运行程序与启动入口，DSH_HOME（配置/插件/会话）保留；\n"
-            + "• 实例必须处于停止状态；\n"
-            + (_precheck.RequiresSessionBackup
-                ? "• 目标版本读不了现有的新格式会话，建议勾选「导出现有会话备份」。\n"
-                : string.Empty)
-            + "• 切换后首次启动可能需要补装插件依赖（联网）。\n\n继续吗？",
-            "更换运行版本",
-            MessageBoxButton.OKCancel,
-            MessageBoxImage.Question);
-        if (confirm != MessageBoxResult.OK)
+        // 先出确认面板（不再用 MessageBox：无法 UIA 定位、且会遮住勾选项与预检内容）。
+        ShowConfirmPanel();
+        await Task.CompletedTask;
+    }
+
+    /// <summary>把“即将做什么/哪些勾选生效”摆到窗口内，等用户显式确认。</summary>
+    private void ShowConfirmPanel()
+    {
+        if (_target is null || _precheck is null)
+        {
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            $"把实例「{_instance.Name}」的运行版本从 {_instance.DetectedVersion ?? "未知"} 换到 {_target.Version}？",
+            "• 只改运行程序与启动入口，DSH_HOME（配置/插件/会话）保留；",
+            "• 实例必须处于停止状态；",
+            "• 切换后首次启动可能需要补装插件依赖（联网）。"
+        };
+        if (_precheck.RequiresSessionBackup)
+        {
+            lines.Insert(3, SessionBackupBox.IsChecked == true
+                ? "• 目标版本读不了现有的新格式会话，已勾选「导出现有会话备份」。"
+                : "• 目标版本读不了现有的新格式会话，建议先勾选「导出现有会话备份」。");
+        }
+
+        if (SnapshotBox.IsChecked == true)
+        {
+            lines.Insert(3, "• 切换前会先创建配置快照。");
+        }
+
+        ConfirmText.Text = string.Join("\n", lines);
+        ConfirmPanel.Visibility = Visibility.Visible;
+        SwitchButton.IsEnabled = false;
+        StatusText.Text = "请确认后继续。";
+        ConfirmButton.Focus();
+    }
+
+    private void HideConfirmPanel()
+    {
+        ConfirmPanel.Visibility = Visibility.Collapsed;
+        SwitchButton.IsEnabled = _target is not null && _precheck is not null && !_busy;
+    }
+
+    private void ConfirmCancel_Click(object sender, RoutedEventArgs e)
+    {
+        HideConfirmPanel();
+        StatusText.Text = "已返回，可重新选择版本或勾选项。";
+    }
+
+    /// <summary>确认面板里的勾选项改了→作废旧确认（勾选项会改变实际动作）。</summary>
+    private void Option_Click(object sender, RoutedEventArgs e)
+    {
+        if (ConfirmPanel.Visibility == Visibility.Visible)
+        {
+            ConfirmPanel.Visibility = Visibility.Collapsed;
+            SwitchButton.IsEnabled = _target is not null && _precheck is not null && !_busy;
+            StatusText.Text = "勾选项已变化，请重新点「切换」确认。";
+        }
+    }
+
+    private async void Confirm_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy || _target is null || _precheck is null)
+        {
+            return;
+        }
+
+        ConfirmPanel.Visibility = Visibility.Collapsed;
+        await RunSwitchAsync();
+    }
+
+    private async Task RunSwitchAsync()
+    {
+        if (_target is null)
         {
             return;
         }

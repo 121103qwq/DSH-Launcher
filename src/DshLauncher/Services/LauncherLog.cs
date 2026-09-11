@@ -10,15 +10,29 @@ namespace DshLauncher.Services;
 /// %LocalAppData%\DeepSeek\launcher\launcher.log（1MB 轮转 → launcher.log.old）。
 /// 只记录 Launcher 自身事件；dsh 子进程输出仍由实例日志/运行输出承载。
 /// 任何写入失败都静默降级——日志绝不能反过来弄崩 Launcher。
+/// 目录可用环境变量 <c>DSH_LAUNCHER_LOG_ROOT</c> 覆盖（harness 用它把测试条目写进临时目录，
+/// 不再污染用户真实 launcher.log，见 work-log/54）。
 /// </summary>
 public static class LauncherLog
 {
+    /// <summary>日志目录覆盖变量；空值/无值时用 LocalAppData 默认目录。</summary>
+    public const string LogRootVariable = "DSH_LAUNCHER_LOG_ROOT";
+
     private const long MaxBytes = 1_000_000;
     private static readonly object Sync = new();
 
-    public static string LogDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DeepSeek", "launcher");
+    public static string LogDirectory
+    {
+        get
+        {
+            var overridden = Environment.GetEnvironmentVariable(LogRootVariable);
+            return string.IsNullOrWhiteSpace(overridden)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "DeepSeek", "launcher")
+                : Path.GetFullPath(overridden);
+        }
+    }
 
     public static string LogPath => Path.Combine(LogDirectory, "launcher.log");
 
