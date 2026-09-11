@@ -1482,6 +1482,148 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 20. #20 安全体检：CredentialAuditService + 安全反证（绝不把凭据写进任何输出物）
+// ===========================================================================
+{
+    var auditRoot = Path.Combine(scratch, "credential-audit");
+    var auditHome = Path.Combine(auditRoot, "dsh-home");
+    var auditProfile = Path.Combine(auditHome, "profiles", "web");
+    var auditNodes = Path.Combine(auditProfile, "node_modules", "pkg");
+    Directory.CreateDirectory(auditProfile);
+    Directory.CreateDirectory(auditNodes);
+    Directory.CreateDirectory(Path.Combine(auditHome, ".dsh-launcher"));
+
+    // 故意用"一眼假"的哨兵值；断言里检查这些串（含中段特征）绝不出现在任何输出物中。
+    const string FakeOpenAi = "sk-FAKEFAKESECRETVALUE1234567890";
+    const string FakeGithub = "ghp_FAKEGITHUBTOKEN1234567890ABCD";
+    const string FakeGeneric = "FAKEGENERICVALUE1234567890";
+    const string OpenAiMiddle = "FAKEFAKESECRETVALUE";
+    const string GithubMiddle = "FAKEGITHUBTOKEN";
+    const string GenericMiddle = "FAKEGENERICVALUE";
+
+    File.WriteAllText(Path.Combine(auditHome, ".credentials.yaml"),
+        "openai:\n  api_key: " + FakeOpenAi + "\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(auditHome, "settings.yaml"),
+        "auth:\n  access_token: " + FakeGithub + "\n", new UTF8Encoding(false));
+    File.WriteAllText(Path.Combine(auditProfile, "package.json"),
+        "{\n  \"name\": \"dsh-profile-web\",\n  \"apiKey\": \"" + FakeGeneric + "\"\n}\n", new UTF8Encoding(false));
+    // node_modules 内的同名模式**不应**被扫描（范围硬边界）
+    File.WriteAllText(Path.Combine(auditNodes, "vendored.json"),
+        "{\"token\": \"" + FakeOpenAi + "\"}\n", new UTF8Encoding(false));
+
+    // 反证 B 的基线：体检前后临时 HOME 的文件集必须完全不变（不写盘）
+    static string SnapshotTree(string root)
+    {
+        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(path =>
+            {
+                var info = new FileInfo(path);
+                return path + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks;
+            });
+        var directories = Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+        return string.Join(";", files) + "||" + string.Join(";", directories);
+    }
+    var treeBefore = SnapshotTree(auditHome);
+
+    var auditLogRoot = Path.Combine(auditRoot, "logs");
+    Directory.CreateDirectory(auditLogRoot);
+    var previousLogRoot = Environment.GetEnvironmentVariable("DSH_LAUNCHER_LOG_ROOT");
+    Environment.SetEnvironmentVariable("DSH_LAUNCHER_LOG_ROOT", auditLogRoot);
+    CredentialAuditReport auditReport;
+    CredentialAuditReport previewReport;
+    try
+    {
+        auditReport = CredentialAuditService.Run(new CredentialAuditService.CredentialAuditRequest(
+            auditHome,
+            ProfileName: "web"));
+        previewReport = CredentialAuditService.Run(new CredentialAuditService.CredentialAuditRequest(
+            auditHome,
+            ProfileName: "web",
+            IncludeRedactedPreview: true));
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("DSH_LAUNCHER_LOG_ROOT", previousLogRoot);
+    }
+
+    // 自校准：必须先证明"能测出已知故障"——命中必须存在，否则后面的"没泄露"断言毫无意义。
+    Check("credential-audit/自校准：三个已知哨兵都被发现（位置正确、默认不带任何预览值）",
+        auditReport.Hits.Count >= 3
+        && auditReport.Hits.Any(hit => hit.FilePath.EndsWith(".credentials.yaml", StringComparison.OrdinalIgnoreCase)
+            && hit.Line == 2
+            && hit.PatternName.Contains("sk-", StringComparison.Ordinal))
+        && auditReport.Hits.Any(hit => hit.FilePath.EndsWith("settings.yaml", StringComparison.OrdinalIgnoreCase)
+            && hit.Line == 2)
+        && auditReport.Hits.Any(hit => hit.FilePath.EndsWith("package.json", StringComparison.OrdinalIgnoreCase))
+        && auditReport.Hits.All(hit => hit.RedactedPreview is null),
+        string.Join(" | ", auditReport.Hits.Select(hit =>
+            Path.GetFileName(hit.FilePath) + ":" + hit.Line + ":" + hit.PatternName
+            + ":preview=" + (hit.RedactedPreview ?? "null"))));
+
+    Check("credential-audit/范围边界：node_modules 内的同名模式不被扫描（并列出凭据文件清单）",
+        auditReport.Hits.All(hit => !hit.FilePath.Contains("node_modules", StringComparison.OrdinalIgnoreCase))
+        && auditReport.Files.Any(file => file.Kind.Contains("凭据", StringComparison.Ordinal)
+            && file.FilePath.EndsWith(".credentials.yaml", StringComparison.OrdinalIgnoreCase)));
+
+    var serializedReport = JsonSerializer.Serialize(
+        auditReport,
+        new JsonSerializerOptions { WriteIndented = true });
+    var serializedPreviewReport = JsonSerializer.Serialize(
+        previewReport,
+        new JsonSerializerOptions { WriteIndented = true });
+
+    // 安全反证 A：默认报告的完整序列化里不得出现任何哨兵值（含中段特征串）
+    Check("credential-audit/反证A（默认，Q5(i)）：报告序列化后不含任何凭据值或其中段特征",
+        !serializedReport.Contains(FakeOpenAi, StringComparison.Ordinal)
+        && !serializedReport.Contains(FakeGithub, StringComparison.Ordinal)
+        && !serializedReport.Contains(FakeGeneric, StringComparison.Ordinal)
+        && !serializedReport.Contains(OpenAiMiddle, StringComparison.Ordinal)
+        && !serializedReport.Contains(GithubMiddle, StringComparison.Ordinal)
+        && !serializedReport.Contains(GenericMiddle, StringComparison.Ordinal));
+
+    // 安全反证 B：体检不写盘——临时 HOME 的文件集/大小/修改时间完全不变
+    Check("credential-audit/反证B：体检是纯读取（临时 DSH_HOME 的文件集与修改时间零变化）",
+        SnapshotTree(auditHome) == treeBefore);
+
+    // 安全反证 C：即使有人以后给体检加了日志，日志里也不得出现哨兵值
+    var auditLogFiles = Directory.Exists(auditLogRoot)
+        ? Directory.EnumerateFiles(auditLogRoot, "*", SearchOption.AllDirectories).ToArray()
+        : Array.Empty<string>();
+    Check("credential-audit/反证C：日志目录里没有任何内容包含哨兵值（服务自身无日志依赖）",
+        auditLogFiles.All(file => !File.ReadAllText(file).Contains(FakeOpenAi, StringComparison.Ordinal)
+            && !File.ReadAllText(file).Contains(FakeGithub, StringComparison.Ordinal)
+            && !File.ReadAllText(file).Contains(FakeGeneric, StringComparison.Ordinal)));
+
+    // 显式开启脱敏预览（Q5 (ii)）：预览只保留前 3 + 后 4，中段必须查不到
+    var previewHit = previewReport.Hits.FirstOrDefault(hit =>
+        hit.RedactedPreview is not null && hit.RedactedPreview.StartsWith("sk-", StringComparison.Ordinal));
+    Check("credential-audit/显式开启脱敏预览：形如 sk-••••••7890（中段特征串仍不可见）",
+        previewHit is not null
+        && previewHit!.RedactedPreview!.Contains('•', StringComparison.Ordinal)
+        && previewHit.RedactedPreview!.EndsWith("7890", StringComparison.Ordinal)
+        && previewHit.RedactedPreview!.Length <= 13
+        && !serializedPreviewReport.Contains(OpenAiMiddle, StringComparison.Ordinal)
+        && !serializedPreviewReport.Contains(GithubMiddle, StringComparison.Ordinal)
+        && !serializedPreviewReport.Contains(GenericMiddle, StringComparison.Ordinal)
+        && !serializedPreviewReport.Contains(FakeOpenAi, StringComparison.Ordinal));
+
+    // 纯函数边界：短值全遮蔽、空值不抛
+    Check("credential-audit/脱敏函数边界：短值全遮蔽、空值不抛、长度受限",
+        CredentialAuditService.BuildRedactedPreview("sk-123") == "••••••"
+        && CredentialAuditService.BuildRedactedPreview(string.Empty) == "••••••"
+        && CredentialAuditService.BuildRedactedPreview("sk-abcdefghijklmnop").Length <= 13);
+
+    // 不存在的 HOME 必须是"报告 + 说明"，而不是异常
+    var missingHomeReport = CredentialAuditService.Run(new CredentialAuditService.CredentialAuditRequest(
+        Path.Combine(auditRoot, "not-exists")));
+    Check("credential-audit/DSH_HOME 不存在：给出说明而不是抛异常",
+        missingHomeReport.Hits.Count == 0
+        && missingHomeReport.Notes.Any(note => note.Contains("不存在", StringComparison.Ordinal)));
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",
