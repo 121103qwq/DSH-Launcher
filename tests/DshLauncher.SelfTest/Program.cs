@@ -345,6 +345,50 @@ Check("zh1024/缓存损坏时不抛异常（拉取失败则返回空列表，不
     zhBroken.Count == 0);
 
 // ===========================================================================
+// 10. 中文插件源适配器 ②（dshfind.com）
+// ===========================================================================
+using (var dshfindDocument = JsonDocument.Parse("""{"plugins":[{"name":"dsh-spotlight","owner":"0xsline","fullName":"0xsline/dsh-spotlight","url":"https://github.com/0xsline/dsh-spotlight","description":"Keyboard-first command palette","tags":["ui","palette"],"language":"TypeScript","stars":128,"archived":false,"category":"","isOfficial":false,"isFeatured":true,"pushedAt":"2026-09-09T00:00:00Z","i18n":{"en":"Keyboard-first command palette","zh":"键盘优先的命令面板"}}]}"""))
+{
+    var mapped = DshfindCatalogService.TryMap(dshfindDocument.RootElement.GetProperty("plugins")[0]);
+    Check("dshfind/映射：i18n 中文优先、无 category 时用首个 tag、安装标识由 owner/repo 生成",
+        mapped is { SourceKind: MarketplaceSourceKind.ZhCatalog, Name: "dsh-spotlight", InstallSpec: "github:0xsline/dsh-spotlight", Stars: 128 }
+        && mapped!.Description == "键盘优先的命令面板"
+        && mapped.Category == "ui"
+        && mapped.SourceName.Contains("精选", StringComparison.Ordinal)
+        && mapped.SourceName.Contains("★128", StringComparison.Ordinal));
+}
+
+using (var archivedDocument = JsonDocument.Parse("""{"fullName":"old/repo","name":"repo","archived":true}"""))
+{
+    Check("dshfind/映射：已归档插件直接排除（不往市场塞死项目）",
+        DshfindCatalogService.TryMap(archivedDocument.RootElement) is null);
+}
+
+using (var officialDocument = JsonDocument.Parse("""{"fullName":"deepseek-ai/dsh-x","name":"dsh-x","description":"official","isOfficial":true,"category":"tools"}"""))
+{
+    Check("dshfind/映射：官方标记进来源名，缺 install 时仍可用 github: 兜底安装",
+        DshfindCatalogService.TryMap(officialDocument.RootElement) is { InstallSpec: "github:deepseek-ai/dsh-x" } officialItem
+        && officialItem.SourceName.Contains("官方", StringComparison.Ordinal));
+}
+
+var dshfindPaths = new LauncherPaths(Path.Combine(scratch, "dshfind"));
+var dshfindService = new DshfindCatalogService(dshfindPaths);
+Directory.CreateDirectory(dshfindPaths.RootDirectory);
+File.WriteAllText(
+    dshfindService.CachePath,
+    """{"savedAt":"2999-01-01T00:00:00+00:00","source":"test","items":[{"fullName":"a/b","name":"b","description":"d"}]}""",
+    Encoding.UTF8);
+var dshfindCached = await dshfindService.LoadAsync();
+Check("dshfind/未过期缓存直接命中（不联网；8 MB 全量不会每次拉）",
+    dshfindCached.Count == 1 && dshfindCached[0].Name == "b"
+    && dshfindService.LastStatus.Contains("缓存", StringComparison.Ordinal));
+File.WriteAllText(dshfindService.CachePath, "{ broken", Encoding.UTF8);
+var dshfindBroken = await new DshfindCatalogService(dshfindPaths).LoadAsync(new CancellationTokenSource(TimeSpan.FromSeconds(15)).Token);
+// 缓存损坏但网络可用时应该真的拉成功（这也是好结果），所以只断言"不抛异常"。
+Check("dshfind/缓存损坏时仍能正常工作（要么拉取成功、要么回退空列表，不抛异常）",
+    dshfindBroken.Count == 0 || dshfindBroken.Count > 1000, $"count={dshfindBroken.Count}");
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",

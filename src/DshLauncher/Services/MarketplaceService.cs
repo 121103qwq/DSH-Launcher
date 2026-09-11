@@ -52,6 +52,8 @@ public sealed class MarketplaceService
     private readonly LauncherPaths _paths;
     private readonly Deepseek1024CatalogService? _chineseCatalog;
     private readonly Func<bool> _chineseCatalogEnabled;
+    private readonly DshfindCatalogService? _dshfindCatalog;
+    private readonly Func<bool> _dshfindCatalogEnabled;
     private readonly IReadOnlyList<Uri> _customSources;
     private readonly Dictionary<string, ThemeReadmePreview> _themePreviewCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -60,13 +62,17 @@ public sealed class MarketplaceService
         HttpClient? httpClient = null,
         IEnumerable<Uri>? customSources = null,
         Deepseek1024CatalogService? chineseCatalog = null,
-        Func<bool>? chineseCatalogEnabled = null)
+        Func<bool>? chineseCatalogEnabled = null,
+        DshfindCatalogService? dshfindCatalog = null,
+        Func<bool>? dshfindCatalogEnabled = null)
     {
         _paths = paths ?? new LauncherPaths();
         _httpClient = httpClient ?? CreateHttpClient();
         _customSources = customSources?.Where(uri => uri.IsAbsoluteUri).ToArray() ?? Array.Empty<Uri>();
         _chineseCatalog = chineseCatalog;
         _chineseCatalogEnabled = chineseCatalogEnabled ?? (() => false);
+        _dshfindCatalog = dshfindCatalog;
+        _dshfindCatalogEnabled = dshfindCatalogEnabled ?? (() => false);
     }
 
     public async Task<MarketplaceSearchResult> SearchAsync(
@@ -155,6 +161,37 @@ public sealed class MarketplaceService
             catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException or InvalidOperationException)
             {
                 warnings.Add($"中文插件源读取失败：{ex.Message}");
+            }
+        }
+
+        // 第二个中文源 dshfind.com（同样默认关闭；8 MB 全量载荷由服务内部单飞 + TTL 处理）。
+        if (_dshfindCatalog is not null && _dshfindCatalogEnabled())
+        {
+            sourcesChecked++;
+            try
+            {
+                var dshfindItems = await _dshfindCatalog.LoadAsync(cancellationToken);
+                if (dshfindItems.Count > 0)
+                {
+                    items.AddRange(dshfindItems);
+                }
+                else
+                {
+                    warnings.Add($"dshfind 中文源不可用：{_dshfindCatalog.LastStatus}");
+                }
+
+                progress?.Report(new MarketplaceRefreshProgress(
+                    MergeItems(items),
+                    warnings.ToArray(),
+                    sourcesChecked));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException or InvalidOperationException)
+            {
+                warnings.Add($"dshfind 中文源读取失败：{ex.Message}");
             }
         }
 

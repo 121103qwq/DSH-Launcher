@@ -151,6 +151,9 @@ public sealed class LauncherSettingsData
     /// </summary>
     public bool UseChinesePluginSource { get; set; }
 
+    /// <summary>是否启用第二个中文插件源（dshfind.com，约 1.4 万条）。默认关闭。</summary>
+    public bool UseDshfindPluginSource { get; set; }
+
     /// <summary>点击主窗口 × 时的行为。</summary>
     [JsonConverter(typeof(CloseBehaviorConverter))]
     public CloseBehavior CloseBehavior { get; set; } = CloseBehavior.MinimizeToTray;
