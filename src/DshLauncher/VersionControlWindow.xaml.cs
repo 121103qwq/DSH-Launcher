@@ -756,22 +756,9 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         try
         {
             var preview = await Task.Run(() => _packageService.PreviewPackage(dialog.FileName));
-            var previewText = $"{preview.Name}\n\n"
-                + $"{preview.Description}\n\n"
-                + $"DSh：{preview.DshVersion ?? "未标记"}\n"
-                + $"Plugins：{preview.PluginCount}\n"
-                + $"Skills：{preview.SkillCount}\n"
-                + $"Agent Presets：{preview.AgentPresetCount}\n"
-                + $"Providers：{preview.ProviderCount}\n"
-                + $"Workflow：{preview.Workflow ?? "无"}\n\n"
-                + $"将创建新的独立版本“{preview.Name}”，不会覆盖已有版本。\n\n确认导入吗？";
-            if (System.Windows.MessageBox.Show(
-                    Window.GetWindow(this),
-                    previewText,
-                    "导入整合包预览",
-                    System.Windows.MessageBoxButton.YesNo,
-                    System.Windows.MessageBoxImage.Information) != System.Windows.MessageBoxResult.Yes)
+            if (new LegacyPackImportWindow(Window.GetWindow(this), preview).ShowDialog() != true)
             {
+                SetStatus("已取消导入：未确认整合包内容。");
                 return;
             }
 
