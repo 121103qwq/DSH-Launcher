@@ -1149,6 +1149,126 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 }
 
 // ===========================================================================
+// 15. 导出 manifest v4 + .dspack v2（DshPackWriter）与读回往返（#24 第 5 步）
+//   注意：带 out 的调用一律单独成句，不放进 && 链（短路会导致"未赋值"）。
+// ===========================================================================
+{
+    var rtRoot = Path.Combine(scratch, "roundtrip");
+    Directory.CreateDirectory(rtRoot);
+    var rtPayload = Encoding.UTF8.GetBytes("model-payload-bytes-0123456789");
+    var rtSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(rtPayload)).ToLowerInvariant();
+
+    var rtRequest = new PackExportRequest(
+        PackName: "whale-export",
+        PackVersion: "1.0.0",
+        ProfileName: "whale",
+        DshVersion: "0.1.1-rc.2",
+        Bundles: new[] { "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app" },
+        Dependencies: new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["dsh-pet"] = "0.2.0",
+            ["dsh-reasoning-effort"] = "github:HanaAyane/dsh-reasoning-effort#83bc8c5",
+            ["theme"] = "github:owner/repo#abcdef1&path:packages/theme"
+        },
+        DisplayNames: new Dictionary<string, string> { ["zh-CN"] = "大肥鱼导出", ["en-US"] = "Whale Export" },
+        Descriptions: new Dictionary<string, string> { ["zh-CN"] = "往返验证用" },
+        Author: "tester",
+        Patch: "plugins:\n  whale: {}\n",
+        Files: new[] { new PackFileEntry("data/whale.bin", rtSha, rtPayload.Length, new[] { "https://mirror.example.com/whale.bin" }) },
+        Overrides: new Dictionary<string, string>(StringComparer.Ordinal) { ["cordis.patch.yml"] = "plugins:\n  whale: {}\n" },
+        WorkspaceYaml: "packages:\n  - .\n",
+        LockYaml: "lockfileVersion: '9.0'\n",
+        PackageJsonSnapshot: "{\"name\":\"snapshot\"}");
+
+    var rtPath = Path.Combine(rtRoot, "whale-export.dspack");
+    var rtWritten = DshPackWriter.TryWrite(rtPath, rtRequest, out var rtWriteError);
+    var rtRead = PackArchiveReader.TryRead(rtPath, out var rtArchive, out var rtOutcome, out var rtReadError);
+    Check("packexport/导出 .dspack：容器标记 v2 + manifest v4 + 可选快照/overrides",
+        rtWritten
+        && File.Exists(rtPath)
+        && !File.Exists(rtPath + ".tmp")
+        && rtRead
+        && rtOutcome == PackArchiveOutcome.Ok
+        && rtArchive!.Container == PackContainerKind.DspackV2
+        && rtArchive.Manifest.Version == PackManifestVersion.V4
+        && rtArchive.Manifest.Type == PackManifestType.Profile
+        && rtArchive.HasPackageJson
+        && rtArchive.HasPnpmLock
+        && rtArchive.HasPnpmWorkspace
+        && rtArchive.OverridePaths.Count == 1,
+        rtWriteError ?? rtReadError ?? string.Empty);
+
+    var rtManifest = rtArchive!.Manifest;
+    var rtNpmOk = rtManifest.Dependencies.TryGetValue("dsh-pet", out var rtNpmVersion);
+    var rtGitOk = rtManifest.Dependencies.TryGetValue("github:HanaAyane/dsh-reasoning-effort", out var rtGitSha);
+    var rtSubOk = rtManifest.Dependencies.TryGetValue("github:owner/repo#path:/packages/theme", out var rtSubSha);
+    Check("packexport/坐标反向转换：package.json 条目 → 规范坐标（三条规则都可往返）",
+        rtNpmOk && rtNpmVersion == "0.2.0"
+        && rtGitOk && rtGitSha == "83bc8c5"
+        && rtSubOk && rtSubSha == "abcdef1"
+        && rtManifest.Files.Count == 1
+        && rtManifest.Files[0].Sha256 == rtSha
+        && rtManifest.Files[0].Size == rtPayload.Length
+        && rtManifest.ResolveDisplayName("en-US") == "Whale Export"
+        && rtManifest.ResolveDisplayName("zh-CN") == "大肥鱼导出");
+
+    var rtBadOverride = DshPackWriter.TryWrite(
+        Path.Combine(rtRoot, "bad1.dspack"),
+        rtRequest with { Overrides = new Dictionary<string, string> { ["../escape.yml"] = "x" } },
+        out var rtBadOverrideError);
+    var rtBadFile = DshPackWriter.TryWrite(
+        Path.Combine(rtRoot, "bad2.dspack"),
+        rtRequest with { Files = new[] { new PackFileEntry("a.bin", "zz", 1, new[] { "https://x" }) } },
+        out var rtBadFileError);
+    Check("packexport/导出前校验：不安全的 overrides 路径与坏 files[] 必须拒写（不产出坏包）",
+        !rtBadOverride
+        && rtBadOverrideError!.Contains("overrides 路径非法", StringComparison.Ordinal)
+        && !rtBadFile
+        && rtBadFileError!.Contains("files[]", StringComparison.Ordinal)
+        && !File.Exists(Path.Combine(rtRoot, "bad1.dspack"))
+        && !File.Exists(Path.Combine(rtRoot, "bad2.dspack")));
+
+    // ---- 往返：导出的包用自家导入器装一遍，依赖与 patch 必须回到原样 ----
+    var rtPaths = new LauncherPaths(Path.Combine(rtRoot, "import-root"));
+    Directory.CreateDirectory(rtPaths.RootDirectory);
+    var rtRegistry = new InstanceRegistry(rtPaths);
+    var rtTemplateRoot = Path.Combine(rtRoot, "template");
+    Directory.CreateDirectory(rtTemplateRoot);
+    var rtTemplateExe = Path.Combine(rtTemplateRoot, "dsh.cmd");
+    File.WriteAllText(rtTemplateExe, "@echo off", new UTF8Encoding(false));
+    var rtTemplate = rtRegistry.Register("往返模板", rtTemplateRoot, InstanceKind.Installed, rtTemplateExe, "0.1.1-rc.2", "pnpm");
+    var rtDownloader = new PackFileDownloader((_, _) => Task.FromResult<Stream>(new MemoryStream(rtPayload)));
+    var rtService = new DshPackImportService(rtRegistry, rtDownloader);
+
+    var rtImportable = PackArchiveReader.TryRead(rtPath, out var rtImportArchive, out _, out _);
+    var rtImport = rtService
+        .ImportAsync(rtImportArchive!, rtTemplate, rtRegistry.Load(), allowDownloads: true)
+        .GetAwaiter().GetResult();
+    var rtInstance = rtRegistry.Load().FirstOrDefault(instance => instance.Id == rtImport.InstanceId);
+    var rtProfile = rtInstance is null ? null : Path.Combine(rtInstance.DshHome, "profiles", "whale");
+    var rtPackagePath = rtProfile is null ? null : Path.Combine(rtProfile, "package.json");
+    var rtBinaryPath = rtProfile is null ? null : Path.Combine(rtProfile, "data", "whale.bin");
+    JsonDocument? rtPackage = rtPackagePath is not null && File.Exists(rtPackagePath)
+        ? JsonDocument.Parse(File.ReadAllText(rtPackagePath))
+        : null;
+    JsonElement? rtDeps = rtPackage is null ? null : rtPackage.RootElement.GetProperty("dependencies");
+    Check("packexport/往返（导出→自家导入）：依赖与 spec 回到原样、patch 与载荷都落盘",
+        rtImportable
+        && rtImport.Succeeded
+        && rtProfile is not null
+        && File.Exists(Path.Combine(rtProfile, "cordis.patch.yml"))
+        && rtDeps is { } deps
+        && deps.GetProperty("dsh-pet").GetString() == "0.2.0"
+        && deps.GetProperty("dsh-reasoning-effort").GetString() == "github:HanaAyane/dsh-reasoning-effort#83bc8c5"
+        && deps.GetProperty("theme").GetString() == "github:owner/repo#abcdef1&path:packages/theme"
+        && rtBinaryPath is not null
+        && File.Exists(rtBinaryPath)
+        && File.ReadAllBytes(rtBinaryPath).SequenceEqual(rtPayload),
+        rtImport.Error ?? string.Empty);
+    rtPackage?.Dispose();
+}
+
+// ===========================================================================
 // 8. 核心 bundle 常量
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",
