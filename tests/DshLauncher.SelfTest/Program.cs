@@ -2078,6 +2078,19 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && PresentationSurfaceService.BuildWindowsTerminalArguments(null, "dsh-tui", "C:/work") is null
         && PresentationSurfaceService.BuildWindowsTerminalArguments("C:/x/dsh.cmd", null, null) is null);
 
+    var terminalStartInfo = PresentationSurfaceService.CreateWindowsTerminalStartInfo(
+        "C:/wt.exe",
+        new[] { "-d", "C:/my work", "C:/x/dsh.cmd", "--profile", "dsh-tui" },
+        "C:/home",
+        "C:/x/dsh.cmd");
+
+    Check("surface/终端启动信息：注入 DSH_HOME/DSH_AGENTS_HOME/PATH，且 UseShellExecute=false（wt.exe 继承环境）",
+        !terminalStartInfo.UseShellExecute
+        && terminalStartInfo.Environment["DSH_HOME"] == "C:/home"
+        && terminalStartInfo.Environment["DSH_AGENTS_HOME"] == Path.Combine("C:/home", ".agents")
+        && !string.IsNullOrWhiteSpace(terminalStartInfo.Environment["PATH"])
+        && terminalStartInfo.Arguments == "-d \"C:/my work\" C:/x/dsh.cmd --profile dsh-tui");
+
     Check("surface/自带 desktop surface 判据：只认 @deepseek-ai/dsh-desktop*，判不到不隐藏",
         PresentationSurfaceService.HasVendorDesktopSurface(new[] { "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-desktop-app" })
         && PresentationSurfaceService.HasVendorDesktopSurface(new[] { "@deepseek-ai/dsh-desktop" })

@@ -3727,6 +3727,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        // 启动前校验：非内置名字的 profile 目录/manifest 不存在时，dsh 会直接抛错退栈，
+        // 与其让终端闪一个 Node.js 堆栈，不如在这里说清楚（work-log/91，变更集 108）。
+        var profileInfo = new DshProfileService().Describe(instance, profileName);
+        if (!profileInfo.Exists && !profileInfo.IsShipped)
+        {
+            ShowNotice($"活动 profile「{profileName}」在 {Path.Combine(DshProfileService.ProfilesRoot(instance), profileName)} 下不存在；"
+                + "dsh 对非内置名字会直接报 “profile does not exist”（内置模板只有 web / acp / headless / sdk）。"
+                + "请先在「扩展」页创建或安装这个 profile，再用「在终端打开」。");
+            return;
+        }
+
         var terminal = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Microsoft", "WindowsApps", "wt.exe");
@@ -3746,12 +3757,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = terminal,
-                Arguments = string.Join(" ", arguments.Select(value => value.Contains(' ') ? "\"" + value + "\"" : value)),
-                UseShellExecute = true
-            });
+            // 必须注入 DSH_HOME：wt.exe 在 UseShellExecute=true 下只继承启动器环境，
+            // 终端里的 dsh 会退到默认 home ~/.dsh（变更集 108 前的真缺陷）。
+            System.Diagnostics.Process.Start(PresentationSurfaceService.CreateWindowsTerminalStartInfo(
+                terminal,
+                arguments,
+                instance.DshHome,
+                instance.DshExecutablePath));
             ShowNotice($"已在终端打开实例「{instance.Name}」（profile：{profileName}）。");
         }
         catch (Exception ex)

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
@@ -145,6 +146,32 @@ public static class PresentationSurfaceService
         arguments.Add("--profile");
         arguments.Add(profileName!);
         return arguments;
+    }
+
+    /// <summary>
+    /// 构造 Windows Terminal 的 ProcessStartInfo（可测）：**必须注入 DSH_HOME**。
+    /// wt.exe 用 <c>UseShellExecute = true</c> 启动时，新标签页只继承启动器自己的环境（没有 DSH_HOME），
+    /// 终端里的 dsh 会退到默认 home <c>~/.dsh</c>——内置模板（web/acp/headless/sdk）不存在会自建所以看不出来，
+    /// 自定义 profile（如 dsh-tui）则直接报 <c>profile does not exist</c>（work-log/91，变更集 108）。
+    /// 实测：wt.exe 在 <c>UseShellExecute = false</c> 下可启动且继承注入的环境变量。
+    /// </summary>
+    public static ProcessStartInfo CreateWindowsTerminalStartInfo(
+        string terminalPath,
+        IReadOnlyList<string> arguments,
+        string dshHome,
+        string? dshExecutable)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = terminalPath,
+            Arguments = string.Join(" ", arguments.Select(value => value.Contains(' ') ? "\"" + value + "\"" : value)),
+            UseShellExecute = false,
+            CreateNoWindow = false
+        };
+        startInfo.Environment["DSH_HOME"] = dshHome;
+        startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(dshHome, ".agents");
+        startInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(dshExecutable);
+        return startInfo;
     }
 
     private static bool IsWebBundle(string bundle) =>
