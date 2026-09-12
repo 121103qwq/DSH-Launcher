@@ -532,13 +532,29 @@
                                                             Padding="0"
                                                             ToolTip="选择启动方式">
                                                         <Button.ContextMenu>
-                                                            <ContextMenu Style="{StaticResource ContextInstanceMenuStyle}">
-                                                                <MenuItem Header="Desktop 启动（启动器内部窗口）" Click="StartLauncherInstance_Click" />
-                                                                <MenuItem Header="Web 启动（浏览器）" Click="StartInstance_Click" />
-                                                                <MenuItem Header="打开窗口（DSH Desktop 封装）" Click="OpenDesktopShell_Click" />
-                                                                <MenuItem Header="在终端打开（终端面）" Click="OpenInTerminal_Click" />
+                                                            <ContextMenu Style="{StaticResource ContextInstanceMenuStyle}"
+                                                                         Opened="LaunchModeMenu_Opened">
+                                                                <MenuItem Header="Desktop 启动（启动器内部窗口）"
+                                                                          Tag="Desktop"
+                                                                          IsCheckable="True"
+                                                                          Click="LaunchModeMenuItem_Click" />
+                                                                <MenuItem Header="Web 启动（浏览器）"
+                                                                          Tag="Web"
+                                                                          IsCheckable="True"
+                                                                          Click="LaunchModeMenuItem_Click" />
+                                                                <MenuItem Header="打开窗口（DSH Desktop 封装）"
+                                                                          Tag="ElectronDesktop"
+                                                                          ToolTipService.ShowOnDisabled="True"
+                                                                          Click="OpenDesktopShell_Click" />
+                                                                <MenuItem Header="在终端打开（终端面）"
+                                                                          Tag="Terminal"
+                                                                          ToolTipService.ShowOnDisabled="True"
+                                                                          Click="OpenInTerminal_Click" />
                                                                 <Separator Style="{StaticResource MenuSeparatorStyle}" />
-                                                                <MenuItem Header="隔离启动（剥离第三方插件）" Click="IsolatedStart_Click" />
+                                                                <MenuItem Header="隔离启动（剥离第三方插件）"
+                                                                          Tag="Isolated"
+                                                                          IsCheckable="True"
+                                                                          Click="LaunchModeMenuItem_Click" />
                                                             </ContextMenu>
                                                         </Button.ContextMenu>
                                                     </Button>

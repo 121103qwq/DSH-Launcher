@@ -2067,6 +2067,15 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && string.Join(" ", surfaceArgs) == "-d C:/work C:/x/dsh.cmd --profile dsh-tui"
         && PresentationSurfaceService.BuildWindowsTerminalArguments(null, "dsh-tui", "C:/work") is null
         && PresentationSurfaceService.BuildWindowsTerminalArguments("C:/x/dsh.cmd", null, null) is null);
+
+    Check("surface/自带 desktop surface 判据：只认 @deepseek-ai/dsh-desktop*，判不到不隐藏",
+        PresentationSurfaceService.HasVendorDesktopSurface(new[] { "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-desktop-app" })
+        && PresentationSurfaceService.HasVendorDesktopSurface(new[] { "@deepseek-ai/dsh-desktop" })
+        && !PresentationSurfaceService.HasVendorDesktopSurface(new[] { "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app" })
+        && !PresentationSurfaceService.HasVendorDesktopSurface(new[] { "@someone/dsh-desktop-app" })
+        && !PresentationSurfaceService.HasVendorDesktopSurface(new[] { "dsh-desktop-app" })
+        && !PresentationSurfaceService.HasVendorDesktopSurface(null)
+        && !PresentationSurfaceService.HasVendorDesktopSurface(Array.Empty<string>()));
 }
 
 // ===========================================================================
@@ -2074,6 +2083,33 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
 // ===========================================================================
 Check("bundles/核心 bundle 常量与上游一致（base / web-app）",
     DshCoreBundles.Base == "@deepseek-ai/dsh-base" && DshCoreBundles.WebApp == "@deepseek-ai/dsh-web-app");
+
+// ===========================================================================
+// 9. 启动方式（VersionOpenMode，work-log/82）
+// ===========================================================================
+var launchModeHome = Path.Combine(scratch, "launch-mode-home");
+Directory.CreateDirectory(launchModeHome);
+var launchModeInstance = BuildInstance("launch-mode", launchModeHome);
+var launchModeSettings = new VersionSettingsService(new LauncherPaths(Path.Combine(scratch, "launch-mode-paths")));
+Check("launch-mode/无设置文件时读回“未设置”（由界面回落 Desktop）",
+    launchModeSettings.Read(launchModeInstance).OpenMode is null
+    && !File.Exists(launchModeSettings.GetSettingsPath(launchModeInstance)));
+
+var launchModeData = launchModeSettings.Read(launchModeInstance);
+launchModeData.OpenMode = VersionOpenMode.Isolated;
+launchModeSettings.Save(launchModeInstance, launchModeData);
+var launchModePath = launchModeSettings.GetSettingsPath(launchModeInstance);
+var launchModeText = File.ReadAllText(launchModePath, Encoding.UTF8);
+Check("launch-mode/Isolated 能落盘读回（Clone 不丢字段）",
+    launchModeSettings.Read(launchModeInstance).OpenMode == VersionOpenMode.Isolated
+    && launchModeText.Contains("\"Isolated\"", StringComparison.Ordinal));
+
+File.WriteAllText(launchModePath, launchModeText.Replace("\"Isolated\"", "\"Launcher\""), Encoding.UTF8);
+Check("launch-mode/旧值 Launcher 按 Desktop 读回（旧设置不丢）",
+    launchModeSettings.Read(launchModeInstance).OpenMode == VersionOpenMode.Desktop);
+File.WriteAllText(launchModePath, launchModeText.Replace("\"Isolated\"", "\"NoSuchMode\""), Encoding.UTF8);
+Check("launch-mode/未知值保守回落 Desktop（不抛异常）",
+    launchModeSettings.Read(launchModeInstance).OpenMode == VersionOpenMode.Desktop);
 
 try
 {

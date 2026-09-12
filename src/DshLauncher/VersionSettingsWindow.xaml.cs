@@ -168,6 +168,7 @@ public partial class VersionSettingsWindow : UserControl
         {
             VersionOpenMode.Custom => "当前版本将使用手动绑定的本地入口，并继承此版本的 DSH_HOME。",
             VersionOpenMode.Web => "当前版本将使用 dsh 原生方式启动：服务启动后由 dsh 在默认浏览器打开 WebUI。",
+            VersionOpenMode.Isolated => "当前版本将用隔离 profile 启动：剥离第三方插件、保留 dsh 核心；不会修改你的 profile 与配置。",
             _ => "当前版本将使用启动器方式启动：服务启动后自动打开内部 Chat 窗口，不会重复弹浏览器。"
         };
         LoadEnvironmentVariables();
@@ -1149,6 +1150,7 @@ public partial class VersionSettingsWindow : UserControl
             {
                 VersionOpenMode.Web => "Web 启动（dsh 原生）",
                 VersionOpenMode.Custom => $"手动打开 {Path.GetFileName(customOpenTargetPath)}",
+                VersionOpenMode.Isolated => "隔离启动（剥离第三方插件）",
                 _ => "Desktop 启动（启动器方式）"
             };
             OpenModeStatusText.Text = snapshot is null

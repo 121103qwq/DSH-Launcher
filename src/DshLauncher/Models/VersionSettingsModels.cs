@@ -23,7 +23,14 @@ public enum VersionOpenMode
     Web,
     /// <summary>Desktop 启动：启动器所带的方式（启动服务 + 自动打开内部 Chat 窗口，抑制 dsh 浏览器双开）。</summary>
     Desktop,
-    Custom
+    Custom,
+
+    /// <summary>
+    /// 隔离启动：用隔离 profile 启动（剥离第三方插件、保留 dsh 核心，不改用户配置）。
+    /// 由实例卡片「启动」切分按钮的 ▼ 菜单选择（work-log/81、82）；实际启动链路在
+    /// <c>SafeProfileService</c>（Tier1/Tier2）。
+    /// </summary>
+    Isolated
 }
 
 /// <summary>
@@ -41,6 +48,7 @@ public sealed class VersionOpenModeConverter : JsonConverter<VersionOpenMode>
             "Web" => VersionOpenMode.Web,
             "Desktop" or "Launcher" => VersionOpenMode.Desktop,
             "Custom" => VersionOpenMode.Custom,
+            "Isolated" => VersionOpenMode.Isolated,
             _ => VersionOpenMode.Desktop
         };
     }
@@ -75,6 +83,13 @@ public sealed class VersionSettingsData
     /// Null keeps the legacy behavior: a detected DSH Desktop runtime opens as
     /// a desktop window, while normal DSh runtimes use Launcher web startup.
     /// </summary>
+    /// <remarks>
+    /// 属性级 <see cref="JsonConverterAttribute"/> 是必要的：<c>VersionSettingsService</c> 的
+    /// options 里注入了 <c>JsonStringEnumConverter</c>，对 <c>Nullable&lt;VersionOpenMode&gt;</c>
+    /// 它会抢先于枚举类型上的转换器，使旧值（Launcher）抛解析异常而不是回落 Desktop
+    /// （2026-09-12 SelfTest 实际抓到；旧值兼容只在属性级挂接后才成立）。
+    /// </remarks>
+    [JsonConverter(typeof(VersionOpenModeConverter))]
     public VersionOpenMode? OpenMode { get; set; }
 
     /// <summary>

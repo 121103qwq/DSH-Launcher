@@ -140,6 +140,7 @@
                                               Height="36">
                                         <ComboBoxItem Content="Web 启动（dsh 原生运行方式）" Tag="Web" />
                                         <ComboBoxItem Content="Desktop 启动（启动器所带的方式）" Tag="Desktop" />
+                                        <ComboBoxItem Content="隔离启动（剥离第三方插件，不改你的配置）" Tag="Isolated" />
                                         <ComboBoxItem Content="手动绑定程序、脚本或快捷方式" Tag="Custom" />
                                     </ComboBox>
                                     <Grid x:Name="CustomOpenTargetPanel" Margin="0,10,0,0">

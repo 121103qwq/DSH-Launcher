@@ -385,9 +385,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ? "打开窗口"
             : _instanceRunner.IsRunning(SelectedInstance.Id)
                 ? "打开实例"
-                : GetSelectedOpenMode() == VersionOpenMode.Web
-                    ? "Web 启动"
-                    : "Desktop 启动";
+                : GetEffectiveOpenMode() switch
+                {
+                    VersionOpenMode.Web => "Web 启动",
+                    VersionOpenMode.Isolated => "隔离启动",
+                    _ => "Desktop 启动"
+                };
 
     public bool CanStopInstance => CanStopInstanceCore(
         _isLifecycleInProgress,
@@ -427,6 +430,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             return VersionOpenMode.Desktop;
         }
+    }
+
+    /// <summary>
+    /// 实际生效的启动方式：dsh 运行时自带 desktop surface 时，启动器的「Desktop 启动」不再适用
+    /// （▼ 菜单里该项也会隐藏），按 Web 处理——判不到就不隐藏、不替换（work-log/81 §七.5）。
+    /// </summary>
+    private VersionOpenMode GetEffectiveOpenMode()
+    {
+        var mode = GetSelectedOpenMode();
+        return mode == VersionOpenMode.Desktop && SelectedInstance is { } instance && HasVendorDesktopSurface(instance)
+            ? VersionOpenMode.Web
+            : mode;
+    }
+
+    /// <summary>该实例当前 profile 是否含 dsh 自带的 desktop surface bundle（判不到＝false）。</summary>
+    private bool HasVendorDesktopSurface(ManagerInstance instance)
+    {
+        var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+        return PresentationSurfaceService.HasVendorDesktopSurface(ReadProfileBundles(instance, profileName));
     }
 
     internal static bool CanStopInstanceCore(
@@ -1639,7 +1661,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
 
             var resolved = ResolveInstanceById(Instances, instance.Id) ?? instance;
-            var openBrowser = GetSelectedOpenMode() == VersionOpenMode.Web;
+            var openBrowser = GetEffectiveOpenMode() == VersionOpenMode.Web;
             var result = await StartManagedInstanceAsync(resolved, openBrowser);
             if (result is null || !result.IsSuccess || result.ProcessId is null || result.WebUrl is null)
             {
@@ -3508,6 +3530,92 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             menu.PlacementTarget = button;
             menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
             menu.IsOpen = true;
+        }
+    }
+
+    /// <summary>
+    /// ▼ 菜单里的启动方式项（work-log/82，用户口径）：点击只切换方式并写回实例设置，**不启动**；
+    /// 真正启动由左侧主按钮触发。（「打开窗口」/「在终端打开」不是启动方式，仍是点击即执行。）
+    /// </summary>
+    private void LaunchModeMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.MenuItem { Tag: string tag }
+            || SelectedInstance is not { } instance
+            || !Enum.TryParse<VersionOpenMode>(tag, out var mode)
+            || mode is not (VersionOpenMode.Web or VersionOpenMode.Desktop or VersionOpenMode.Isolated))
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = _versionSettingsService.Read(instance);
+            settings.OpenMode = mode;
+            _versionSettingsService.Save(instance, settings);
+        }
+        catch (Exception ex)
+        {
+            ShowNotice("保存启动方式失败：" + ex.Message);
+            return;
+        }
+
+        OnPropertyChanged(nameof(StartInstanceButtonText));
+        OnPropertyChanged(nameof(IsCustomOpenBound));
+        ShowNotice(mode switch
+        {
+            VersionOpenMode.Web => "已切换为 Web 启动；点击左侧启动按钮生效。",
+            VersionOpenMode.Isolated => "已切换为隔离启动；点击左侧启动按钮生效（会剥离第三方插件、不改你的配置）。",
+            _ => "已切换为 Desktop 启动；点击左侧启动按钮生效。"
+        });
+    }
+
+    /// <summary>
+    /// 打开 ▼ 菜单前刷新勾选与可用性（work-log/82）：勾选＝当前生效的启动方式；
+    /// 「打开窗口」按运行时能力、「在终端打开」按呈现面决定可用性（置灰 + tooltip 说明原因）；
+    /// dsh 自带 desktop surface 时隐藏「Desktop 启动」与「打开窗口」（判不到不隐藏）。
+    /// </summary>
+    private void LaunchModeMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.ContextMenu menu
+            || SelectedInstance is not { } instance)
+        {
+            return;
+        }
+
+        var mode = GetEffectiveOpenMode();
+        var vendorDesktop = HasVendorDesktopSurface(instance);
+
+        foreach (var item in menu.Items.OfType<System.Windows.Controls.MenuItem>())
+        {
+            switch (item.Tag as string)
+            {
+                case "Desktop":
+                    item.Visibility = vendorDesktop ? Visibility.Collapsed : Visibility.Visible;
+                    item.IsChecked = !vendorDesktop && mode == VersionOpenMode.Desktop;
+                    break;
+                case "Web":
+                    item.IsChecked = mode == VersionOpenMode.Web;
+                    break;
+                case "Isolated":
+                    item.IsChecked = mode == VersionOpenMode.Isolated;
+                    break;
+                case "ElectronDesktop":
+                    item.Visibility = vendorDesktop ? Visibility.Collapsed : Visibility.Visible;
+                    item.IsEnabled = instance.CanOpenDesktopShell;
+                    item.ToolTip = instance.CanOpenDesktopShell
+                        ? "用 DSH Desktop 封装运行时打开原生窗口（与启动器窗口相互独立）。"
+                        : "该实例的运行时不是 DSH Desktop 封装（ElectronBootstrap），无法打开原生窗口。";
+                    break;
+                case "Terminal":
+                    var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+                    var surface = PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
+                    var supported = PresentationSurfaceService.SupportsTerminalLaunch(surface);
+                    item.IsEnabled = supported;
+                    item.ToolTip = supported
+                        ? $"在 Windows Terminal 里打开（profile：{profileName}）。"
+                        : $"当前呈现面是「{PresentationSurfaceService.Describe(surface)}」，不是在终端打开的终端面（如 dsh-tui 这类 profile）。";
+                    break;
+            }
         }
     }
 
@@ -5691,19 +5799,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        await StartSelectedInstanceAsync();
-    }
+        // 隔离启动方式（work-log/82）：主按钮执行隔离启动链路；运行中不重复启动，
+        // 仍交给 StartSelectedInstanceAsync 处理"打开已运行实例"。
+        if (GetEffectiveOpenMode() == VersionOpenMode.Isolated
+            && SelectedInstance is { } isolatedTarget
+            && !_instanceRunner.IsRunning(isolatedTarget.Id)
+            && isolatedTarget.RuntimeOwnership != InstanceRuntimeOwnership.Attached)
+        {
+            await StartIsolatedAsync();
+            return;
+        }
 
-    private async void StartLauncherInstance_Click(object sender, RoutedEventArgs e)
-    {
         await StartSelectedInstanceAsync();
     }
 
     /// <summary>
-    /// 隔离启动（A2，work-log/71）：主界面显式入口。复用崩溃恢复用的安全模式启动链路
-    /// （隔离 profile + 分层降级 + 零污染校验 + 启动证据），不改用户任何配置。
+    /// 隔离启动（A2，work-log/71；work-log/82 起改由主按钮在「隔离启动」方式下触发）。
+    /// 复用崩溃恢复用的安全模式启动链路（隔离 profile + 分层降级 + 零污染校验 + 启动证据），
+    /// 不改用户任何配置。
     /// </summary>
-    private async void IsolatedStart_Click(object sender, RoutedEventArgs e)
+    private async Task StartIsolatedAsync()
     {
         var instance = SelectedInstance;
         if (instance is null)
@@ -5726,7 +5841,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var openBrowser = GetSelectedOpenMode() == VersionOpenMode.Web;
+        var openBrowser = GetEffectiveOpenMode() == VersionOpenMode.Web;
         foreach (var tier in new[] { SafeProfileTier.Tier1KeepDeepSeekCore, SafeProfileTier.Tier2Minimal })
         {
             var result = await _instanceRunner.StartAsync(
@@ -5763,7 +5878,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (!string.IsNullOrWhiteSpace(selected.WebUrl))
             {
-                if (GetSelectedOpenMode() == VersionOpenMode.Web)
+                if (GetEffectiveOpenMode() == VersionOpenMode.Web)
                 {
                     // Web 启动模式：重新打开 = 在默认浏览器打开（与 dsh 原生行为一致）；
                     // 0.1.2-rc.1 起页面需要 launch token，优先用带 token 的地址。
@@ -7556,7 +7671,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task<bool> StartPreparedInstanceAndOpenAsync(ManagerInstance selected, bool interactive = true)
     {
-        var openBrowser = GetSelectedOpenMode() == VersionOpenMode.Web;
+        var openBrowser = GetEffectiveOpenMode() == VersionOpenMode.Web;
         var result = await StartManagedInstanceAsync(selected, openBrowser, interactive);
         if (result is null)
         {

@@ -84,6 +84,35 @@ public static class PresentationSurfaceService
         surface == PresentationSurface.Terminal;
 
     /// <summary>
+    /// dsh 运行时自带的 desktop surface（将来可能出现，如 <c>@deepseek-ai/dsh-desktop-app</c>）：
+    /// 仅以官方 scope 为准（<c>@deepseek-ai/dsh-desktop</c> 或 <c>@deepseek-ai/dsh-desktop-*</c>），
+    /// 社区包里同名字段不命中；判不到一律 false（不隐藏启动器的「Desktop 启动」/「打开窗口」，不猜）
+    /// ——work-log/81 §七.5。
+    /// </summary>
+    public static bool HasVendorDesktopSurface(IEnumerable<string>? bundles) =>
+        bundles?.Any(IsVendorDesktopBundle) == true;
+
+    private const string OfficialScopePrefix = "@deepseek-ai/";
+
+    private static bool IsVendorDesktopBundle(string? bundle)
+    {
+        if (string.IsNullOrWhiteSpace(bundle))
+        {
+            return false;
+        }
+
+        var name = bundle!.Trim();
+        if (!name.StartsWith(OfficialScopePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var segment = name[OfficialScopePrefix.Length..];
+        return segment.Equals("dsh-desktop", StringComparison.OrdinalIgnoreCase)
+            || segment.StartsWith("dsh-desktop-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// 构造 Windows Terminal 启动参数（不含可执行文件名本身）：
     /// <c>-d &lt;工作目录&gt; &lt;dsh 入口&gt; --profile &lt;profile&gt;</c>。
     /// 缺参数则返回 null（调用方提示，不猜）。
