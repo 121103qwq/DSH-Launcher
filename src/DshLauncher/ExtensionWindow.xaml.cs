@@ -33,6 +33,7 @@ public partial class ExtensionWindow : UserControl
     private readonly VersionSnapshotService? _versionSnapshotService;
     private readonly Action? _openPluginMatrix;
     private IReadOnlyList<SkillMarketItem> _skillMarketSnapshot = Array.Empty<SkillMarketItem>();
+    private string _skillMarketSourceSignature = string.Empty;
     private bool _isSkillMarketLoading;
     private bool _isSkillMarketMutating;
     private int _lastSkillProgressItemCount = -1;
@@ -179,7 +180,9 @@ public partial class ExtensionWindow : UserControl
     {
         var query = SkillMarketSearchBox.Text.Trim();
         var category = (SkillMarketCategoryList.SelectedItem as ListBoxItem)?.Tag?.ToString() ?? string.Empty;
-        // 变更集 123：Agent 页也支持「来源 / 排序」（与扩展页对齐；来源取设置页为 Skill 配的仓库）
+        // 变更集 123：Agent 页也支持「来源 / 排序」（与扩展页对齐）
+        // 变更集 124：重建来源选项——配置源 ∪ 当前列表实际仓库（缓存路径下 RefreshSkillMarketAsync 不会跑，挂在它里面会导致下拉恒为空）
+        RefreshSkillMarketSourceChoices(items);
         var sourceFilter = (SkillMarketSourceBox?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
         var sortKey = (SkillMarketSortBox?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Relevance";
         var instanceStopped = _instance.RuntimeStatus != InstanceRuntimeStatus.Running
@@ -204,35 +207,44 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    /// <summary>变更集 123：Agent 页的来源下拉——列出设置页为 Skill 配置的市场源（仓库），默认“全部来源”。</summary>
-    private void RefreshSkillMarketSourceChoices()
+    /// <summary>
+    /// 变更集 124：Agent 页的来源下拉——设置页为 Skill 配置的市场源（若有）∪ 当前列表里实际出现的仓库。
+    /// 只在选项集合真正变化时重建，避免渐进式刷新期间打断用户选择。
+    /// </summary>
+    private void RefreshSkillMarketSourceChoices(IReadOnlyList<SkillMarketItem> items)
     {
         if (SkillMarketSourceBox is null)
         {
             return;
         }
 
-        var previous = (SkillMarketSourceBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
-        var choices = new List<ComboBoxItem> { new() { Content = "全部来源", Tag = string.Empty } };
+        IReadOnlyList<MarketSourceSetting> configured;
         try
         {
-            foreach (var entry in new MarketSourceSettingsService().ReadEntries(MarketSourceKind.Skill))
-            {
-                choices.Add(new ComboBoxItem
-                {
-                    Content = entry.Enabled ? entry.Value : entry.Value + "（已停用）",
-                    Tag = entry.Value
-                });
-            }
+            configured = new MarketSourceSettingsService().ReadEntries(MarketSourceKind.Skill);
         }
         catch (Exception ex)
         {
             LauncherLog.Warn("读取 Skill 市场源失败：" + ex.Message);
+            configured = Array.Empty<MarketSourceSetting>();
         }
 
-        SkillMarketSourceBox.ItemsSource = choices;
-        SkillMarketSourceBox.SelectedItem = choices.FirstOrDefault(item =>
-            string.Equals(item.Tag?.ToString(), previous, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+        var choices = SkillMarketQuery.BuildSourceChoices(configured, items);
+        var signature = string.Join('\n', choices.Select(choice => choice.Tag));
+        if (signature == _skillMarketSourceSignature)
+        {
+            return;
+        }
+
+        var previous = (SkillMarketSourceBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
+        _skillMarketSourceSignature = signature;
+        SkillMarketSourceBox.ItemsSource = choices
+            .Select(choice => new ComboBoxItem { Content = choice.Label, Tag = choice.Tag })
+            .ToArray();
+        SkillMarketSourceBox.SelectedItem = SkillMarketSourceBox.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), previous, StringComparison.OrdinalIgnoreCase))
+            ?? SkillMarketSourceBox.Items[0];
     }
 
     private void SkillMarketFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -249,7 +261,6 @@ public partial class ExtensionWindow : UserControl
 
     private async Task RefreshSkillMarketAsync()
     {
-        RefreshSkillMarketSourceChoices();
         if (_skillMarketService is null || _isSkillMarketLoading)
         {
             return;
