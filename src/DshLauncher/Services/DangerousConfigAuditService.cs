@@ -329,6 +329,25 @@ public static class DangerousConfigAuditService
         return new DangerousConfigReport(findings, checkedItems, notes, DateTime.UtcNow);
     }
 
+    /// <summary>
+    /// 启动前提示用的权限类发现（work-log/82）：沙箱档位 / DSH_PERMISSION_MODE /
+    /// approval.policy 三类与“免确认 + 全盘”直接相关的 Danger 项（只看 Danger，
+    /// Warning/Info 不打扰启动）。
+    /// </summary>
+    public static IReadOnlyList<DangerousConfigFinding> FindStartupPermissionDangers(DangerousConfigReport report) =>
+        report.Findings
+            .Where(finding => finding.Severity == DangerousConfigSeverity.Danger
+                && StartupPermissionFindingIds.Contains(finding.Id, StringComparer.Ordinal))
+            .ToList();
+
+    private static readonly string[] StartupPermissionFindingIds =
+    {
+        "sandbox-mode",
+        "env-permission-mode",
+        "approval-policy",
+        "approval-policy-effective"
+    };
+
     /// <summary>读取 profile 层文本（cordis.yml / cordis.patch.yml）。读不到不算错。</summary>
     private static string ReadLayerText(string? profileDirectory, List<string> notes)
     {

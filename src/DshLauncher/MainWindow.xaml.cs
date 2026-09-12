@@ -101,6 +101,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _shutdownFromTray;
     private readonly SafeProfileService _safeProfileService = new();
     private readonly HashSet<string> _safeModeAsked = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _dangerConfigWarned = new(StringComparer.Ordinal);
     private readonly StartupEvidenceStore _startupEvidence;
     private readonly InstanceIdleTracker _idleTracker = new();
     private readonly CrashRecoveryService _crashRecovery;
@@ -5927,6 +5928,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             selected = resolvedStartTarget;
 
+            WarnAboutDangerousConfigOnce(selected);
+
             await StartPreparedInstanceAndOpenAsync(selected);
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -5942,6 +5945,57 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             EndLifecycleOperation();
         }
+    }
+
+    /// <summary>
+    /// D（work-log/82）：启动前提示危险权限配置（沙箱 danger-full-access / approval never）。
+    /// 每个 Launcher 会话、每个实例+profile 只提示一次；**只提示不改**任何配置。
+    /// 只走用户主动启动链路（自动重启/接管重启不弹，避免无人值守时弹窗）。
+    /// </summary>
+    private void WarnAboutDangerousConfigOnce(ManagerInstance instance)
+    {
+        string profileName;
+        try
+        {
+            profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+        }
+        catch
+        {
+            profileName = string.Empty;
+        }
+
+        var key = $"{instance.Id}|{profileName}";
+        if (!_dangerConfigWarned.Add(key))
+        {
+            return;
+        }
+
+        IReadOnlyList<DangerousConfigFinding> warnings;
+        try
+        {
+            warnings = DangerousConfigAuditService.FindStartupPermissionDangers(
+                DangerousConfigAuditService.Run(instance.DshHome, profileName));
+        }
+        catch
+        {
+            _dangerConfigWarned.Remove(key);
+            return;
+        }
+
+        if (warnings.Count == 0)
+        {
+            return;
+        }
+
+        var details = string.Join("\n", warnings.Select(item => $"· {item.Title}\n  {item.Advice}"));
+        System.Windows.MessageBox.Show(
+            this,
+            $"实例「{instance.Name}」当前 profile（{(string.IsNullOrWhiteSpace(profileName) ? "web" : profileName)}）存在高权限配置：\n\n"
+            + details
+            + "\n\n启动器只提示，不会修改你的配置；本次会话不再重复提示。完整检查见 设置 → 安全体检。",
+            "启动前安全提示",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
     }
 
     private void OpenDesktopShell_Click(object sender, RoutedEventArgs e)

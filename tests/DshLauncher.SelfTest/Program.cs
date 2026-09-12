@@ -1836,6 +1836,16 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && safeReport.CheckedItems.Count >= 5,
         string.Join(" | ", safeReport.Findings.Select(finding => finding.Id)));
 
+    var startupWarnings = DangerousConfigAuditService.FindStartupPermissionDangers(dangerousReport);
+    Check("danger-config/启动前提示只挑权限类危险项（沙箱/环境变量/审批），不含遥测等其它危险项",
+        startupWarnings.Any(finding => finding.Id == "sandbox-mode")
+        && startupWarnings.Any(finding => finding.Id == "approval-policy")
+        && startupWarnings.Any(finding => finding.Id == "env-permission-mode")
+        && startupWarnings.All(finding => finding.Severity == DangerousConfigSeverity.Danger)
+        && startupWarnings.All(finding => finding.Id is not ("telemetry-endpoint" or "hmr-enabled" or "plugin-origins"))
+        && DangerousConfigAuditService.FindStartupPermissionDangers(safeReport).Count == 0,
+        string.Join(" | ", startupWarnings.Select(finding => finding.Id)));
+
     // 环境变量只给 mode、不给 URL 时：按环境变量推断 effective-never，且不误报 URL。
     // 注意要用**没有显式写死 approval.policy** 的样本：profile 层写死的值会覆盖环境变量推导（这是真实语义）。
     var inferredHome = Path.Combine(dangerRoot, "inferred-home");
