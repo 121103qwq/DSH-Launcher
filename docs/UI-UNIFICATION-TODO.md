@@ -29,6 +29,7 @@
 - [x] 新增缺失令牌（**2026-09-13**，共 16 个）：`TitleBarChromeBrush`/`TitleBarChromeBorderBrush`/`TitleBarChromeHoverBrush`/`TitleBarChromePressedBrush`/`TitleBarCloseHoverBrush`、`DangerSurfaceBrush`/`SuccessSurfaceBrush`/`SuccessBorderBrush`/`InfoSurfaceBrush`/`HighlightSurfaceBrush`/`NeutralSurfaceBrush`、`StatusIdleBrush`、`EmptyStateGradientStartColor`/`EmptyStateGradientEndColor`（Color 型）+ `EmptyStateAccentBrush`/`EmptyStateAccentSoftBrush`；`WarningTextBrush` 等既有令牌改为被真实引用
 - [x] 复核 App.xaml 令牌表（**2026-09-13**）：命名统一（画刷 `*Brush`、颜色 `*Color`）、语义色成对；`docs/UI-DESIGN.md` 颜色表同步
 - [x] 硬化 harness 断言（**2026-09-13**）：旧的「8 色白名单」断言升级为**全量门禁**——遍历 `src/DshLauncher/**/*.xaml`，断言 `App.xaml` 之外无颜色字面量
+- [x] **收尾（2026-09-13，变更集 132）**：上述门禁有**两块盲区**——`App.xaml` 样式/模板内 **28 处** + C# 内 **24 处**（含子目录 `Models/`、`Controls/`）；新增 **16 个令牌**全部收敛；门禁升级为「**令牌定义行是唯一合法处**」（含 App.xaml 非令牌行 + C#；`FromRgb/FromArgb` 只认全数字参数，从变量派生 alpha 合法）
 
 ### 1.3 字体与层级
 - [x] `FontSize="10"` 两处（`ExtensionWindow.xaml:504`、`MainWindow.xaml:241`）→ **提到 12**（**2026-09-13 完成**，变更集 128）
@@ -133,4 +134,5 @@ grep -rn 'Width="[2-9][0-9][0-9]"' --include=*.xaml src/DshLauncher
 | 2026-09-13 | **变更集 129（B 收尾：小字字重）**：字重规则按角色收窄为「仅胶囊/徽标/状态标签 12px + SemiBold」；6 个真胶囊修正；新增规则型胶囊门禁 |
 | 2026-09-13 | **变更集 130（UI 统一 C：图标体系）**：17 种字形进规范表（含补扫出的 ⧗ ＋ ↗）；标题栏三字形统一 18px；`⌄`→`▾`；新增 `IconTextGap` 令牌并替换 8 处间距；新增「字形在表内 + 无 emoji」门禁 |
 | 2026-09-13 | **变更集 131（UI 统一 D：菜单统一）**：隐式 MenuItem 样式 + 禁用态 + 危险项样式；菜单面颜色令牌化（新增 `MenuHoverBrush`）；C# 动态菜单状态点改令牌；**过程中因 StaticResource 前向引用把启动器改崩一次，harness 冒烟断言抓住并修复** |
+| 2026-09-13 | **变更集 132（UI 统一 A2：颜色令牌化收尾）**：补齐 127 的盲区（App.xaml 样式 28 处 + C# 24 处）→ 16 个新令牌；门禁升级为「令牌定义行唯一合法」；新增菜单样式断言 |
 | 2026-09-13 | 动手前复核：旧扫描数字作废（颜色 8→**38** 处、字号 1→**26** 处偏离阶梯、固定宽 →**22** 处、窗口 4+2→**5 窗口 + 8 内嵌页**）；补测 `DynamicResource` **0 处**、令牌表 34 键与真实缺项——已写入上方第 2 节 |

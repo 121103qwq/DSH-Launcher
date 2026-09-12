@@ -111,8 +111,8 @@ public sealed class ProviderCardViewModel : INotifyPropertyChanged
         : "点击启用此 Provider";
 
     public WpfBrush ToggleBrush => IsEnabled
-        ? new SolidColorBrush(WpfColor.FromRgb(37, 135, 90))
-        : new SolidColorBrush(WpfColor.FromRgb(190, 75, 55));
+        ? Services.UiBrush.Get("SuccessTextBrush")
+        : Services.UiBrush.Get("DangerTextBrush");
 
     public string StatusText => _diagnostic.StatusText;
 

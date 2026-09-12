@@ -1143,7 +1143,7 @@ public partial class VersionSettingsWindow : UserControl
         foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, HealthButton, ExportButton })
         {
             button.Background = ReferenceEquals(button, activeButton)
-                ? new System.Windows.Media.SolidColorBrush(WpfColor.FromRgb(227, 240, 253))
+                ? Services.UiBrush.Get("HighlightSurfaceBrush")
                 : WpfBrushes.Transparent;
             button.Foreground = ReferenceEquals(button, activeButton)
                 ? (WpfBrush)FindResource("BlueBrush")

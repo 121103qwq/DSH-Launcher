@@ -26,6 +26,23 @@
         <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#F8FBFE" />
         <SolidColorBrush x:Key="HoverSurfaceBrush" Color="#F7FAFD" />
         <SolidColorBrush x:Key="MenuHoverBrush" Color="#E0EAFD" />   <!-- 菜单项悬停底（变更集 131） -->
+        <!-- 变更集 132（A2 颜色令牌化收尾）：样式/模板里原以字面量写死的颜色 -->
+        <Color x:Key="BlueColor">#1370F3</Color>
+        <Color x:Key="BlueDarkColor">#0B5BCB</Color>
+        <Color x:Key="ShadowColor">#3E5C7A</Color>
+        <SolidColorBrush x:Key="OnBrandTextBrush" Color="#FFFFFF" />        <!-- 品牌蓝底上的文字/描边 -->
+        <SolidColorBrush x:Key="ControlBorderBrush" Color="#C5D5E6" />      <!-- 输入类控件描边 -->
+        <SolidColorBrush x:Key="SubtleSurfaceBrush" Color="#E7F1FC" />      <!-- 次级浅蓝面（禁用/选中/进度底） -->
+        <SolidColorBrush x:Key="SelectionBrush" Color="#B8DCF8" />          <!-- 文本选择高亮 -->
+        <SolidColorBrush x:Key="ScrollThumbBrush" Color="#C8D8EA" />        <!-- 滚动条滑块（常态/悬停/拖动） -->
+        <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#96C0F9" />
+        <SolidColorBrush x:Key="ScrollThumbDragBrush" Color="#4890F5" />
+        <SolidColorBrush x:Key="StatusOkSoftBrush" Color="#342EA66B" />     <!-- 状态胶囊底（≈15% 绿/红/灰） -->
+        <SolidColorBrush x:Key="StatusErrorSoftBrush" Color="#34D94A4A" />
+        <SolidColorBrush x:Key="StatusIdleSoftBrush" Color="#2C96A3B5" />
+        <SolidColorBrush x:Key="StatusOkTextBrush" Color="#1F7A50" />       <!-- 状态胶囊文字（深色调） -->
+        <SolidColorBrush x:Key="StatusIdleTextBrush" Color="#606B7A" />
+        <SolidColorBrush x:Key="AccentPurpleBrush" Color="#6A3D9A" />       <!-- TUI/home 来源标签 -->
 
         <!-- 标题栏 chrome（原 MainWindow 里散落的白色叠加） -->
         <SolidColorBrush x:Key="TitleBarChromeBrush" Color="#55FFFFFF" />
@@ -58,12 +75,12 @@
         <Thickness x:Key="ItemMargin">0,0,0,8</Thickness>
         <Thickness x:Key="IconTextGap">0,0,8,0</Thickness>   <!-- 图标与文字的间距（变更集 130） -->
         <LinearGradientBrush x:Key="TitleBarGradient" StartPoint="0,0" EndPoint="1,0">
-            <GradientStop Color="#0B5BCB" Offset="0" />
-            <GradientStop Color="#1370F3" Offset="1" />
+            <GradientStop Color="{StaticResource BlueDarkColor}" Offset="0" />
+            <GradientStop Color="{StaticResource BlueColor}" Offset="1" />
         </LinearGradientBrush>
 
-        <DropShadowEffect x:Key="CardShadow" Color="#3E5C7A" BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.14" />
-        <DropShadowEffect x:Key="CardShadowSoft" Color="#3E5C7A" BlurRadius="10" ShadowDepth="1" Direction="270" Opacity="0.08" />
+        <DropShadowEffect x:Key="CardShadow" Color="{StaticResource ShadowColor}" BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.14" />
+        <DropShadowEffect x:Key="CardShadowSoft" Color="{StaticResource ShadowColor}" BlurRadius="10" ShadowDepth="1" Direction="270" Opacity="0.08" />
 
         <!-- 文本渲染：Display/ClearType（WPF 默认 Ideal 在高 DPI 下发虚）；
              布局取整避免亚像素错位。应用到所有 Window 与嵌入 UserControl。 -->
@@ -99,13 +116,13 @@
                                     <Thumb>
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="{x:Type Thumb}">
-                                                <Border x:Name="ThumbChrome" Background="#C8D8EA" CornerRadius="5" Margin="2" />
+                                                <Border x:Name="ThumbChrome" Background="{StaticResource ScrollThumbBrush}" CornerRadius="5" Margin="2" />
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="ThumbChrome" Property="Background" Value="#96C0F9" />
+                                                        <Setter TargetName="ThumbChrome" Property="Background" Value="{StaticResource ScrollThumbHoverBrush}" />
                                                     </Trigger>
                                                     <Trigger Property="IsDragging" Value="True">
-                                                        <Setter TargetName="ThumbChrome" Property="Background" Value="#4890F5" />
+                                                        <Setter TargetName="ThumbChrome" Property="Background" Value="{StaticResource ScrollThumbDragBrush}" />
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
@@ -210,8 +227,8 @@
             <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
             <Setter Property="FontSize" Value="14" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-            <Setter Property="Background" Value="#FFFFFF" />
-            <Setter Property="BorderBrush" Value="#C5D5E6" />
+            <Setter Property="Background" Value="{StaticResource CardBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="16,9" />
             <Setter Property="Cursor" Value="Hand" />
@@ -235,7 +252,7 @@
                     <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                 </Trigger>
                 <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="#E7F1FC" />
+                    <Setter Property="Background" Value="{StaticResource SubtleSurfaceBrush}" />
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
                     <Setter Property="Opacity" Value="0.5" />
@@ -246,10 +263,10 @@
         <Style TargetType="TextBox">
             <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Background" Value="White" />
+            <Setter Property="Background" Value="{StaticResource CardBrush}" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="CaretBrush" Value="{StaticResource TextBrush}" />
-            <Setter Property="SelectionBrush" Value="#B8DCF8" />
+            <Setter Property="SelectionBrush" Value="{StaticResource SelectionBrush}" />
             <Setter Property="SelectionTextBrush" Value="{StaticResource TextBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
             <Setter Property="BorderThickness" Value="1" />
@@ -295,7 +312,7 @@
             <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-            <Setter Property="Background" Value="White" />
+            <Setter Property="Background" Value="{StaticResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="10,6" />
@@ -362,7 +379,7 @@
                                    Placement="Bottom"
                                    AllowsTransparency="True"
                                    PopupAnimation="Slide">
-                                <Border Background="White"
+                                <Border Background="{StaticResource CardBrush}"
                                         BorderBrush="{StaticResource LineBrush}"
                                         BorderThickness="1"
                                         CornerRadius="8"
@@ -410,10 +427,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="#E3F0FD" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource HighlightSurfaceBrush}" />
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="#E7F1FC" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource SubtleSurfaceBrush}" />
                                 <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -451,7 +468,7 @@
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="TabChrome" Property="Background" Value="{StaticResource BlueBrush}" />
                                 <Setter TargetName="TabChrome" Property="BorderBrush" Value="{StaticResource BlueBrush}" />
-                                <Setter Property="Foreground" Value="White" />
+                                <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="TabChrome" Property="BorderBrush" Value="{StaticResource BlueBrush}" />
@@ -464,25 +481,25 @@
         <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{StaticResource BlueBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource BlueBrush}" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="{StaticResource BlueDarkBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource BlueDarkBrush}" />
-                    <Setter Property="Foreground" Value="White" />
+                    <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
                 </Trigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
-            <Setter Property="Background" Value="White" />
+            <Setter Property="Background" Value="{StaticResource CardBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="{StaticResource DangerBrush}" />
-                    <Setter Property="Foreground" Value="White" />
+                    <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -494,7 +511,7 @@
             <Setter Property="FontSize" Value="15" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#E0EAFD" />
+                    <Setter Property="Background" Value="{StaticResource MenuHoverBrush}" />
                     <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                 </Trigger>
             </Style.Triggers>
@@ -502,7 +519,7 @@
         <Style x:Key="TopNavButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
             <Setter Property="Padding" Value="15,8" />
             <Setter Property="FontSize" Value="14" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -517,10 +534,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="NavChrome" Property="Background" Value="#55FFFFFF" />
+                                <Setter TargetName="NavChrome" Property="Background" Value="{StaticResource TitleBarChromeBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="NavChrome" Property="Background" Value="#B3FFFFFF" />
+                                <Setter TargetName="NavChrome" Property="Background" Value="{StaticResource TitleBarChromePressedBrush}" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.5" />
@@ -545,14 +562,14 @@
                                     Width="18"
                                     Height="18"
                                     CornerRadius="5"
-                                    Background="White"
+                                    Background="{StaticResource CardBrush}"
                                     BorderBrush="{StaticResource LineBrush}"
                                     BorderThickness="1"
                                     VerticalAlignment="Center"
                                     SnapsToDevicePixels="True">
                                 <Path x:Name="Check"
                                       Data="M 4,9 L 8,13 L 14,5"
-                                      Stroke="White"
+                                      Stroke="{StaticResource OnBrandTextBrush}"
                                       StrokeThickness="2"
                                       StrokeStartLineCap="Round"
                                       StrokeEndLineCap="Round"
@@ -587,7 +604,7 @@
         <!-- 进度条：蓝色圆角；不确定态用脉冲代替系统绿色块 -->
         <Style TargetType="ProgressBar">
             <Setter Property="Height" Value="6" />
-            <Setter Property="Background" Value="#E7F1FC" />
+            <Setter Property="Background" Value="{StaticResource SubtleSurfaceBrush}" />
             <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
             <Setter Property="Template">
                 <Setter.Value>

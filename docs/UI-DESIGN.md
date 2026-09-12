@@ -35,8 +35,25 @@
 | `InfoSurfaceBrush` / `HighlightSurfaceBrush` / `NeutralSurfaceBrush` | #F4F8FC / #E3F0FD / #F4F5F7 | 信息底/高亮底/中性底 |
 | `TitleBarChromeBrush` / `TitleBarChromeBorderBrush` / `TitleBarChromeHoverBrush` / `TitleBarChromePressedBrush` / `TitleBarCloseHoverBrush` | #55FFFFFF / #80FFFFFF / #80FFFFFF / #B3FFFFFF / #CE2111 | 标题栏按钮常态/描边/悬停/按下/关闭悬停 |
 | `EmptyStateGradientStartColor` / `EmptyStateGradientEndColor`（Color） + `EmptyStateAccentBrush` / `EmptyStateAccentSoftBrush` | #4890F5 / #96C0F9 / #7FB2F9 / #C6DCFC | 空态插画（GradientStop 需 Color 型） |
+| `MenuHoverBrush` | #E0EAFD | 菜单项悬停底（变更集 131） |
+| `BlueColor` / `BlueDarkColor`（Color） | #1370F3 / #0B5BCB | 标题栏渐变停靠点（GradientStop 需 Color 型） |
+| `ShadowColor`（Color） | #3E5C7A | 卡片阴影（`CardShadow` / `CardShadowSoft`） |
+| `OnBrandTextBrush` | #FFFFFF | 品牌蓝底上的文字 / 描边 |
+| `ControlBorderBrush` | #C5D5E6 | 输入类控件描边 |
+| `SubtleSurfaceBrush` | #E7F1FC | 次级浅蓝面（禁用底 / 选中底 / 进度条底） |
+| `SelectionBrush` | #B8DCF8 | 文本选择高亮 |
+| `ScrollThumbBrush` / `ScrollThumbHoverBrush` / `ScrollThumbDragBrush` | #C8D8EA / #96C0F9 / #4890F5 | 滚动条滑块常态 / 悬停 / 拖动 |
+| `StatusOkSoftBrush` / `StatusErrorSoftBrush` / `StatusIdleSoftBrush` | #342EA66B / #34D94A4A / #2C96A3B5 | 状态胶囊底（≈15% 透明，8 位 ARGB） |
+| `StatusOkTextBrush` / `StatusIdleTextBrush` | #1F7A50 / #606B7A | 状态胶囊文字（深色调） |
+| `AccentPurpleBrush` | #6A3D9A | `Tui` / home 来源标签 |
 
-> **禁止**在窗口 XAML 里硬编码**任何**颜色字面量（`#RRGGBB` / `#AARRGGBB`）——令牌只在 `App.xaml` 定义；harness 断言「颜色已全部令牌化」逐文件扫描整个 `src/DshLauncher`（变更集 127 起为全量门禁）。
+> **颜色字面量的唯一合法归宿＝本表的令牌定义行**（`App.xaml` 里含 `x:Key=` 的行）。除此之外：
+> - **XAML**（含 `App.xaml` 的样式/模板内部）不得出现 `#RRGGBB` / `#AARRGGBB`；
+> - **C#** 不得出现 `Color.FromRgb/FromArgb`（**全数字参数**）与 `Colors.*`；取令牌用 `Services.UiBrush.Get("<令牌名>")`。
+>
+> **例外（合法）**：从**已有颜色派生**的写法，如 `Color.FromArgb(36, solid.Color.R, solid.Color.G, solid.Color.B)` —— 门禁按「全数字参数」放行。
+> harness 断言「颜色已全部令牌化（XAML 含 App.xaml 非令牌行 + C# 均无颜色字面量）」自 **变更集 132** 起为全量门禁
+> （变更集 127 的首版规则是「XAML 里、App.xaml 之外」，实际放过了 52 处）。
 
 ### 字体与字号
 

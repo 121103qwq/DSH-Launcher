@@ -214,7 +214,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public Visibility BalanceVisibility { get; private set; } = Visibility.Collapsed;
 
     public WpfBrush BalanceForeground { get; private set; } =
-        new SolidColorBrush(WpfColor.FromRgb(46, 166, 107));
+        Services.UiBrush.Get("GreenBrush");
 
     public ObservableCollection<ManagerInstance> Instances { get; } = new();
 
@@ -322,25 +322,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public WpfBrush SelectedInstanceStatusBrush => SelectedInstance?.RuntimeStatus switch
     {
-        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromRgb(46, 166, 107)),
-        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromRgb(217, 74, 74)),
-        _ => new SolidColorBrush(WpfColor.FromRgb(150, 163, 181))
+        InstanceRuntimeStatus.Running => Services.UiBrush.Get("GreenBrush"),
+        InstanceRuntimeStatus.Error => Services.UiBrush.Get("DangerBrush"),
+        _ => Services.UiBrush.Get("StatusIdleBrush")
     };
 
     /// <summary>状态胶囊底色（状态色 15% 透明度）。</summary>
     public WpfBrush SelectedInstanceStatusBackgroundBrush => SelectedInstance?.RuntimeStatus switch
     {
-        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromArgb(52, 46, 166, 107)),
-        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromArgb(52, 217, 74, 74)),
-        _ => new SolidColorBrush(WpfColor.FromArgb(44, 150, 163, 181))
+        InstanceRuntimeStatus.Running => Services.UiBrush.Get("StatusOkSoftBrush"),
+        InstanceRuntimeStatus.Error => Services.UiBrush.Get("StatusErrorSoftBrush"),
+        _ => Services.UiBrush.Get("StatusIdleSoftBrush")
     };
 
     /// <summary>状态胶囊文字色（状态色深色调）。</summary>
     public WpfBrush SelectedInstanceStatusTextBrush => SelectedInstance?.RuntimeStatus switch
     {
-        InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromRgb(31, 122, 80)),
-        InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromRgb(180, 35, 24)),
-        _ => new SolidColorBrush(WpfColor.FromRgb(96, 107, 122))
+        InstanceRuntimeStatus.Running => Services.UiBrush.Get("StatusOkTextBrush"),
+        InstanceRuntimeStatus.Error => Services.UiBrush.Get("DangerBrush"),
+        _ => Services.UiBrush.Get("StatusIdleTextBrush")
     };
 
     public bool CanStartInstance => SelectedInstance is null
@@ -822,13 +822,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
 
     public System.Windows.Media.Brush NodeStatusBrush => _isNodeDetectionInProgress
-        ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(113, 129, 150))
+        ? Services.UiBrush.Get("StatusIdleTextBrush")
         : GetSelectedNodeCompatibility() switch
         {
-            NodeRuntimeCompatibility.Compatible => new SolidColorBrush(System.Windows.Media.Color.FromRgb(37, 135, 90)),
-            NodeRuntimeCompatibility.Incompatible => new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 75, 55)),
-            NodeRuntimeCompatibility.Missing => new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 105, 30)),
-            _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(113, 129, 150))
+            NodeRuntimeCompatibility.Compatible => Services.UiBrush.Get("SuccessTextBrush"),
+            NodeRuntimeCompatibility.Incompatible => Services.UiBrush.Get("DangerTextBrush"),
+            NodeRuntimeCompatibility.Missing => Services.UiBrush.Get("WarningTextBrush"),
+            _ => Services.UiBrush.Get("StatusIdleTextBrush")
         };
 
     public string NodeVersionText => _isNodeDetectionInProgress
@@ -850,8 +850,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string DshStatusText => _dshRuntime.IsAvailable ? "可用" : "未安装";
 
     public System.Windows.Media.Brush DshStatusBrush => _dshRuntime.IsAvailable
-        ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(37, 135, 90))
-        : new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 105, 30));
+        ? Services.UiBrush.Get("SuccessTextBrush")
+        : Services.UiBrush.Get("WarningTextBrush");
 
     public string DshVersionText => _dshRuntime.IsAvailable
         ? $"{_dshRuntime.DisplayVersionText} · {(_dshRuntime.ExecutablePath is null ? "启动文件未解析" : "已找到启动文件")}"
@@ -3233,7 +3233,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 var selected = i == index;
                 navButtons[i].Background = selected
-                    ? new SolidColorBrush(WpfColor.FromRgb(227, 240, 253))
+                    ? Services.UiBrush.Get("HighlightSurfaceBrush")
                     : WpfBrushes.Transparent;
                 navButtons[i].Foreground = selected
                     ? (WpfBrush)FindResource("BlueBrush")
@@ -4230,14 +4230,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     BalanceText = $"余额 {data.Currency} {data.Total}（赠送 {data.Granted} · 充值 {data.ToppedUp}）";
                     BalanceDetailText = data.Available ? "账户可用" : "账户不可用或余额不足";
-                    BalanceForeground = new SolidColorBrush(WpfColor.FromRgb(46, 166, 107));
+                    BalanceForeground = Services.UiBrush.Get("GreenBrush");
                 }
                 else
                 {
                     // 已开启但取不到：给可见的灰提示（悬停看原因），否则用户会以为开关无效。
                     BalanceText = "余额不可用（悬停查看原因）";
                     BalanceDetailText = result.Error ?? "未知错误";
-                    BalanceForeground = new SolidColorBrush(WpfColor.FromRgb(140, 140, 140));
+                    BalanceForeground = Services.UiBrush.Get("MutedBrush");
                 }
 
                 BalanceVisibility = Visibility.Visible;

@@ -19,9 +19,12 @@ namespace DshLauncher;
 /// </summary>
 public partial class EnvironmentScanWindow : UserControl, INotifyPropertyChanged
 {
-    private static readonly Brush WebBrush = new SolidColorBrush(Color.FromRgb(0x1B, 0x5E, 0x20));
-    private static readonly Brush TuiBrush = new SolidColorBrush(Color.FromRgb(0x6A, 0x3D, 0x9A));
-    private static readonly Brush OtherBrush = new SolidColorBrush(Color.FromRgb(0x8C, 0x8C, 0x8C));
+    // 变更集 132：来源标签色改走令牌（原为三等价的颜色字面量）。保持 static——它们在嵌套类
+    // ScanProfileItem 的静态上下文里被引用；静态初始化发生在类型首次使用时（此时 App 资源已就绪），
+    // 且 Services.UiBrush.Get 对 Application.Current 为空有兜底（返回透明画刷，不会抛）。
+    private static readonly Brush WebBrush = Services.UiBrush.Get("SuccessTextBrush");
+    private static readonly Brush TuiBrush = Services.UiBrush.Get("AccentPurpleBrush");
+    private static readonly Brush OtherBrush = Services.UiBrush.Get("MutedBrush");
 
     private readonly DshEnvironmentScanner _scanner;
     private readonly Func<IReadOnlyCollection<ManagerInstance>> _instancesProvider;
