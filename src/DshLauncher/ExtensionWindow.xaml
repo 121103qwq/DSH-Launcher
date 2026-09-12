@@ -66,10 +66,10 @@
                                    Margin="8,0,0,0" />
                     </Grid>
                     <StackPanel Margin="0,4,0,0">
-                        <Button x:Name="CurrentInstanceRootPathLink"
+                        <Button AutomationProperties.Name="当前实例安装目录（点击复制）" x:Name="CurrentInstanceRootPathLink"
                                 Style="{StaticResource PathLinkButton}"
                                 Click="PathLink_Click" />
-                        <Button x:Name="CurrentInstanceDshHomeLink"
+                        <Button AutomationProperties.Name="当前实例 DSH_HOME（点击复制）" x:Name="CurrentInstanceDshHomeLink"
                                 Style="{StaticResource PathLinkButton}"
                                 Click="PathLink_Click"
                                 Margin="0,3,0,0" />
@@ -223,7 +223,7 @@
                                        Foreground="{StaticResource MutedBrush}"
                                        FontSize="11"
                                        VerticalAlignment="Center" />
-                            <Button x:Name="SelectedLocationLink"
+                            <Button AutomationProperties.Name="所选位置路径（点击复制）" x:Name="SelectedLocationLink"
                                     Style="{StaticResource PathLinkButton}"
                                     Click="PathLink_Click" />
                         </StackPanel>

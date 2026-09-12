@@ -225,6 +225,14 @@
 `SnapsToDevicePixels` + `UseLayoutRounding`。颜色按语义取 `SuccessTextBrush` /
 `DangerTextBrush` / `MutedBrush` 系。
 
+### 键盘可达性与自动化（2026-09-13 统一，变更集 138）
+
+- **焦点可见**：统一焦点框 `AppFocusVisual`（蓝色虚线描边 2px），挂在 keyed 按钮样式上（`PrimaryButton`/`DangerButton`/`NavButton`/`TopNavButton`/`PathLinkButton`）。**禁止**把 `FocusVisualStyle` 设为 `{x:Null}`。
+- **可访问名**：**无文字按钮必须有 `AutomationProperties.Name`**（导航图标、路径复制、标题栏三按钮、实例切换、启动按钮等 15 处已补）；有 ToolTip 的按钮可直接复用其文案。
+- **键盘约定**：`Enter` = 模态窗主按钮（`IsDefault="True"`，当前 3/3）；`Esc` = 取消/关闭（`IsCancel="True"`，当前 3/3）；列表方向键 = WPF 默认；**不手动设 `TabIndex`**（靠视觉顺序）；`AccessKey` 仅在必要时使用。
+- **提示（`ShowNotice`）**：当前为**常驻**提示条（页面顶部，直到被下一条替换）；"自动消失时长"待做（需定时器 + 淡出）。
+- ⚠️ **禁止在 `App.xaml` 写"隐式样式 + `BasedOn="{StaticResource {x:Type X}}"`"**：隐式样式在**字典加载期**就解析主题样式，解析不到会抛 `XamlParseException`（`ResourceDictionary.DeferrableContent`），应用启动即崩；keyed 样式是**用到时**才解析，所以同样写法安全。焦点框因此挂在 keyed 样式上而非隐式样式。
+
 ### 窗口与页面框架（2026-09-13 统一，变更集 137）
 
 - **标题层级**：**页面标题 20px**（`FontWeight=SemiBold`）；**卡片标题 18px**。内嵌页标题一律 20——本轮把「扫描本机 DSH 环境」「任务中心」「日志中心」「插件 × 实例矩阵」从 18 提到 20。

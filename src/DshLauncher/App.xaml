@@ -478,7 +478,22 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- 变更集 138（UI 统一 I）：统一键盘焦点框——虚线描边 + 2px 外扩，深色主题下也可见 -->
+        <Style x:Key="AppFocusVisual">
+            <Setter Property="Control.Template">
+                <Setter.Value>
+                    <ControlTemplate>
+                        <Rectangle Margin="1"
+                                   Stroke="{StaticResource BlueBrush}"
+                                   StrokeThickness="2"
+                                   StrokeDashArray="1 1"
+                                   SnapsToDevicePixels="True" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}" />
             <Setter Property="MinHeight" Value="38" />
             <Setter Property="Padding" Value="16,0" />
             <Setter Property="Background" Value="{StaticResource BlueBrush}" />
@@ -494,6 +509,7 @@
             </Style.Triggers>
         </Style>
         <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}" />
             <Setter Property="MinHeight" Value="38" />
             <Setter Property="Padding" Value="16,0" />
             <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
@@ -508,6 +524,7 @@
             </Style.Triggers>
         </Style>
         <Style x:Key="NavButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}" />
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
@@ -521,6 +538,7 @@
             </Style.Triggers>
         </Style>
         <Style x:Key="TopNavButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
@@ -649,7 +667,7 @@
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}" />
             <Setter Property="HorizontalContentAlignment" Value="Left" />
             <Setter Property="Template">
                 <Setter.Value>
