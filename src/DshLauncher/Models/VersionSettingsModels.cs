@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace DshLauncher.Models;
 
 public enum ConversationSyncMode
@@ -13,11 +16,37 @@ public enum PluginInstallMode
     Compatibility
 }
 
+[JsonConverter(typeof(VersionOpenModeConverter))]
 public enum VersionOpenMode
 {
-    Launcher,
+    /// <summary>Web 启动：dsh 原生运行方式（服务由 Launcher 管理，打开方式交给 dsh 默认浏览器）。</summary>
+    Web,
+    /// <summary>Desktop 启动：启动器所带的方式（启动服务 + 自动打开内部 Chat 窗口，抑制 dsh 浏览器双开）。</summary>
     Desktop,
     Custom
+}
+
+/// <summary>
+/// 兼容旧设置文件：v1.0.7 的枚举值是 Launcher/Desktop/Custom，其中
+/// "Launcher"（启动器方式）重命名为 Desktop；旧 "Desktop"（DSH Desktop 封装窗口）
+/// 不再是打开方式选项（该入口保留为启动页的独立按钮），保守映射到 Desktop。
+/// </summary>
+public sealed class VersionOpenModeConverter : JsonConverter<VersionOpenMode>
+{
+    public override VersionOpenMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var value = reader.GetString();
+        return value switch
+        {
+            "Web" => VersionOpenMode.Web,
+            "Desktop" or "Launcher" => VersionOpenMode.Desktop,
+            "Custom" => VersionOpenMode.Custom,
+            _ => VersionOpenMode.Desktop
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, VersionOpenMode value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.ToString());
 }
 
 public sealed class VersionSettingsData
@@ -52,6 +81,35 @@ public sealed class VersionSettingsData
 /// <summary>
 /// Launcher 级设置：作用域是全部版本，而不是某一个版本的 DSH_HOME。
 /// </summary>
+public enum CloseBehavior
+{
+    /// <summary>最小化到托盘：关闭主窗口仅隐藏，实例继续运行，托盘可恢复。</summary>
+    MinimizeToTray,
+    /// <summary>关闭启动器与实例：退出应用并停止 Launcher 管理的实例。</summary>
+    ExitAndStopInstances
+}
+
+/// <summary>
+/// 兼容旧设置文件：早期版本存在 CloseBehavior.Exit（“仅退出不停实例”）语义，
+/// 与“web/desktop 窗口不具备关停实例能力”的设计冲突，已移除；旧值一律映射到
+/// ExitAndStopInstances（退出并停实例）。
+/// </summary>
+public sealed class CloseBehaviorConverter : JsonConverter<CloseBehavior>
+{
+    public override CloseBehavior Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var value = reader.GetString();
+        return value switch
+        {
+            "MinimizeToTray" => CloseBehavior.MinimizeToTray,
+            _ => CloseBehavior.ExitAndStopInstances
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, CloseBehavior value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.ToString());
+}
+
 public sealed class LauncherSettingsData
 {
     public bool SyncAllConfiguration { get; set; }
@@ -59,6 +117,10 @@ public sealed class LauncherSettingsData
     public List<string> Workspaces { get; set; } = new();
 
     public PluginInstallMode PluginInstallMode { get; set; } = PluginInstallMode.Fast;
+
+    /// <summary>点击主窗口 × 时的行为。</summary>
+    [JsonConverter(typeof(CloseBehaviorConverter))]
+    public CloseBehavior CloseBehavior { get; set; } = CloseBehavior.MinimizeToTray;
 
     /// <summary>
     /// Optional npm global prefix used only for the Launcher-managed DSh runtime.

@@ -22,14 +22,17 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly Dictionary<string, AttachedDshService> _attached = new(StringComparer.Ordinal);
     private readonly Func<int> _portAllocator;
     private readonly DshHomeImportService _homeImporter;
+    private readonly ExtensionService? _extensionService;
     private bool _disposed;
 
     public DshInstanceRunner(
         Func<int>? portAllocator = null,
-        DshHomeImportService? homeImporter = null)
+        DshHomeImportService? homeImporter = null,
+        ExtensionService? extensionService = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
+        _extensionService = extensionService;
     }
 
     public bool IsRunning(string instanceId)
@@ -207,7 +210,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     public async Task<DshInstanceRunResult> StartAsync(
         ManagerInstance instance,
         NodeRuntimeInfo? nodeRuntime,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool openBrowser = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -273,6 +277,30 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                 return DshInstanceRunResult.Failure(
                     $"恢复导入配置引用的 Plugin 失败：{ex.Message}");
             }
+
+            // 方案 A 自愈：RestoreProfilePackages 只复制插件目录（且跳过 junction），
+            // 平铺依赖与 link:/file: 插件都不会随导入复制；声明却在 package.json /
+            // cordis.patch.yml 中保留，dsh web 启动会因 bundle 不可解析 fail-loud
+            // （“健康检查前退出”）。这里按 lock 文件 pnpm install 恢复完整依赖图。
+            // 自愈失败要中止启动并给出可操作错误，而不是让健康检查 30 秒后再报“退出”。
+            if (_extensionService is not null)
+            {
+                try
+                {
+                    await _extensionService.EnsureProfileDependenciesAsync(
+                        instance,
+                        nodeRuntime,
+                        cancellationToken);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException
+                    or IOException
+                    or UnauthorizedAccessException
+                    or TimeoutException)
+                {
+                    return DshInstanceRunResult.Failure(
+                        $"插件依赖自愈失败：{ex.Message}");
+                }
+            }
         }
 
         await _operationGate.WaitAsync(cancellationToken);
@@ -316,7 +344,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         var webUrl = $"http://127.0.0.1:{port}/";
                         process = new Process
                         {
-                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint),
+                            StartInfo = CreateStartInfo(instance, port, nodeRuntime, sourceEntrypoint, openBrowser),
                             EnableRaisingEvents = true
                         };
                         var output = new StringBuilder();
@@ -719,7 +747,8 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         ManagerInstance instance,
         int port,
         NodeRuntimeInfo? nodeRuntime,
-        string? sourceEntrypoint)
+        string? sourceEntrypoint,
+        bool openBrowser)
     {
         var spec = instance.Kind == InstanceKind.Source
             ? new DshRuntimeLaunchSpec(
@@ -737,6 +766,15 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             arguments.Add(patchPath);
         }
 
+        // Desktop 启动（启动器方式）由 Launcher 用内部 Chat 窗口承载 WebUI，
+        // 必须抑制 dsh 默认打开系统浏览器，避免双开；
+        // Web 启动（dsh 原生方式）不传 --no-open，由 dsh 原生打开默认浏览器。
+        // --no-open 是 0.1.0-rc.8 才加入的开关，旧版 dsh 传了会以 unknown option 退出。
+        if (!openBrowser && SupportsNoOpen(instance.DetectedVersion))
+        {
+            arguments.Add("--no-open");
+        }
+
         arguments.Add("--host");
         arguments.Add("127.0.0.1");
         arguments.Add("--port");
@@ -748,6 +786,53 @@ public sealed class DshInstanceRunner : IAsyncDisposable
             instance.DshHome,
             Path.Combine(instance.DshHome, ".agents"),
             nodeRuntime?.ExecutablePath);
+    }
+
+    /// <summary>
+    /// dsh 是否支持 --no-open（0.1.0-rc.8 引入）。支持条件 = 版本 ≥ 0.1.0-rc.8：
+    /// 主版本段大于 0.1.0 的一切版本（如 0.1.1-rc.2、0.2.x、1.x）都满足，
+    /// 预发布后缀只在主段恰好等于 0.1.0 时参与比较（rc.N 需 ≥ 8）；
+    /// 解析失败（未知/旧版）时按不支持处理——不传开关，保持旧版能正常启动。
+    /// </summary>
+    private static bool SupportsNoOpen(string? version)
+    {
+        var trimmed = version?.Trim().TrimStart('v', 'V');
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return false;
+        }
+
+        var coreAndPre = trimmed.Split('-');
+        var core = coreAndPre[0].Split('.')
+            .Select(part => int.TryParse(part, out var number) ? number : -1)
+            .ToArray();
+        if (core.Length < 2 || core[0] < 0 || core[1] < 0)
+        {
+            return false;
+        }
+
+        var patch = core.Length > 2 && core[2] >= 0 ? core[2] : 0;
+        if (core[0] > 0
+            || (core[0] == 0 && (core[1] > 1 || (core[1] == 1 && patch > 0))))
+        {
+            return true;   // 主版本段 > 0.1.0：0.1.1-rc.2 / 0.2.x / 1.x 等均支持
+        }
+
+        if (core[0] == 0 && core[1] == 1 && patch == 0)
+        {
+            var pre = coreAndPre.Length > 1 ? coreAndPre[1] : null;
+            if (string.IsNullOrWhiteSpace(pre))
+            {
+                return true;   // 0.1.0 正式版 > 0.1.0-rc.8
+            }
+
+            // 仅识别 rc 预发布段；其他预发布（beta 等）按非正式处理
+            return pre.StartsWith("rc.", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(pre.AsSpan(3), out var rc)
+                && rc >= 8;
+        }
+
+        return false;   // 0.0.x 及更低：不支持
     }
 
     internal static string BuildPathWithNodeDirectory(string? nodeExecutablePath, string currentPath)

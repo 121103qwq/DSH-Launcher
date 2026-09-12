@@ -14,7 +14,7 @@ namespace DshLauncher.Services;
 /// DSh's official Plugin CLI supports adding and updating client plugins while
 /// an instance is running. Other mutations still require a stopped instance.
 /// </summary>
-public sealed class ExtensionService
+public sealed partial class ExtensionService
 {
     private const string ProfileName = "web";
     private const string McpPackage = "@deepseek-ai/dsh-mcp-client";

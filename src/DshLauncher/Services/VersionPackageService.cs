@@ -820,7 +820,7 @@ public sealed class VersionPackageService
             settings.CustomOpenTargetPath = null;
             if (settings.OpenMode == VersionOpenMode.Custom)
             {
-                settings.OpenMode = VersionOpenMode.Launcher;
+                settings.OpenMode = VersionOpenMode.Desktop;
             }
             return JsonSerializer.Serialize(settings, JsonOptions);
         }

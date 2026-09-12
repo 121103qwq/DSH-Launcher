@@ -1,7 +1,6 @@
-bin/
-obj/
-.vs/
-*.user
-*.suo
-*.pdb
-publish/
+# 构建产物
+src/DshLauncher/bin/
+src/DshLauncher/obj/
+# 发布产物与运行缓存（exe 放 dist 供使用，但 72MB 不入 git）
+dist/
+*.WebView2/

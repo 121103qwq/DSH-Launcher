@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Collections.ObjectModel;
@@ -42,7 +43,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly SourceProjectInspector _sourceInspector = new();
     private readonly InstanceRegistry _instanceRegistry = new();
     private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
-    private readonly DshInstanceRunner _instanceRunner = new();
+    private readonly DshInstanceRunner _instanceRunner;
     private readonly ExtensionService _extensionService;
     private readonly MarketplaceService _marketplaceService;
     private readonly SkillMarketService _skillMarketService;
@@ -81,6 +82,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private string _currentSection = "启动";
     private Action? _runtimePanelUpdateStatus;
     private HwndSource? _windowSource;
+    private Services.TrayIconService? _trayIconService;
+    private bool _shutdownFromTray;
 
     public MainWindow()
     {
@@ -91,10 +94,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         RecentInstancesView.SortDescriptions.Add(new SortDescription(
             nameof(ManagerInstance.RecentSortAt),
             ListSortDirection.Descending));
-        _versionSnapshotService = new(isRunning: id => _instanceRunner.IsRunning(id));
+        _versionSnapshotService = new(isRunning: id => _instanceRunner!.IsRunning(id));
         _extensionService = new(
-            id => _instanceRunner.IsRunning(id),
+            id => _instanceRunner!.IsRunning(id),
             snapshotService: _versionSnapshotService);
+        _instanceRunner = new(extensionService: _extensionService);
         _marketplaceService = new();
         _skillMarketService = new(_extensionService);
         _versionPackageService = new(_instanceRegistry);
@@ -237,11 +241,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string StartInstanceButtonText => SelectedInstance is null
         ? "准备首个版本"
-        : IsExternalOpenBound
+        : IsCustomOpenBound
             ? "打开窗口"
             : _instanceRunner.IsRunning(SelectedInstance.Id)
                 ? "打开实例"
-                : "启动实例";
+                : GetSelectedOpenMode() == VersionOpenMode.Web
+                    ? "Web 启动"
+                    : "Desktop 启动";
 
     public bool CanStopInstance => CanStopInstanceCore(
         _isLifecycleInProgress,
@@ -251,13 +257,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public bool CanRestartInstance => CanStopInstance;
 
-    public bool IsDesktopOpenBound => SelectedInstance?.CanOpenDesktopShell == true
-        && GetSelectedOpenMode() == VersionOpenMode.Desktop;
-
     public bool IsCustomOpenBound => SelectedInstance is not null
         && GetSelectedOpenMode() == VersionOpenMode.Custom;
 
-    public bool IsExternalOpenBound => IsDesktopOpenBound || IsCustomOpenBound;
+    public bool IsExternalOpenBound => IsCustomOpenBound;
 
     public Visibility LauncherStartVisibility => IsExternalOpenBound
         ? Visibility.Visible
@@ -272,20 +275,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (SelectedInstance is null)
         {
-            return VersionOpenMode.Launcher;
+            return VersionOpenMode.Desktop;
         }
 
         try
         {
             var settings = _versionSettingsService.Read(SelectedInstance);
-            return settings.OpenMode
-                ?? (SelectedInstance.CanOpenDesktopShell
-                    ? VersionOpenMode.Desktop
-                    : VersionOpenMode.Launcher);
+            return settings.OpenMode ?? VersionOpenMode.Desktop;
         }
         catch
         {
-            return VersionOpenMode.Launcher;
+            return VersionOpenMode.Desktop;
         }
     }
 
@@ -1498,6 +1498,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         UpdateStatus();
 
         AddPluginInstallModeSection(panel);
+        AddCloseBehaviorSection(panel);
         AddVersionSyncSection(panel);
         return panel;
     }
@@ -1587,6 +1588,101 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         compatibility.Checked += (_, _) => SaveMode(PluginInstallMode.Compatibility);
         fast.Checked += (_, _) => SaveMode(PluginInstallMode.Fast);
+    }
+
+    private void AddCloseBehaviorSection(StackPanel panel)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = "关闭主窗口时",
+            FontSize = 20,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 32, 0, 0)
+        });
+
+        var content = new StackPanel();
+        var card = new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(20),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        };
+        var current = CloseBehavior.MinimizeToTray;
+        try
+        {
+            current = _versionSettingsService.ReadLauncherSettings().CloseBehavior;
+        }
+        catch
+        {
+        }
+
+        var minimize = new System.Windows.Controls.RadioButton
+        {
+            GroupName = "CloseBehavior",
+            Content = "最小化到托盘",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            IsChecked = current == CloseBehavior.MinimizeToTray
+        };
+        var exitAndStop = new System.Windows.Controls.RadioButton
+        {
+            GroupName = "CloseBehavior",
+            Content = "关闭启动器与实例",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 18, 0, 0),
+            IsChecked = current == CloseBehavior.ExitAndStopInstances
+        };
+        var status = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("BlueBrush"),
+            FontSize = 11,
+            Margin = new Thickness(24, 12, 0, 0)
+        };
+        content.Children.Add(minimize);
+        content.Children.Add(new TextBlock
+        {
+            Text = "主窗口隐藏到托盘，实例继续运行；双击托盘图标或菜单“打开”恢复。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(24, 5, 0, 0)
+        });
+        content.Children.Add(exitAndStop);
+        content.Children.Add(new TextBlock
+        {
+            Text = "退出应用并停止该实例（与托盘菜单“退出”相同）；外部 Attached 实例不受影响。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(24, 5, 0, 0)
+        });
+        content.Children.Add(status);
+        panel.Children.Add(card);
+
+        void SaveBehavior(CloseBehavior behavior)
+        {
+            try
+            {
+                var settings = _versionSettingsService.ReadLauncherSettings();
+                settings.CloseBehavior = behavior;
+                _versionSettingsService.SaveLauncherSettings(settings);
+                status.Text = behavior == CloseBehavior.MinimizeToTray
+                    ? "已设置：最小化到托盘。"
+                    : "已设置：关闭启动器与实例。";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                status.Text = $"保存失败：{ex.Message}";
+            }
+        }
+
+        minimize.Checked += (_, _) => SaveBehavior(CloseBehavior.MinimizeToTray);
+        exitAndStop.Checked += (_, _) => SaveBehavior(CloseBehavior.ExitAndStopInstances);
     }
 
     private void AddVersionSyncSection(StackPanel panel)
@@ -2661,12 +2757,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void StartInstance_Click(object sender, RoutedEventArgs e)
     {
-        if (IsDesktopOpenBound)
-        {
-            OpenDesktopShell_Click(sender, e);
-            return;
-        }
-
         if (IsCustomOpenBound)
         {
             OpenCustomTarget();
@@ -2695,12 +2785,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (!string.IsNullOrWhiteSpace(selected.WebUrl))
             {
-                if (!TryFocusChatWindow(selected.Id))
+                if (GetSelectedOpenMode() == VersionOpenMode.Web)
                 {
-                    OpenChatWindow(selected.Id, selected.WebUrl);
+                    // Web 启动模式：重新打开 = 在默认浏览器打开（与 dsh 原生行为一致）
+                    OpenWebUrlInBrowser(selected.WebUrl);
+                    ShowNotice($"实例仍在运行，已在默认浏览器打开：{selected.WebUrl}。");
                 }
+                else
+                {
+                    if (!TryFocusChatWindow(selected.Id))
+                    {
+                        OpenChatWindow(selected.Id, selected.WebUrl);
+                    }
 
-                ShowNotice($"实例仍在运行，已重新打开：{selected.Name}。关闭窗口不会停止实例。 ");
+                    ShowNotice($"实例仍在运行，已重新打开：{selected.Name}。关闭窗口不会停止实例。 ");
+                }
             }
             else
             {
@@ -3234,7 +3333,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return false;
     }
 
-    private async Task<DshInstanceRunResult?> StartManagedInstanceAsync(ManagerInstance instance)
+    private async Task<DshInstanceRunResult?> StartManagedInstanceAsync(
+        ManagerInstance instance,
+        bool openBrowser = false)
     {
         await SynchronizeModelProvidersAsync(instance, notifyNoConfiguration: true);
         await SynchronizeConversationsAsync(instance);
@@ -3246,7 +3347,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var result = await _instanceRunner.StartAsync(
             instance,
             _nodeRuntime,
-            _windowCancellation.Token);
+            _windowCancellation.Token,
+            openBrowser);
         if (!result.IsSuccess || result.ProcessId is null || result.Port is null || result.WebUrl is null)
         {
             UpdateInstanceStatus(instance, InstanceRuntimeStatus.Error, result.Error);
@@ -3351,8 +3453,63 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (e.LeftButton == MouseButtonState.Pressed
             && !IsInsideButton(e.OriginalSource as DependencyObject))
         {
-            DragMove();
+            if (e.ClickCount == 2)
+            {
+                // 双击标题栏：最大化/还原（标准窗口行为）
+                ToggleMaximize();
+            }
+            else
+            {
+                DragMove();
+            }
         }
+    }
+
+    private void Maximize_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
+
+    private void ToggleMaximize()
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+        UpdateMaximizeGlyph();
+    }
+
+    protected override void OnStateChanged(EventArgs e)
+    {
+        base.OnStateChanged(e);
+        UpdateMaximizeGlyph();
+        UpdateMaximizeVisuals();
+    }
+
+    private void UpdateMaximizeGlyph()
+    {
+        if (MaximizeGlyph is null)
+        {
+            return;
+        }
+
+        var maximized = WindowState == WindowState.Maximized;
+        MaximizeGlyph.Text = maximized ? "❐" : "□";
+        MaximizeButton.ToolTip = maximized ? "还原" : "最大化";
+    }
+
+    /// <summary>
+    /// 最大化时把外层边距/圆角/描边归零，直角占满工作区（配合 WM_GETMINMAXINFO）；
+    /// 恢复普通状态时还原圆角外观。
+    /// </summary>
+    private void UpdateMaximizeVisuals()
+    {
+        if (AppRootBorder is null || TitleBarBorder is null)
+        {
+            return;
+        }
+
+        var maximized = WindowState == WindowState.Maximized;
+        AppRootBorder.Margin = maximized ? new Thickness(0) : new Thickness(4);
+        AppRootBorder.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(18);
+        AppRootBorder.BorderThickness = maximized ? new Thickness(0) : new Thickness(1);
+        TitleBarBorder.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(17, 17, 0, 0);
     }
 
     private static bool IsInsideButton(DependencyObject? source)
@@ -3489,6 +3646,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        // 点击 × 的行为由设置（设置 / 诊断 → 关闭主窗口时）决定：
+        // MinimizeToTray —— 隐藏到托盘（默认，实例继续运行）；
+        // ExitAndStopInstances —— 退出并停止 Launcher 管理的实例（等同托盘菜单“退出”）。
+        var closeBehavior = CloseBehavior.MinimizeToTray;
+        try
+        {
+            closeBehavior = _versionSettingsService.ReadLauncherSettings().CloseBehavior;
+        }
+        catch
+        {
+            // 设置不可读时按默认行为处理
+        }
+
+        if (closeBehavior == CloseBehavior.MinimizeToTray
+            && !_shutdownFromTray
+            && !_shutdownCleanupStarted)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+
         if (!_shutdownCleanupCompleted)
         {
             e.Cancel = true;
@@ -3522,6 +3701,123 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         base.OnSourceInitialized(e);
         _windowSource = PresentationSource.FromVisual(this) as HwndSource;
         _windowSource?.AddHook(WindowProcedure);
+        _trayIconService = new Services.TrayIconService(
+            LoadLauncherIcon(),
+            "DSH Launcher",
+            ShowMainWindowFromTray,
+            RequestShutdownFromTray);
+    }
+
+    private static System.Drawing.Icon LoadLauncherIcon()
+    {
+        using var stream = System.Windows.Application.GetResourceStream(
+            new Uri("pack://application:,,,/Assets/DSHLauncher.ico"))!.Stream;
+        return new System.Drawing.Icon(stream);
+    }
+
+    private void ShowMainWindowFromTray()
+    {
+        if (_shutdownCleanupStarted)
+        {
+            return;
+        }
+
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
+
+    private void RequestShutdownFromTray()
+    {
+        if (_shutdownCleanupStarted)
+        {
+            return;
+        }
+
+        _shutdownFromTray = true;
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        Close();
+    }
+
+    private const int WmGetMinMaxInfo = 0x0024;
+    private const uint MonitorDefaultToNearest = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMonitorInfo
+    {
+        public uint cbSize;
+        public NativeRect rcMonitor;
+        public NativeRect rcWork;
+        public uint dwFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMinMaxInfo
+    {
+        public NativePoint ptReserved;
+        public NativePoint ptMaxSize;
+        public NativePoint ptMaxPosition;
+        public NativePoint ptMinTrackSize;
+        public NativePoint ptMaxTrackSize;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr windowHandle, uint flags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref NativeMonitorInfo info);
+
+    private void HandleWmGetMinMaxInfo(IntPtr windowHandle, IntPtr wordParameter)
+    {
+        var monitor = MonitorFromWindow(windowHandle, MonitorDefaultToNearest);
+        if (monitor == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var info = new NativeMonitorInfo
+        {
+            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMonitorInfo>()
+        };
+        if (!GetMonitorInfo(monitor, ref info))
+        {
+            return;
+        }
+
+        var minMax = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMinMaxInfo>(wordParameter);
+        minMax.ptMaxPosition.X = info.rcWork.Left - info.rcMonitor.Left;
+        minMax.ptMaxPosition.Y = info.rcWork.Top - info.rcMonitor.Top;
+        minMax.ptMaxSize.X = info.rcWork.Right - info.rcWork.Left;
+        minMax.ptMaxSize.Y = info.rcWork.Bottom - info.rcWork.Top;
+        System.Runtime.InteropServices.Marshal.StructureToPtr(minMax, wordParameter, false);
     }
 
     private IntPtr WindowProcedure(
@@ -3531,6 +3827,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         IntPtr longParameter,
         ref bool handled)
     {
+        // 最大化尺寸/位置 = 当前显示器的“工作区”（避开任务栏、无溢出空隙），
+        // 与 UpdateMaximizeVisuals 的直角化配合实现“占满”。
+        if (message == WmGetMinMaxInfo)
+        {
+            HandleWmGetMinMaxInfo(windowHandle, wordParameter);
+            handled = true;
+            return IntPtr.Zero;
+        }
+
         if (message != WindowMessageNonClientHitTest
             || WindowState != WindowState.Normal
             || ResizeMode != ResizeMode.CanResize)
@@ -3749,7 +4054,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task<bool> StartPreparedInstanceAndOpenAsync(ManagerInstance selected)
     {
-        var result = await StartManagedInstanceAsync(selected);
+        var openBrowser = GetSelectedOpenMode() == VersionOpenMode.Web;
+        var result = await StartManagedInstanceAsync(selected, openBrowser);
         if (result is null)
         {
             return false;
@@ -3761,6 +4067,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
+        if (openBrowser)
+        {
+            // Web 启动（dsh 原生方式）：打开方式交给 dsh 默认浏览器，Launcher 不重复开窗口
+            ShowNotice($"实例已启动：{selected.Name}，{result.WebUrl}（dsh 已在默认浏览器打开）。");
+            return true;
+        }
+
+        // Desktop 启动（启动器方式）：Launcher 用内部 Chat 窗口承载 WebUI
         OpenChatWindow(selected.Id, result.WebUrl);
         ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
         return true;
@@ -4075,6 +4389,27 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         finally
         {
             EndLifecycleOperation();
+        }
+    }
+
+    private void OpenWebUrlInBrowser(string url)
+    {
+        try
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+                || parsed.Scheme is not ("http" or "https"))
+            {
+                ShowNotice($"地址无效，无法用浏览器打开：{url}");
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception
+            or InvalidOperationException
+            or IOException)
+        {
+            ShowNotice($"打开浏览器失败：{ex.Message}");
         }
     }
 

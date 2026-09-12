@@ -24,6 +24,34 @@
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
     <Window.Resources>
+        <Style x:Key="WindowControlButton" TargetType="Button">
+            <Setter Property="Width" Value="42" />
+            <Setter Property="Height" Value="42" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#3388D3" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#1D69AF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="ResizeThumbStyle" TargetType="Thumb">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Template">
@@ -36,7 +64,8 @@
         </Style>
     </Window.Resources>
 
-    <Border Margin="4"
+    <Border x:Name="AppRootBorder"
+            Margin="4"
             Background="{StaticResource PageBrush}"
             BorderBrush="#D6E4F1"
             BorderThickness="1"
@@ -47,18 +76,26 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0"
+            <Border x:Name="TitleBarBorder"
+                    Grid.Row="0"
                     Background="{StaticResource BlueBrush}"
                     CornerRadius="17,17,0,0"
                     MouseLeftButtonDown="TitleBar_OnMouseLeftButtonDown">
                 <Grid Margin="18,0,16,0">
-                    <TextBlock x:Name="StartupBrandText"
-                               Text="DSH Launcher"
-                               Foreground="White"
-                               FontSize="20"
-                               FontWeight="SemiBold"
-                               HorizontalAlignment="Left"
-                               VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Center">
+                        <Image Source="Assets/DSHLauncher.ico"
+                               Width="22"
+                               Height="22"
+                               Margin="0,0,8,0" />
+                        <TextBlock x:Name="StartupBrandText"
+                                   Text="DSH Launcher"
+                                   Foreground="White"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
                     <Button x:Name="VersionSettingsBackButton"
                             Width="190"
                             Height="44"
@@ -185,22 +222,25 @@
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
                         <Button Click="Minimize_Click"
-                                Width="42"
-                                Height="42"
-                                Padding="0"
-                                Background="Transparent"
-                                BorderBrush="Transparent"
-                                Foreground="White"
+                                Style="{StaticResource WindowControlButton}"
                                 ToolTip="最小化">
                             <TextBlock Text="—" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
+                        <Button x:Name="MaximizeButton"
+                                Click="Maximize_Click"
+                                Style="{StaticResource WindowControlButton}"
+                                Width="50"
+                                Height="50"
+                                Margin="0,0,2,0"
+                                ToolTip="最大化">
+                            <TextBlock x:Name="MaximizeGlyph"
+                                       Text="□"
+                                       FontSize="18"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Button>
                         <Button Click="Close_Click"
-                                Width="42"
-                                Height="42"
-                                Padding="0"
-                                Background="Transparent"
-                                BorderBrush="Transparent"
-                                Foreground="White"
+                                Style="{StaticResource WindowControlButton}"
                                 ToolTip="关闭">
                             <TextBlock Text="×" FontSize="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
@@ -331,7 +371,7 @@
                                                         <TextBlock Text="{Binding StartInstanceButtonText}" />
                                                     </StackPanel>
                                                 </Button>
-                                                <Button Content="Launcher 启动"
+                                                <Button Content="Desktop 启动"
                                                         Click="StartLauncherInstance_Click"
                                                         Visibility="{Binding LauncherStartVisibility}"
                                                         IsEnabled="{Binding CanStartInstance}"

@@ -149,16 +149,16 @@ public partial class VersionSettingsWindow : UserControl
     {
         WindowTitleBox.Text = _settings.WindowTitle ?? string.Empty;
         NodePathBox.Text = _settings.NodeExecutablePath ?? string.Empty;
-        var openMode = _settings.OpenMode
-            ?? (_instance?.CanOpenDesktopShell == true ? VersionOpenMode.Desktop : VersionOpenMode.Launcher);
+        var openMode = _settings.OpenMode ?? VersionOpenMode.Desktop;
         OpenModeBox.SelectedValue = openMode.ToString();
         CustomOpenTargetBox.Text = _settings.CustomOpenTargetPath ?? string.Empty;
         UpdateCustomOpenTargetEnabled();
-        OpenModeStatusText.Text = openMode == VersionOpenMode.Custom
-            ? "当前版本将使用手动绑定的本地入口，并继承此版本的 DSH_HOME。"
-            : _instance?.CanOpenDesktopShell == true
-                ? "当前版本已检测到 DSH Desktop 打开入口。"
-                : "当前版本没有检测到 DSH Desktop；仍可使用 Launcher 或手动绑定打开方式。";
+        OpenModeStatusText.Text = openMode switch
+        {
+            VersionOpenMode.Custom => "当前版本将使用手动绑定的本地入口，并继承此版本的 DSH_HOME。",
+            VersionOpenMode.Web => "当前版本将使用 dsh 原生方式启动：服务启动后由 dsh 在默认浏览器打开 WebUI。",
+            _ => "当前版本将使用启动器方式启动：服务启动后自动打开内部 Chat 窗口，不会重复弹浏览器。"
+        };
     }
 
     private string FormatNodeRuntime()
@@ -456,12 +456,6 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
-        if (openMode == VersionOpenMode.Desktop && !_instance.CanOpenDesktopShell)
-        {
-            OpenModeStatusText.Text = "当前版本没有可用的 DSH Desktop 打开入口，请先导入或检测 DSH Desktop。";
-            return;
-        }
-
         var customOpenTargetPath = _settings.CustomOpenTargetPath;
         if (openMode == VersionOpenMode.Custom)
         {
@@ -492,9 +486,9 @@ public partial class VersionSettingsWindow : UserControl
             _settings = updated;
             var modeText = openMode switch
             {
-                VersionOpenMode.Desktop => "DSH Desktop 打开窗口",
+                VersionOpenMode.Web => "Web 启动（dsh 原生）",
                 VersionOpenMode.Custom => $"手动打开 {Path.GetFileName(customOpenTargetPath)}",
-                _ => "Launcher 启动"
+                _ => "Desktop 启动（启动器方式）"
             };
             OpenModeStatusText.Text = snapshot is null
                 ? $"已保存：{modeText}。"
