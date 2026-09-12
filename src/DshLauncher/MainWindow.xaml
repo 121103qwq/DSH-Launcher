@@ -452,6 +452,24 @@
                                                        Foreground="{StaticResource MutedBrush}"
                                                        FontSize="12"
                                                        Margin="0,8,0,0" />
+                                            <TextBlock Text="{Binding SelectedInstanceProfileText}"
+                                                       Foreground="{StaticResource MutedBrush}"
+                                                       FontSize="12"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Margin="0,4,0,0">
+                                                <TextBlock.ToolTip>
+                                                    <ToolTip Style="{StaticResource PathCardToolTip}">
+                                                        <StackPanel>
+                                                            <TextBlock Text="dsh profile" FontWeight="SemiBold" FontSize="12" />
+                                                            <TextBlock Text="该实例当前使用的 profile（$DSH_HOME/profiles/&lt;名&gt;）：决定加载哪些 bundle 与插件，也决定呈现面（终端 / 无界面等）。可在扩展页顶部或实例设置里切换。"
+                                                                       FontSize="11"
+                                                                       TextWrapping="Wrap"
+                                                                       MaxWidth="360"
+                                                                       Margin="0,4,0,0" />
+                                                        </StackPanel>
+                                                    </ToolTip>
+                                                </TextBlock.ToolTip>
+                                            </TextBlock>
                                             <Button x:Name="InstanceRootPathLink"
                                                     Style="{StaticResource PathLinkButton}"
                                                     Click="PathLink_Click"

@@ -269,6 +269,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceSurfaceVisibility));
             OnPropertyChanged(nameof(SelectedInstanceSurfaceText));
             OnPropertyChanged(nameof(SelectedInstanceSurfaceTooltip));
+            OnPropertyChanged(nameof(SelectedInstanceProfileText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
@@ -565,6 +566,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    public string SelectedInstanceProfileText
+    {
+        get
+        {
+            if (SelectedInstance is not { } instance)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return "profile：" + DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+            }
+            catch
+            {
+                return "profile：读取失败";
+            }
+        }
+    }
+
     /// <summary>呈现面徽标：非 Web 面（终端/无界面/未识别）才显示。</summary>
     public Visibility SelectedInstanceSurfaceVisibility
     {
@@ -647,6 +668,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceSurfaceVisibility));
             OnPropertyChanged(nameof(SelectedInstanceSurfaceText));
             OnPropertyChanged(nameof(SelectedInstanceSurfaceTooltip));
+            OnPropertyChanged(nameof(SelectedInstanceProfileText));
             EvaluateIdleAutoStop();
             ConvergeStaleAttachedInstances();
         });
@@ -2485,6 +2507,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedInstanceSurfaceVisibility));
         OnPropertyChanged(nameof(SelectedInstanceSurfaceText));
         OnPropertyChanged(nameof(SelectedInstanceSurfaceTooltip));
+        OnPropertyChanged(nameof(SelectedInstanceProfileText));
         // 设置页里刚打开/关掉更新提示开关后也要立刻查询，否则徽标要等下次切实例才出现。
         if (IsLoaded && _selectedVersionSettings.CheckDshUpdates)
         {
