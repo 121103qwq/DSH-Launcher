@@ -92,6 +92,29 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+
+                    <!-- 变更集 145：版本列表空态 —— 0 个版本时不再是一块空白（规范见 UI-DESIGN「空态/加载态/错误态」） -->
+                    <TextBlock Grid.Row="1"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               Margin="24,12,24,12"
+                               FontSize="12"
+                               Foreground="{StaticResource MutedBrush}"
+                               Text="还没有版本。点下方「新建干净版本」建立空实例，或「导入实例」沿用已有安装；也可以用「扫描本机 DSH 环境」自动发现。">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasItems, ElementName=VersionList}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+
                     <StackPanel Grid.Row="2">
                         <Button x:Name="AddInstanceButton"
                                 Content="导入实例"

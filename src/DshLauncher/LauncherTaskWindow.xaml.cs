@@ -71,7 +71,7 @@ public partial class LauncherTaskWindow : UserControl
         var running = tasks.Count(item => item.IsRunning);
         RunningCountText.Text = running == 0 ? "当前没有运行中的任务" : $"运行中 {running} 个";
         var history = tasks.Count - running;
-        StatusText.Text = $"历史 {history} 条（上限 {LauncherTaskService.MaximumRetainedTasks}）· 台账文件 launcher-tasks.json";
+        StatusTextStyler.Set(StatusText, $"历史 {history} 条（上限 {LauncherTaskService.MaximumRetainedTasks}）· 台账文件 launcher-tasks.json");
         EmptyText.Visibility = tasks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 }

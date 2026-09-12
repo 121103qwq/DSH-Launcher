@@ -308,7 +308,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             or NotSupportedException
             or UnauthorizedAccessException)
         {
-            SetStatus($"无法读取快捷方式：{ex.Message}");
+            SetStatusError($"无法读取快捷方式：{ex.Message}");
         }
     }
 
@@ -350,7 +350,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"导入实例失败：{ex.Message}");
+            SetStatusError($"导入实例失败：{ex.Message}");
         }
         finally
         {
@@ -416,7 +416,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"删除版本失败：{ex.Message}");
+            SetStatusError($"删除版本失败：{ex.Message}");
         }
         finally
         {
@@ -470,7 +470,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"创建版本失败：{ex.Message}");
+            SetStatusError($"创建版本失败：{ex.Message}");
         }
         finally
         {
@@ -534,7 +534,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"创建版本失败：{ex.Message}");
+            SetStatusError($"创建版本失败：{ex.Message}");
         }
         finally
         {
@@ -681,7 +681,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             var install = await new DshInstallService().InstallVersionAsync(
                 nodeRuntime, requiredVersion, DshInstallService.OfficialRegistry, target,
                 task?.Token ?? _lifetimeCancellation.Token);
-            if (!install.IsSuccess) { task?.Fail(install.Error); SetStatus($"安装 DSh {requiredVersion} 失败：{install.Error}"); return null; }
+            if (!install.IsSuccess) { task?.Fail(install.Error); SetStatusError($"安装 DSh {requiredVersion} 失败：{install.Error}"); return null; }
 
             var packageRoot = PackTemplateResolution.LocateInstalledPackageRoot(target, requiredVersion!);
             if (packageRoot is null) { task?.Fail("找不到运行目录"); SetStatus($"已安装但找不到运行目录：{target}"); return null; }
@@ -694,7 +694,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             return resolvedTemplate;
         }
         catch (OperationCanceledException) { task?.MarkCancelled("安装已取消"); SetStatus("安装 DSh 的下载已取消。"); return null; }
-        catch (Exception ex) { task?.Fail(ex.Message); SetStatus($"安装 DSh {requiredVersion} 失败：{ex.Message}"); return null; }
+        catch (Exception ex) { task?.Fail(ex.Message); SetStatusError($"安装 DSh {requiredVersion} 失败：{ex.Message}"); return null; }
         finally { task?.Dispose(); }
     }
 
@@ -717,7 +717,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         {
             if (!PackArchiveReader.TryRead(filePath, out var archive, out var outcome, out var readError) || archive is null)
             {
-                SetStatus($"整合包无法使用（{outcome}）：{readError}");
+                SetStatusError($"整合包无法使用（{outcome}）：{readError}");
                 return;
             }
 
@@ -760,7 +760,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             if (!importOutcome.Succeeded)
             {
                 task?.Fail(importOutcome.Error);
-                SetStatus($"导入整合包失败：{importOutcome.Error}");
+                SetStatusError($"导入整合包失败：{importOutcome.Error}");
                 return;
             }
 
@@ -788,7 +788,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         catch (Exception ex)
         {
             task?.Fail(ex.Message);
-            SetStatus($"导入整合包失败：{ex.Message}");
+            SetStatusError($"导入整合包失败：{ex.Message}");
         }
         finally
         {
@@ -855,7 +855,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"导入整合包失败：{ex.Message}");
+            SetStatusError($"导入整合包失败：{ex.Message}");
         }
         finally
         {
@@ -918,10 +918,10 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             : _switchHistory.LoadForInstance(version.Id).ToArray();
         SwitchHistoryList.ItemsSource = records.Select(record => record.DisplayText).ToArray();
         _latestSwitchRecord = records.FirstOrDefault();
-        SwitchHistoryStatusText.Text = records.Length == 0
+        StatusTextStyler.Set(SwitchHistoryStatusText, records.Length == 0
             ? "还没有切换记录（每次从这里更换运行版本后会写一条）。"
             : $"共 {records.Length} 条；回退目标：DSh {_latestSwitchRecord!.FromVersion}"
-                + (records.Length > 1 ? "（只回退一步）" : string.Empty);
+                + (records.Length > 1 ? "（只回退一步）" : string.Empty));
         OnPropertyChanged(nameof(CanRollbackVersion));
     }
 
@@ -941,7 +941,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            SetStatus($"保存更新提示开关失败：{ex.Message}");
+            SetStatusError($"保存更新提示开关失败：{ex.Message}");
             return;
         }
 
@@ -996,7 +996,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     {
         if (_latestSwitchRecord is null)
         {
-            SwitchHistoryStatusText.Text = "没有可回退的记录。";
+            StatusTextStyler.Set(SwitchHistoryStatusText, "没有可回退的记录。");
             return;
         }
 
@@ -1096,7 +1096,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             if (_selectionRevision == selectionRevision
                 && string.Equals(SelectedVersion?.Id, version.Id, StringComparison.Ordinal))
             {
-                SetStatus($"检查版本失败：{ex.Message}");
+                SetStatusError($"检查版本失败：{ex.Message}");
             }
         }
         finally
@@ -1135,7 +1135,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"自动修复失败：{ex.Message}");
+            SetStatusError($"自动修复失败：{ex.Message}");
         }
         finally
         {
@@ -1165,7 +1165,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"创建快照失败：{ex.Message}");
+            SetStatusError($"创建快照失败：{ex.Message}");
         }
         finally
         {
@@ -1204,7 +1204,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"回滚失败：{ex.Message}");
+            SetStatusError($"回滚失败：{ex.Message}");
         }
         finally
         {
@@ -1232,7 +1232,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            SetStatus($"读取版本快照失败：{ex.Message}");
+            SetStatusError($"读取版本快照失败：{ex.Message}");
         }
     }
 
@@ -1268,7 +1268,12 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanRollback));
     }
 
-    private void SetStatus(string message) => StatusText.Text = message;
+    // 变更集 145：状态行三态分色（失败=错误色；需先做某事=警告色；其余=说明色）
+    private void SetStatus(string message) => StatusTextStyler.Set(StatusText, message);
+
+    private void SetStatusError(string message) => StatusTextStyler.Set(StatusText, message, isError: true);
+
+    private void SetStatusWarning(string message) => StatusTextStyler.Set(StatusText, message, isWarning: true);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

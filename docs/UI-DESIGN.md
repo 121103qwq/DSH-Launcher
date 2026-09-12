@@ -269,7 +269,7 @@
 | 错误态 | "…失败：原因（点「X」重试）" | `DangerTextBrush` | **必须**写明下一步点哪里 |
 
 **纪律**：错误**不允许只写进日志**而没有界面反馈；失败文案**必须自带动作指引**。
-参考实现：`ExtensionWindow.SetStatusText(block, text, isError:, isWarning:)`（市场 / Skill 状态行 11 处调用，失败文案统一带"（点「刷新目录」重试）"）。
+参考实现：**共享工具 `Services/StatusTextStyler.Set(block, text, isError:, isWarning:)`**（变更集 136 在 `ExtensionWindow` 落地、**变更集 145 提取为共享实现**）。已接入：`ExtensionWindow`（市场 / Skill 状态行 11 处，失败文案统一带"（点「刷新目录」重试）"）、`ConversationWindow`（搜索 / 打开失败带「搜索」「刷新」指引）、`VersionControlWindow`（导入 / 删除 / 检查失败 = 错误色，需先操作 = 警告色，并补**版本列表空态**）、`LogCenterWindow`（打开目录失败 = 错误色）、`LauncherTaskWindow`（信息行）。
 - **提示条（`ShowNotice`）时长（变更集 144）**：**按文字长度自适应** —— `4s + 文字长度/30`（上限 **12s**）；「失败 / 异常 / 错误 / 崩溃」类文案或带 detail 的提示**常驻**（读者要照着文案处理）；鼠标**悬停暂停**、移开按剩余时间继续；右侧 `×` 手动关闭。
 
 

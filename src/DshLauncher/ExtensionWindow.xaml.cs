@@ -693,15 +693,9 @@ public partial class ExtensionWindow : UserControl
     /// 状态行三态（变更集 136，UI 统一 §1.7）：加载中＝次要色、部分失败＝警告色、失败＝危险色；
     /// 失败文案必须自带"下一步点哪里"（重试入口＝页面上的「刷新目录」按钮）。
     /// </summary>
+    // 变更集 145：三态分色的实现提取到共享工具，此处仅保留原有调用名（11 处调用不变）。
     private static void SetStatusText(System.Windows.Controls.TextBlock block, string text, bool isError = false, bool isWarning = false)
-    {
-        block.Text = text;
-        block.Foreground = isError
-            ? Services.UiBrush.Get("DangerTextBrush")
-            : isWarning
-                ? Services.UiBrush.Get("WarningTextBrush")
-                : Services.UiBrush.Get("MutedBrush");
-    }
+        => Services.StatusTextStyler.Set(block, text, isError, isWarning);
 
     private async Task RefreshMarketplaceAsync()
     {

@@ -126,7 +126,7 @@ public partial class ConversationWindow : UserControl
         var query = SearchBox.Text.Trim();
         if (query.Length == 0)
         {
-            StatusText.Text = "请输入要搜索的内容。";
+            StatusTextStyler.Set(StatusText, "请输入要搜索的内容。", isWarning: true);
             return;
         }
 
@@ -135,7 +135,7 @@ public partial class ConversationWindow : UserControl
         _searchCancellation = new CancellationTokenSource();
         var token = _searchCancellation.Token;
         SearchButton.IsEnabled = false;
-        StatusText.Text = $"正在搜索“{query}”…";
+        StatusTextStyler.Set(StatusText, $"正在搜索“{query}”…");
         try
         {
             var hits = await _service.SearchAsync(
@@ -153,9 +153,9 @@ public partial class ConversationWindow : UserControl
             SearchResultsPanel.Visibility = hasResults ? Visibility.Visible : Visibility.Collapsed;
             ConversationListPanel.Visibility = hasResults ? Visibility.Collapsed : Visibility.Visible;
             ClearSearchButton.Visibility = Visibility.Visible;
-            StatusText.Text = hasResults
+            StatusTextStyler.Set(StatusText, hasResults
                 ? $"找到 {hits.Count} 条会话（按命中次数排序），双击结果可打开。"
-                : $"没有找到包含“{query}”的会话。";
+                : $"没有找到包含“{query}”的会话（可换个关键词，或点「刷新」看全部）。");
         }
         catch (OperationCanceledException)
         {
@@ -163,7 +163,7 @@ public partial class ConversationWindow : UserControl
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            StatusText.Text = $"搜索失败：{ex.Message}";
+            StatusTextStyler.Set(StatusText, $"搜索失败：{ex.Message}（可点「搜索」或「刷新」重试）", isError: true);
         }
         finally
         {
@@ -178,7 +178,7 @@ public partial class ConversationWindow : UserControl
         SearchResultsPanel.Visibility = Visibility.Collapsed;
         ConversationListPanel.Visibility = Visibility.Visible;
         ClearSearchButton.Visibility = Visibility.Collapsed;
-        StatusText.Text = $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。";
+        StatusTextStyler.Set(StatusText, $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。");
     }
 
     private async void SearchResultsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
@@ -200,12 +200,12 @@ public partial class ConversationWindow : UserControl
         {
             if (!await _openConversation(owner, hit.Entry))
             {
-                StatusText.Text = "该会话无法打开（可能已被移动或删除）。";
+                StatusTextStyler.Set(StatusText, "该会话无法打开（可能已被移动或删除）；点「刷新」可重新读取列表。", isError: true);
             }
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException)
         {
-            StatusText.Text = $"打开会话失败：{ex.Message}";
+            StatusTextStyler.Set(StatusText, $"打开会话失败：{ex.Message}（点「刷新」重试）", isError: true);
         }
     }
 
@@ -271,7 +271,7 @@ public partial class ConversationWindow : UserControl
         if (IsLoaded)
         {
             ApplyConversationFilter();
-            StatusText.Text = $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。";
+            StatusTextStyler.Set(StatusText, $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。");
         }
     }
 

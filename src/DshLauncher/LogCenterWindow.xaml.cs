@@ -68,7 +68,7 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            StatusText.Text = "打开日志目录失败：" + ex.Message;
+            StatusTextStyler.Set(StatusText, "打开日志目录失败：" + ex.Message + "（请检查目录是否存在或权限）", isError: true);
         }
     }
 
@@ -152,7 +152,7 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
             status += $" · 仅显示前 {rendered} 条";
         }
 
-        StatusText.Text = status;
+        StatusTextStyler.Set(StatusText, status);
     }
 
     private UIElement BuildDayHeader(LogDayGroup group)
