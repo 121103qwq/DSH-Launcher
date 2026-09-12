@@ -225,6 +225,18 @@
 `SnapsToDevicePixels` + `UseLayoutRounding`。颜色按语义取 `SuccessTextBrush` /
 `DangerTextBrush` / `MutedBrush` 系。
 
+### 空态 / 加载态 / 错误态（2026-09-13 统一，变更集 136）
+
+| 态 | 文案 | 颜色 | 动作入口 |
+|---|---|---|---|
+| 空态 | 一句话说明"为什么是空的" | `MutedBrush` | 有可执行动作则给出按钮或明确指引（如"点击「刷新目录」"） |
+| 加载态 | "正在…，请稍候"（≤1s 的操作可省） | `MutedBrush` | 长任务另配 `ProgressBar IsIndeterminate` |
+| 警告态（部分失败） | "已更新，但有 N 个来源暂时不可用" | `WarningTextBrush` | 说明影响范围 |
+| 错误态 | "…失败：原因（点「X」重试）" | `DangerTextBrush` | **必须**写明下一步点哪里 |
+
+**纪律**：错误**不允许只写进日志**而没有界面反馈；失败文案**必须自带动作指引**。
+参考实现：`ExtensionWindow.SetStatusText(block, text, isError:, isWarning:)`（市场 / Skill 状态行 11 处调用，失败文案统一带"（点「刷新目录」重试）"）。
+
 ### 菜单（ContextMenu / MenuItem）
 
 | 部位 | 规格 |

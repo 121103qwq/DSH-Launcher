@@ -314,12 +314,12 @@ public partial class ExtensionWindow : UserControl
             if (_skillMarketWarnings.Count > 0)
             {
                 // 刷新结束保留失败提示，避免“目录为空”误导（GitHub 限流等）。
-                SkillMarketStatusText.Text = $"⚠ {_skillMarketWarnings[^1]}";
+                SetStatusText(SkillMarketStatusText, $"⚠ {_skillMarketWarnings[^1]}", isWarning: true);
             }
         }
         catch (Exception ex)
         {
-            SkillMarketStatusText.Text = $"刷新 Skill 目录失败：{ex.Message}";
+            SetStatusText(SkillMarketStatusText, $"刷新 Skill 目录失败：{ex.Message}（点“刷新目录”重试）", isError: true);
         }
         finally
         {
@@ -409,7 +409,7 @@ public partial class ExtensionWindow : UserControl
         }
         catch (Exception ex)
         {
-            SkillMarketStatusText.Text = $"安装 Skill 失败：{ex.Message}";
+            SetStatusText(SkillMarketStatusText, $"安装 Skill 失败：{ex.Message}", isError: true);
             progressWindow.Fail(ex.Message);
         }
         finally
@@ -675,7 +675,7 @@ public partial class ExtensionWindow : UserControl
             var cached = await Task.Run(() => _marketplaceService.ReadCached(_instance));
             if (cached is null)
             {
-                MarketplaceStatusText.Text = "还没有本地缓存；点击“刷新目录”可从在线来源读取插件目录。";
+                SetStatusText(MarketplaceStatusText, "还没有本地缓存；点击“刷新目录”可从在线来源读取插件目录。");
                 return false;
             }
 
@@ -684,9 +684,23 @@ public partial class ExtensionWindow : UserControl
         }
         catch (Exception ex)
         {
-            MarketplaceStatusText.Text = $"读取插件市场缓存失败：{ex.Message}";
+            SetStatusText(MarketplaceStatusText, $"读取插件市场缓存失败：{ex.Message}（点“刷新目录”重试）", isError: true);
             return false;
         }
+    }
+
+    /// <summary>
+    /// 状态行三态（变更集 136，UI 统一 §1.7）：加载中＝次要色、部分失败＝警告色、失败＝危险色；
+    /// 失败文案必须自带"下一步点哪里"（重试入口＝页面上的「刷新目录」按钮）。
+    /// </summary>
+    private static void SetStatusText(System.Windows.Controls.TextBlock block, string text, bool isError = false, bool isWarning = false)
+    {
+        block.Text = text;
+        block.Foreground = isError
+            ? Services.UiBrush.Get("DangerTextBrush")
+            : isWarning
+                ? Services.UiBrush.Get("WarningTextBrush")
+                : Services.UiBrush.Get("MutedBrush");
     }
 
     private async Task RefreshMarketplaceAsync()
@@ -702,9 +716,9 @@ public partial class ExtensionWindow : UserControl
         // 刷新总预算：社区目录大文件（约 2MB）在慢网络需 50s 左右，
         // 放宽到 90s（各来源并行，实际等待约等于最慢来源）。
         _marketplaceCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        MarketplaceStatusText.Text = _marketplaceSnapshot.Count == 0
+        SetStatusText(MarketplaceStatusText, _marketplaceSnapshot.Count == 0
             ? "正在读取插件目录，请稍候…"
-            : "正在后台更新目录，当前先显示本地缓存。";
+            : "正在后台更新目录，当前先显示本地缓存。");
 
         try
         {
@@ -718,7 +732,7 @@ public partial class ExtensionWindow : UserControl
                 }
 
                 _marketplaceSnapshot = state.Items;
-                MarketplaceStatusText.Text = $"后台更新中：已合并 {state.Items.Count} 条候选插件…";
+                SetStatusText(MarketplaceStatusText, $"后台更新中：已合并 {state.Items.Count} 条候选插件…");
                 RenderMarketplaceItems();
             });
             var result = await _marketplaceService.SearchAsync(
@@ -727,17 +741,17 @@ public partial class ExtensionWindow : UserControl
                 _marketplaceCancellation.Token,
                 progress: progress);
             await SetMarketplaceSnapshotAsync(result, fromCache: false, _marketplaceCancellation.Token);
-            MarketplaceStatusText.Text = result.Warnings.Count == 0
+            SetStatusText(MarketplaceStatusText, result.Warnings.Count == 0
                 ? "目录已更新。列表中的插件在真正安装前还会再次检查。"
-                : $"目录已更新，但有 {result.Warnings.Count} 个来源暂时不可用；仍显示其他来源的结果。";
+                : $"目录已更新，但有 {result.Warnings.Count} 个来源暂时不可用；仍显示其他来源的结果。", isWarning: result.Warnings.Count > 0);
         }
         catch (OperationCanceledException) when (_marketplaceCancellation?.IsCancellationRequested == true)
         {
-            MarketplaceStatusText.Text = "读取插件目录超时或已取消，请稍后重试。";
+            SetStatusText(MarketplaceStatusText, "读取插件目录超时或已取消，请稍后重试（点“刷新目录”）。", isError: true);
         }
         catch (Exception ex)
         {
-            MarketplaceStatusText.Text = $"读取插件目录失败：{ex.Message}";
+            SetStatusText(MarketplaceStatusText, $"读取插件目录失败：{ex.Message}（点“刷新目录”重试）", isError: true);
         }
         finally
         {
