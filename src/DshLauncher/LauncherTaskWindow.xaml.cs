@@ -22,7 +22,13 @@ public partial class LauncherTaskWindow : UserControl
         _tasks.Changed += OnTasksChanged;
     }
 
-    private void Window_OnLoaded(object sender, RoutedEventArgs e) => Refresh();
+    private readonly Services.ScrollMemory _taskScroll = new(new Services.UiStateStore(), "page/tasks");   // 变更集 146
+
+    private void Window_OnLoaded(object sender, RoutedEventArgs e)
+    {
+        _taskScroll.Attach(TaskList);   // 变更集 146：滚动位置记忆
+        Refresh();
+    }
 
     private void Window_OnUnloaded(object sender, RoutedEventArgs e) => _tasks.Changed -= OnTasksChanged;
 
@@ -73,5 +79,7 @@ public partial class LauncherTaskWindow : UserControl
         var history = tasks.Count - running;
         StatusTextStyler.Set(StatusText, $"历史 {history} 条（上限 {LauncherTaskService.MaximumRetainedTasks}）· 台账文件 launcher-tasks.json");
         EmptyText.Visibility = tasks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(() => _taskScroll.Restore(TaskList)));   // 变更集 146
     }
 }

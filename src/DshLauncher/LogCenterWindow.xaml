@@ -67,7 +67,7 @@
                     CornerRadius="{StaticResource CardCornerRadius}"
                     Padding="{StaticResource CardPadding}">
                 <Grid>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                    <ScrollViewer x:Name="LogScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                         <StackPanel x:Name="LogPanel" />
                     </ScrollViewer>
                     <TextBlock x:Name="EmptyText"

@@ -40,6 +40,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private const string TestHideNodeVariable = "DSH_LAUNCHER_TEST_HIDE_NODE";
     private const string TestHideDshVariable = "DSH_LAUNCHER_TEST_HIDE_DSH";
 #endif
+    private readonly Services.UiStateStore _uiStateStore = new();   // 变更集 146：界面状态持久化
+
     private readonly NodeRuntimeDetector _nodeDetector = new();
     private readonly DshRuntimeDetector _dshDetector = new();
     private readonly SourceProjectInspector _sourceInspector = new();
@@ -3222,17 +3224,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         };
         var navButtons = new List<System.Windows.Controls.Button>();
         var scrollOffsets = new double[categories.Length];
+        // 变更集 146：设置页各分类的滚动位置改为**持久化**（原先只存在内存里，重启即丢）
+        for (var scrollIndex = 0; scrollIndex < categories.Length; scrollIndex++)
+        {
+            scrollOffsets[scrollIndex] = _uiStateStore.GetScrollOffset("settings/" + categories[scrollIndex].Title);
+        }
+
         var currentCategory = -1;
         void SelectCategory(int index)
         {
             if (currentCategory >= 0)
             {
                 scrollOffsets[currentCategory] = contentScroller.VerticalOffset;
+                _uiStateStore.SaveScrollOffset("settings/" + categories[currentCategory].Title, contentScroller.VerticalOffset);
             }
 
             contentScroller.Content = categories[index].Panel;
             contentScroller.UpdateLayout();
-            contentScroller.ScrollToVerticalOffset(scrollOffsets[index]);
+            // 变更集 146：换完内容要等下一轮布局，ScrollToVerticalOffset 才不会被忽略
+            //（实测：直接调用时恢复无效，随后切换分类还会把 0 写回存档，覆盖掉记住的位置）
+            var restoreOffset = scrollOffsets[index];
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+                new Action(() => contentScroller.ScrollToVerticalOffset(restoreOffset)));
             currentCategory = index;
             for (var i = 0; i < navButtons.Count; i++)
             {

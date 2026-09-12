@@ -181,6 +181,8 @@
 - 大列表开启虚拟化：`VirtualizingStackPanel.IsVirtualizing=True`、
   `VirtualizationMode=Recycling`、`ScrollViewer.CanContentScroll=True`。
 - 列表容器设 `ClipToBounds=True`，避免滚动内容压出圆角。
+- **滚动位置记忆（变更集 146）**：共享组件 `Services/ScrollMemory`（600ms 防抖写盘）+ `ui-state.json` 的通用字段 `ScrollOffsets`（key = `page/xxx` 或 `settings/分类名`）。接入三步：`Attach(宿主)` → 数据填充后 `Restore(宿主)` → 无需其它代码。**恢复必须等下一轮布局**（`Dispatcher.BeginInvoke(DispatcherPriority.Loaded, …)`）：换完内容立即 `ScrollToVerticalOffset` 会被忽略（实测：设置页因此恢复失效，随后切分类还会把 0 写回存档）。列表作为宿主时给**具名**元素，不要依赖"视觉树里第一个 `ScrollViewer`"。
+
 
 ### 数据表（ListView + GridView）
 

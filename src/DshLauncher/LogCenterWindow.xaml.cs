@@ -37,7 +37,13 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
         };
     }
 
-    private void Window_OnLoaded(object sender, RoutedEventArgs e) => RefreshData();
+    private readonly Services.ScrollMemory _logScroll = new(new Services.UiStateStore(), "page/logs");   // 变更集 146
+
+    private void Window_OnLoaded(object sender, RoutedEventArgs e)
+    {
+        _logScroll.Attach(LogScroll);   // 变更集 146：绑定到日志区滚动视图本身（不再靠"视觉树第一个"猜）
+        RefreshData();
+    }
 
     private void Window_OnUnloaded(object sender, RoutedEventArgs e) => _keywordDebounce.Stop();
 
@@ -98,6 +104,9 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
         }
 
         Render();
+
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(() => _logScroll.Restore(LogScroll)));   // 变更集 146
     }
 
     private void Render()

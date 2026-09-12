@@ -13,6 +13,8 @@ namespace DshLauncher;
 
 public partial class ConversationWindow : UserControl
 {
+    private readonly Services.ScrollMemory _conversationScroll = new(new Services.UiStateStore(), "page/conversations");   // 变更集 146
+
     private readonly ManagerInstance _instance;
     private readonly ConversationService _service;
     private readonly Func<ManagerInstance, ConversationEntry, Task<bool>> _openConversation;
@@ -91,6 +93,7 @@ public partial class ConversationWindow : UserControl
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
+        _conversationScroll.Attach(ConversationList);   // 变更集 146：滚动位置记忆
         VersionSelectorBox.ItemsSource = _instances ?? new[] { _instance };
         VersionSelectorBox.SelectedItem = (_instances ?? new[] { _instance }).FirstOrDefault(candidate =>
             string.Equals(candidate.Id, _instance.Id, StringComparison.Ordinal));
@@ -284,6 +287,10 @@ public partial class ConversationWindow : UserControl
             "Workspace" => Entries.Where(static entry => !string.IsNullOrWhiteSpace(entry.WorkingDirectory)).ToArray(),
             _ => Entries.ToArray()
         };
+
+        // 变更集 146：等布局完成后恢复上次的滚动位置（此刻可滚动范围才有效）
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+            new Action(() => _conversationScroll.Restore(ConversationList)));
     }
 
     private async void RefreshBackups_Click(object sender, RoutedEventArgs e) =>

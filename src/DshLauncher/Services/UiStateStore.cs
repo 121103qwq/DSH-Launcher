@@ -79,6 +79,57 @@ public sealed class UiStateStore
         }
     }
 
+    /// <summary>变更集 146：读取某页记住的垂直滚动偏移（无记录返回 0）。</summary>
+    public double GetScrollOffset(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return 0;
+        }
+
+        lock (_sync)
+        {
+            return ReadRoot()?.ScrollOffsets.TryGetValue(key, out var offset) == true && offset > 0 ? offset : 0;
+        }
+    }
+
+    /// <summary>变更集 146：记住某页的垂直滚动偏移（写盘失败只降级，不打断 UI）。</summary>
+    public void SaveScrollOffset(string key, double offset)
+    {
+        if (string.IsNullOrWhiteSpace(key) || double.IsNaN(offset) || offset < 0)
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            try
+            {
+                var root = ReadRoot() ?? new UiStateRoot();
+                if (root.ScrollOffsets.TryGetValue(key, out var current) && Math.Abs(current - offset) < 1)
+                {
+                    return;   // 变化 < 1px 不写盘，避免滚动过程中频繁 IO
+                }
+
+                root.ScrollOffsets[key] = offset;
+                var directory = System.IO.Path.GetDirectoryName(_path);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                var temporary = $"{_path}.{Guid.NewGuid():N}.tmp";
+                File.WriteAllText(temporary, JsonSerializer.Serialize(root), new UTF8Encoding(false));
+                File.Move(temporary, _path, overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                LauncherLog.Warn("保存滚动位置失败（不影响使用）。", ErrorCodes.E9001,
+                    new { path = _path, key, error = ex.Message });
+            }
+        }
+    }
+
     private UiStateRoot? ReadRoot()
     {
         try
@@ -101,5 +152,8 @@ public sealed class UiStateStore
     private sealed class UiStateRoot
     {
         public Dictionary<string, MarketplaceUiState> Marketplaces { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>变更集 146：内嵌页的滚动位置（key = 页/分类标识，value = 垂直偏移 px）。</summary>
+        public Dictionary<string, double> ScrollOffsets { get; set; } = new(StringComparer.Ordinal);
     }
 }
