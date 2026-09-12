@@ -346,8 +346,11 @@ public partial class VersionSettingsWindow : UserControl
         };
         var remove = new System.Windows.Controls.Button
         {
+            // 变更集 143：代码动态创建的危险按钮统一套 DangerButton（原先没样式 → 看着是普通按钮）。
+            // 注意：本项目 UseWindowsForms + 隐式 using，Application 在 WinForms/WPF 间歧义（CS0104），故用窗口实例上的 FindResource。
             Content = "删除",
-            Padding = new Thickness(12, 7, 12, 7)
+            Style = (System.Windows.Style)FindResource("DangerButton"),
+            Padding = new Thickness(10, 6, 10, 6)
         };
         remove.Click += (_, _) => EnvironmentVariableList.Children.Remove(row);
         System.Windows.Controls.Grid.SetColumn(valueBox, 1);

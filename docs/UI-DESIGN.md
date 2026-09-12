@@ -206,6 +206,8 @@
 - **统尺寸**：`PrimaryButton`/`DangerButton` 都带 `MinHeight="38"` + `Padding="16,0"` → 同屏的主/危险按钮**高度与左右内边距一致**。
 - **紧凑按钮分层**：工具条/卡片内的小按钮（`CompactToolbarButton` 等）允许 `Padding="10,4"`~`"12,7"`，**不与三级动作按钮混排在同一行**。
 - 链接式动作用 `PathLinkButton`（无高度、无边框）。
+- ⚠️ **动态创建的按钮同样受规范约束**：`new Button(...)` 的删除/卸载/移除类按钮 **必须显式套 `DangerButton`**（用窗口实例的 `FindResource`，**不要**写 `Application.Current`：本项目 `UseWindowsForms` + 隐式 using 会让 `Application` 歧义 → CS0104）。harness 有 C# 侧断言。
+- ⚠️ **虚拟化列表的条目要显式约束宽度**：ListBox 在 `ScrollViewer.CanContentScroll=True` 时，虚拟化面板以**无限宽度**测量条目，带 `TextWrapping` 的长描述会把条目的想要宽度撑到视口之外（`Stretch` 只作用于 arrange，救不回 measure）→ 右侧按钮被挤出窗口。市场列表做法：`ItemContainerStyle` 里 `Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox}}"`（变更集 143）。
 - ⚠️ **不要在元素上内联 `Foreground` / `Background`**（危险按钮及所有依赖样式触发器的按钮）：**WPF 本地值优先级高于样式触发器**，内联值会让「悬停变白字 / 变底色」失效。（2026-09-13 变更集 142：「删除版本」内联 `Foreground=DangerBrush` → 悬停红底红字，其余 6 个危险按钮正常。harness 有断言。）
 - **危险操作必须用 `DangerButton`**（`Content` 含 删除/卸载/回滚/清理/移除 的按钮）：harness 有断言。
 - 默认样式：白底 + `#C5D5E6` 描边 + 8px 圆角 + 内边距 16,9；悬停变主色。

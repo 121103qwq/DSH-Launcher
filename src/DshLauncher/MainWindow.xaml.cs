@@ -2673,8 +2673,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 };
                 var removeButton = new System.Windows.Controls.Button
                 {
+                    // 变更集 143（用户反馈）：这是**代码动态创建**的删除按钮，XAML 门禁扫不到——
+                    // 原先没套样式，看着是普通按钮；按"危险操作统一 DangerButton"补上（Padding 与扩展列表里的紧凑删除按钮一致）。
+                    // 注意：本项目 UseWindowsForms + 隐式 using，Application 在 WinForms/WPF 间歧义（CS0104），故用窗口实例上的 FindResource。
                     Content = "删除",
-                    Padding = new Thickness(10, 3, 10, 3),
+                    Style = (System.Windows.Style)FindResource("DangerButton"),
+                    Padding = new Thickness(10, 6, 10, 6),
                     Margin = new Thickness(6, 0, 0, 0)
                 };
                 removeButton.Click += (_, _) =>
