@@ -519,8 +519,17 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Style.Triggers>
                 <!-- 变更集 140（用户反馈）：悬停只"加深描边"，不再整块变实心红（底色与文字保持不变） -->
+                <!-- 变更集 141（用户澄清）：危险按钮悬停 = **红底白字（底色反转）**（变更集 140 误改成"只加深描边"，此处改回）；
+                     按下再深一档（DangerStrongBrush）以保留按下反馈。 -->
                 <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource DangerBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+                    <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="{StaticResource DangerStrongBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource DangerStrongBrush}" />
+                    <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
                 </Trigger>
             </Style.Triggers>
         </Style>
