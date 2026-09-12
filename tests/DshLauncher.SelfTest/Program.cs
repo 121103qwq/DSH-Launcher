@@ -2202,6 +2202,80 @@ finally
     Environment.SetEnvironmentVariable(LauncherLog.LogRootVariable, logCenterPreviousRoot);
 }
 
+// ===========================================================================
+// 11. UI 插件扫描（InstanceUiPluginScanner，work-log/89）
+// ===========================================================================
+Check("ui-plugin/分类：spec 声明 > keywords > 包名",
+    InstanceUiPluginScanner.Classify("pkg", null, Array.Empty<string>(), new[] { "#dsh-ecosystem-spec/tui-channel" }, false)
+        is { Kind: UiPluginKind.Tui, Confidence: UiPluginConfidence.Strong }
+    && InstanceUiPluginScanner.Classify("@x/dsh-tui", null, new[] { "tui", "cli" }, Array.Empty<string>(), true)
+        is { Kind: UiPluginKind.Tui, Confidence: UiPluginConfidence.Medium, Enabled: true }
+    && InstanceUiPluginScanner.Classify("dsh-my-tui", null, Array.Empty<string>(), Array.Empty<string>(), false)
+        is { Kind: UiPluginKind.Tui, Confidence: UiPluginConfidence.Weak }
+    && InstanceUiPluginScanner.Classify("dsh-gui-x", null, new[] { "gui" }, Array.Empty<string>(), false)
+        is { Kind: UiPluginKind.Gui, Confidence: UiPluginConfidence.Medium }
+    && InstanceUiPluginScanner.Classify("dsh-desktop-tool", null, Array.Empty<string>(), Array.Empty<string>(), false)
+        is { Kind: UiPluginKind.Gui, Confidence: UiPluginConfidence.Weak }
+    && InstanceUiPluginScanner.Classify("dsh-base", null, new[] { "agent" }, Array.Empty<string>(), true) is null
+    && InstanceUiPluginScanner.Classify("@deepseek-ai/dsh-terminal", null, new[] { "terminal" }, Array.Empty<string>(), true) is null
+    && InstanceUiPluginScanner.Classify("@deepseek-ai/dsh-terminal-bash", "1.0.0", new[] { "tui" }, Array.Empty<string>(), true) is null
+    && InstanceUiPluginScanner.Classify("@deepseek-ai/dsh-desktop-app", null, Array.Empty<string>(), Array.Empty<string>(), false)
+        is { Kind: UiPluginKind.Gui });
+
+var uiHome = Path.Combine(scratch, "ui-plugin-home");
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "web"));
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "@deepseek-harness-tui", "dsh-tui"));
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "dsh-gui-hanhua"));
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "dsh-ssh-tui"));
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "node-pty"));
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "picocolors"));
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "lodash"));
+File.WriteAllText(
+    Path.Combine(uiHome, "profiles", "web", "package.json"),
+    """{ "dependencies": { "@deepseek-harness-tui/dsh-tui": "0.10.1", "dsh-ssh-tui": "0.4.0", "dsh-gui-hanhua": "1.0.0", "node-pty": "1.0.0" }, "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "@deepseek-harness-tui/dsh-tui"] } } }""",
+    Encoding.UTF8);
+File.WriteAllText(
+    Path.Combine(uiHome, "profiles", "node_modules", "@deepseek-harness-tui", "dsh-tui", "package.json"),
+    """{ "name": "@deepseek-harness-tui/dsh-tui", "version": "0.10.1", "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }, "imports": { "#dsh-ecosystem-spec/tui-channel": "./x.js" } }""",
+    Encoding.UTF8);
+File.WriteAllText(
+    Path.Combine(uiHome, "profiles", "node_modules", "dsh-gui-hanhua", "package.json"),
+    """{ "name": "dsh-gui-hanhua", "version": "1.0.0", "keywords": ["gui"], "dsh": { "bundle": { "patch": "./cordis.patch.yml" } } }""",
+    Encoding.UTF8);
+File.WriteAllText(
+    Path.Combine(uiHome, "profiles", "node_modules", "dsh-ssh-tui", "package.json"),
+    """{ "name": "dsh-ssh-tui", "version": "0.4.0", "keywords": ["tui", "terminal"], "dsh": { "bundle": { "patch": "./cordis.patch.yml" } } }""",
+    Encoding.UTF8);
+// 负例1：直接依赖但没声明 dsh（普通库，keywords 里的 terminal 不应命中）
+File.WriteAllText(
+    Path.Combine(uiHome, "profiles", "node_modules", "node-pty", "package.json"),
+    """{ "name": "node-pty", "version": "1.0.0", "keywords": ["tty", "terminal"] }""",
+    Encoding.UTF8);
+// 负例2：传递依赖（不在 dependencies/bundles 里，即便有 terminal 关键字也不算）
+File.WriteAllText(
+    Path.Combine(uiHome, "profiles", "node_modules", "picocolors", "package.json"),
+    """{ "name": "picocolors", "version": "1.0.0", "keywords": ["terminal", "cli"] }""",
+    Encoding.UTF8);
+File.WriteAllText(
+    Path.Combine(uiHome, "profiles", "node_modules", "lodash", "package.json"),
+    """{ "name": "lodash", "version": "4.17.21" }""",
+    Encoding.UTF8);
+var uiInstance = BuildInstance("ui-plugins", uiHome);
+var uiScan = InstanceUiPluginScanner.Scan(uiInstance, "web");
+Check("ui-plugin/扫描：识别 TUI/GUI、标记启用状态、过滤非插件包（依赖白名单 + dsh 声明）",
+    uiScan.Plugins.Count == 3
+    && uiScan.HasTuiProvider && uiScan.HasEnabledTuiProvider
+    && uiScan.TuiPlugins is [
+        { Name: "@deepseek-harness-tui/dsh-tui", Enabled: true, Confidence: UiPluginConfidence.Strong },
+        { Name: "dsh-ssh-tui", Enabled: false, Confidence: UiPluginConfidence.Medium }
+    ]
+    && uiScan.GuiPlugins is [{ Name: "dsh-gui-hanhua", Enabled: false }]
+    && uiScan.NotEnabledTuiPlugins is [{ Name: "dsh-ssh-tui" }]
+    && !uiScan.Plugins.Any(plugin => plugin.Name is "node-pty" or "picocolors" or "lodash"));
+Check("ui-plugin/未启用 TUI 扫描：无已启用提供者时标记为需启用",
+    InstanceUiPluginScanner.Classify("dsh-ssh-tui", "0.4.0", new[] { "tui" }, Array.Empty<string>(), false)
+        is { Kind: UiPluginKind.Tui, Enabled: false });
+
 try
 {
     Directory.Delete(scratch, recursive: true);

@@ -3643,6 +3643,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var mode = GetEffectiveOpenMode();
         var vendorDesktop = HasVendorDesktopSurface(instance);
+        var launchModeVisibility = _selectedVersionSettings.LaunchModeVisibility;
+        bool ModeVisible(string key) =>
+            launchModeVisibility is null
+            || !launchModeVisibility.TryGetValue(key, out var visible)
+            || visible;
 
         foreach (var item in menu.Items.OfType<System.Windows.Controls.MenuItem>())
         {
@@ -3656,16 +3661,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     item.IsChecked = mode == VersionOpenMode.Web;
                     break;
                 case "Isolated":
+                    item.Visibility = ModeVisible("isolated") ? Visibility.Visible : Visibility.Collapsed;
                     item.IsChecked = mode == VersionOpenMode.Isolated;
                     break;
                 case "ElectronDesktop":
-                    item.Visibility = vendorDesktop ? Visibility.Collapsed : Visibility.Visible;
+                    item.Visibility = vendorDesktop || !ModeVisible("window") ? Visibility.Collapsed : Visibility.Visible;
                     item.IsEnabled = instance.CanOpenDesktopShell;
                     item.ToolTip = instance.CanOpenDesktopShell
                         ? "用 DSH Desktop 封装运行时打开原生窗口（与启动器窗口相互独立）。"
                         : "该实例的运行时不是 DSH Desktop 封装（ElectronBootstrap），无法打开原生窗口。";
                     break;
                 case "Terminal":
+                    item.Visibility = ModeVisible("terminal") ? Visibility.Visible : Visibility.Collapsed;
                     var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
                     var surface = PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
                     var supported = PresentationSurfaceService.SupportsTerminalLaunch(surface);
@@ -3678,7 +3685,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void OpenInTerminal_Click(object sender, RoutedEventArgs e)
+    private async void OpenInTerminal_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedInstance is not { } instance)
         {
@@ -3690,6 +3697,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var surface = PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
         if (!PresentationSurfaceService.SupportsTerminalLaunch(surface))
         {
+            // 检测到 TUI 插件时给更具体的提示；未启用的提供快捷启用（work-log/89，变更集 106）。
+            var scan = InstanceUiPluginScanner.Scan(instance, profileName);
+            if (scan.HasTuiProvider)
+            {
+                var names = string.Join("、", scan.TuiPlugins.Select(plugin =>
+                    plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
+                var notEnabled = scan.NotEnabledTuiPlugins;
+                if (notEnabled.Count > 0
+                    && System.Windows.MessageBox.Show(
+                        this,
+                        $"检测到 TUI 插件：{names}。\n\n其中 {string.Join("、", notEnabled.Select(plugin => plugin.Name))} 尚未启用（不在当前 profile 的插件层里）。\n"
+                        + "现在把它们加入当前 profile 的插件层吗？（只改依赖与 bundles，不动插件文件）",
+                        "启用检测到的 TUI 插件",
+                        MessageBoxButton.OKCancel,
+                        MessageBoxImage.Question) == MessageBoxResult.OK)
+                {
+                    await EnableDetectedTuiPluginsAsync(instance, notEnabled);
+                    return;
+                }
+
+                ShowNotice($"检测到 TUI 插件（{names}），但当前 profile「{profileName}」的呈现面是"
+                    + $"「{PresentationSurfaceService.Describe(surface)}」；请把活动 profile 切到该插件对应的终端面 profile，再用「在终端打开」。");
+                return;
+            }
+
             ShowNotice($"实例「{instance.Name}」的呈现面是「{PresentationSurfaceService.Describe(surface)}」，不是终端面；"
                 + "「在终端打开」只适用于 dsh-tui 这类终端面 profile。");
             return;
@@ -3725,6 +3757,54 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         catch (Exception ex)
         {
             ShowNotice("在终端打开失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>把检测到但未启用的 TUI 插件加入当前 profile 的插件层（复用插件管理链路）。</summary>
+    private async Task EnableDetectedTuiPluginsAsync(ManagerInstance instance, IReadOnlyList<UiPluginInfo> plugins)
+    {
+        try
+        {
+            var entries = await _extensionService.ListAsync(instance, _windowCancellation.Token);
+            var enabled = new List<string>();
+            var failed = new List<string>();
+            foreach (var plugin in plugins)
+            {
+                var entry = entries.FirstOrDefault(item =>
+                    string.Equals(item.Name, plugin.Name, StringComparison.OrdinalIgnoreCase));
+                if (entry is null)
+                {
+                    failed.Add(plugin.Name + "（不在当前 profile 的依赖里，请在扩展页插件管理里启用）");
+                    continue;
+                }
+
+                try
+                {
+                    await _extensionService.SetPluginEnabledAsync(instance, entry, true, _windowCancellation.Token);
+                    enabled.Add(plugin.Name);
+                }
+                catch (Exception ex)
+                {
+                    failed.Add($"{plugin.Name}（{ex.Message}）");
+                }
+            }
+
+            var parts = new List<string>();
+            if (enabled.Count > 0)
+            {
+                parts.Add("已启用：" + string.Join("、", enabled));
+            }
+
+            if (failed.Count > 0)
+            {
+                parts.Add("未启用：" + string.Join("、", failed));
+            }
+
+            ShowNotice(string.Join("；", parts) + "。启用后请把活动 profile 切换/重建为对应终端面 profile，再用「在终端打开」。");
+        }
+        catch (Exception ex)
+        {
+            ShowNotice("启用插件失败：" + ex.Message);
         }
     }
 
@@ -5045,7 +5125,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     NodeExecutablePath = current.NodeExecutablePath,
                     OpenMode = current.OpenMode,
                     CustomOpenTargetPath = current.CustomOpenTargetPath,
-                    UseDshMarketHotReload = current.UseDshMarketHotReload
+                    UseDshMarketHotReload = current.UseDshMarketHotReload,
+                    LaunchModeVisibility = current.LaunchModeVisibility is null
+                        ? null
+                        : new Dictionary<string, bool>(current.LaunchModeVisibility, StringComparer.Ordinal)
                 };
                 var snapshot = instance.RuntimeStatus != InstanceRuntimeStatus.Running
                     && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached

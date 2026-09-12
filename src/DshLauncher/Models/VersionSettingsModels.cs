@@ -110,6 +110,12 @@ public sealed class VersionSettingsData
     /// <summary>是否在该实例设置页显示 DSh 版本更新提示（联网查询官方版本，默认关）。</summary>
     public bool CheckDshUpdates { get; set; }
 
+    /// <summary>
+    /// 卡片 ▼ 启动方式菜单的显示开关（键：terminal / window / isolated；缺省或 true = 显示）。
+    /// 实例级，随 version-settings.json 保存（work-log/89，变更集 106）。
+    /// </summary>
+    public Dictionary<string, bool>? LaunchModeVisibility { get; set; }
+
     /// <summary>空闲阈值（分钟，5–240，默认 30）。</summary>
     public int? AutoStopIdleMinutes { get; set; }
 

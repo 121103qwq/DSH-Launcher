@@ -117,6 +117,9 @@ public sealed class VersionSettingsService
             AutoStopWhenIdle = settings.AutoStopWhenIdle,
             AutoStopIdleMinutes = settings.AutoStopIdleMinutes,
             CheckDshUpdates = settings.CheckDshUpdates,
+            LaunchModeVisibility = settings.LaunchModeVisibility is null
+                ? null
+                : new Dictionary<string, bool>(settings.LaunchModeVisibility, StringComparer.Ordinal),
             CrashPolicy = settings.CrashPolicy,
             CrashRestartLimit = settings.CrashRestartLimit
         };

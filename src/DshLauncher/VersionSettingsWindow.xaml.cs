@@ -34,6 +34,8 @@ public partial class VersionSettingsWindow : UserControl
     private const string EnvironmentNameTag = "EnvironmentName";
     private const string EnvironmentValueTag = "EnvironmentValue";
     private VersionSettingsData _settings = new();
+    private StackPanel? _uiLaunchModeRows;
+    private TextBlock? _uiLaunchModeStatusText;
 
     public VersionSettingsWindow(
         ManagerInstance? instance,
@@ -88,6 +90,7 @@ public partial class VersionSettingsWindow : UserControl
         LoadWorkspaceNames();
         LoadConfigurationControls();
         LoadPluginSettingsControls();
+        AppendLaunchModeVisibilitySection();
         ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
 
         if (_instance is null)
@@ -1084,7 +1087,10 @@ public partial class VersionSettingsWindow : UserControl
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
         OpenMode = _settings.OpenMode,
-        CustomOpenTargetPath = _settings.CustomOpenTargetPath
+        CustomOpenTargetPath = _settings.CustomOpenTargetPath,
+        LaunchModeVisibility = _settings.LaunchModeVisibility is null
+            ? null
+            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal)
     };
 
     private void OpenModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
@@ -1103,6 +1109,206 @@ public partial class VersionSettingsWindow : UserControl
             StringComparison.Ordinal);
         CustomOpenTargetPanel.Opacity = CustomOpenTargetPanel.IsEnabled ? 1 : 0.55;
     }
+
+    // ------------------------------------------------------------------
+    // 启动方式显示（work-log/89，变更集 106）：扫描实例 UI 插件，控制哪些方式
+    // 出现在实例卡片的 ▼ 菜单里。Desktop / Web 不受开关影响。
+    // ------------------------------------------------------------------
+
+    private void AppendLaunchModeVisibilitySection()
+    {
+        var content = new StackPanel();
+        content.Children.Add(new TextBlock
+        {
+            Text = "启动方式显示",
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 14
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "扫描该实例的插件（TUI / GUI）后，在这里控制哪些方式出现在实例卡片的 ▼ 菜单里；关闭只是隐藏入口，随时可以重新打开。Desktop 启动 / Web 启动 始终显示。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 6)
+        });
+
+        _uiLaunchModeRows = new StackPanel();
+        content.Children.Add(_uiLaunchModeRows);
+
+        _uiLaunchModeStatusText = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        content.Children.Add(_uiLaunchModeStatusText);
+
+        var refresh = new WpfButton
+        {
+            Content = "重新扫描",
+            Padding = new Thickness(12, 7, 12, 7),
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        refresh.Click += (_, _) => RefreshLaunchModeVisibilitySection();
+        content.Children.Add(refresh);
+
+        PersonalizationPage.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = (CornerRadius)FindResource("CardCornerRadius"),
+            Padding = (Thickness)FindResource("CardPadding"),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+
+        RefreshLaunchModeVisibilitySection();
+    }
+
+    private void RefreshLaunchModeVisibilitySection()
+    {
+        if (_instance is null || _uiLaunchModeRows is null || _uiLaunchModeStatusText is null)
+        {
+            return;
+        }
+
+        _uiLaunchModeRows.Children.Clear();
+        var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
+        UiPluginScanResult scan;
+        try
+        {
+            scan = InstanceUiPluginScanner.Scan(_instance, profileName);
+        }
+        catch (Exception ex)
+        {
+            _uiLaunchModeStatusText.Text = "扫描失败：" + ex.Message;
+            return;
+        }
+
+        var visibility = _settings.LaunchModeVisibility;
+        bool ModeVisible(string key) => visibility is null || !visibility.TryGetValue(key, out var value) || value;
+
+        if (scan.HasTuiProvider)
+        {
+            var sources = string.Join("、", scan.TuiPlugins.Select(plugin =>
+                plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
+            AddLaunchModeRow("terminal", "在终端打开", "来源：" + sources, ModeVisible("terminal"));
+        }
+
+        if (_instance.CanOpenDesktopShell)
+        {
+            AddLaunchModeRow("window", "打开窗口（DSH Desktop 封装）", null, ModeVisible("window"));
+        }
+
+        AddLaunchModeRow("isolated", "隔离启动（剥离第三方插件）", null, ModeVisible("isolated"));
+
+        foreach (var gui in scan.GuiPlugins)
+        {
+            _uiLaunchModeRows.Children.Add(new TextBlock
+            {
+                Text = $"· {gui.Name}{(gui.Version is null ? string.Empty : " " + gui.Version)}：GUI 插件（{DescribeUiConfidence(gui.Confidence)}）——启动器不提供它的独立启动方式",
+                Foreground = (WpfBrush)FindResource("MutedBrush"),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+        }
+
+        var parts = new List<string>
+        {
+            $"profile：{profileName}",
+            $"TUI {scan.TuiPlugins.Count} 个",
+            $"GUI {scan.GuiPlugins.Count} 个"
+        };
+        if (scan.Warnings.Count > 0)
+        {
+            parts.Add($"{scan.Warnings.Count} 条扫描告警");
+        }
+
+        _uiLaunchModeStatusText.Text = "扫描结果：" + string.Join(" · ", parts) + "。开关立即生效（卡片 ▼ 菜单）。";
+    }
+
+    private void AddLaunchModeRow(string key, string title, string? source, bool isVisible)
+    {
+        if (_uiLaunchModeRows is null)
+        {
+            return;
+        }
+
+        var row = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var check = new System.Windows.Controls.CheckBox
+        {
+            IsChecked = isVisible,
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        System.Windows.Automation.AutomationProperties.SetName(check, title);
+        check.Checked += (_, _) => SaveLaunchModeVisibility(key, true);
+        check.Unchecked += (_, _) => SaveLaunchModeVisibility(key, false);
+        Grid.SetColumn(check, 0);
+        row.Children.Add(check);
+
+        var text = new StackPanel { Margin = new Thickness(6, 0, 0, 0) };
+        text.Children.Add(new TextBlock { Text = title, FontSize = 12, TextWrapping = TextWrapping.Wrap });
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            text.Children.Add(new TextBlock
+            {
+                Text = source,
+                Foreground = (WpfBrush)FindResource("MutedBrush"),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        Grid.SetColumn(text, 1);
+        row.Children.Add(text);
+        _uiLaunchModeRows.Children.Add(row);
+    }
+
+    private void SaveLaunchModeVisibility(string key, bool visible)
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var map = _settings.LaunchModeVisibility is null
+                ? new Dictionary<string, bool>(StringComparer.Ordinal)
+                : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal);
+            map[key] = visible;
+            _settings.LaunchModeVisibility = map;
+            _settingsService.Save(_instance, _settings);
+            if (_uiLaunchModeStatusText is not null)
+            {
+                _uiLaunchModeStatusText.Text = (visible ? "已开启" : "已关闭") + "该方式在卡片 ▼ 菜单里的显示（立即生效）。";
+            }
+
+            _settingsSaved();
+        }
+        catch (Exception ex)
+        {
+            if (_uiLaunchModeStatusText is not null)
+            {
+                _uiLaunchModeStatusText.Text = "保存失败：" + ex.Message;
+            }
+        }
+    }
+
+    private static string DescribeUiConfidence(UiPluginConfidence confidence) => confidence switch
+    {
+        UiPluginConfidence.Strong => "spec 声明",
+        UiPluginConfidence.Medium => "关键字",
+        _ => "包名启发式"
+    };
 
     private void BrowseOpenTarget_Click(object sender, RoutedEventArgs e)
     {
@@ -1189,7 +1395,10 @@ public partial class VersionSettingsWindow : UserControl
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
         OpenMode = _settings.OpenMode,
-        CustomOpenTargetPath = _settings.CustomOpenTargetPath
+        CustomOpenTargetPath = _settings.CustomOpenTargetPath,
+        LaunchModeVisibility = _settings.LaunchModeVisibility is null
+            ? null
+            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal)
     };
 
     private async void RefreshPlugins_Click(object sender, RoutedEventArgs e) => await LoadPluginsAsync();
@@ -1309,7 +1518,10 @@ public partial class VersionSettingsWindow : UserControl
                 NodeExecutablePath = nodePath,
                 OpenMode = _settings.OpenMode,
                 CustomOpenTargetPath = _settings.CustomOpenTargetPath,
-                UseDshMarketHotReload = _settings.UseDshMarketHotReload
+                UseDshMarketHotReload = _settings.UseDshMarketHotReload,
+                LaunchModeVisibility = _settings.LaunchModeVisibility is null
+                    ? null
+                    : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal)
             };
             var snapshot = TryCreateSnapshot("保存窗口与 Node 设置前");
             _settingsService.Save(_instance, updated);
