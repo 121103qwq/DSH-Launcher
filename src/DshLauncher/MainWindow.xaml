@@ -259,7 +259,7 @@
                         <Button AutomationProperties.Name="最小化窗口" Click="Minimize_Click"
                                 Style="{StaticResource WindowControlButton}"
                                 ToolTip="最小化">
-                            <TextBlock Text="—" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <TextBlock Text="—" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
                         <Button AutomationProperties.Name="最大化 / 还原窗口" x:Name="MaximizeButton"
                                 Click="Maximize_Click"
@@ -269,8 +269,7 @@
                                 Margin="0,0,2,0"
                                 ToolTip="最大化">
                             <TextBlock x:Name="MaximizeGlyph"
-                                       Text="□"
-                                       FontSize="18"
+                                       Text="□" FontSize="22"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center" />
                         </Button>
@@ -278,7 +277,7 @@
                                 Style="{StaticResource WindowControlButton}"
                                 Tag="Close"
                                 ToolTip="关闭">
-                            <TextBlock Text="×" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <TextBlock Text="×" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Button>
                     </StackPanel>
                 </Grid>

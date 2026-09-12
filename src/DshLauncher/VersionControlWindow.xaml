@@ -101,41 +101,56 @@
                                 Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,0,8">
                             <Button.ContextMenu>
-                                <ContextMenu Style="{StaticResource ContextInstanceMenuStyle}">
+                                <!-- 变更集 140 修复：点击后只出现窄白框 —— 给弹出层定最小宽度，避免双行项在 popup 测量期宽度塔陷；
+                                     Placement 在此显式指定，PlacementTarget 由 AddInstance_Click 在代码里设置
+                                     （ContextMenu 不在按钮可视树内，用 RelativeSource AncestorType=Button 解析不到）。 -->
+                                <ContextMenu Style="{StaticResource ContextInstanceMenuStyle}"
+                                            MinWidth="320"
+                                            Placement="Bottom">
                                     <!-- 双行菜单项（变更集 133）：标题 + 11px MutedBrush 说明。说明放在 Header 内容里，
                                          不覆写共享模板（避免复制一份悬停/选中/禁用触发器），也不新增任何字形。
                                          Header 不是字符串时 UIA Name 会为空，因此显式给 AutomationProperties.Name
                                          （既让 UI 自动化可用，也满足 §1.9 可访问性要求）。 -->
                                     <MenuItem Click="ScanInstanceFolder_Click" AutomationProperties.Name="从文件夹导入" Style="{StaticResource ContextInstanceMenuItemStyle}">
-                                        <StackPanel>
+                                        <MenuItem.Header>
+<StackPanel>
                                             <TextBlock Text="从文件夹导入" />
                                             <TextBlock Text="选一个含 dsh 的目录" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
                                         </StackPanel>
+                                        </MenuItem.Header>
                                     </MenuItem>
                                     <MenuItem Click="ScanInstanceShortcut_Click" AutomationProperties.Name="从快捷方式导入" Style="{StaticResource ContextInstanceMenuItemStyle}">
-                                        <StackPanel>
+                                        <MenuItem.Header>
+<StackPanel>
                                             <TextBlock Text="从快捷方式导入" />
                                             <TextBlock Text="从 .lnk 解析出安装目录" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
                                         </StackPanel>
+                                        </MenuItem.Header>
                                     </MenuItem>
                                     <MenuItem Click="ImportSourceProject_Click" AutomationProperties.Name="从源码目录导入" Style="{StaticResource ContextInstanceMenuItemStyle}">
-                                        <StackPanel>
+                                        <MenuItem.Header>
+<StackPanel>
                                             <TextBlock Text="从源码目录导入" />
                                             <TextBlock Text="选 dsh 源码仓库根目录" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
                                         </StackPanel>
+                                        </MenuItem.Header>
                                     </MenuItem>
                                     <MenuItem Click="ScanEnvironment_Click" AutomationProperties.Name="扫描本机 DSH 环境" Style="{StaticResource ContextInstanceMenuItemStyle}">
-                                        <StackPanel>
+                                        <MenuItem.Header>
+<StackPanel>
                                             <TextBlock Text="扫描本机 DSH 环境" />
                                             <TextBlock Text="枚举 .dsh* 与 DSH_HOME 指向的 home" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
                                         </StackPanel>
+                                        </MenuItem.Header>
                                     </MenuItem>
                                     <Separator Style="{StaticResource MenuSeparatorStyle}" />
                                     <MenuItem Click="ImportPackage_Click" AutomationProperties.Name="导入整合包" Style="{StaticResource ContextInstanceMenuItemStyle}">
-                                        <StackPanel>
+                                        <MenuItem.Header>
+<StackPanel>
                                             <TextBlock Text="导入整合包" />
                                             <TextBlock Text=".dshpack / .dspack / .tgz：建一个独立版本" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
                                         </StackPanel>
+                                        </MenuItem.Header>
                                     </MenuItem>
                                 </ContextMenu>
                             </Button.ContextMenu>

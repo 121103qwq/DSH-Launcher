@@ -19,6 +19,7 @@
         <SolidColorBrush x:Key="SuccessTextBrush" Color="#25875A" />
         <SolidColorBrush x:Key="DangerTextBrush" Color="#A25A54" />
         <SolidColorBrush x:Key="DangerBrush" Color="#B42318" />
+        <SolidColorBrush x:Key="DangerStrongBrush" Color="#8F1C12" />   <!-- 危险操作悬停时的描边加深（变更集 140） -->
         <SolidColorBrush x:Key="WarningBrush" Color="#F1C26B" />
         <SolidColorBrush x:Key="WarningTextBrush" Color="#8A6D1B" />
         <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#FFF9EA" />
@@ -517,9 +518,9 @@
             <Setter Property="Background" Value="{StaticResource CardBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Style.Triggers>
+                <!-- 变更集 140（用户反馈）：悬停只"加深描边"，不再整块变实心红（底色与文字保持不变） -->
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource DangerBrush}" />
-                    <Setter Property="Foreground" Value="{StaticResource OnBrandTextBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource DangerStrongBrush}" />
                 </Trigger>
             </Style.Triggers>
         </Style>
