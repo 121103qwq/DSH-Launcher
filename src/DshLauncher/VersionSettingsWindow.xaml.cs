@@ -29,6 +29,8 @@ public partial class VersionSettingsWindow : UserControl
     private readonly VersionSnapshotService _snapshotService = new();
     private System.Windows.Threading.DispatcherTimer? _healthTimer;
     private int _healthLogLineCount = -1;
+    /// <summary>诊断类状态文本的保留期：运行状况页 1s 周期刷新在此期间不覆盖（work-log/87，变更集 104）。</summary>
+    private DateTimeOffset _bisectStatusPinnedUntil = DateTimeOffset.MinValue;
     private const string EnvironmentNameTag = "EnvironmentName";
     private const string EnvironmentValueTag = "EnvironmentValue";
     private VersionSettingsData _settings = new();
@@ -492,6 +494,12 @@ public partial class VersionSettingsWindow : UserControl
         }
 
         DisableCulpritButton.Visibility = Visibility.Collapsed;
+        // 卫生检查/复位等用户主动触发的结果文本，在保留期内不被周期刷新覆盖（work-log/87）。
+        if (DateTimeOffset.Now < _bisectStatusPinnedUntil)
+        {
+            return;
+        }
+
         if (thirdParty.Count == 0)
         {
             BisectStatusText.Text = "该实例没有第三方插件，无需定位。";
@@ -502,6 +510,9 @@ public partial class VersionSettingsWindow : UserControl
             ? $"当前有 {thirdParty.Count} 个第三方插件；请先停止实例再定位。"
             : $"当前有 {thirdParty.Count} 个第三方插件：{string.Join("、", thirdParty)}";
     }
+
+    /// <summary>固定诊断类状态文本 20 秒（避免被运行状况页的 1s 周期刷新覆盖）。</summary>
+    private void PinBisectStatus() => _bisectStatusPinnedUntil = DateTimeOffset.Now.AddSeconds(20);
 
     /// <summary>A3 收尾：检查并复位 profile 残留（work-log/71 事故预防）。复位前自动快照。</summary>
     private void ProfileHygiene_Click(object sender, RoutedEventArgs e)
@@ -514,6 +525,7 @@ public partial class VersionSettingsWindow : UserControl
         if (_healthProviders?.IsInstanceRunning?.Invoke(_instance) == true)
         {
             BisectStatusText.Text = "请先停止实例，再检查/复位 profile 配置。";
+            PinBisectStatus();
             return;
         }
 
@@ -523,6 +535,7 @@ public partial class VersionSettingsWindow : UserControl
         if (issues.Count == 0)
         {
             BisectStatusText.Text = $"profile「{profileName}」配置干净，没有发现残留。";
+            PinBisectStatus();
             return;
         }
 
@@ -546,10 +559,12 @@ public partial class VersionSettingsWindow : UserControl
         if (!ProfileHygiene.TryReset(profileDirectory, snapshotDirectory, out var actions, out var error))
         {
             BisectStatusText.Text = $"复位失败：{error}";
+            PinBisectStatus();
             return;
         }
 
         BisectStatusText.Text = "复位完成：" + string.Join("；", actions);
+        PinBisectStatus();
         LauncherLog.Info("profile 卫生复位完成。", "E3002", new { profileDirectory, snapshotDirectory, actions });
     }
 

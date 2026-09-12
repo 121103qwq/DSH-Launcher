@@ -682,6 +682,7 @@
                                         Style="{StaticResource PrimaryButton}" />
                                 <Button x:Name="ProfileHygieneButton"
                                         Content="检查并复位 profile 残留"
+                                        Click="ProfileHygiene_Click"
                                         Margin="8,0,0,0"
                                         ToolTip="检查 profile 里已卸载插件留下的残留（空的 pnpm-lock.yaml、allowBuilds 残留、缺 dependencies 键）；复位前自动快照，只动这三个配置文件" />
                                 <Button x:Name="DisableCulpritButton"
