@@ -1,4 +1,4 @@
-<Window x:Class="DshLauncher.VersionSwitchWindow"
+<Window SnapsToDevicePixels="True" UseLayoutRounding="True" x:Class="DshLauncher.VersionSwitchWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="更换运行版本"

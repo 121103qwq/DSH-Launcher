@@ -1,4 +1,4 @@
-<UserControl x:Class="DshLauncher.ConversationWindow"
+<UserControl SnapsToDevicePixels="True" UseLayoutRounding="True" x:Class="DshLauncher.ConversationWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         FontFamily="{StaticResource UiFont}"

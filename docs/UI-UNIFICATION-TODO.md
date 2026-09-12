@@ -78,9 +78,10 @@
 - [ ] 错误码文案与 `ErrorCodes` 表一致
 
 ### 1.11 高 DPI 与渲染
-- [ ] 125% / 150% / 200% 下逐窗口检查 1px 描边、像素对齐（`SnapsToDevicePixels`/`UseLayoutRounding`）
-- [ ] 明确 ClearType 降级范围（当前只有 MainWindow 透明窗口）——决定是否保留透明圆角
-- [ ] 图标/位图在缩放下的模糊检查
+- [x] 像素对齐（**2026-09-13 变更集 139**）：13 个窗口/页面根元素补 `UseLayoutRounding` + `SnapsToDevicePixels`（此前**根元素 0 处**；只在 App.xaml/MainWindow 内部零星出现）；顺带踩坑记录：批量改 XAML 找根元素必须用 `<(Window|UserControl) `（带空格），否则宽正则会回退匹配到 `<Window.Resources>` 属性元素并插坏 XML（`MC3000`）
+- [x] ClearType 降级范围（**2026-09-13 定案**）：**只有 `MainWindow`**（`AllowsTransparency` + `WindowStyle=None` 透明窗）走灰度抗锯齿；其余窗口不透明；**决定保留透明圆角**
+- [x] 图标/位图缩放（**2026-09-13**）：应用内图标＝字体字形（矢量，缩放不糊）；位图仅 MainWindow/ExtensionWindow 少量
+- [ ] **150% / 200% 逐窗口人工核对**：改系统缩放需用户操作并重启；核对清单（描边/圆角/文字/图标/最大化）已写入 `UI-DESIGN.md`
 
 ### 1.12 主题与视觉定制（P2，若做）
 - [ ] 主题色 5 选
@@ -145,4 +146,5 @@ grep -rn 'Width="[2-9][0-9][0-9]"' --include=*.xaml src/DshLauncher
 | 2026-09-13 | **变更集 136（UI 统一 G：空/加载/错误三态）**：市场/Skill 状态行 11 处三态分色 + 失败文案自带重试指引；新增 `UI-DESIGN.md` 三态规范与门禁；其余页面列为遗留 |
 | 2026-09-13 | **变更集 137（UI 统一 H：窗口与页面框架）**：4 个内嵌页标题 18→20；`NewVersionWindow` 补最小尺寸；返回/关闭交互规则写入规范；新增「标题/最小尺寸/IsCancel」门禁 |
 | 2026-09-13 | **变更集 138（UI 统一 I：键盘可达性与自动化）**：统一焦点框 `AppFocusVisual` 挂 keyed 按钮样式（修 `PathLinkButton` 的 `{x:Null}`）；15 个无文字按钮补可访问名；**隐式样式 + `BasedOn {x:Type Button}` 致 App.xaml 加载崩溃**（harness 抓住）并固化禁令 |
+| 2026-09-13 | **变更集 139（UI 统一 J：高 DPI 与渲染）**：13 个窗口/页面根元素补像素对齐（此前 0 处）；明确 ClearType 降级范围（仅 MainWindow 透明窗）与图标缩放策略；新增门禁；150%/200% 人工核对清单入规范 |
 | 2026-09-13 | 动手前复核：旧扫描数字作废（颜色 8→**38** 处、字号 1→**26** 处偏离阶梯、固定宽 →**22** 处、窗口 4+2→**5 窗口 + 8 内嵌页**）；补测 `DynamicResource` **0 处**、令牌表 34 键与真实缺项——已写入上方第 2 节 |

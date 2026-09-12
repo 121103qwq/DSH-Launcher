@@ -1,4 +1,4 @@
-<Window x:Class="DshLauncher.PackImportWindow"
+<Window SnapsToDevicePixels="True" UseLayoutRounding="True" x:Class="DshLauncher.PackImportWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="导入整合包"

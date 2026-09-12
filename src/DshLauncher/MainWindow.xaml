@@ -1,4 +1,4 @@
-<Window x:Class="DshLauncher.MainWindow"
+<Window SnapsToDevicePixels="True" UseLayoutRounding="True" x:Class="DshLauncher.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"

@@ -225,6 +225,14 @@
 `SnapsToDevicePixels` + `UseLayoutRounding`。颜色按语义取 `SuccessTextBrush` /
 `DangerTextBrush` / `MutedBrush` 系。
 
+### 高 DPI 与渲染（2026-09-13 统一，变更集 139）
+
+- **像素对齐**：每个窗口/页面的**根元素**都要 `UseLayoutRounding="True"` + `SnapsToDevicePixels="True"`（13 个根元素已全覆盖）；1px 描边只用整数厚度。**批量改 XAML 时识别根元素必须用 `<(Window|UserControl) `（元素名后跟空格）**——属性元素是 `<Window.Resources>`，用宽正则回退匹配会插坏 XML。
+- **DPI 感知**：项目**没有**自定义 `app.manifest` 与 DPI 属性 → 用 WPF/.NET 框架默认（**PerMonitorV2**），多显示器不同缩放时按所在屏重算。
+- **ClearType 降级范围**：**只有 `MainWindow`** 是 `AllowsTransparency="True"` + `WindowStyle="None"` 的透明窗（圆角/阴影靠透明实现）→ 其文字为灰度抗锯齿；其余窗口不透明、正常 ClearType。**结论：保留透明圆角**（视觉收益大于灰度 AA 的代价）。
+- **图标缩放**：应用内图标是**字体字形**（矢量，缩放不糊，见「图标（字形集）」）；位图仅 `MainWindow`/`ExtensionWindow` 少量（应用图标/参考图），按 `Stretch=Uniform` 呈现。
+- **150% / 200% 人工核对清单**（需改系统缩放并重启）：① 1px 描边是否连续清晰；② 卡片/胶囊圆角是否锯齿；③ 文字是否清晰（MainWindow 灰度 AA 属预期）；④ 图标是否糊边；⑤ 最大化/还原后布局是否错位。
+
 ### 键盘可达性与自动化（2026-09-13 统一，变更集 138）
 
 - **焦点可见**：统一焦点框 `AppFocusVisual`（蓝色虚线描边 2px），挂在 keyed 按钮样式上（`PrimaryButton`/`DangerButton`/`NavButton`/`TopNavButton`/`PathLinkButton`）。**禁止**把 `FocusVisualStyle` 设为 `{x:Null}`。
