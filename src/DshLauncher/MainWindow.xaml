@@ -315,7 +315,7 @@
                             </Grid>
                         </Border>
 
-                        <Grid x:Name="MainDashboardGrid" Grid.Row="1" MaxWidth="1200" HorizontalAlignment="Center">
+                        <Grid x:Name="MainDashboardGrid" Grid.Row="1">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="320" />
                                 <ColumnDefinition Width="18" />

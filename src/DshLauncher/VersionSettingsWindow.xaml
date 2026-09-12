@@ -5,14 +5,14 @@
              FontFamily="{StaticResource UiFont}"
              Loaded="Window_OnLoaded"
              Unloaded="Window_OnUnloaded">
-    <Grid Background="{StaticResource PageBrush}" MaxWidth="1200" HorizontalAlignment="Center">
+    <Grid Background="{StaticResource PageBrush}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="320" />
-            <ColumnDefinition Width="18" />
+            <ColumnDefinition Width="180" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <Grid Grid.Column="0">
+            <!-- 阴影单独一层：避免 DropShadowEffect 把导航文字一起栅格化 -->
             <Border Background="{StaticResource CardBrush}"
                     BorderBrush="{StaticResource LineBrush}"
                     BorderThickness="0,0,1,0"
@@ -58,7 +58,7 @@
             </Border>
         </Grid>
 
-        <ScrollViewer Grid.Column="2"
+        <ScrollViewer Grid.Column="1"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled"
                       HorizontalContentAlignment="Stretch"
