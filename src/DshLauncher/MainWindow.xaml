@@ -388,6 +388,21 @@
                                                            FontSize="12"
                                                            FontWeight="SemiBold" />
                                             </Border>
+                                            <Border Visibility="{Binding SelectedInstanceSurfaceVisibility}"
+                                                    Background="{StaticResource InfoBackgroundBrush}"
+                                                    BorderBrush="{StaticResource LineBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="{StaticResource PanelCornerRadius}"
+                                                    Padding="9,3"
+                                                    Margin="0,0,8,0"
+                                                    ToolTip="{Binding SelectedInstanceSurfaceTooltip}"
+                                                    SnapsToDevicePixels="True"
+                                                    UseLayoutRounding="True">
+                                                <TextBlock Text="{Binding SelectedInstanceSurfaceText}"
+                                                           Foreground="{StaticResource MutedBrush}"
+                                                           FontSize="12"
+                                                           FontWeight="SemiBold" />
+                                            </Border>
                                             <Border HorizontalAlignment="Right"
                                                     Background="{Binding SelectedInstanceStatusBackgroundBrush}"
                                                     BorderBrush="{Binding SelectedInstanceStatusBrush}"

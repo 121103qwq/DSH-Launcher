@@ -266,6 +266,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
             OnPropertyChanged(nameof(SelectedInstanceUpdateVisibility));
             OnPropertyChanged(nameof(SelectedInstanceUpdateTooltip));
+            OnPropertyChanged(nameof(SelectedInstanceSurfaceVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceSurfaceText));
+            OnPropertyChanged(nameof(SelectedInstanceSurfaceTooltip));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
@@ -539,6 +542,63 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ? Visibility.Visible
             : Visibility.Collapsed;
 
+    /// <summary>
+    /// 当前实例的呈现面（按当前 profile 的 `dsh.profile.bundles` 判定，读不到按 profile 名兜底——
+    /// 与 ▼ 菜单「在终端打开」的可用性同一套判据）。work-log/84（变更集 101）。
+    /// </summary>
+    private PresentationSurface GetSelectedInstanceSurface(out string profileName)
+    {
+        profileName = string.Empty;
+        if (SelectedInstance is not { } instance)
+        {
+            return PresentationSurface.Unknown;
+        }
+
+        try
+        {
+            profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+            return PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
+        }
+        catch
+        {
+            return PresentationSurface.Unknown;
+        }
+    }
+
+    /// <summary>呈现面徽标：非 Web 面（终端/无界面/未识别）才显示。</summary>
+    public Visibility SelectedInstanceSurfaceVisibility
+    {
+        get
+        {
+            var surface = GetSelectedInstanceSurface(out _);
+            return SelectedInstance is not null && PresentationSurfaceService.NeedsSurfaceBadge(surface)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+    }
+
+    public string SelectedInstanceSurfaceText =>
+        PresentationSurfaceService.Describe(GetSelectedInstanceSurface(out _));
+
+    public string SelectedInstanceSurfaceTooltip
+    {
+        get
+        {
+            var surface = GetSelectedInstanceSurface(out var profileName);
+            var profileText = string.IsNullOrWhiteSpace(profileName) ? "未识别" : profileName;
+            return surface switch
+            {
+                PresentationSurface.Terminal =>
+                    $"当前 profile（{profileText}）是终端面（如 dsh-tui）：用 ▼ 菜单的「在终端打开」在 Windows Terminal 里运行。",
+                PresentationSurface.Headless =>
+                    $"当前 profile（{profileText}）是无界面面（headless / sdk / acp），启动器不能启动它；请在终端里运行 dsh --profile {profileText}。",
+                PresentationSurface.Unknown =>
+                    $"当前 profile（{profileText}）的呈现面未识别：启动器不硬套打开方式（可在插件页切换 profile）。",
+                _ => $"当前 profile（{profileText}）是浏览器面，可直接启动。"
+            };
+        }
+    }
+
     private void OnHttpHealthDegraded(WatchdogInstanceDto instance, int consecutiveFailures)
     {
         _startupEvidence.Record(instance.InstanceId, new StartupEvidence(
@@ -584,6 +644,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(SelectedInstanceResourceVisibility));
             OnPropertyChanged(nameof(SelectedInstanceSafeModeVisibility));
             OnPropertyChanged(nameof(SelectedInstanceCooldownVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceSurfaceVisibility));
+            OnPropertyChanged(nameof(SelectedInstanceSurfaceText));
+            OnPropertyChanged(nameof(SelectedInstanceSurfaceTooltip));
             EvaluateIdleAutoStop();
             ConvergeStaleAttachedInstances();
         });
@@ -2419,6 +2482,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         OnPropertyChanged(nameof(SelectedInstanceUpdateVisibility));
         OnPropertyChanged(nameof(SelectedInstanceUpdateTooltip));
+        OnPropertyChanged(nameof(SelectedInstanceSurfaceVisibility));
+        OnPropertyChanged(nameof(SelectedInstanceSurfaceText));
+        OnPropertyChanged(nameof(SelectedInstanceSurfaceTooltip));
         // 设置页里刚打开/关掉更新提示开关后也要立刻查询，否则徽标要等下次切实例才出现。
         if (IsLoaded && _selectedVersionSettings.CheckDshUpdates)
         {

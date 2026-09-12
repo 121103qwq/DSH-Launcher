@@ -2086,6 +2086,12 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && !PresentationSurfaceService.HasVendorDesktopSurface(new[] { "dsh-desktop-app" })
         && !PresentationSurfaceService.HasVendorDesktopSurface(null)
         && !PresentationSurfaceService.HasVendorDesktopSurface(Array.Empty<string>()));
+
+    Check("surface/徽标只对非 Web 面显示（Web 是常态不打扰）",
+        !PresentationSurfaceService.NeedsSurfaceBadge(PresentationSurface.Web)
+        && PresentationSurfaceService.NeedsSurfaceBadge(PresentationSurface.Terminal)
+        && PresentationSurfaceService.NeedsSurfaceBadge(PresentationSurface.Headless)
+        && PresentationSurfaceService.NeedsSurfaceBadge(PresentationSurface.Unknown));
 }
 
 // ===========================================================================

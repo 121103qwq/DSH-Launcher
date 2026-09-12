@@ -84,6 +84,13 @@ public static class PresentationSurfaceService
         surface == PresentationSurface.Terminal;
 
     /// <summary>
+    /// 实例卡片是否值得显示呈现面徽标（work-log/84，变更集 101）：
+    /// Web 面是常态（不打扰），终端/无界面/未识别才提示。
+    /// </summary>
+    public static bool NeedsSurfaceBadge(PresentationSurface surface) =>
+        surface != PresentationSurface.Web;
+
+    /// <summary>
     /// dsh 运行时自带的 desktop surface（将来可能出现，如 <c>@deepseek-ai/dsh-desktop-app</c>）：
     /// 仅以官方 scope 为准（<c>@deepseek-ai/dsh-desktop</c> 或 <c>@deepseek-ai/dsh-desktop-*</c>），
     /// 社区包里同名字段不命中；判不到一律 false（不隐藏启动器的「Desktop 启动」/「打开窗口」，不猜）
