@@ -166,8 +166,10 @@ public partial class VersionSettingsWindow : UserControl
     }
 
     /// <summary>
-    /// 「终端启动（TUI 插件）」（变更集 113）：扫到 TUI 插件时给出可粘贴的完整命令。
-    /// TUI 不由启动器托管，命令里带 DSH_HOME 与活动 profile，避开退到 ~/.dsh 找不到 profile。
+    /// 「终端启动（TUI 插件）」（变更集 113/114）：扫到 TUI 插件时给出可粘贴的完整命令。
+    /// 命令优先指向**承载 TUI 的终端面 profile**——活动 profile 若不是终端面（如 web 面里也装了 dsh-tui），
+    /// 拿它跑出来的不是 TUI；找不到终端面 profile 时才退回活动 profile。命令带 DSH_HOME，
+    /// 避开 dsh 退到默认 home（~/.dsh）找不到 profile。
     /// </summary>
     private void RefreshTerminalCommandCard()
     {
@@ -176,20 +178,56 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
-        var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
-        UiPluginScanResult scan;
+        var activeProfile = DshProfileService.ResolveActiveName(_instance, _settingsService);
+        var profiles = new DshProfileService();
+        var candidates = new List<string> { activeProfile };
         try
         {
-            scan = InstanceUiPluginScanner.Scan(_instance, profileName);
+            foreach (var info in profiles.List(_instance))
+            {
+                if (!string.Equals(info.Name, activeProfile, StringComparison.OrdinalIgnoreCase))
+                {
+                    candidates.Add(info.Name);
+                }
+            }
         }
         catch (Exception ex)
         {
-            TerminalCommandCard.Visibility = Visibility.Collapsed;
-            LauncherLog.Warn("扫描 TUI 插件失败：" + ex.Message);
-            return;
+            LauncherLog.Warn("读取 profile 列表失败：" + ex.Message);
         }
 
-        if (!scan.HasTuiProvider)
+        string? chosenProfile = null;
+        UiPluginScanResult? chosenScan = null;
+        foreach (var name in candidates)
+        {
+            UiPluginScanResult scan;
+            try
+            {
+                scan = InstanceUiPluginScanner.Scan(_instance, name);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("扫描 TUI 插件失败：" + ex.Message);
+                continue;
+            }
+
+            if (!scan.HasTuiProvider)
+            {
+                continue;
+            }
+
+            chosenProfile ??= name;
+            chosenScan ??= scan;
+            var info = profiles.Describe(_instance, name);
+            if (PresentationSurfaceService.Detect(name, info.Bundles) == PresentationSurface.Terminal)
+            {
+                chosenProfile = name;
+                chosenScan = scan;
+                break;
+            }
+        }
+
+        if (chosenProfile is null || chosenScan is null)
         {
             TerminalCommandCard.Visibility = Visibility.Collapsed;
             return;
@@ -198,17 +236,17 @@ public partial class VersionSettingsWindow : UserControl
         var command = TerminalLaunchService.BuildPowerShellCommand(
             _instance.DshHome,
             _instance.DshExecutablePath,
-            profileName);
+            chosenProfile);
         if (command is null)
         {
             TerminalCommandCard.Visibility = Visibility.Collapsed;
             return;
         }
 
-        var names = string.Join("、", scan.TuiPlugins.Select(plugin =>
+        var names = string.Join("、", chosenScan.TuiPlugins.Select(plugin =>
             plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
         TerminalCommandBox.Text = command;
-        TerminalCommandHintText.Text = $"检测到 {names}（profile：{profileName}）。";
+        TerminalCommandHintText.Text = $"检测到 {names}（profile：{chosenProfile}）。";
         TerminalCommandCard.Visibility = Visibility.Visible;
     }
 
