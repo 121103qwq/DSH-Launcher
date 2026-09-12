@@ -199,7 +199,7 @@
 
                 <Border Grid.Row="3"
                         Background="{StaticResource InfoBackgroundBrush}"
-                        CornerRadius="9"
+                        CornerRadius="{StaticResource PanelCornerRadius}"
                         Padding="10"
                         Margin="0,12,0,0">
                     <StackPanel>
@@ -231,7 +231,7 @@
                             <Button x:Name="EnableButton" Content="启用" Click="Enable_Click" Margin="0,0,6,6" Padding="10,6" />
                             <Button x:Name="DisableButton" Content="禁用" Click="Disable_Click" Margin="0,0,6,6" Padding="10,6" />
                             <Button x:Name="UpdateButton" Content="更新" Click="Update_Click" Margin="0,0,6,6" Padding="10,6" />
-                            <Button x:Name="RemoveButton" Content="删除" Click="Remove_Click" Margin="0,0,6,6" Padding="10,6" />
+                            <Button Style="{StaticResource DangerButton}" x:Name="RemoveButton" Content="删除" Click="Remove_Click" Margin="0,0,6,6" Padding="10,6" />
                         </WrapPanel>
                         <TextBlock x:Name="HintText"
                                    Text="修改前请停止实例。Plugin 和 MCP 会在下次启动时生效。"
@@ -495,7 +495,7 @@
                                                     IsEnabled="{Binding CanAction}"
                                                     Padding="12,6"
                                                     Style="{StaticResource PrimaryButton}" />
-                                            <Button Content="卸载"
+                                            <Button Style="{StaticResource DangerButton}" Content="卸载"
                                                      Click="MarketplaceRemove_Click"
                                                      IsEnabled="{Binding CanRemove}"
                                                      Padding="12,6"

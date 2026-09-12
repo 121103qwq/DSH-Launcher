@@ -59,7 +59,7 @@
                         <Button Content="导入 session.jsonl / .zstd" Click="Import_Click" Margin="0,0,8,0" />
                         <Button Content="导出选中对话" Click="Export_Click" Margin="0,0,8,0" />
                         <Button Content="备份选中对话" Click="Backup_Click" Margin="0,0,8,0" />
-                        <Button Content="删除选中对话" Click="Delete_Click" />
+                        <Button Style="{StaticResource DangerButton}" Content="删除选中对话" Click="Delete_Click" />
                     </WrapPanel>
                     <Grid Grid.Row="1" Margin="0,0,0,10">
                         <Grid.ColumnDefinitions>

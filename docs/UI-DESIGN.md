@@ -159,6 +159,13 @@
 ## 三、组件规范
 
 ### 卡片（Card）
+
+**2026-09-13 实测补充（变更集 135）**
+
+- **圆角只用令牌**：主卡片 `CardCornerRadius`(12)、次级面板 `PanelCornerRadius`(10)、列表项/按钮/输入框 `ItemCornerRadius`(8)。
+  **白名单例外**（允许裸值）：`3`＝胶囊/徽标（见「状态胶囊」）、`17`/`18`＝透明窗口外框与 58×58 空态插画。harness 断言"非白名单裸圆角 = 0"。
+- **阴影**：一律 `CardShadow`/`CardShadowSoft`，且**必须独立分层**（`Effect` 不挂含内容的元素）——harness 已断言。
+- **卡片外边距**：页面内容与卡片之间用 `0,0,0,12`（现口径，实测 6–12）；卡片内部间距用 `CardPadding`/`PanelPadding` 令牌。
 白色底 + `LineBrush` 1px 描边 + `CardCornerRadius` + `CardPadding` + 独立阴影层。
 标题 18px SemiBold，副标题 11px Muted。
 
@@ -186,6 +193,19 @@
 避免默认尺寸下就出现横向滚动条；窄窗口才出现属正常。
 
 ### 按钮
+
+**三级动作按钮（2026-09-13 统一，变更集 135）**
+
+| 级别 | 样式 | 外观 |
+|---|---|---|
+| 主操作 | `PrimaryButton` | 蓝实心（`BlueBrush` 底 + `OnBrandTextBrush` 字），悬停 `BlueDarkBrush` |
+| 次级操作 | 默认按钮（不挂样式） | 白底（`CardBrush`）+ `ControlBorderBrush` 描边 |
+| 危险操作 | `DangerButton` | `DangerTextBrush` 字 + `DangerBrush` 描边 + 浅底，悬停转 `DangerBrush` 实心 |
+
+- **统尺寸**：`PrimaryButton`/`DangerButton` 都带 `MinHeight="38"` + `Padding="16,0"` → 同屏的主/危险按钮**高度与左右内边距一致**。
+- **紧凑按钮分层**：工具条/卡片内的小按钮（`CompactToolbarButton` 等）允许 `Padding="10,4"`~`"12,7"`，**不与三级动作按钮混排在同一行**。
+- 链接式动作用 `PathLinkButton`（无高度、无边框）。
+- **危险操作必须用 `DangerButton`**（`Content` 含 删除/卸载/回滚/清理/移除 的按钮）：harness 有断言。
 - 默认样式：白底 + `#C5D5E6` 描边 + 8px 圆角 + 内边距 16,9；悬停变主色。
 - 主操作：`PrimaryButton`（蓝底白字 SemiBold）。
 - 紧凑按钮：`Padding="10,6"`；工具条按钮 `Padding="12,7"`。

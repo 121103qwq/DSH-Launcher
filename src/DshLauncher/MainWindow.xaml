@@ -228,7 +228,7 @@
                             </Button>
                             <Border x:Name="TaskBadge"
                                     Background="{StaticResource DangerBrush}"
-                                    CornerRadius="8"
+                                    CornerRadius="{StaticResource ItemCornerRadius}"
                                     MinWidth="16"
                                     Height="16"
                                     HorizontalAlignment="Right"
@@ -293,7 +293,7 @@
                                 Background="{StaticResource WarningBackgroundBrush}"
                                 BorderBrush="{StaticResource WarningBrush}"
                                 BorderThickness="1"
-                                CornerRadius="9"
+                                CornerRadius="{StaticResource PanelCornerRadius}"
                                 Padding="14,10"
                                 Margin="0,0,0,12">
                             <Grid>
@@ -692,7 +692,7 @@
                                             </ListBox.ItemContainerStyle>
                                             <ListBox.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="9" Padding="12">
+                                                    <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="12">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="22" />

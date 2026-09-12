@@ -66,7 +66,7 @@
                                 <Border Background="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=Background}"
                                         BorderBrush="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=BorderBrush}"
                                         BorderThickness="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=BorderThickness}"
-                                        CornerRadius="9"
+                                        CornerRadius="{StaticResource PanelCornerRadius}"
                                         Padding="10">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -189,7 +189,7 @@
                                         ToolTip="{Binding CloneButtonToolTip}"
                                         Padding="16,9"
                                         Margin="0,0,8,8" />
-                                <Button Content="删除版本"
+                                <Button Style="{StaticResource DangerButton}" Content="删除版本"
                                         Click="DeleteVersion_Click"
                                         IsEnabled="{Binding CanDelete}"
                                         ToolTip="{Binding DeleteButtonToolTip}"
@@ -336,7 +336,7 @@
                                         Margin="8,0,0,0"
                                         Padding="14,8" />
                                 <Button Grid.Column="2"
-                                        Content="回滚选中快照"
+                                        Style="{StaticResource DangerButton}" Content="回滚选中快照"
                                         Click="RollbackSnapshot_Click"
                                         IsEnabled="{Binding CanRollback}"
                                         Margin="8,0,0,0"
