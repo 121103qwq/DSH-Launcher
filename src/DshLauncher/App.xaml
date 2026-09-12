@@ -25,6 +25,7 @@
         <SolidColorBrush x:Key="InfoBackgroundBrush" Color="#F5F9FD" />
         <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#F8FBFE" />
         <SolidColorBrush x:Key="HoverSurfaceBrush" Color="#F7FAFD" />
+        <SolidColorBrush x:Key="MenuHoverBrush" Color="#E0EAFD" />   <!-- 菜单项悬停底（变更集 131） -->
 
         <!-- 标题栏 chrome（原 MainWindow 里散落的白色叠加） -->
         <SolidColorBrush x:Key="TitleBarChromeBrush" Color="#55FFFFFF" />
@@ -133,8 +134,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ContextMenu">
-                        <Border Background="White"
-                                BorderBrush="#C8DDF0"
+                        <Border Background="{StaticResource CardBrush}"
+                                BorderBrush="{StaticResource LineBrush}"
                                 BorderThickness="1"
                                 CornerRadius="10"
                                 Padding="6"
@@ -183,17 +184,28 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="#E0EAFD" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource MenuHoverBrush}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="ItemChrome" Property="Background" Value="#EAF2FE" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="{StaticResource PageBrush}" />
                                 <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+                                <Setter TargetName="ItemChrome" Property="Background" Value="Transparent" />
+                                <Setter Property="Cursor" Value="Arrow" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- 危险菜单项（变更集 131）：只把前景改为危险色，悬停底仍用中性 MenuHoverBrush -->
+        <Style x:Key="MenuItemDangerStyle" TargetType="MenuItem" BasedOn="{StaticResource ContextInstanceMenuItemStyle}">
+            <Setter Property="Foreground" Value="{StaticResource DangerTextBrush}" />
+        </Style>
+        <!-- 隐式样式：所有菜单项默认走统一外观（变更集 131；此前 MainWindow 分体菜单未挂样式→系统默认外观） -->
+        <Style TargetType="MenuItem" BasedOn="{StaticResource ContextInstanceMenuItemStyle}" />
         <Style TargetType="Button">
             <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
             <Setter Property="FontSize" Value="14" />

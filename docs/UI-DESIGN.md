@@ -181,6 +181,21 @@
 `SnapsToDevicePixels` + `UseLayoutRounding`。颜色按语义取 `SuccessTextBrush` /
 `DangerTextBrush` / `MutedBrush` 系。
 
+### 菜单（ContextMenu / MenuItem）
+
+| 部位 | 规格 |
+|---|---|
+| 弹出层 `ContextMenu` | `CardBrush` 底 + `LineBrush` 描边（1px）+ 圆角 10 + 内边距 6 + `HasDropShadow` + `MaxHeight=410`（超出内部滚动）；样式 `ContextInstanceMenuStyle` |
+| 菜单项 `MenuItem` | 内边距 `10,8` + 圆角 7 + 前景 `TextBrush`；悬停底 `MenuHoverBrush`；选中（`IsChecked`）底 `PageBrush` + 前景 `BlueBrush`；行间距 `Margin 0,1`；样式 `ContextInstanceMenuItemStyle`（**隐式样式，所有菜单项默认命中**） |
+| 禁用态（`IsEnabled=False`） | 前景 `MutedBrush` + **无悬停底** + 光标箭头 |
+| 危险项 | `MenuItemDangerStyle`：前景 `DangerTextBrush`，悬停底仍用中性 `MenuHoverBrush` |
+| 分隔线 | `MenuSeparatorStyle`：`LineBrush` 1px + `Margin 10,6`（隐式样式已生效） |
+| 图标列 / 快捷键列 | **暂未启用**（未使用 `MenuItem.Icon` / `InputGestureText`）。若要启用：图标必须先在「图标（字形集）」登记，快捷键列用于展示 `InputGestureText` |
+
+> ⚠️ **在 `App.xaml` 新增样式时的顺序要求**：`BasedOn` / `StaticResource` **不支持前向引用**——被引用的样式必须**先定义**。
+> 2026-09-13（变更集 131）曾因把隐式 `MenuItem` 样式插到 `ContextInstanceMenuItemStyle` 之前，导致启动即抛
+> `XamlParseException`（`StaticResourceHolder`）；harness 的「冒烟执行无异常」断言当场抓住。
+
 ### 链接（PathLinkButton）
 用于长路径/标识：显示**尾部**（`TailPath`，上限 42 字符）+ `CharacterEllipsis`；
 蓝色、悬停下划线、点击复制完整值；悬停出**独立悬浮卡片**（圆角边框 + 阴影 ToolTip），

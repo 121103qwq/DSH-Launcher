@@ -6880,9 +6880,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 Height = 8,
                 Fill = instance.RuntimeStatus switch
                 {
-                    InstanceRuntimeStatus.Running => new SolidColorBrush(WpfColor.FromRgb(46, 166, 107)),
-                    InstanceRuntimeStatus.Error => new SolidColorBrush(WpfColor.FromRgb(217, 74, 74)),
-                    _ => new SolidColorBrush(WpfColor.FromRgb(150, 163, 181))
+                    // 变更集 131：状态点颜色走令牌（此前把 GreenBrush / DangerBrush / StatusIdleBrush 的色值手抄成了字面量）
+                    InstanceRuntimeStatus.Running => (System.Windows.Media.Brush)FindResource("GreenBrush"),
+                    InstanceRuntimeStatus.Error => (System.Windows.Media.Brush)FindResource("DangerBrush"),
+                    _ => (System.Windows.Media.Brush)FindResource("StatusIdleBrush")
                 },
                 Margin = new Thickness(0, 0, 8, 0),
                 VerticalAlignment = VerticalAlignment.Center
