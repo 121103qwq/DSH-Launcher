@@ -1,5 +1,7 @@
 # dsh-launcher-dev —— DSH Launcher 本地开发仓库
 
+> ⚠️ **本仓库的代码与文档完全由 AI 生成**（人负责需求、决策与验收）。是否合并到上游、以什么形式合并，**完全由上游作者决定** —— 详见 [`AI-PRODUCT-NOTICE.md`](AI-PRODUCT-NOTICE.md)。
+
 基于 **121103qwq/DSH-Launcher v1.0.7**（commit `846c44c1`，官方 main）的本地开发分支：
 上游源码 + 修复与增强变更集。本仓库是之后所有修改的基准（git 管理）。
 
