@@ -579,11 +579,6 @@
                                                                           Tag="ElectronDesktop"
                                                                           ToolTipService.ShowOnDisabled="True"
                                                                           Click="OpenDesktopShell_Click" />
-                                                                <MenuItem Header="终端启动（终端面）"
-                                                                          Tag="Terminal"
-                                                                          IsCheckable="True"
-                                                                          ToolTipService.ShowOnDisabled="True"
-                                                                          Click="LaunchModeMenuItem_Click" />
                                                                 <Separator Style="{StaticResource MenuSeparatorStyle}" />
                                                                 <MenuItem Header="隔离启动（剥离第三方插件）"
                                                                           Tag="Isolated"

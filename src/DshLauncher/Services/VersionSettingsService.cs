@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -110,18 +110,12 @@ public sealed class VersionSettingsService
             WindowTitle = settings.WindowTitle,
             NodeExecutablePath = settings.NodeExecutablePath,
             OpenMode = settings.OpenMode,
-            CustomOpenTargetPath = settings.CustomOpenTargetPath,
             EnvironmentVariables = settings.EnvironmentVariables is null
                 ? null
                 : new Dictionary<string, string>(settings.EnvironmentVariables, StringComparer.Ordinal),
             AutoStopWhenIdle = settings.AutoStopWhenIdle,
             AutoStopIdleMinutes = settings.AutoStopIdleMinutes,
             CheckDshUpdates = settings.CheckDshUpdates,
-            LaunchModeVisibility = settings.LaunchModeVisibility is null
-                ? null
-                : new Dictionary<string, bool>(settings.LaunchModeVisibility, StringComparer.Ordinal),
-            TerminalWorkingDirectory = settings.TerminalWorkingDirectory,
-            TerminalAskWorkspaceEachTime = settings.TerminalAskWorkspaceEachTime,
             CrashPolicy = settings.CrashPolicy,
             CrashRestartLimit = settings.CrashRestartLimit
         };
@@ -475,7 +469,6 @@ public sealed class VersionSettingsService
             ? null
             : settings.WindowTitle.Trim();
         settings.NodeExecutablePath = NormalizePath(settings.NodeExecutablePath);
-        settings.CustomOpenTargetPath = NormalizePath(settings.CustomOpenTargetPath);
 
         if (settings.ConversationWorkspace?.Length > 80)
         {

@@ -851,12 +851,7 @@ public sealed class VersionPackageService
             var settings = JsonSerializer.Deserialize<VersionSettingsData>(content, JsonOptions)
                 ?? new VersionSettingsData();
             settings.NodeExecutablePath = null;
-            settings.CustomOpenTargetPath = null;
-            settings.TerminalWorkingDirectory = null; // 机器相关路径，与上面两项同策略不随包分发（work-log/92）
-            if (settings.OpenMode == VersionOpenMode.Custom)
-            {
-                settings.OpenMode = VersionOpenMode.Desktop;
-            }
+            // 手动绑定 / 终端启动已在变更集 112 收敛掉；遗留值由 VersionOpenModeConverter 回落 Desktop。
             return JsonSerializer.Serialize(settings, JsonOptions);
         }
         catch (JsonException)

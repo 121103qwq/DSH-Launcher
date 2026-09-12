@@ -1,4 +1,4 @@
-<UserControl x:Class="DshLauncher.VersionSettingsWindow"
+﻿<UserControl x:Class="DshLauncher.VersionSettingsWindow"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="clr-namespace:DshLauncher.Controls"
@@ -124,62 +124,6 @@
                                                FontSize="11"
                                                TextWrapping="Wrap"
                                                Margin="0,8,0,0" />
-                                </StackPanel>
-                            </Border>
-                            <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource CardPadding}" Margin="0,14,0,0">
-                                <StackPanel>
-                                    <TextBlock Text="启动方式" FontWeight="SemiBold" />
-                                    <TextBlock Text="这里集中管理这个版本「怎么启动」：默认启动方式、卡片 ▼ 菜单里显示哪些方式、以及终端启动的工作区。实例卡片上的「启动」按钮右侧 ▼ 可快捷切换启动方式。"
-                                               Foreground="{StaticResource MutedBrush}"
-                                               TextWrapping="Wrap"
-                                               FontSize="11"
-                                               Margin="0,6,0,0" />
-                                    <TextBlock Text="默认启动方式" FontWeight="SemiBold" FontSize="13" Margin="0,16,0,0" />
-                                    <TextBlock Text="Web 启动：dsh 原生运行方式，由 dsh 在默认浏览器打开 WebUI；Desktop 启动：启动器所带的方式，用内部窗口承载 WebUI（不会重复弹浏览器）；隔离启动：剥离第三方插件、不改你的配置；或手动绑定 EXE/BAT/CMD/PowerShell 脚本和 LNK 快捷方式。终端面 profile（如 dsh-tui）可用「终端启动」。"
-                                               Foreground="{StaticResource MutedBrush}"
-                                               TextWrapping="Wrap"
-                                               FontSize="11"
-                                               Margin="0,6,0,12" />
-                                    <ComboBox x:Name="OpenModeBox"
-                                              SelectedValuePath="Tag"
-                                              SelectionChanged="OpenModeBox_SelectionChanged"
-                                              Height="36">
-                                        <ComboBoxItem Content="Web 启动（dsh 原生运行方式）" Tag="Web" />
-                                        <ComboBoxItem Content="Desktop 启动（启动器所带的方式）" Tag="Desktop" />
-                                        <ComboBoxItem x:Name="OpenModeTerminalItem" Content="终端启动（终端面，如 dsh-tui）" Tag="Terminal" />
-                                        <ComboBoxItem x:Name="OpenModeIsolatedItem" Content="隔离启动（剥离第三方插件，不改你的配置）" Tag="Isolated" />
-                                        <ComboBoxItem Content="手动绑定程序、脚本或快捷方式" Tag="Custom" />
-                                        <ComboBoxItem Content="未设置（按运行时自动）" Tag="Unset" />
-                                    </ComboBox>
-                                    <Grid x:Name="CustomOpenTargetPanel" Margin="0,10,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox x:Name="CustomOpenTargetBox"
-                                                 Height="36"
-                                                 VerticalContentAlignment="Center"
-                                                 ToolTip="选择 EXE、COM、BAT、CMD、PS1、LNK，或其他可由 Windows 打开的文件" />
-                                        <Button Grid.Column="1"
-                                                Content="选择文件"
-                                                Click="BrowseOpenTarget_Click"
-                                                Height="36"
-                                                Padding="14,0"
-                                                Margin="8,0,0,0" />
-                                    </Grid>
-                                    <TextBlock x:Name="OpenModeStatusText"
-                                               Foreground="{StaticResource MutedBrush}"
-                                               TextWrapping="Wrap"
-                                               FontSize="11"
-                                               Margin="0,8,0,0" />
-                                    <Button Content="保存打开方式"
-                                            Click="SaveOpenMode_Click"
-                                            Style="{StaticResource PrimaryButton}"
-                                            HorizontalAlignment="Left"
-                                            Margin="0,14,0,0" />
-
-                                    <!-- 启动方式显示 / 终端启动的工作区：代码追回到这里（变更集 110 集中到本卡片） -->
-                                    <StackPanel x:Name="LaunchModeExtraSections" />
                                 </StackPanel>
                             </Border>
                             <Border Background="{StaticResource InfoBackgroundBrush}"

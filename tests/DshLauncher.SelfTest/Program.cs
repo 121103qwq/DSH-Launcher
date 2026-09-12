@@ -1,4 +1,4 @@
-using System.Formats.Tar;
+﻿using System.Formats.Tar;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
@@ -2064,32 +2064,9 @@ Check("packarchive/配对校验：v5 配 v3 通过、配 v2 拒载",
         && PresentationSurfaceService.Detect("weird", new[] { "some-plugin" }) == PresentationSurface.Unknown
         && PresentationSurfaceService.Detect(null, null) == PresentationSurface.Unknown);
 
-    Check("surface/只有终端面允许在终端打开，且标签正确",
-        PresentationSurfaceService.SupportsTerminalLaunch(PresentationSurface.Terminal)
-        && !PresentationSurfaceService.SupportsTerminalLaunch(PresentationSurface.Web)
-        && !PresentationSurfaceService.SupportsTerminalLaunch(PresentationSurface.Unknown)
-        && PresentationSurfaceService.Describe(PresentationSurface.Terminal) == "终端面"
+    Check("surface/标签正确（终端面 / 未识别）；终端启动已不在启动器链路里（变更集 112 收敛）",
+        PresentationSurfaceService.Describe(PresentationSurface.Terminal) == "终端面"
         && PresentationSurfaceService.Describe(PresentationSurface.Unknown) == "未识别");
-
-    var surfaceArgs = PresentationSurfaceService.BuildWindowsTerminalArguments("C:/x/dsh.cmd", "dsh-tui", "C:/work");
-    Check("surface/终端参数：-d 工作目录 + dsh 入口 + --profile；缺参数返回 null（不猜）",
-        surfaceArgs is not null
-        && string.Join(" ", surfaceArgs) == "-d C:/work C:/x/dsh.cmd --profile dsh-tui"
-        && PresentationSurfaceService.BuildWindowsTerminalArguments(null, "dsh-tui", "C:/work") is null
-        && PresentationSurfaceService.BuildWindowsTerminalArguments("C:/x/dsh.cmd", null, null) is null);
-
-    var terminalStartInfo = PresentationSurfaceService.CreateWindowsTerminalStartInfo(
-        "C:/wt.exe",
-        new[] { "-d", "C:/my work", "C:/x/dsh.cmd", "--profile", "dsh-tui" },
-        "C:/home",
-        "C:/x/dsh.cmd");
-
-    Check("surface/终端启动信息：注入 DSH_HOME/DSH_AGENTS_HOME/PATH，且 UseShellExecute=false（wt.exe 继承环境）",
-        !terminalStartInfo.UseShellExecute
-        && terminalStartInfo.Environment["DSH_HOME"] == "C:/home"
-        && terminalStartInfo.Environment["DSH_AGENTS_HOME"] == Path.Combine("C:/home", ".agents")
-        && !string.IsNullOrWhiteSpace(terminalStartInfo.Environment["PATH"])
-        && terminalStartInfo.Arguments == "-d \"C:/my work\" C:/x/dsh.cmd --profile dsh-tui");
 
     Check("surface/自带 desktop surface 判据：只认 @deepseek-ai/dsh-desktop*，判不到不隐藏",
         PresentationSurfaceService.HasVendorDesktopSurface(new[] { "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-desktop-app" })
@@ -2141,36 +2118,24 @@ Check("launch-mode/未知值保守回落 Desktop（不抛异常）",
     launchModeSettings.Read(launchModeInstance).OpenMode == VersionOpenMode.Desktop);
 
 launchModeData = launchModeSettings.Read(launchModeInstance);
-launchModeData.OpenMode = VersionOpenMode.Terminal;
-launchModeData.TerminalWorkingDirectory = @"C:\work\project";
-launchModeData.TerminalAskWorkspaceEachTime = true;
-launchModeSettings.Save(launchModeInstance, launchModeData);
-var launchModeTerminal = launchModeSettings.Read(launchModeInstance);
-Check("launch-mode/Terminal 落盘读回，终端工作区与“每次选择”开关不丢（work-log/92）",
-    launchModeTerminal.OpenMode == VersionOpenMode.Terminal
-    && launchModeTerminal.TerminalWorkingDirectory == @"C:\work\project"
-    && launchModeTerminal.TerminalAskWorkspaceEachTime);
+Check("launch-mode/生效规则：运行时自带桌面封装时回退 Web（判不到不替换）",
+    LaunchModePolicy.Effective(VersionOpenMode.Desktop, true) == VersionOpenMode.Web
+    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, false) == VersionOpenMode.Desktop
+    && LaunchModePolicy.Effective(VersionOpenMode.Isolated, true) == VersionOpenMode.Isolated
+    && LaunchModePolicy.Effective(VersionOpenMode.Web, true) == VersionOpenMode.Web);
 
-Check("launch-mode/生效规则：桌面封装 / 非终端面 / 入口被隐藏时回退 Web，可用时保持（判不到不替换）",
-    LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, true, true) == VersionOpenMode.Terminal
-    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, false, true, true) == VersionOpenMode.Web
-    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, false, true) == VersionOpenMode.Web
-    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, true, false, false, true) == VersionOpenMode.Web
-    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, false, false, false, true) == VersionOpenMode.Desktop
-    && LaunchModePolicy.Effective(VersionOpenMode.Isolated, false, false, false, true) == VersionOpenMode.Isolated
-    && LaunchModePolicy.Effective(VersionOpenMode.Isolated, false, false, false, false) == VersionOpenMode.Web);
+Check("terminal/命令生成：含 DSH_HOME 设置 + --profile；缺入口返回 null（不猜）",
+    TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", "dsh-tui")
+        == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile dsh-tui"
+    && TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", null)
+        == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile web"
+    && TerminalLaunchService.BuildPowerShellCommand(null, @"C:\dsh\dsh.cmd", "web") is null);
 
 launchModeData = launchModeSettings.Read(launchModeInstance);
 launchModeData.OpenMode = null;
 launchModeSettings.Save(launchModeInstance, launchModeData);
 Check("launch-mode/「未设置」置空可落盘读回（OpenMode 为 null，变更集 111）",
     launchModeSettings.Read(launchModeInstance).OpenMode is null);
-
-var terminalFallback = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-Check("launch-mode/终端工作区解析：目录存在时用它，否则回退；空回退给用户主目录",
-    TerminalLaunchService.ResolveWorkingDirectory(Path.GetTempPath(), "C:/nope") == Path.GetFullPath(Path.GetTempPath())
-    && TerminalLaunchService.ResolveWorkingDirectory(@"C:\definitely-missing-92831", terminalFallback) == Path.GetFullPath(terminalFallback)
-    && TerminalLaunchService.ResolveWorkingDirectory(null, null) == terminalFallback);
 
 // ===========================================================================
 // 10. 日志中心（LogCenterService，work-log/86）

@@ -23,21 +23,13 @@ public enum VersionOpenMode
     Web,
     /// <summary>Desktop 启动：启动器所带的方式（启动服务 + 自动打开内部 Chat 窗口，抑制 dsh 浏览器双开）。</summary>
     Desktop,
-    Custom,
 
     /// <summary>
     /// 隔离启动：用隔离 profile 启动（剥离第三方插件、保留 dsh 核心，不改用户配置）。
     /// 由实例卡片「启动」切分按钮的 ▼ 菜单选择（work-log/81、82）；实际启动链路在
     /// <c>SafeProfileService</c>（Tier1/Tier2）。
     /// </summary>
-    Isolated,
-
-    /// <summary>
-    /// 终端启动：在 Windows Terminal 里跑 <c>dsh --profile &lt;活动 profile&gt;</c>（如 dsh-tui），
-    /// **不经启动器托管进程**。与其它方式一致「只切换不启动」；活动 profile 不是终端面
-    /// （或该方式被隐藏）时回退为 Web 启动（work-log/92，变更集 109）。
-    /// </summary>
-    Terminal
+    Isolated
 }
 
 /// <summary>
@@ -54,9 +46,9 @@ public sealed class VersionOpenModeConverter : JsonConverter<VersionOpenMode>
         {
             "Web" => VersionOpenMode.Web,
             "Desktop" or "Launcher" => VersionOpenMode.Desktop,
-            "Custom" => VersionOpenMode.Custom,
+            "Custom" => VersionOpenMode.Desktop,
             "Isolated" => VersionOpenMode.Isolated,
-            "Terminal" => VersionOpenMode.Terminal,
+            "Terminal" => VersionOpenMode.Desktop,
             _ => VersionOpenMode.Desktop
         };
     }
@@ -101,12 +93,6 @@ public sealed class VersionSettingsData
     public VersionOpenMode? OpenMode { get; set; }
 
     /// <summary>
-    /// Local executable, script or Windows shortcut used when OpenMode is Custom.
-    /// This machine-specific path is not included in shareable version packages.
-    /// </summary>
-    public string? CustomOpenTargetPath { get; set; }
-
-    /// <summary>
     /// 实例级环境变量：启动 dsh 时注入进程环境。DSH_HOME / DSH_AGENTS_HOME / PATH
     /// 为保留项；敏感值（KEY/TOKEN/SECRET/PASSWORD…）落盘时用 DPAPI 加密。
     /// </summary>
@@ -117,21 +103,6 @@ public sealed class VersionSettingsData
 
     /// <summary>是否在该实例设置页显示 DSh 版本更新提示（联网查询官方版本，默认关）。</summary>
     public bool CheckDshUpdates { get; set; }
-
-    /// <summary>
-    /// 卡片 ▼ 启动方式菜单的显示开关（键：terminal / window / isolated；缺省或 true = 显示）。
-    /// 实例级，随 version-settings.json 保存（work-log/89，变更集 106）。
-    /// </summary>
-    public Dictionary<string, bool>? LaunchModeVisibility { get; set; }
-
-    /// <summary>
-    /// 「终端启动」的工作目录。dsh-TUI 用**进程 cwd** 当工作区（插件无 --cwd/--workspace 参数），
-    /// 所以启动目录就是 TUI 打开的工作区；空值＝回退用户主目录（work-log/92，变更集 109）。
-    /// </summary>
-    public string? TerminalWorkingDirectory { get; set; }
-
-    /// <summary>每次「终端启动」都先弹文件夹选择器挑工作区（选中的目录会回写上一项）。</summary>
-    public bool TerminalAskWorkspaceEachTime { get; set; }
 
     /// <summary>空闲阈值（分钟，5–240，默认 30）。</summary>
     public int? AutoStopIdleMinutes { get; set; }

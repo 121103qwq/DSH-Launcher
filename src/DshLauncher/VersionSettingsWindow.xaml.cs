@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using DshLauncher.Models;
@@ -34,11 +34,6 @@ public partial class VersionSettingsWindow : UserControl
     private const string EnvironmentNameTag = "EnvironmentName";
     private const string EnvironmentValueTag = "EnvironmentValue";
     private VersionSettingsData _settings = new();
-    private StackPanel? _uiLaunchModeRows;
-    private TextBlock? _uiLaunchModeStatusText;
-    private System.Windows.Controls.TextBox? _terminalWorkspaceBox;
-    private System.Windows.Controls.CheckBox? _terminalAskEachTimeCheck;
-    private TextBlock? _terminalWorkspaceStatusText;
 
     public VersionSettingsWindow(
         ManagerInstance? instance,
@@ -93,8 +88,6 @@ public partial class VersionSettingsWindow : UserControl
         LoadWorkspaceNames();
         LoadConfigurationControls();
         LoadPluginSettingsControls();
-        AppendLaunchModeVisibilitySection();
-        AppendTerminalWorkspaceSection();
         ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
 
         if (_instance is null)
@@ -169,103 +162,6 @@ public partial class VersionSettingsWindow : UserControl
     {
         WindowTitleBox.Text = _settings.WindowTitle ?? string.Empty;
         NodePathBox.Text = _settings.NodeExecutablePath ?? string.Empty;
-        CustomOpenTargetBox.Text = _settings.CustomOpenTargetPath ?? string.Empty;
-        ApplyOpenModeChoices();
-    }
-
-    /// <summary>
-    /// 刷新「默认启动方式」下拉（变更集 111，work-log/94）：
-    /// 1）按「启动方式显示」过滤被关闭的方式（隔离、终端）；2）终端项按呈现面置灰；
-    /// 3）当前默认若被关闭/不可用则回退 Web 并说明；4）「未设置」= OpenMode 为 null（按运行时自动）。
-    /// </summary>
-    private void ApplyOpenModeChoices()
-    {
-        var visibility = _settings.LaunchModeVisibility;
-        bool ModeVisible(string key) => visibility is null || !visibility.TryGetValue(key, out var value) || value;
-
-        var terminalVisible = ModeVisible("terminal");
-        var terminalSupported = false;
-        if (_instance is not null)
-        {
-            try
-            {
-                var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
-                var profileInfo = new DshProfileService().Describe(_instance, profileName);
-                terminalSupported = PresentationSurfaceService.SupportsTerminalLaunch(
-                    PresentationSurfaceService.Detect(profileName, profileInfo.Bundles));
-            }
-            catch
-            {
-                terminalSupported = false; // 判不到不当成可用
-            }
-        }
-
-        OpenModeTerminalItem.Visibility = terminalVisible ? Visibility.Visible : Visibility.Collapsed;
-        OpenModeTerminalItem.IsEnabled = terminalSupported;
-        OpenModeTerminalItem.ToolTip = terminalSupported
-            ? "在 Windows Terminal 里跑 dsh --profile <活动 profile>；点左侧启动按钮生效。"
-            : "当前 profile 的呈现面不是终端面（如 dsh-tui 这类 profile），暂不可选。";
-        OpenModeIsolatedItem.Visibility = ModeVisible("isolated") ? Visibility.Visible : Visibility.Collapsed;
-
-        var stored = _settings.OpenMode; // null = 未设置（按运行时自动）
-        VersionOpenMode? display = stored;
-        string? fallbackReason = null;
-        if (stored == VersionOpenMode.Isolated && !ModeVisible("isolated"))
-        {
-            display = VersionOpenMode.Web;
-            fallbackReason = "原默认「隔离启动」已在「启动方式显示」里关闭";
-        }
-        else if (stored == VersionOpenMode.Terminal && (!terminalVisible || !terminalSupported))
-        {
-            display = VersionOpenMode.Web;
-            fallbackReason = terminalVisible
-                ? "原默认「终端启动」需要终端面 profile，当前 profile 不是"
-                : "原默认「终端启动」已在「启动方式显示」里关闭";
-        }
-
-        OpenModeBox.SelectedValue = display is null ? "Unset" : display.Value.ToString();
-        OpenModeStatusText.Text = BuildOpenModeStatus(display, fallbackReason);
-        UpdateCustomOpenTargetEnabled();
-    }
-
-    private static string BuildOpenModeStatus(VersionOpenMode? mode, string? fallbackReason)
-    {
-        var text = mode switch
-        {
-            null => "未设置：按运行时自动——运行时自带桌面封装时打开原生窗口，否则按 Web 启动。",
-            VersionOpenMode.Custom => "当前版本将使用手动绑定的本地入口，并继承此版本的 DSH_HOME。",
-            VersionOpenMode.Web => "当前版本将使用 dsh 原生方式启动：服务启动后由 dsh 在默认浏览器打开 WebUI。",
-            VersionOpenMode.Terminal => "当前版本将用「终端启动」：在 Windows Terminal 里跑该 profile（如 dsh-tui）；点左侧启动按钮生效。",
-            VersionOpenMode.Isolated => "当前版本将用隔离 profile 启动：剥离第三方插件、保留 dsh 核心；不会修改你的 profile 与配置。",
-            _ => "当前版本将使用启动器方式启动：服务启动后自动打开内部 Chat 窗口，不会重复弹浏览器。"
-        };
-        return fallbackReason is null ? text : $"{fallbackReason}，当前按 Web 启动生效；重新打开开关即可恢复。";
-    }
-
-    /// <summary>「未设置」：清掉 OpenMode（null），回到按运行时自动的历史默认（变更集 111）。</summary>
-    private void SaveUnsetOpenMode()
-    {
-        if (_instance is null)
-        {
-            return;
-        }
-
-        try
-        {
-            var updated = CopySettings();
-            updated.OpenMode = null;
-            var snapshot = TryCreateSnapshot("保存打开方式前");
-            _settingsService.Save(_instance, updated);
-            _settings = updated;
-            OpenModeStatusText.Text = snapshot is null
-                ? "已保存：未设置（按运行时自动）。"
-                : "已保存：未设置（按运行时自动），并已保留修改前快照。";
-            _settingsSaved();
-        }
-        catch (Exception ex)
-        {
-            OpenModeStatusText.Text = "保存打开方式失败：" + ex.Message;
-        }
     }
 
     private void LoadEnvironmentVariables()
@@ -1163,6 +1059,7 @@ public partial class VersionSettingsWindow : UserControl
     private VersionSettingsData ReadConfigurationSettings() => new()
     {
         SyncAllConfiguration = SyncAllConfigurationCheckBox.IsChecked == true,
+        ActiveProfile = _settings.ActiveProfile,   // 防抹：设置窗口的保存路径也要带上活动 profile（work-log/95）
         ConversationSyncMode = ConversationWorkspaceRadio.IsChecked == true
             ? ConversationSyncMode.Workspace
             : ConversationAllRadio.IsChecked == true
@@ -1176,478 +1073,17 @@ public partial class VersionSettingsWindow : UserControl
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
         OpenMode = _settings.OpenMode,
-        CustomOpenTargetPath = _settings.CustomOpenTargetPath,
-        LaunchModeVisibility = _settings.LaunchModeVisibility is null
-            ? null
-            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal),
-        TerminalWorkingDirectory = _settings.TerminalWorkingDirectory,
-        TerminalAskWorkspaceEachTime = _settings.TerminalAskWorkspaceEachTime
     };
-
-    private void OpenModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        UpdateCustomOpenTargetEnabled();
-
-    private void UpdateCustomOpenTargetEnabled()
-    {
-        if (CustomOpenTargetPanel is null)
-        {
-            return;
-        }
-
-        CustomOpenTargetPanel.IsEnabled = string.Equals(
-            OpenModeBox.SelectedValue?.ToString(),
-            VersionOpenMode.Custom.ToString(),
-            StringComparison.Ordinal);
-        CustomOpenTargetPanel.Opacity = CustomOpenTargetPanel.IsEnabled ? 1 : 0.55;
-    }
-
-    // ------------------------------------------------------------------
-    // 启动方式显示（work-log/89，变更集 106）：扫描实例 UI 插件，控制哪些方式
-    // 出现在实例卡片的 ▼ 菜单里。Desktop / Web 不受开关影响。
-    // ------------------------------------------------------------------
-
-    private void AppendLaunchModeVisibilitySection()
-    {
-        var content = new StackPanel();
-        content.Children.Add(new TextBlock
-        {
-            Text = "启动方式显示",
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 13
-        });
-        content.Children.Add(new TextBlock
-        {
-            Text = "扫描该实例的插件（TUI / GUI）后，在这里控制哪些方式出现在实例卡片的 ▼ 菜单里；关闭只是隐藏入口，随时可以重新打开。Desktop 启动 / Web 启动 始终显示。",
-            Foreground = (WpfBrush)FindResource("MutedBrush"),
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 4, 0, 6)
-        });
-
-        _uiLaunchModeRows = new StackPanel();
-        content.Children.Add(_uiLaunchModeRows);
-
-        _uiLaunchModeStatusText = new TextBlock
-        {
-            Foreground = (WpfBrush)FindResource("MutedBrush"),
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 8, 0, 0)
-        };
-        content.Children.Add(_uiLaunchModeStatusText);
-
-        var refresh = new WpfButton
-        {
-            Content = "重新扫描",
-            Padding = new Thickness(12, 7, 12, 7),
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
-            Margin = new Thickness(0, 10, 0, 0)
-        };
-        refresh.Click += (_, _) => RefreshLaunchModeVisibilitySection();
-        content.Children.Add(refresh);
-
-        content.Margin = new Thickness(0, 18, 0, 0);
-        LaunchModeExtraSections.Children.Add(content);
-
-        RefreshLaunchModeVisibilitySection();
-    }
-
-    private void RefreshLaunchModeVisibilitySection()
-    {
-        if (_instance is null || _uiLaunchModeRows is null || _uiLaunchModeStatusText is null)
-        {
-            return;
-        }
-
-        _uiLaunchModeRows.Children.Clear();
-        var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
-        UiPluginScanResult scan;
-        try
-        {
-            scan = InstanceUiPluginScanner.Scan(_instance, profileName);
-        }
-        catch (Exception ex)
-        {
-            _uiLaunchModeStatusText.Text = "扫描失败：" + ex.Message;
-            return;
-        }
-
-        var visibility = _settings.LaunchModeVisibility;
-        bool ModeVisible(string key) => visibility is null || !visibility.TryGetValue(key, out var value) || value;
-
-        if (scan.HasTuiProvider)
-        {
-            var sources = string.Join("、", scan.TuiPlugins.Select(plugin =>
-                plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
-            AddLaunchModeRow("terminal", "在终端打开", "来源：" + sources, ModeVisible("terminal"));
-        }
-
-        if (_instance.CanOpenDesktopShell)
-        {
-            AddLaunchModeRow("window", "打开窗口（DSH Desktop 封装）", null, ModeVisible("window"));
-        }
-
-        AddLaunchModeRow("isolated", "隔离启动（剥离第三方插件）", null, ModeVisible("isolated"));
-
-        foreach (var gui in scan.GuiPlugins)
-        {
-            _uiLaunchModeRows.Children.Add(new TextBlock
-            {
-                Text = $"· {gui.Name}{(gui.Version is null ? string.Empty : " " + gui.Version)}：GUI 插件（{DescribeUiConfidence(gui.Confidence)}）——启动器不提供它的独立启动方式",
-                Foreground = (WpfBrush)FindResource("MutedBrush"),
-                FontSize = 11,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 4, 0, 0)
-            });
-        }
-
-        var parts = new List<string>
-        {
-            $"profile：{profileName}",
-            $"TUI {scan.TuiPlugins.Count} 个",
-            $"GUI {scan.GuiPlugins.Count} 个"
-        };
-        if (scan.Warnings.Count > 0)
-        {
-            parts.Add($"{scan.Warnings.Count} 条扫描告警");
-        }
-
-        _uiLaunchModeStatusText.Text = "扫描结果：" + string.Join(" · ", parts) + "。开关立即生效（卡片 ▼ 菜单）。";
-    }
-
-    private void AddLaunchModeRow(string key, string title, string? source, bool isVisible)
-    {
-        if (_uiLaunchModeRows is null)
-        {
-            return;
-        }
-
-        var row = new Grid { Margin = new Thickness(0, 4, 0, 0) };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-        var check = new System.Windows.Controls.CheckBox
-        {
-            IsChecked = isVisible,
-            VerticalAlignment = VerticalAlignment.Top
-        };
-        System.Windows.Automation.AutomationProperties.SetName(check, title);
-        check.Checked += (_, _) => SaveLaunchModeVisibility(key, true);
-        check.Unchecked += (_, _) => SaveLaunchModeVisibility(key, false);
-        Grid.SetColumn(check, 0);
-        row.Children.Add(check);
-
-        var text = new StackPanel { Margin = new Thickness(6, 0, 0, 0) };
-        text.Children.Add(new TextBlock { Text = title, FontSize = 12, TextWrapping = TextWrapping.Wrap });
-        if (!string.IsNullOrWhiteSpace(source))
-        {
-            text.Children.Add(new TextBlock
-            {
-                Text = source,
-                Foreground = (WpfBrush)FindResource("MutedBrush"),
-                FontSize = 11,
-                TextWrapping = TextWrapping.Wrap
-            });
-        }
-
-        Grid.SetColumn(text, 1);
-        row.Children.Add(text);
-        _uiLaunchModeRows.Children.Add(row);
-    }
-
-    // ------------------------------------------------------------------
-    // 终端启动的工作区（work-log/92，变更集 109）：dsh-TUI 用进程 cwd 当工作区，
-    // 这里决定「终端启动」在哪个目录拉起它——可固定目录，也可每次弹选择器。
-    // ------------------------------------------------------------------
-
-    private void AppendTerminalWorkspaceSection()
-    {
-        var content = new StackPanel();
-        content.Children.Add(new TextBlock
-        {
-            Text = "终端启动的工作区",
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 13
-        });
-        content.Children.Add(new TextBlock
-        {
-            Text = "「终端启动」在 Windows Terminal 里跑 dsh --profile <活动 profile>。"
-                + "dsh-tui 用进程工作目录当工作区（插件没有 --cwd 参数），所以这里决定 TUI 打开哪个目录；留空＝用户主目录。",
-            Foreground = (WpfBrush)FindResource("MutedBrush"),
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 4, 0, 8)
-        });
-
-        var row = new Grid();
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        _terminalWorkspaceBox = new System.Windows.Controls.TextBox
-        {
-            Text = _settings.TerminalWorkingDirectory ?? string.Empty,
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Padding = new Thickness(8, 6, 8, 6)
-        };
-        System.Windows.Automation.AutomationProperties.SetName(_terminalWorkspaceBox, "终端工作区");
-        _terminalWorkspaceBox.LostFocus += (_, _) => SaveTerminalWorkspace();
-        _terminalWorkspaceBox.KeyDown += (_, args) =>
-        {
-            if (args.Key == System.Windows.Input.Key.Enter)
-            {
-                SaveTerminalWorkspace();
-            }
-        };
-        Grid.SetColumn(_terminalWorkspaceBox, 0);
-        row.Children.Add(_terminalWorkspaceBox);
-
-        var browse = new WpfButton
-        {
-            Content = "浏览…",
-            Padding = new Thickness(12, 7, 12, 7),
-            Margin = new Thickness(8, 0, 0, 0)
-        };
-        browse.Click += (_, _) => BrowseTerminalWorkspace();
-        Grid.SetColumn(browse, 1);
-        row.Children.Add(browse);
-
-        var clear = new WpfButton
-        {
-            Content = "清除",
-            Padding = new Thickness(12, 7, 12, 7),
-            Margin = new Thickness(8, 0, 0, 0)
-        };
-        clear.Click += (_, _) =>
-        {
-            if (_terminalWorkspaceBox is not null)
-            {
-                _terminalWorkspaceBox.Text = string.Empty;
-            }
-
-            SaveTerminalWorkspace();
-        };
-        Grid.SetColumn(clear, 2);
-        row.Children.Add(clear);
-
-        content.Children.Add(row);
-
-        _terminalAskEachTimeCheck = new System.Windows.Controls.CheckBox
-        {
-            Content = "每次终端启动都先让我选目录（选中的目录会记住）",
-            IsChecked = _settings.TerminalAskWorkspaceEachTime,
-            Margin = new Thickness(0, 10, 0, 0)
-        };
-        System.Windows.Automation.AutomationProperties.SetName(_terminalAskEachTimeCheck, "每次终端启动都先让我选目录");
-        _terminalAskEachTimeCheck.Checked += (_, _) => SaveTerminalWorkspace();
-        _terminalAskEachTimeCheck.Unchecked += (_, _) => SaveTerminalWorkspace();
-        content.Children.Add(_terminalAskEachTimeCheck);
-
-        _terminalWorkspaceStatusText = new TextBlock
-        {
-            Foreground = (WpfBrush)FindResource("MutedBrush"),
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 8, 0, 0)
-        };
-        content.Children.Add(_terminalWorkspaceStatusText);
-
-        content.Margin = new Thickness(0, 18, 0, 0);
-        LaunchModeExtraSections.Children.Add(content);
-
-        UpdateTerminalWorkspaceStatus();
-    }
-
-    private void SaveTerminalWorkspace()
-    {
-        if (_instance is null || _terminalWorkspaceBox is null)
-        {
-            return;
-        }
-
-        try
-        {
-            _settings.TerminalWorkingDirectory = string.IsNullOrWhiteSpace(_terminalWorkspaceBox.Text)
-                ? null
-                : _terminalWorkspaceBox.Text.Trim();
-            _settings.TerminalAskWorkspaceEachTime = _terminalAskEachTimeCheck?.IsChecked == true;
-            _settingsService.Save(_instance, _settings);
-            UpdateTerminalWorkspaceStatus(saved: true);
-            _settingsSaved();
-        }
-        catch (Exception ex)
-        {
-            if (_terminalWorkspaceStatusText is not null)
-            {
-                _terminalWorkspaceStatusText.Text = "保存失败：" + ex.Message;
-            }
-        }
-    }
-
-    private void BrowseTerminalWorkspace()
-    {
-        var dialog = new Microsoft.Win32.OpenFolderDialog
-        {
-            Title = "选择终端启动的工作区",
-            Multiselect = false
-        };
-        var current = _terminalWorkspaceBox?.Text?.Trim();
-        dialog.InitialDirectory = !string.IsNullOrWhiteSpace(current) && Directory.Exists(current)
-            ? current!
-            : TerminalLaunchService.ResolveWorkingDirectory(
-                null,
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
-
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true && _terminalWorkspaceBox is not null)
-        {
-            _terminalWorkspaceBox.Text = dialog.FolderName;
-            SaveTerminalWorkspace();
-        }
-    }
-
-    private void UpdateTerminalWorkspaceStatus(bool saved = false)
-    {
-        if (_terminalWorkspaceStatusText is null)
-        {
-            return;
-        }
-
-        var path = _terminalWorkspaceBox?.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            _terminalWorkspaceStatusText.Text = "当前：留空＝回退用户主目录。";
-            return;
-        }
-
-        _terminalWorkspaceStatusText.Text = Directory.Exists(path)
-            ? (saved ? "已保存：" : "当前：") + path
-            : "目录不存在：" + path + "（启动时会回退到用户主目录）";
-    }
-
-    private void SaveLaunchModeVisibility(string key, bool visible)
-    {
-        if (_instance is null)
-        {
-            return;
-        }
-
-        try
-        {
-            var map = _settings.LaunchModeVisibility is null
-                ? new Dictionary<string, bool>(StringComparer.Ordinal)
-                : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal);
-            map[key] = visible;
-            _settings.LaunchModeVisibility = map;
-            _settingsService.Save(_instance, _settings);
-            ApplyOpenModeChoices(); // 关闭某个方式的显示时，「默认启动方式」下拉同步过滤/回退（变更集 111）
-            if (_uiLaunchModeStatusText is not null)
-            {
-                _uiLaunchModeStatusText.Text = (visible ? "已开启" : "已关闭") + "该方式在卡片 ▼ 菜单里的显示（立即生效）。";
-            }
-
-            _settingsSaved();
-        }
-        catch (Exception ex)
-        {
-            if (_uiLaunchModeStatusText is not null)
-            {
-                _uiLaunchModeStatusText.Text = "保存失败：" + ex.Message;
-            }
-        }
-    }
-
     private static string DescribeUiConfidence(UiPluginConfidence confidence) => confidence switch
     {
         UiPluginConfidence.Strong => "spec 声明",
         UiPluginConfidence.Medium => "关键字",
         _ => "包名启发式"
     };
-
-    private void BrowseOpenTarget_Click(object sender, RoutedEventArgs e)
-    {
-        using var dialog = new Forms.OpenFileDialog
-        {
-            Title = "选择这个版本的打开方式",
-            Filter = "程序、脚本和快捷方式|*.exe;*.com;*.bat;*.cmd;*.ps1;*.lnk|所有文件|*.*",
-            CheckFileExists = true,
-            Multiselect = false
-        };
-        if (dialog.ShowDialog() == Forms.DialogResult.OK)
-        {
-            CustomOpenTargetBox.Text = dialog.FileName;
-        }
-    }
-
-    private void SaveOpenMode_Click(object sender, RoutedEventArgs e)
-    {
-        if (_instance is null)
-        {
-            OpenModeStatusText.Text = "请先选择版本。";
-            return;
-        }
-
-        var selectedTag = OpenModeBox.SelectedValue?.ToString();
-        if (string.Equals(selectedTag, "Unset", StringComparison.Ordinal))
-        {
-            SaveUnsetOpenMode(); // 「未设置（按运行时自动）」：清掉 OpenMode（变更集 111）
-            return;
-        }
-
-        if (!Enum.TryParse<VersionOpenMode>(selectedTag, out var openMode))
-        {
-            OpenModeStatusText.Text = "打开方式无效。";
-            return;
-        }
-
-        var customOpenTargetPath = _settings.CustomOpenTargetPath;
-        if (openMode == VersionOpenMode.Custom)
-        {
-            try
-            {
-                customOpenTargetPath = Path.GetFullPath(CustomOpenTargetBox.Text.Trim());
-            }
-            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-            {
-                OpenModeStatusText.Text = "手动绑定的文件路径无效。";
-                return;
-            }
-
-            if (!File.Exists(customOpenTargetPath))
-            {
-                OpenModeStatusText.Text = "手动绑定的文件不存在，请重新选择。";
-                return;
-            }
-        }
-
-        try
-        {
-            var updated = CopySettings();
-            updated.OpenMode = openMode;
-            updated.CustomOpenTargetPath = customOpenTargetPath;
-            var snapshot = TryCreateSnapshot("保存打开方式前");
-            _settingsService.Save(_instance, updated);
-            _settings = updated;
-            var modeText = openMode switch
-            {
-                VersionOpenMode.Web => "Web 启动（dsh 原生）",
-                VersionOpenMode.Custom => $"手动打开 {Path.GetFileName(customOpenTargetPath)}",
-                VersionOpenMode.Isolated => "隔离启动（剥离第三方插件）",
-                _ => "Desktop 启动（启动器方式）"
-            };
-            OpenModeStatusText.Text = snapshot is null
-                ? $"已保存：{modeText}。"
-                : $"已保存：{modeText}，并已保留修改前快照。";
-            _settingsSaved();
-        }
-        catch (Exception ex)
-        {
-            OpenModeStatusText.Text = $"保存打开方式失败：{ex.Message}";
-        }
-    }
-
     private VersionSettingsData CopySettings() => new()
     {
         SyncAllConfiguration = _settings.SyncAllConfiguration,
+        ActiveProfile = _settings.ActiveProfile,   // 防抹：设置窗口的保存路径也要带上活动 profile（work-log/95）
         ConversationSyncMode = _settings.ConversationSyncMode,
         ConversationWorkspace = _settings.ConversationWorkspace,
         SyncModelProviders = _settings.SyncModelProviders,
@@ -1655,12 +1091,6 @@ public partial class VersionSettingsWindow : UserControl
         WindowTitle = _settings.WindowTitle,
         NodeExecutablePath = _settings.NodeExecutablePath,
         OpenMode = _settings.OpenMode,
-        CustomOpenTargetPath = _settings.CustomOpenTargetPath,
-        LaunchModeVisibility = _settings.LaunchModeVisibility is null
-            ? null
-            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal),
-        TerminalWorkingDirectory = _settings.TerminalWorkingDirectory,
-        TerminalAskWorkspaceEachTime = _settings.TerminalAskWorkspaceEachTime
     };
 
     private async void RefreshPlugins_Click(object sender, RoutedEventArgs e) => await LoadPluginsAsync();
@@ -1773,19 +1203,14 @@ public partial class VersionSettingsWindow : UserControl
             var updated = new VersionSettingsData
             {
                 SyncAllConfiguration = _settings.SyncAllConfiguration,
+                ActiveProfile = _settings.ActiveProfile,   // 防抹：设置窗口的保存路径也要带上活动 profile（work-log/95）
                 ConversationSyncMode = _settings.ConversationSyncMode,
                 ConversationWorkspace = _settings.ConversationWorkspace,
                 SyncModelProviders = _settings.SyncModelProviders,
                 WindowTitle = WindowTitleBox.Text,
                 NodeExecutablePath = nodePath,
                 OpenMode = _settings.OpenMode,
-                CustomOpenTargetPath = _settings.CustomOpenTargetPath,
                 UseDshMarketHotReload = _settings.UseDshMarketHotReload,
-                LaunchModeVisibility = _settings.LaunchModeVisibility is null
-                    ? null
-                    : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal),
-                TerminalWorkingDirectory = _settings.TerminalWorkingDirectory,
-                TerminalAskWorkspaceEachTime = _settings.TerminalAskWorkspaceEachTime
             };
             var snapshot = TryCreateSnapshot("保存窗口与 Node 设置前");
             _settingsService.Save(_instance, updated);

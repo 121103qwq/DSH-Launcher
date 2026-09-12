@@ -1,5 +1,4 @@
-using System.Collections.Generic;
-using System.Diagnostics;
+﻿using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
@@ -79,11 +78,6 @@ public static class PresentationSurfaceService
         PresentationSurface.Headless => "无界面",
         _ => "未识别"
     };
-
-    /// <summary>该呈现面是否适合"在终端打开"。</summary>
-    public static bool SupportsTerminalLaunch(PresentationSurface surface) =>
-        surface == PresentationSurface.Terminal;
-
     /// <summary>
     /// 实例卡片是否值得显示呈现面徽标（work-log/84，变更集 101）：
     /// Web 面是常态（不打扰），终端/无界面/未识别才提示。
@@ -119,61 +113,6 @@ public static class PresentationSurfaceService
         return segment.Equals("dsh-desktop", StringComparison.OrdinalIgnoreCase)
             || segment.StartsWith("dsh-desktop-", StringComparison.OrdinalIgnoreCase);
     }
-
-    /// <summary>
-    /// 构造 Windows Terminal 启动参数（不含可执行文件名本身）：
-    /// <c>-d &lt;工作目录&gt; &lt;dsh 入口&gt; --profile &lt;profile&gt;</c>。
-    /// 缺参数则返回 null（调用方提示，不猜）。
-    /// </summary>
-    public static IReadOnlyList<string>? BuildWindowsTerminalArguments(
-        string? dshExecutable,
-        string? profileName,
-        string? workingDirectory)
-    {
-        if (string.IsNullOrWhiteSpace(dshExecutable) || string.IsNullOrWhiteSpace(profileName))
-        {
-            return null;
-        }
-
-        var arguments = new List<string>();
-        if (!string.IsNullOrWhiteSpace(workingDirectory))
-        {
-            arguments.Add("-d");
-            arguments.Add(workingDirectory!);
-        }
-
-        arguments.Add(dshExecutable!);
-        arguments.Add("--profile");
-        arguments.Add(profileName!);
-        return arguments;
-    }
-
-    /// <summary>
-    /// 构造 Windows Terminal 的 ProcessStartInfo（可测）：**必须注入 DSH_HOME**。
-    /// wt.exe 用 <c>UseShellExecute = true</c> 启动时，新标签页只继承启动器自己的环境（没有 DSH_HOME），
-    /// 终端里的 dsh 会退到默认 home <c>~/.dsh</c>——内置模板（web/acp/headless/sdk）不存在会自建所以看不出来，
-    /// 自定义 profile（如 dsh-tui）则直接报 <c>profile does not exist</c>（work-log/91，变更集 108）。
-    /// 实测：wt.exe 在 <c>UseShellExecute = false</c> 下可启动且继承注入的环境变量。
-    /// </summary>
-    public static ProcessStartInfo CreateWindowsTerminalStartInfo(
-        string terminalPath,
-        IReadOnlyList<string> arguments,
-        string dshHome,
-        string? dshExecutable)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = terminalPath,
-            Arguments = string.Join(" ", arguments.Select(value => value.Contains(' ') ? "\"" + value + "\"" : value)),
-            UseShellExecute = false,
-            CreateNoWindow = false
-        };
-        startInfo.Environment["DSH_HOME"] = dshHome;
-        startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(dshHome, ".agents");
-        startInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(dshExecutable);
-        return startInfo;
-    }
-
     private static bool IsWebBundle(string bundle) =>
         bundle.Contains("dsh-web-app", StringComparison.OrdinalIgnoreCase);
 

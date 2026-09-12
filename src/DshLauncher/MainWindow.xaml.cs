@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Collections.ObjectModel;
@@ -274,7 +274,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(CanStopInstance));
             OnPropertyChanged(nameof(CanRestartInstance));
             OnPropertyChanged(nameof(DesktopShellVisibility));
-            OnPropertyChanged(nameof(LauncherStartVisibility));
             OnPropertyChanged(nameof(NodeStatusText));
             OnPropertyChanged(nameof(NodeStatusBrush));
             OnPropertyChanged(nameof(NodeVersionText));
@@ -385,17 +384,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public string StartInstanceButtonText => SelectedInstance is null
         ? "准备首个版本"
-        : IsCustomOpenBound
-            ? "打开窗口"
-            : _instanceRunner.IsRunning(SelectedInstance.Id)
-                ? "打开实例"
-                : GetEffectiveOpenMode() switch
-                {
-                    VersionOpenMode.Web => "Web 启动",
-                    VersionOpenMode.Isolated => "隔离启动",
-                    VersionOpenMode.Terminal => "终端启动",
-                    _ => "Desktop 启动"
-                };
+        : _instanceRunner.IsRunning(SelectedInstance.Id)
+            ? "打开实例"
+            : GetEffectiveOpenMode() switch
+            {
+                VersionOpenMode.Web => "Web 启动",
+                VersionOpenMode.Isolated => "隔离启动",
+                _ => "Desktop 启动"
+            };
 
     public bool CanStopInstance => CanStopInstanceCore(
         _isLifecycleInProgress,
@@ -405,17 +401,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public bool CanRestartInstance => CanStopInstance;
 
-    public bool IsCustomOpenBound => SelectedInstance is not null
-        && GetSelectedOpenMode() == VersionOpenMode.Custom;
-
-    public bool IsExternalOpenBound => IsCustomOpenBound;
-
-    public Visibility LauncherStartVisibility => IsExternalOpenBound
-        ? Visibility.Visible
-        : Visibility.Collapsed;
-
     public Visibility DesktopShellVisibility => SelectedInstance?.CanOpenDesktopShell == true
-        && !IsExternalOpenBound
         ? Visibility.Visible
         : Visibility.Collapsed;
 
@@ -451,23 +437,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         try
         {
-            var settings = _versionSettingsService.Read(instance);
-            bool ModeVisible(string key) => settings.LaunchModeVisibility is null
-                || !settings.LaunchModeVisibility.TryGetValue(key, out var value)
-                || value;
-            var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
-            var terminalSupported = PresentationSurfaceService.SupportsTerminalLaunch(
-                PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName)));
-            return LaunchModePolicy.Effective(
-                mode,
-                HasVendorDesktopSurface(instance),
-                terminalSupported,
-                ModeVisible("terminal"),
-                ModeVisible("isolated"));
+            return LaunchModePolicy.Effective(mode, HasVendorDesktopSurface(instance));
         }
         catch
         {
-            return mode; // 判不到不替换（与 Desktop 回退同一原则，work-log/92）
+            return mode; // 判不到不替换（work-log/81 §七.5）
         }
     }
 
@@ -2477,7 +2451,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _selectedVersionSettings = new VersionSettingsData();
             Title = "DSH Launcher";
             OnPropertyChanged(nameof(StartInstanceButtonText));
-            OnPropertyChanged(nameof(LauncherStartVisibility));
             OnPropertyChanged(nameof(DesktopShellVisibility));
             return;
         }
@@ -2507,7 +2480,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         OnPropertyChanged(nameof(StartInstanceButtonText));
-        OnPropertyChanged(nameof(LauncherStartVisibility));
         OnPropertyChanged(nameof(DesktopShellVisibility));
     }
 
@@ -3617,14 +3589,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     /// <summary>
     /// ▼ 菜单里的启动方式项（work-log/82，用户口径）：点击只切换方式并写回实例设置，**不启动**；
-    /// 真正启动由左侧主按钮触发。（「打开窗口」/「在终端打开」不是启动方式，仍是点击即执行。）
+    /// 真正启动由左侧主按钮触发。（「打开窗口」不是启动方式，仍是点击即执行。）
     /// </summary>
     private void LaunchModeMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.MenuItem { Tag: string tag }
             || SelectedInstance is not { } instance
             || !Enum.TryParse<VersionOpenMode>(tag, out var mode)
-            || mode is not (VersionOpenMode.Web or VersionOpenMode.Desktop or VersionOpenMode.Isolated or VersionOpenMode.Terminal))
+            || mode is not (VersionOpenMode.Web or VersionOpenMode.Desktop or VersionOpenMode.Isolated))
         {
             return;
         }
@@ -3642,19 +3614,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         OnPropertyChanged(nameof(StartInstanceButtonText));
-        OnPropertyChanged(nameof(IsCustomOpenBound));
         ShowNotice(mode switch
         {
             VersionOpenMode.Web => "已切换为 Web 启动；点击左侧启动按钮生效。",
             VersionOpenMode.Isolated => "已切换为隔离启动；点击左侧启动按钮生效（会剥离第三方插件、不改你的配置）。",
-            VersionOpenMode.Terminal => "已切换为终端启动；点击左侧启动按钮生效（在 Windows Terminal 里跑该 profile，不经启动器托管）。",
             _ => "已切换为 Desktop 启动；点击左侧启动按钮生效。"
         });
     }
 
     /// <summary>
     /// 打开 ▼ 菜单前刷新勾选与可用性（work-log/82）：勾选＝当前生效的启动方式；
-    /// 「打开窗口」按运行时能力、「在终端打开」按呈现面决定可用性（置灰 + tooltip 说明原因）；
+    /// 「打开窗口」按运行时能力置灰 + tooltip 说明；
     /// dsh 自带 desktop surface 时隐藏「Desktop 启动」与「打开窗口」（判不到不隐藏）。
     /// </summary>
     private void LaunchModeMenu_Opened(object sender, RoutedEventArgs e)
@@ -3667,11 +3637,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         var mode = GetEffectiveOpenMode();
         var vendorDesktop = HasVendorDesktopSurface(instance);
-        var launchModeVisibility = _selectedVersionSettings.LaunchModeVisibility;
-        bool ModeVisible(string key) =>
-            launchModeVisibility is null
-            || !launchModeVisibility.TryGetValue(key, out var visible)
-            || visible;
 
         foreach (var item in menu.Items.OfType<System.Windows.Controls.MenuItem>())
         {
@@ -3685,202 +3650,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     item.IsChecked = mode == VersionOpenMode.Web;
                     break;
                 case "Isolated":
-                    item.Visibility = ModeVisible("isolated") ? Visibility.Visible : Visibility.Collapsed;
                     item.IsChecked = mode == VersionOpenMode.Isolated;
                     break;
                 case "ElectronDesktop":
-                    item.Visibility = vendorDesktop || !ModeVisible("window") ? Visibility.Collapsed : Visibility.Visible;
+                    item.Visibility = vendorDesktop ? Visibility.Collapsed : Visibility.Visible;
                     item.IsEnabled = instance.CanOpenDesktopShell;
                     item.ToolTip = instance.CanOpenDesktopShell
                         ? "用 DSH Desktop 封装运行时打开原生窗口（与启动器窗口相互独立）。"
                         : "该实例的运行时不是 DSH Desktop 封装（ElectronBootstrap），无法打开原生窗口。";
                     break;
-                case "Terminal":
-                    item.Visibility = ModeVisible("terminal") ? Visibility.Visible : Visibility.Collapsed;
-                    var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
-                    var surface = PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
-                    var supported = PresentationSurfaceService.SupportsTerminalLaunch(surface);
-                    item.IsChecked = mode == VersionOpenMode.Terminal; // 与其它方式一致：勾选＝当前生效方式（work-log/92）
-                    item.IsEnabled = supported;
-                    item.ToolTip = supported
-                        ? $"终端启动：在 Windows Terminal 里跑 dsh --profile {profileName}（点击左侧启动按钮生效）。"
-                        : $"当前呈现面是「{PresentationSurfaceService.Describe(surface)}」，不是在终端打开的终端面（如 dsh-tui 这类 profile）。";
-                    break;
             }
         }
     }
-
-    /// <summary>
-    /// 在终端打开当前活动 profile（主按钮「终端启动」调用；菜单项已改为只切换方式，不再直接调用）。
-    /// 含呈现面校验、TUI 插件未启用时的快捷启用、profile 存在性预检、工作区解析（可选每次弹选择器）。
-    /// </summary>
-    private async Task TryOpenTerminalInActiveProfileAsync()
-    {
-        if (SelectedInstance is not { } instance)
-        {
-            ShowNotice("请先选择一个实例。");
-            return;
-        }
-
-        var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
-        var surface = PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
-        if (!PresentationSurfaceService.SupportsTerminalLaunch(surface))
-        {
-            // 检测到 TUI 插件时给更具体的提示；未启用的提供快捷启用（work-log/89，变更集 106）。
-            var scan = InstanceUiPluginScanner.Scan(instance, profileName);
-            if (scan.HasTuiProvider)
-            {
-                var names = string.Join("、", scan.TuiPlugins.Select(plugin =>
-                    plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
-                var notEnabled = scan.NotEnabledTuiPlugins;
-                if (notEnabled.Count > 0
-                    && System.Windows.MessageBox.Show(
-                        this,
-                        $"检测到 TUI 插件：{names}。\n\n其中 {string.Join("、", notEnabled.Select(plugin => plugin.Name))} 尚未启用（不在当前 profile 的插件层里）。\n"
-                        + "现在把它们加入当前 profile 的插件层吗？（只改依赖与 bundles，不动插件文件）",
-                        "启用检测到的 TUI 插件",
-                        MessageBoxButton.OKCancel,
-                        MessageBoxImage.Question) == MessageBoxResult.OK)
-                {
-                    await EnableDetectedTuiPluginsAsync(instance, notEnabled);
-                    return;
-                }
-
-                ShowNotice($"检测到 TUI 插件（{names}），但当前 profile「{profileName}」的呈现面是"
-                    + $"「{PresentationSurfaceService.Describe(surface)}」；请把活动 profile 切到该插件对应的终端面 profile，再用「在终端打开」。");
-                return;
-            }
-
-            ShowNotice($"实例「{instance.Name}」的呈现面是「{PresentationSurfaceService.Describe(surface)}」，不是终端面；"
-                + "「在终端打开」只适用于 dsh-tui 这类终端面 profile。");
-            return;
-        }
-
-        // 启动前校验：非内置名字的 profile 目录/manifest 不存在时，dsh 会直接抛错退栈，
-        // 与其让终端闪一个 Node.js 堆栈，不如在这里说清楚（work-log/91，变更集 108）。
-        var profileInfo = new DshProfileService().Describe(instance, profileName);
-        if (!profileInfo.Exists && !profileInfo.IsShipped)
-        {
-            ShowNotice($"活动 profile「{profileName}」在 {Path.Combine(DshProfileService.ProfilesRoot(instance), profileName)} 下不存在；"
-                + "dsh 对非内置名字会直接报 “profile does not exist”（内置模板只有 web / acp / headless / sdk）。"
-                + "请先在「扩展」页创建或安装这个 profile，再用「在终端打开」。");
-            return;
-        }
-
-        var terminal = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Microsoft", "WindowsApps", "wt.exe");
-        if (!File.Exists(terminal))
-        {
-            ShowNotice("未找到 Windows Terminal（wt.exe）；请先安装 Windows Terminal 再试「在终端打开」。");
-            return;
-        }
-
-        // 工作区：dsh-TUI 用**进程 cwd** 当工作区（插件没有 --cwd/--workspace 参数），所以启动目录就是它打开的工作区。
-        // 实例设置里可以固定一个目录；开了「每次选择」就先弹文件夹选择器，选中的目录回写设置（work-log/92，变更集 109）。
-        var terminalSettings = _versionSettingsService.Read(instance);
-        var workingDirectory = TerminalLaunchService.ResolveWorkingDirectory(
-            terminalSettings.TerminalWorkingDirectory,
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
-        if (terminalSettings.TerminalAskWorkspaceEachTime)
-        {
-            var picker = new Microsoft.Win32.OpenFolderDialog
-            {
-                Title = "选择终端启动的工作区",
-                InitialDirectory = workingDirectory,
-                Multiselect = false
-            };
-            if (picker.ShowDialog(this) != true)
-            {
-                ShowNotice("已取消：未选择工作区，终端未打开。");
-                return;
-            }
-
-            workingDirectory = picker.FolderName;
-            try
-            {
-                terminalSettings.TerminalWorkingDirectory = workingDirectory;
-                _versionSettingsService.Save(instance, terminalSettings);
-            }
-            catch (Exception ex)
-            {
-                ShowNotice("工作区只用于本次启动，保存设置失败：" + ex.Message);
-            }
-        }
-
-        var arguments = PresentationSurfaceService.BuildWindowsTerminalArguments(
-            instance.DshExecutablePath, profileName, workingDirectory);
-        if (arguments is null)
-        {
-            ShowNotice("该实例缺少可用的 dsh 入口，无法在终端打开；请先在版本控制里修复运行目录。");
-            return;
-        }
-
-        try
-        {
-            // 必须注入 DSH_HOME：wt.exe 在 UseShellExecute=true 下只继承启动器环境，
-            // 终端里的 dsh 会退到默认 home ~/.dsh（变更集 108 前的真缺陷）。
-            System.Diagnostics.Process.Start(PresentationSurfaceService.CreateWindowsTerminalStartInfo(
-                terminal,
-                arguments,
-                instance.DshHome,
-                instance.DshExecutablePath));
-            ShowNotice($"已在终端打开实例「{instance.Name}」（profile：{profileName}，工作区：{workingDirectory}）。");
-        }
-        catch (Exception ex)
-        {
-            ShowNotice("在终端打开失败：" + ex.Message);
-        }
-    }
-
-    /// <summary>把检测到但未启用的 TUI 插件加入当前 profile 的插件层（复用插件管理链路）。</summary>
-    private async Task EnableDetectedTuiPluginsAsync(ManagerInstance instance, IReadOnlyList<UiPluginInfo> plugins)
-    {
-        try
-        {
-            var entries = await _extensionService.ListAsync(instance, _windowCancellation.Token);
-            var enabled = new List<string>();
-            var failed = new List<string>();
-            foreach (var plugin in plugins)
-            {
-                var entry = entries.FirstOrDefault(item =>
-                    string.Equals(item.Name, plugin.Name, StringComparison.OrdinalIgnoreCase));
-                if (entry is null)
-                {
-                    failed.Add(plugin.Name + "（不在当前 profile 的依赖里，请在扩展页插件管理里启用）");
-                    continue;
-                }
-
-                try
-                {
-                    await _extensionService.SetPluginEnabledAsync(instance, entry, true, _windowCancellation.Token);
-                    enabled.Add(plugin.Name);
-                }
-                catch (Exception ex)
-                {
-                    failed.Add($"{plugin.Name}（{ex.Message}）");
-                }
-            }
-
-            var parts = new List<string>();
-            if (enabled.Count > 0)
-            {
-                parts.Add("已启用：" + string.Join("、", enabled));
-            }
-
-            if (failed.Count > 0)
-            {
-                parts.Add("未启用：" + string.Join("、", failed));
-            }
-
-            ShowNotice(string.Join("；", parts) + "。启用后请把活动 profile 切换/重建为对应终端面 profile，再用「在终端打开」。");
-        }
-        catch (Exception ex)
-        {
-            ShowNotice("启用插件失败：" + ex.Message);
-        }
-    }
-
     /// <summary>只读读取某个 profile 的 dsh.profile.bundles（读不到返回空，判定侧会回退到 profile 名）。</summary>
     private static IReadOnlyList<string> ReadProfileBundles(ManagerInstance instance, string profileName)
     {
@@ -5197,13 +4978,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     WindowTitle = current.WindowTitle,
                     NodeExecutablePath = current.NodeExecutablePath,
                     OpenMode = current.OpenMode,
-                    CustomOpenTargetPath = current.CustomOpenTargetPath,
-                    UseDshMarketHotReload = current.UseDshMarketHotReload,
-                    LaunchModeVisibility = current.LaunchModeVisibility is null
-                        ? null
-                        : new Dictionary<string, bool>(current.LaunchModeVisibility, StringComparer.Ordinal),
-                    TerminalWorkingDirectory = current.TerminalWorkingDirectory,
-                    TerminalAskWorkspaceEachTime = current.TerminalAskWorkspaceEachTime
+                    UseDshMarketHotReload = current.UseDshMarketHotReload
                 };
                 var snapshot = instance.RuntimeStatus != InstanceRuntimeStatus.Running
                     && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
@@ -6016,23 +5791,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void StartInstance_Click(object sender, RoutedEventArgs e)
     {
-        if (IsCustomOpenBound)
-        {
-            OpenCustomTarget();
-            return;
-        }
-
-        // 终端启动方式（work-log/92，变更集 109）：主按钮在 Windows Terminal 里拉起活动 profile；
-        // 运行中不重复拉起（沿用“打开已运行实例”，避免两个进程写同一个 DSH_HOME）。
-        if (GetEffectiveOpenMode() == VersionOpenMode.Terminal
-            && SelectedInstance is { } terminalTarget
-            && !_instanceRunner.IsRunning(terminalTarget.Id)
-            && terminalTarget.RuntimeOwnership != InstanceRuntimeOwnership.Attached)
-        {
-            await TryOpenTerminalInActiveProfileAsync();
-            return;
-        }
-
         // 隔离启动方式（work-log/82）：主按钮执行隔离启动链路；运行中不重复启动，
         // 仍交给 StartSelectedInstanceAsync 处理"打开已运行实例"。
         if (GetEffectiveOpenMode() == VersionOpenMode.Isolated
@@ -6337,46 +6095,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         finally
         {
             EndLifecycleOperation();
-        }
-    }
-
-    private void OpenCustomTarget()
-    {
-        var instance = SelectedInstance;
-        if (instance is null)
-        {
-            ShowNotice("请先选择版本。");
-            return;
-        }
-
-        if (_instanceRunner.IsRunning(instance.Id)
-            || instance.RuntimeStatus == InstanceRuntimeStatus.Running)
-        {
-            ShowNotice("请先停止这个版本，再使用绑定的打开方式，避免两个进程同时写入同一个 DSH_HOME。");
-            return;
-        }
-
-        try
-        {
-            var settings = _versionSettingsService.Read(instance);
-            var startInfo = VersionOpenTargetService.CreateStartInfo(
-                instance,
-                settings.CustomOpenTargetPath ?? string.Empty);
-            if (Process.Start(startInfo) is null)
-            {
-                ShowNotice("绑定的打开方式启动失败。");
-                return;
-            }
-
-            ShowNotice($"已通过 {Path.GetFileName(settings.CustomOpenTargetPath)} 打开 {instance.Name}，并传入该版本的隔离数据目录。");
-        }
-        catch (Exception ex) when (ex is Win32Exception
-            or IOException
-            or InvalidOperationException
-            or ArgumentException
-            or NotSupportedException)
-        {
-            ShowNotice($"打开绑定入口失败：{ex.Message}");
         }
     }
 
@@ -6935,7 +6653,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedInstanceStatusTextBrush));
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(StartInstanceButtonText));
-        OnPropertyChanged(nameof(LauncherStartVisibility));
         OnPropertyChanged(nameof(DesktopShellVisibility));
         OnPropertyChanged(nameof(CanStopInstance));
         OnPropertyChanged(nameof(CanRestartInstance));

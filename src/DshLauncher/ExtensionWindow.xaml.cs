@@ -543,6 +543,73 @@ public partial class ExtensionWindow : UserControl
         {
             _profileSelectorLoading = false;
         }
+
+        RefreshTuiCommandPanel();
+    }
+
+    /// <summary>
+    /// 「终端启动（TUI 插件）」（变更集 112，work-log/95）：扫到 TUI 插件时给出可直接粘贴的命令。
+    /// TUI 不再做成启动器里的启动方式；命令里带 DSH_HOME，避开“退到 ~/.dsh 找不到 profile”。
+    /// </summary>
+    private void RefreshTuiCommandPanel()
+    {
+        if (TuiCommandPanel is null || TuiCommandBox is null)
+        {
+            return;
+        }
+
+        var profileName = DshProfileService.ResolveActiveName(_instance, _versionSettingsService);
+        UiPluginScanResult scan;
+        try
+        {
+            scan = InstanceUiPluginScanner.Scan(_instance, profileName);
+        }
+        catch (Exception ex)
+        {
+            TuiCommandPanel.Visibility = Visibility.Collapsed;
+            LauncherLog.Warn("扫描 TUI 插件失败：" + ex.Message);
+            return;
+        }
+
+        if (!scan.HasTuiProvider)
+        {
+            TuiCommandPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var command = TerminalLaunchService.BuildPowerShellCommand(
+            _instance.DshHome,
+            _instance.DshExecutablePath,
+            profileName);
+        if (command is null)
+        {
+            TuiCommandPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var names = string.Join("、", scan.TuiPlugins.Select(plugin =>
+            plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
+        TuiCommandBox.Text = command;
+        TuiCommandHintText.Text = $"检测到 {names}（profile：{profileName}）。粘到终端执行即可；实例正在运行时可先停止。";
+        TuiCommandPanel.Visibility = Visibility.Visible;
+    }
+
+    private void CopyTuiCommand_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(TuiCommandBox.Text))
+        {
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(TuiCommandBox.Text);
+            TuiCommandHintText.Text = "命令已复制；粘到 PowerShell 里执行即可。";
+        }
+        catch (Exception ex)
+        {
+            TuiCommandHintText.Text = "复制失败：" + ex.Message;
+        }
     }
 
     private static string BuildProfileHint(DshProfileInfo info)
