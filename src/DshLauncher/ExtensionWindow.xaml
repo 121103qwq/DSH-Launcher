@@ -658,10 +658,10 @@
                                VerticalAlignment="Center"
                                Margin="18,0,8,0" />
                     <ComboBox x:Name="SkillMarketSourceBox"
-                              Width="168"
+                              Width="240"
                               Height="34"
                               SelectedIndex="0"
-                              ToolTip="按“设置 / 诊断 → 市场源”里为 Skill 配置的仓库筛选"
+                              ToolTip="按技能所在仓库筛选；“全部来源”旁的数字是当前列表的技能总数。仓库来自内置 GitHub 搜索，也可在“设置 / 诊断 → 市场源”里补充配置源"
                               SelectionChanged="SkillMarketFilter_SelectionChanged" />
                 </StackPanel>
 

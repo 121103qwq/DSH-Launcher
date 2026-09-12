@@ -230,7 +230,7 @@ public partial class ExtensionWindow : UserControl
         }
 
         var choices = SkillMarketQuery.BuildSourceChoices(configured, items);
-        var signature = string.Join('\n', choices.Select(choice => choice.Tag));
+        var signature = string.Join('\n', choices.Select(choice => choice.Tag + "|" + choice.Label));
         if (signature == _skillMarketSourceSignature)
         {
             return;
@@ -239,12 +239,19 @@ public partial class ExtensionWindow : UserControl
         var previous = (SkillMarketSourceBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
         _skillMarketSourceSignature = signature;
         SkillMarketSourceBox.ItemsSource = choices
-            .Select(choice => new ComboBoxItem { Content = choice.Label, Tag = choice.Tag })
+            .Select(choice => new ComboBoxItem
+            {
+                Content = choice.Label,
+                Tag = choice.Tag,
+                // 变更集 125：“（仓库来自内置 GitHub 搜索）”这类说明行不可选
+                IsEnabled = choice.Selectable
+            })
             .ToArray();
-        SkillMarketSourceBox.SelectedItem = SkillMarketSourceBox.Items
-            .OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), previous, StringComparison.OrdinalIgnoreCase))
-            ?? SkillMarketSourceBox.Items[0];
+        var sourceItems = SkillMarketSourceBox.Items.OfType<ComboBoxItem>().ToArray();
+        SkillMarketSourceBox.SelectedItem = sourceItems
+            .FirstOrDefault(item => item.IsEnabled
+                && string.Equals(item.Tag?.ToString(), previous, StringComparison.OrdinalIgnoreCase))
+            ?? sourceItems.First(item => item.IsEnabled);
     }
 
     private void SkillMarketFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)

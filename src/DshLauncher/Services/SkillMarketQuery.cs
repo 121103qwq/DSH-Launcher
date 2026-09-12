@@ -48,19 +48,46 @@ public static class SkillMarketQuery
     }
 
     /// <summary>
-    /// 变更集 124：来源下拉的选项——「全部来源」+ 设置页配置的 Skill 源（停用项带标注）+ 当前列表里实际出现的仓库（去重）。
+    /// 变更集 124/125：来源下拉的选项——「全部来源」+ 来源说明行（不可选）+ 配置的 Skill 源 + 当前列表里实际出现的仓库。
     /// 技能列表来自动态 GitHub 搜索（`q=skill in:name`），并不存在一份固定的“内置来源清单”，
-    /// 所以只列配置源在未配置时就是空的（变更集 123 的缺陷）；补上当前列表实际仓库后保证非空且与所见数据一致。
+    /// 所以只列配置源在未配置时就是空的（变更集 123 的缺陷）；补上当前列表实际仓库后保证非空。
+    /// 变更集 125：每项带该仓库的技能数（让用户知道“选了什么能得到什么”），并插入一行不可选的来源说明。
     /// </summary>
-    /// <returns>按显示顺序排列的（标签，值）对；首项固定为“全部来源”（值为空字符串）。</returns>
-    public static IReadOnlyList<(string Tag, string Label)> BuildSourceChoices(
+    /// <returns>按显示顺序排列的选项；首项固定为「全部来源」（Tag 为空串）。</returns>
+    public static IReadOnlyList<SkillSourceChoice> BuildSourceChoices(
         IEnumerable<MarketSourceSetting> configuredSources,
         IEnumerable<SkillMarketItem> items)
     {
         ArgumentNullException.ThrowIfNull(configuredSources);
         ArgumentNullException.ThrowIfNull(items);
 
-        var choices = new List<(string Tag, string Label)> { (string.Empty, "全部来源") };
+        var itemList = items as IReadOnlyCollection<SkillMarketItem> ?? items.ToArray();
+        var repositoryOrder = new List<string>();
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in itemList)
+        {
+            var repository = item.Repository;
+            if (string.IsNullOrWhiteSpace(repository))
+            {
+                continue;
+            }
+
+            if (counts.TryGetValue(repository, out var count))
+            {
+                counts[repository] = count + 1;
+            }
+            else
+            {
+                counts[repository] = 1;
+                repositoryOrder.Add(repository);
+            }
+        }
+
+        var choices = new List<SkillSourceChoice>
+        {
+            new(string.Empty, $"全部来源（{itemList.Count} 个技能）", true, itemList.Count),
+            new(string.Empty, "（仓库来自内置 GitHub 搜索）", false, 0)
+        };
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var source in configuredSources)
@@ -70,20 +97,24 @@ public static class SkillMarketQuery
                 continue;
             }
 
-            choices.Add((source.Value, source.Enabled ? source.Value : source.Value + "（已停用）"));
+            var count = counts.TryGetValue(source.Value, out var value) ? value : 0;
+            var label = source.Enabled
+                ? $"{source.Value} · {count} 个技能"
+                : $"{source.Value} · {count} 个技能（已停用）";
+            choices.Add(new SkillSourceChoice(source.Value, label, true, count));
         }
 
-        foreach (var repository in items
-                     .Select(item => item.Repository)
-                     .Where(value => !string.IsNullOrWhiteSpace(value))
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var repository in repositoryOrder)
         {
             if (seen.Add(repository))
             {
-                choices.Add((repository, repository));
+                choices.Add(new SkillSourceChoice(repository, $"{repository} · {counts[repository]} 个技能", true, counts[repository]));
             }
         }
 
         return choices;
     }
 }
+
+/// <summary>来源下拉的一项：标签用于显示；“说明行”通过 Selectable=false 表达；技能数让用户预知选中后的结果。</summary>
+public sealed record SkillSourceChoice(string Tag, string Label, bool Selectable, int SkillCount);

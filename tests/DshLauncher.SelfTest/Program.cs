@@ -2334,26 +2334,27 @@ Check("skill-market/不筛选时返回全量（含未知排序键回退）",
     SkillMarketQuery.Apply(skillSamples, null, null, null, null).Count == 3
     && SkillMarketQuery.Apply(skillSamples, null, null, null, "Unknown").Count == 3);
 
-// 变更集 124：来源下拉选项 =「全部来源」+ 配置源（带停用标注）+ 当前列表实际仓库（去重）
+// 变更集 124/125：来源下拉选项 =「全部来源（N 个技能）」+ 说明行（不可选）+ 配置源 + 当前列表实际仓库（带技能数）
 var sourceChoicesEmptyConfig = SkillMarketQuery.BuildSourceChoices(Array.Empty<MarketSourceSetting>(), skillSamples);
-Check("skill-market/来源选项：未配置任何源时仍非空（用户实测的 bug 场景）",
-    sourceChoicesEmptyConfig.Count == 3
-    && sourceChoicesEmptyConfig[0] == (string.Empty, "全部来源")
-    && sourceChoicesEmptyConfig[1].Tag == "acme/skills"
-    && sourceChoicesEmptyConfig[2].Tag == "other/pack",
+Check("skill-market/来源选项：未配置任何源时仍非空且带技能数（用户实测的 bug 场景）",
+    sourceChoicesEmptyConfig.Count == 4
+    && sourceChoicesEmptyConfig[0].Label == "全部来源（3 个技能）"
+    && !sourceChoicesEmptyConfig[1].Selectable
+    && sourceChoicesEmptyConfig[2].Tag == "acme/skills" && sourceChoicesEmptyConfig[2].SkillCount == 2
+    && sourceChoicesEmptyConfig[3].Tag == "other/pack" && sourceChoicesEmptyConfig[3].SkillCount == 1,
     string.Join(" | ", sourceChoicesEmptyConfig.Select(choice => choice.Label)));
 var sourceChoicesConfigured = SkillMarketQuery.BuildSourceChoices(
     new[] { new MarketSourceSetting("acme/skills", true), new MarketSourceSetting("my/own", false) },
     skillSamples);
 Check("skill-market/来源选项：配置源优先、停用标注、与实际仓库去重",
-    sourceChoicesConfigured.Count == 4
-    && sourceChoicesConfigured[1] == ("acme/skills", "acme/skills")
-    && sourceChoicesConfigured[2] == ("my/own", "my/own（已停用）")
-    && sourceChoicesConfigured[3].Tag == "other/pack",
+    sourceChoicesConfigured.Count == 5
+    && sourceChoicesConfigured[2].Label == "acme/skills · 2 个技能"
+    && sourceChoicesConfigured[3].Tag == "my/own" && sourceChoicesConfigured[3].Label == "my/own · 0 个技能（已停用）"
+    && sourceChoicesConfigured[4].Tag == "other/pack",
     string.Join(" | ", sourceChoicesConfigured.Select(choice => choice.Label)));
-Check("skill-market/来源选项：既无配置也无条目时只有“全部来源”",
+Check("skill-market/来源选项：既无配置也无条目时只有“全部来源 + 说明行”",
     SkillMarketQuery.BuildSourceChoices(Array.Empty<MarketSourceSetting>(), Array.Empty<SkillMarketItem>())
-        is [("", "全部来源")]);
+        is [{ Tag: "", Selectable: true, Label: "全部来源（0 个技能）" }, { Selectable: false }]);
 
 try
 {
