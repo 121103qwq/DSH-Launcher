@@ -204,11 +204,12 @@
                                         ToolTip="{Binding CloneButtonToolTip}"
                                         Padding="16,9"
                                         Margin="0,0,8,8" />
+                                <!-- 变更集 142：**不再内联 Foreground** —— 元素本地值优先级高于样式触发器，
+                                     会让悬停的"白字"失效（用户实测：红底红字）；常态文字色统一走样式的 DangerTextBrush。 -->
                                 <Button Style="{StaticResource DangerButton}" Content="删除版本"
                                         Click="DeleteVersion_Click"
                                         IsEnabled="{Binding CanDelete}"
                                         ToolTip="{Binding DeleteButtonToolTip}"
-                                        Foreground="{StaticResource DangerBrush}"
                                         Padding="16,9"
                                         Margin="0,0,8,8" />
                                 <Button Content="版本设置" Click="OpenSettings_Click" Padding="16,9" Margin="0,0,8,8" />
