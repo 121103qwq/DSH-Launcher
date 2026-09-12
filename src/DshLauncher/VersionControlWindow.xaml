@@ -97,17 +97,46 @@
                                 Content="导入实例"
                                 Click="AddInstance_Click"
                                 IsEnabled="{Binding CanAddInstance}"
-                                ToolTip="点击选择：从文件夹导入 / 从快捷方式导入 / 从源码目录导入 / 扫描本机 DSH 环境 / 导入整合包"
+                                ToolTip="导入一个已有的 dsh 安装（文件夹 / 快捷方式 / 源码 / 本机环境扫描 / 整合包）。与「新建干净版本」的区别：新建是空实例，导入会沿用现有的安装目录与配置。"
                                 Style="{StaticResource PrimaryButton}"
                                 Margin="0,0,0,8">
                             <Button.ContextMenu>
                                 <ContextMenu Style="{StaticResource ContextInstanceMenuStyle}">
-                                    <MenuItem Header="从文件夹导入" Click="ScanInstanceFolder_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
-                                    <MenuItem Header="从快捷方式导入" Click="ScanInstanceShortcut_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
-                                    <MenuItem Header="从源码目录导入" Click="ImportSourceProject_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
-                                    <MenuItem Header="扫描本机 DSH 环境" Click="ScanEnvironment_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
+                                    <!-- 双行菜单项（变更集 133）：标题 + 11px MutedBrush 说明。说明放在 Header 内容里，
+                                         不覆写共享模板（避免复制一份悬停/选中/禁用触发器），也不新增任何字形。
+                                         Header 不是字符串时 UIA Name 会为空，因此显式给 AutomationProperties.Name
+                                         （既让 UI 自动化可用，也满足 §1.9 可访问性要求）。 -->
+                                    <MenuItem Click="ScanInstanceFolder_Click" AutomationProperties.Name="从文件夹导入" Style="{StaticResource ContextInstanceMenuItemStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="从文件夹导入" />
+                                            <TextBlock Text="选一个含 dsh 的目录" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </MenuItem>
+                                    <MenuItem Click="ScanInstanceShortcut_Click" AutomationProperties.Name="从快捷方式导入" Style="{StaticResource ContextInstanceMenuItemStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="从快捷方式导入" />
+                                            <TextBlock Text="从 .lnk 解析出安装目录" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </MenuItem>
+                                    <MenuItem Click="ImportSourceProject_Click" AutomationProperties.Name="从源码目录导入" Style="{StaticResource ContextInstanceMenuItemStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="从源码目录导入" />
+                                            <TextBlock Text="选 dsh 源码仓库根目录" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </MenuItem>
+                                    <MenuItem Click="ScanEnvironment_Click" AutomationProperties.Name="扫描本机 DSH 环境" Style="{StaticResource ContextInstanceMenuItemStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="扫描本机 DSH 环境" />
+                                            <TextBlock Text="枚举 .dsh* 与 DSH_HOME 指向的 home" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </MenuItem>
                                     <Separator Style="{StaticResource MenuSeparatorStyle}" />
-                                    <MenuItem Header="导入整合包（.dshpack / .dspack / .tgz）" Click="ImportPackage_Click" Style="{StaticResource ContextInstanceMenuItemStyle}" />
+                                    <MenuItem Click="ImportPackage_Click" AutomationProperties.Name="导入整合包" Style="{StaticResource ContextInstanceMenuItemStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="导入整合包" />
+                                            <TextBlock Text=".dshpack / .dspack / .tgz：建一个独立版本" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </MenuItem>
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>

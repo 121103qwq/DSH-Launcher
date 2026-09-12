@@ -209,6 +209,11 @@
 | 分隔线 | `MenuSeparatorStyle`：`LineBrush` 1px + `Margin 10,6`（隐式样式已生效） |
 | 图标列 / 快捷键列 | **暂未启用**（未使用 `MenuItem.Icon` / `InputGestureText`）。若要启用：图标必须先在「图标（字形集）」登记，快捷键列用于展示 `InputGestureText` |
 
+> **双行菜单项（变更集 133）**：需要解释的动作（如「导入实例」的 5 个入口）用「**标题 + 11px `MutedBrush` 说明**」两行承载。
+> 说明写在 `MenuItem` 的 **Header 内容**里（`StackPanel` + 两个 `TextBlock`，说明行 `Margin="0,3,0,0"`），
+> **不覆写共享模板**——覆写就要把悬停/选中/禁用三个触发器复制一份，日后改样式必然漏一处。
+> 悬停/选中时**说明保持 `MutedBrush`**，只有标题随前景变化。
+
 > ⚠️ **在 `App.xaml` 新增样式时的顺序要求**：`BasedOn` / `StaticResource` **不支持前向引用**——被引用的样式必须**先定义**。
 > 2026-09-13（变更集 131）曾因把隐式 `MenuItem` 样式插到 `ContextInstanceMenuItemStyle` 之前，导致启动即抛
 > `XamlParseException`（`StaticResourceHolder`）；harness 的「冒烟执行无异常」断言当场抓住。
