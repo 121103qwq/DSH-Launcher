@@ -58,6 +58,11 @@
 > `UI-UNIFICATION-TODO.md` §1.3 的「11（辅助）」都不一致。本轮按"以规范为准 + 规范未覆盖即补充"的规则**把 11 正式补入阶梯**，
 > 而不是把 103 处 11px 改成 12px（那会造成大范围视觉变化）。越界判定与门禁：`FontSize` ∈ {11,12,13,14,15,16,18,20,24,28,30}，
 > **图标字形**（`Text`/`Content` 为几何符号，如 `— □ × ⌄`）不参与文字阶梯，由图标体系规范（变更集 C）。
+
+> **小字字重（2026-09-13 决议，变更集 129）**：**只有「胶囊 / 徽标 / 状态标签」类**（小圆角 `CornerRadius="3"`、浅色底、短标签文字的 `Border`）
+> 用 **12px + `SemiBold`**；其余 ≤12px 文字（说明行、次要信息、时间戳）保持**常规字重**。
+> 原因：`UI-UNIFICATION-TODO.md` §1.3 早先写的「≤12px 一律 `SemiBold`」经实测（129 个 ≤12px 文本元素里 112 个未加粗）
+> 若照字面执行会让辅助文字整体变重，故**按角色收窄**为只覆盖胶囊类。harness 断言「胶囊/徽标/状态标签为 12px + SemiBold」逐个小圆角胶囊扫描。
 | 11 | 元信息（版本号、路径、来源、时间）——**最小字号** |
 
 规则：11px 只用于元信息；可交互/需要强调的小字用 12px + `SemiBold`。
@@ -143,6 +148,8 @@
 - ProgressBar 由全局样式提供（蓝色圆角；不确定态脉冲），高度默认 6。
 
 ### 状态胶囊（Chip）
+
+> 规格：**12px + `SemiBold`** + 小圆角（3）+ 浅色底 + 同族描边（如成功底 `SuccessSurfaceBrush` / 描边 `SuccessBorderBrush`、警告底 `WarningBackgroundBrush` / 描边 `WarningBrush`、中性底 `NeutralSurfaceBrush` / 描边 `LineBrush`）；内边距 6–9 × 1–3。
 12px SemiBold 文字 + 1px 同色描边 + 半透明同色底（不透明度 ≥ 44）+ 8px 圆点；
 `SnapsToDevicePixels` + `UseLayoutRounding`。颜色按语义取 `SuccessTextBrush` /
 `DangerTextBrush` / `MutedBrush` 系。
