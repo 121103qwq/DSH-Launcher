@@ -11,6 +11,7 @@ using WpfColor = System.Windows.Media.Color;
 
 namespace DshLauncher.UnitTests;
 
+[Collection("WpfRendering")]
 public sealed class VisualEffectsControllerTests
 {
     [Fact]

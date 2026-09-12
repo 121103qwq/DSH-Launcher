@@ -12,6 +12,7 @@ using Xunit;
 
 namespace DshLauncher.UnitTests;
 
+[Collection("WpfRendering")]
 public sealed class VisualAppearanceRenderingTests
 {
     [Fact]
@@ -110,6 +111,7 @@ public sealed class VisualAppearanceRenderingTests
         root.AddFirst(new XElement(wpf + "Border.Resources",
             app.Root!.Element(wpf + "Application.Resources")!.Elements().Select(element => new XElement(element)),
             main.Root.Element(wpf + "Window.Resources")!.Elements().Select(element => new XElement(element))));
+        XamlTestResources.NormalizeAssemblyNamespaces(root);
         var result = (Border)XamlReader.Parse(root.ToString());
         result.DataContext = new
         {

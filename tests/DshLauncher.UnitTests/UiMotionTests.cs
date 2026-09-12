@@ -10,6 +10,7 @@ using Xunit.Abstractions;
 
 namespace DshLauncher.UnitTests;
 
+[Collection("WpfRendering")]
 public sealed class UiMotionTests
 {
     private readonly ITestOutputHelper _output;
@@ -210,7 +211,7 @@ public sealed class UiMotionTests
             var replacements = 0;
 
             UiMotion.Enter(element);
-            PumpDispatcher(TimeSpan.FromMilliseconds(80));
+            PumpUntil(() => element.Opacity is > 0.05 and < 0.7);
             var opacityBeforeTransition = element.Opacity;
             Assert.InRange(opacityBeforeTransition, 0.05, 0.75);
 
@@ -318,6 +319,31 @@ public sealed class UiMotionTests
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
         }
+    }
+
+    private static void PumpUntil(Func<bool> condition)
+    {
+        var frame = new DispatcherFrame();
+        var observed = false;
+        var timeout = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        EventHandler sample = (_, _) =>
+        {
+            if (condition())
+            {
+                observed = true;
+                frame.Continue = false;
+            }
+        };
+        CompositionTarget.Rendering += sample;
+        timeout.Tick += (_, _) => frame.Continue = false;
+        timeout.Start();
+        try { Dispatcher.PushFrame(frame); }
+        finally
+        {
+            timeout.Stop();
+            CompositionTarget.Rendering -= sample;
+        }
+        Assert.True(observed, "A real intermediate animation frame was not observed.");
     }
 
     private static void PumpDispatcher(TimeSpan duration)

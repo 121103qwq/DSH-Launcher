@@ -285,7 +285,7 @@
                                      Background="Transparent"
                                      Margin="0,12,0,0">
                                 <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
+                                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource RoundedListItem}">
                                         <Setter Property="Padding" Value="0" />
                                         <Setter Property="Margin" Value="0,0,0,8" />
                                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />

@@ -1934,7 +1934,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         categoryList.Items.Add(new ListBoxItem { Content = "Launcher", Tag = "launcher" });
         categoryList.Items.Add(new ListBoxItem { Content = "DSh 版本", Tag = "dsh" });
         categoryList.Items.Add(new ListBoxItem { Content = "DSH Desktop", Tag = "desktop" });
-        var categoryStyle = new Style(typeof(ListBoxItem));
+        var categoryStyle = new Style(typeof(ListBoxItem), (Style)FindResource("RoundedListItem"));
         categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.PaddingProperty, new Thickness(16, 12, 16, 12)));
         categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.MarginProperty, new Thickness(0, 0, 0, 6)));
         categoryStyle.Setters.Add(new Setter(

@@ -8,6 +8,7 @@ using Xunit;
 
 namespace DshLauncher.UnitTests;
 
+[Collection("WpfRendering")]
 public sealed class HeaderLayoutTests
 {
     private static readonly XNamespace Wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
@@ -121,6 +122,7 @@ public sealed class HeaderLayoutTests
         }
         var app = XDocument.Load(SourceFile("App.xaml"));
         header.AddFirst(new XElement(Wpf + "Grid.Resources", app.Root!.Element(Wpf + "Application.Resources")!.Elements().Select(element => new XElement(element))));
+        XamlTestResources.NormalizeAssemblyNamespaces(header);
         return (Grid)XamlReader.Parse(header.ToString());
     }
 
