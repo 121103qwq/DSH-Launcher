@@ -44,7 +44,7 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel>
-                    <TextBlock Text="当前实例" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="当前实例" FontSize="18" FontWeight="SemiBold" />
                     <Grid Margin="0,10,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" MaxWidth="190" />
@@ -370,7 +370,7 @@
 
                 <StackPanel Grid.Row="2" Margin="0,14,0,12">
                     <Grid>
-                        <TextBlock Text="插件市场" FontSize="21" FontWeight="SemiBold" />
+                        <TextBlock Text="插件市场" FontSize="20" FontWeight="SemiBold" />
                         <Button Content="中文官网 ↗"
                                 Click="MarketplaceSite_Click"
                                 Padding="10,4"
@@ -501,7 +501,7 @@
                                                      Margin="0,7,0,0" />
                                             <TextBlock Text="{Binding ThemeStatusText}"
                                                        Foreground="{StaticResource MutedBrush}"
-                                                       FontSize="10"
+                                                       FontSize="12"
                                                        TextWrapping="Wrap"
                                                        Margin="0,7,0,0">
                                                 <TextBlock.Style>
@@ -589,7 +589,7 @@
                 </Grid>
 
                 <StackPanel Grid.Row="1" Margin="0,14,0,12">
-                    <TextBlock Text="Skill 市场" FontSize="21" FontWeight="SemiBold" />
+                    <TextBlock Text="Skill 市场" FontSize="20" FontWeight="SemiBold" />
                     <TextBlock Text="从 GitHub 仓库中发现并校验单个 Skill；安装会导入所选 Skill 目录及配套文件（需实例已停止）。内容为 GitHub 上的通用 Agent Skill 库，与 DSH 生态无绑定；同一仓库的同名 Skill 只保留一个，每个仓库最多收录 20 个。"
                                Foreground="{StaticResource MutedBrush}"
                                FontSize="11"

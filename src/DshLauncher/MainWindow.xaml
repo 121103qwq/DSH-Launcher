@@ -238,7 +238,7 @@
                                     IsHitTestVisible="False">
                                 <TextBlock x:Name="TaskBadgeText"
                                            Foreground="White"
-                                           FontSize="10"
+                                           FontSize="12"
                                            FontWeight="SemiBold"
                                            Text="0"
                                            HorizontalAlignment="Center"

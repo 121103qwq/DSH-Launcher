@@ -140,7 +140,7 @@
                                Margin="0,6,0,22" />
                     <Border Background="{StaticResource InfoBackgroundBrush}" CornerRadius="{StaticResource PanelCornerRadius}" Padding="{StaticResource PanelPadding}">
                         <StackPanel>
-                            <TextBlock Text="{Binding SelectedVersionName}" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SelectedVersionName}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
                             <TextBlock Text="{Binding SelectedVersionDetails}" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,8,0,0" />
                             <WrapPanel Margin="0,18,0,0">
                                 <Button Content="检查版本"
