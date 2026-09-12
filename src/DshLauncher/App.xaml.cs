@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -114,7 +114,7 @@ public partial class App : System.Windows.Application
             e.Handled = true;
             try
             {
-                System.Windows.MessageBox.Show(
+                AppDialog.Show(
                     $"DSH Launcher 启动失败，即将退出。\n\n{e.Exception.Message}\n\n详情见 %LocalAppData%\\DeepSeek\\launcher\\crash.log",
                     "DSH Launcher 启动失败",
                     MessageBoxButton.OK,

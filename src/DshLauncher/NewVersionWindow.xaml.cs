@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 
 namespace DshLauncher;
 
@@ -56,7 +56,7 @@ public partial class NewVersionWindow : Window
     {
         if (string.IsNullOrWhiteSpace(VersionName) || string.IsNullOrWhiteSpace(DshVersion))
         {
-            System.Windows.MessageBox.Show(this, "请输入版本名称并选择 DSh 版本。", "新建版本", MessageBoxButton.OK, MessageBoxImage.Information);
+            AppDialog.Show(this, "请输入版本名称并选择 DSh 版本。", "新建版本", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 

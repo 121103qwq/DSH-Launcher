@@ -3094,7 +3094,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             var multiple = sources.Length > 1;
             var sourceList = string.Join(Environment.NewLine, sources);
-            var confirmed = System.Windows.MessageBox.Show(
+            var confirmed = AppDialog.Show(
                 this,
                 $"将以下 DSh 运行时：\n{sourceList}\n\n移动到：\n{target}\n\n"
                 + (multiple ? "（多个运行时会分别放入目标目录下的同名子文件夹）\n\n" : string.Empty)
@@ -3972,7 +3972,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            var confirmed = System.Windows.MessageBox.Show(
+            var confirmed = AppDialog.Show(
                 this,
                 "导出文件包含本机文件路径、行号与模式名。默认不含任何凭据片段，但仍属敏感信息："
                     + "请勿分享，它也不会进入诊断包或整合包。\n\n继续导出吗？",
@@ -5023,7 +5023,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         deleteWorkspaceButton.Click += (_, _) =>
         {
             if (managedWorkspaceBox.SelectedItem is not string current
-                || System.Windows.MessageBox.Show(
+                || AppDialog.Show(
                     this,
                     $"确定删除工作区“{current}”？成员版本会改为完全独立，对话文件不会被删除。",
                     "删除工作区",
@@ -5154,7 +5154,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
             && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
         {
-            var usePortable = System.Windows.MessageBox.Show(this,
+            var usePortable = AppDialog.Show(this,
                 $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\n是否下载便携版 Node.js 到 Launcher 自己的目录？\n（免管理员、不修改系统 PATH、不卸载或影响现有 Node.js）",
                 "运行环境不兼容",
                 MessageBoxButton.YesNo,
@@ -5195,7 +5195,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     prepareNodeEngine);
                 if (!nodeResult.IsSuccess && !nodeResult.IsCancelled)
                 {
-                    var useInstaller = System.Windows.MessageBox.Show(
+                    var useInstaller = AppDialog.Show(
                         this,
                         $"便携版 Node.js 准备失败：\n{nodeResult.Error}\n\n是否改用官方安装程序？（需要管理员权限，会弹出 UAC）",
                         "准备运行环境",
@@ -5220,7 +5220,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 if (!nodeResult.IsSuccess)
                 {
                     progressWindow.SetStatus(nodeResult.Error ?? "Node.js 准备失败。");
-                    System.Windows.MessageBox.Show(this, nodeResult.Error ?? "Node.js 准备失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppDialog.Show(this, nodeResult.Error ?? "Node.js 准备失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -5238,7 +5238,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 if (!IsPreparedNodeUsable(prepareNodeEngine))
                 {
                     progressWindow.SetStatus("Node.js 准备后仍未被检测到或版本不满足要求，请重新检测或检查安装路径。");
-                    System.Windows.MessageBox.Show(this, "Node.js 准备后仍未被检测到或版本不满足要求，请重新检测或检查安装路径。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppDialog.Show(this, "Node.js 准备后仍未被检测到或版本不满足要求，请重新检测或检查安装路径。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -5287,7 +5287,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 if (!dshResult.IsSuccess)
                 {
                     progressWindow.SetStatus(dshResult.Error ?? "DSh 安装失败。");
-                    System.Windows.MessageBox.Show(this, dshResult.Error ?? "DSh 安装失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppDialog.Show(this, dshResult.Error ?? "DSh 安装失败。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -5306,7 +5306,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 if (!_dshRuntime.IsAvailable)
                 {
                     progressWindow.SetStatus("DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。");
-                    System.Windows.MessageBox.Show(this, "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppDialog.Show(this, "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。", "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
             }
@@ -5334,7 +5334,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var message = $"Node.js {_nodeRuntime.VersionText} 与当前 DSh 要求（{finalRequirement ?? "未声明"}）不兼容。\n\n"
                     + "Launcher 不会自动卸载现有 Node.js。请安装满足要求的兼容版本后重试。";
                 progressWindow.SetStatus(message);
-                System.Windows.MessageBox.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
+                AppDialog.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
 
@@ -5519,11 +5519,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var message = "当前 Node.js 版本与 DeepSeek Harness 要求不兼容。\n\n"
                 + string.Join("\n", missing.Select(item => "• " + item))
                 + $"\n\nLauncher 不会自动卸载现有 Node.js。请安装满足要求（{requirement}）的兼容版本后重试。";
-            System.Windows.MessageBox.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
+            AppDialog.Show(this, message, "运行环境不兼容", MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }
 
-        var confirm = System.Windows.MessageBox.Show(
+        var confirm = AppDialog.Show(
             this,
             "运行环境缺失：\n\n" + string.Join("\n", missing.Select(item => "• " + item))
             + "\n\n是否现在准备运行环境？准备完成后将自动继续启动实例。",
@@ -5818,7 +5818,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        var confirmed = System.Windows.MessageBox.Show(
+        var confirmed = AppDialog.Show(
             this,
             $"用隔离 profile 启动实例 {instance.Name}？\n\n"
             + $"· 会生成 {SafeProfileService.SafeProfileName}（隔离 profile）：剥离第三方插件、保留 dsh 核心；\n"
@@ -5978,7 +5978,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var details = string.Join("\n", warnings.Select(item => $"· {item.Title}\n  {item.Advice}"));
-        System.Windows.MessageBox.Show(
+        AppDialog.Show(
             this,
             $"实例「{instance.Name}」当前 profile（{(string.IsNullOrWhiteSpace(profileName) ? "web" : profileName)}）存在高权限配置：\n\n"
             + details
@@ -6344,7 +6344,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 steps.Add($"构建源码（{project.BuildCommand}）");
             }
 
-            var confirm = System.Windows.MessageBox.Show(
+            var confirm = AppDialog.Show(
                 this,
                 "这个源码版本还不能直接启动。Launcher 将在源码目录执行：\n\n"
                 + string.Join("\n", steps.Select(static step => "• " + step))
@@ -6408,7 +6408,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ? "\n\n证据：\n" + string.Join("\n", result.Evidence.Select(item => $"· [{item.Layer}] {item.Summary}"))
                 : string.Empty;
             var preview = string.Join("、", thirdParty.Take(3));
-            var confirmed = System.Windows.MessageBox.Show(
+            var confirmed = AppDialog.Show(
                 this,
                 $"实例 {instance.Name} 启动失败：\n{FormatStartFailure(result.Error)}{evidenceText}\n\n"
                 + $"检测到 {thirdParty.Count} 个第三方插件（{preview}{(thirdParty.Count > 3 ? "…" : string.Empty)}），可能是它们导致启动失败。\n\n"
@@ -6500,7 +6500,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             {
                 // 没有第三方插件可怀疑时，原来会**静默返回**、用户什么都看不到（work-log/71 事故正是如此）。
                 // 这里给出下一步引导：先区分"渲染宿主"（浏览器 vs 桌面窗口），再给出一键清缓存入口。
-                System.Windows.MessageBox.Show(
+                AppDialog.Show(
                     this,
                     $"实例 {instance.Name} 的页面加载异常：{probe.Summary}\n\n"
                     + "下一步建议：先点上面的「浏览器」方式打开同一个实例。\n"
@@ -6516,7 +6516,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 return;
             }
 
-            var confirmed = System.Windows.MessageBox.Show(
+            var confirmed = AppDialog.Show(
                 this,
                 $"实例 {instance.Name} 的页面加载异常：{probe.Summary}\n\n"
                 + $"检测到 {thirdParty.Count} 个第三方插件（{string.Join("、", thirdParty.Take(3))}），可能是它们导致页面无法渲染。\n\n"
@@ -7015,7 +7015,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 var message = $"{runningForClose.Length} 个实例正在运行：{names}{more}。"
                     + "\n退出启动器会先停止这些实例，未保存的会话内容可能中断。"
                     + "\n\n确定要退出吗？";
-                confirmed = System.Windows.MessageBox.Show(
+                confirmed = AppDialog.Show(
                     this,
                     DialogText.ForMessageBox(message),
                     "退出启动器",
@@ -8070,7 +8070,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        System.Windows.MessageBox.Show(
+        AppDialog.Show(
             this,
             Services.DialogText.ForMessageBox(PageNoticeDetail),
             "启动详情",

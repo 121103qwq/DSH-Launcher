@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -524,7 +524,7 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
-        if (System.Windows.MessageBox.Show(
+        if (AppDialog.Show(
                 Window.GetWindow(this),
                 $"确定把“{backup.DisplayName}”恢复到当前实例？已有相同会话 ID 时不会覆盖。",
                 "恢复对话备份",
@@ -556,7 +556,7 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
-        if (System.Windows.MessageBox.Show(
+        if (AppDialog.Show(
                 Window.GetWindow(this),
                 DialogText.ForMessageBox(entry.HasHistoricalGenerations
                     ? $"确定删除会话文件“{entry.RelativePath}”？\n\n"
@@ -645,6 +645,6 @@ public partial class ConversationWindow : UserControl
     private void ShowError(Exception ex)
     {
         StatusText.Text = ex.Message;
-        System.Windows.MessageBox.Show(Window.GetWindow(this), ex.Message, "对话操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        AppDialog.Show(Window.GetWindow(this), ex.Message, "对话操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

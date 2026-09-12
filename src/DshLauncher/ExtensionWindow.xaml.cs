@@ -1108,7 +1108,7 @@ public partial class ExtensionWindow : UserControl
                     const string message = "当前实例已关闭 dsh-market 热加载。请先停止实例，再点击“安装”或使用“手动安装 Plugin”。";
                     MarketplaceStatusText.Text = message;
                     progressWindow.Fail(message);
-                    System.Windows.MessageBox.Show(
+                    AppDialog.Show(
                         Window.GetWindow(this),
                         message,
                         "无法热加载",
@@ -1123,7 +1123,7 @@ public partial class ExtensionWindow : UserControl
                     var message = $"当前实例没有可用的 dsh-market，运行中不能热加载。请先停止实例，再点击“安装”或使用“手动安装 Plugin”。\n\n{_themeState.Error}";
                     MarketplaceStatusText.Text = message;
                     progressWindow.Fail(message);
-                    System.Windows.MessageBox.Show(
+                    AppDialog.Show(
                         Window.GetWindow(this),
                         message,
                         "未检测到 dsh-market",
@@ -1137,7 +1137,7 @@ public partial class ExtensionWindow : UserControl
                     const string message = "该插件不在 dsh-market 目录中，无法在运行中热加载。请先停止实例，再点击“安装”进行普通安装。";
                     MarketplaceStatusText.Text = message;
                     progressWindow.Fail(message);
-                    System.Windows.MessageBox.Show(
+                    AppDialog.Show(
                         Window.GetWindow(this),
                         message,
                         "dsh-market 不支持该条目",
@@ -1151,7 +1151,7 @@ public partial class ExtensionWindow : UserControl
                     const string message = "该插件不在 dsh-market 目录中，无法在运行中热加载更新。请先停止实例，再点击“更新”进行普通更新。";
                     MarketplaceStatusText.Text = message;
                     progressWindow.Fail(message);
-                    System.Windows.MessageBox.Show(
+                    AppDialog.Show(
                         Window.GetWindow(this),
                         message,
                         "dsh-market 不支持该条目",
@@ -1171,7 +1171,7 @@ public partial class ExtensionWindow : UserControl
 
             if (verification.Status == MarketplaceVerificationStatus.Incompatible)
             {
-                var proceed = System.Windows.MessageBox.Show(
+                var proceed = AppDialog.Show(
                     Window.GetWindow(this),
                     $"该插件与当前实例的 DSh 运行时不兼容：\n\n{verification.Message}\n\n继续{(item.IsInstalled ? "更新" : "安装")}后实例可能无法启动（可用安全模式或「逐插件定位」恢复）。仍要继续吗？",
                     "插件依赖不兼容",
@@ -1366,7 +1366,7 @@ public partial class ExtensionWindow : UserControl
             return;
         }
 
-        if (System.Windows.MessageBox.Show(
+        if (AppDialog.Show(
                 Window.GetWindow(this),
                 $"确定从当前实例卸载“{item.Name}”？实例需要停止，操作前会保存当前 Plugin 配置。",
                 "确认卸载",
@@ -1662,7 +1662,7 @@ public partial class ExtensionWindow : UserControl
             && _instance.RuntimeStatus == InstanceRuntimeStatus.Running)
         {
             progressWindow.SetIndeterminate("兼容性热安装仍然失败，等待确认是否停止实例后重试…");
-            if (System.Windows.MessageBox.Show(
+            if (AppDialog.Show(
                     progressWindow,
                     $"热安装未成功。是否由 Launcher 停止当前实例，然后再使用兼容性安装重试？\n\n{Tail(compatibilityError.Message)}",
                     "热安装失败",
@@ -1736,7 +1736,7 @@ public partial class ExtensionWindow : UserControl
                     _instance);
                 if (verdict.Status == MarketplaceVerificationStatus.Rejected)
                 {
-                    var proceed = System.Windows.MessageBox.Show(
+                    var proceed = AppDialog.Show(
                         Window.GetWindow(this),
                         $"这个目标不是可用的 DSH 插件：\n\n{verdict.Message}\n\n继续安装的话，它只会出现在「已安装（默认禁用）」里，DSh 不会加载它。仍要继续吗？",
                         "不是 DSH 插件",
@@ -1749,7 +1749,7 @@ public partial class ExtensionWindow : UserControl
                 }
                 else if (verdict.Status == MarketplaceVerificationStatus.Incompatible)
                 {
-                    var proceed = System.Windows.MessageBox.Show(
+                    var proceed = AppDialog.Show(
                         Window.GetWindow(this),
                         $"该插件与当前实例的 DSh 运行时不兼容：\n\n{verdict.Message}\n\n安装后实例可能无法启动（可用安全模式或「逐插件定位」恢复）。仍要继续吗？",
                         "插件依赖不兼容",
@@ -1931,7 +1931,7 @@ public partial class ExtensionWindow : UserControl
             {
                 var verdict = await _marketplaceService.CheckPluginCompatibilityAsync(entry.Name, _instance);
                 if (verdict.Status == MarketplaceVerificationStatus.Incompatible
-                    && System.Windows.MessageBox.Show(
+                    && AppDialog.Show(
                         Window.GetWindow(this),
                         $"“{entry.Name}”的最新版本与当前实例的 DSh 运行时不兼容：\n\n{verdict.Message}\n\n更新后实例可能无法启动。仍要继续吗？",
                         "插件依赖不兼容",
@@ -1953,7 +1953,7 @@ public partial class ExtensionWindow : UserControl
     private async void Remove_Click(object sender, RoutedEventArgs e)
     {
         if (ExtensionList.SelectedItem is not ExtensionEntry entry) return;
-        if (System.Windows.MessageBox.Show(Window.GetWindow(this), $"确定删除“{entry.Name}”？该操作只针对当前实例。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        if (AppDialog.Show(Window.GetWindow(this), $"确定删除“{entry.Name}”？该操作只针对当前实例。", "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         try
         {
             switch (entry.Kind)
@@ -2075,7 +2075,7 @@ public partial class ExtensionWindow : UserControl
         }
 
         if (_instance.RuntimeStatus == InstanceRuntimeStatus.Running
-            && System.Windows.MessageBox.Show(
+            && AppDialog.Show(
                 Window.GetWindow(this),
                 $"当前实例正在运行。批量更新 {pending.Length} 个插件可能不会立即生效（需重启实例）。是否继续？",
                 "批量更新插件",
@@ -2168,7 +2168,7 @@ public partial class ExtensionWindow : UserControl
             if (findings.Count == 0)
             {
                 StatusText.Text = "依赖自检通过：未发现核心包混入或 bundle 缺失。";
-                System.Windows.MessageBox.Show(Window.GetWindow(this),
+                AppDialog.Show(Window.GetWindow(this),
                     "依赖自检通过：未发现核心包混入或 bundle 缺失。", "依赖自检",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
@@ -2176,7 +2176,7 @@ public partial class ExtensionWindow : UserControl
 
             var errors = findings.Count(finding => finding.Level == "error");
             StatusText.Text = $"依赖自检：{findings.Count} 项发现（{errors} 项错误）。";
-            System.Windows.MessageBox.Show(Window.GetWindow(this),
+            AppDialog.Show(Window.GetWindow(this),
                 string.Join("\n\n", findings.Select(finding =>
                     $"[{(finding.Level == "error" ? "错误" : "警告")}] {finding.Message}")),
                 "依赖自检结果",
@@ -2320,6 +2320,6 @@ public partial class ExtensionWindow : UserControl
     private void ShowError(Exception ex)
     {
         StatusText.Text = ex.Message;
-        System.Windows.MessageBox.Show(Window.GetWindow(this), ex.Message, "扩展操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        AppDialog.Show(Window.GetWindow(this), ex.Message, "扩展操作失败", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

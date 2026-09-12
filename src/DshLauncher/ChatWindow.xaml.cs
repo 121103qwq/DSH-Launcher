@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
@@ -74,7 +74,7 @@ public partial class ChatWindow : Window
         catch (Exception ex)
         {
             _pageFailureReporter?.Invoke($"WebView2 环境创建失败：{ex.Message}");
-            System.Windows.MessageBox.Show(
+            AppDialog.Show(
                 this,
                 $"DeepSeek 窗口无法加载 WebView2。\n\n{ex.Message}\n\nLauncher 和 DSh 实例仍会保持运行。",
                 "DeepSeek 启动诊断",

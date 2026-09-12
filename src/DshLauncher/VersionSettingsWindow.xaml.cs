@@ -670,7 +670,7 @@ public partial class VersionSettingsWindow : UserControl
         }
 
         var lines = string.Join("\n", issues.Select(issue => "· " + issue.Detail));
-        var confirmed = System.Windows.MessageBox.Show(
+        var confirmed = AppDialog.Show(
             $"profile「{profileName}」发现 {issues.Count} 处残留：\n\n{lines}\n\n"
             + "复位会先快照，然后：移走空的 pnpm-lock.yaml、清除 allowBuilds 残留、补空 dependencies 键。\n"
             + "只动这三个配置文件，不会碰 node_modules、会话与凭据。\n\n确定要复位吗？",
@@ -753,8 +753,8 @@ public partial class VersionSettingsWindow : UserControl
         var owner = Window.GetWindow(this);
         var message = $"禁用插件 {culprit} 并正常启动实例？\n\n会先把当前配置存成回滚点，可随时恢复。";
         var confirmed = owner is null
-            ? System.Windows.MessageBox.Show(message, "禁用插件", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes
-            : System.Windows.MessageBox.Show(owner, message, "禁用插件", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+            ? AppDialog.Show(message, "禁用插件", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes
+            : AppDialog.Show(owner, message, "禁用插件", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
         if (!confirmed)
         {
             return;
@@ -924,8 +924,8 @@ public partial class VersionSettingsWindow : UserControl
         var owner = Window.GetWindow(this);
         var message = $"解除实例 {_instance.Name} 的崩溃冷却并立即重启？";
         var confirmed = owner is null
-            ? System.Windows.MessageBox.Show(message, "清冷却并重启", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes
-            : System.Windows.MessageBox.Show(owner, message, "清冷却并重启", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+            ? AppDialog.Show(message, "清冷却并重启", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes
+            : AppDialog.Show(owner, message, "清冷却并重启", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
         if (!confirmed)
         {
             return;
@@ -963,9 +963,9 @@ public partial class VersionSettingsWindow : UserControl
         var owner = Window.GetWindow(this);
         var message = $"清空实例 {_instance.Name} 的启动证据？\n\n将同时删除内存记录与落盘文件（.dsh-launcher/startup-evidence.jsonl）。";
         var confirmed = owner is null
-            ? System.Windows.MessageBox.Show(
+            ? AppDialog.Show(
                 message, "清空启动证据", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK
-            : System.Windows.MessageBox.Show(
+            : AppDialog.Show(
                 owner, message, "清空启动证据", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
         if (!confirmed)
         {
@@ -1063,9 +1063,9 @@ public partial class VersionSettingsWindow : UserControl
             : $"实例 {_instance.Name} 未运行，将清理它遗留的全部进程（可能来自上次异常退出）。\n\n继续？";
         var owner = Window.GetWindow(this);
         var confirmed = owner is null
-            ? System.Windows.MessageBox.Show(
+            ? AppDialog.Show(
                 message, "清理残留进程", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes
-            : System.Windows.MessageBox.Show(
+            : AppDialog.Show(
                 owner, message, "清理残留进程", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
         if (!confirmed)
         {
@@ -1285,7 +1285,7 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
-        if (System.Windows.MessageBox.Show(
+        if (AppDialog.Show(
                 Window.GetWindow(this),
                 $"确定删除“{entry.Name}”？该操作只针对当前版本。",
                 "确认删除",

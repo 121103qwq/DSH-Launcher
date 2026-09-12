@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using DshLauncher.Services;
@@ -202,7 +202,7 @@ internal sealed class FirstRunSetupWindow : Window
         }
         catch (ArgumentException ex)
         {
-            System.Windows.MessageBox.Show(
+            AppDialog.Show(
                 this,
                 ex.Message,
                 "安装位置无效",

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Net.Http;
@@ -379,11 +379,21 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
 
         // 删除前预扫描：attachments 对象存储带只读属性，提前告知用户会被自动清除。
-        var readOnlyCount = FileSystemCleanup.CountReadOnlyFiles(version.DshHome);
+        // 变更集 122：全盘扫描移到后台——DSH_HOME 含 node_modules，同步遍历会阻塞 UI（用户反馈“删实例会卡一下”）
+        SetBusy(true);
+        int readOnlyCount;
+        try
+        {
+            readOnlyCount = await Task.Run(() => FileSystemCleanup.CountReadOnlyFiles(version.DshHome));
+        }
+        finally
+        {
+            SetBusy(false);
+        }
         var readOnlyNotice = readOnlyCount > 0
             ? $"\n\n该版本的 attachments 等目录含 {readOnlyCount} 个只读文件，删除时会自动清除只读属性。"
             : string.Empty;
-        var result = System.Windows.MessageBox.Show(
+        var result = AppDialog.Show(
             Window.GetWindow(this),
             $"确定删除版本“{version.Name}”？\n\n这会删除该版本的 DSH_HOME、Launcher 备份和注册记录，操作无法恢复。不会删除共享的 DSh 运行目录。\n\n如果要保留配置，请先导出整合包。{readOnlyNotice}",
             "确认删除版本",
@@ -1173,7 +1183,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             return;
         }
 
-        if (System.Windows.MessageBox.Show(
+        if (AppDialog.Show(
                 Window.GetWindow(this),
                 $"确定把“{version.Name}”的配置恢复到 {snapshot.DisplayName}？\n\n恢复前会再自动创建一个回滚点；会话文件不会改变。",
                 "确认回滚版本配置",
