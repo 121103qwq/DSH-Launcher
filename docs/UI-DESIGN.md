@@ -233,6 +233,8 @@
 
 ### 高 DPI 与渲染（2026-09-13 统一，变更集 139）
 
+> ⚠️ **验证状态**：以上仅在 **125%**（本机默认，DPI 120）下实测；**150% / 200% 未验** —— 2026-09-13 用户决定跳过（本机未找到缩放设置入口，且 125% 下观感正常）。若日后在高缩放机器上发现 1px 边框不均、字形发虚或文字截断，按本节的规则排查（`UseLayoutRounding` + `SnapsToDevicePixels` 已覆盖 13 个窗口/页面根元素）。
+
 - **像素对齐**：每个窗口/页面的**根元素**都要 `UseLayoutRounding="True"` + `SnapsToDevicePixels="True"`（13 个根元素已全覆盖）；1px 描边只用整数厚度。**批量改 XAML 时识别根元素必须用 `<(Window|UserControl) `（元素名后跟空格）**——属性元素是 `<Window.Resources>`，用宽正则回退匹配会插坏 XML。
 - **DPI 感知**：项目**没有**自定义 `app.manifest` 与 DPI 属性 → 用 WPF/.NET 框架默认（**PerMonitorV2**），多显示器不同缩放时按所在屏重算。
 - **ClearType 降级范围**：**只有 `MainWindow`** 是 `AllowsTransparency="True"` + `WindowStyle="None"` 的透明窗（圆角/阴影靠透明实现）→ 其文字为灰度抗锯齿；其余窗口不透明、正常 ClearType。**结论：保留透明圆角**（视觉收益大于灰度 AA 的代价）。
