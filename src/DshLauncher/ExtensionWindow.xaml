@@ -136,6 +136,7 @@
                              Background="Transparent"
                              Foreground="{StaticResource TextBrush}"
                              SelectionChanged="ExtensionList_SelectionChanged"
+                             KeyDown="ExtensionList_KeyDown"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              VirtualizingStackPanel.IsVirtualizing="True"
                              VirtualizingStackPanel.VirtualizationMode="Recycling"

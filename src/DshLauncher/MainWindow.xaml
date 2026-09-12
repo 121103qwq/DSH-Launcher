@@ -288,7 +288,11 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
+                        <!-- 变更集 144：提示条支持悬停暂停（MouseEnter/Leave）与手动关闭（右侧 ×），
+                             自动消失时长按文字长度自适应（错误类常驻），见 MainWindow.xaml.cs 的 ShowNotice。 -->
                         <Border Visibility="{Binding PageNoticeVisibility}"
+                                MouseEnter="PageNotice_MouseEnter"
+                                MouseLeave="PageNotice_MouseLeave"
                                 Background="{StaticResource WarningBackgroundBrush}"
                                 BorderBrush="{StaticResource WarningBrush}"
                                 BorderThickness="1"
@@ -298,6 +302,7 @@
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{Binding PageNotice}"
@@ -311,6 +316,17 @@
                                         Margin="12,0,0,0"
                                         Padding="10,4"
                                         VerticalAlignment="Center" />
+                                <Button Grid.Column="2"
+                                        Style="{StaticResource PathLinkButton}"
+                                        Content="×"
+                                        FontSize="16"
+                                        Foreground="{StaticResource WarningTextBrush}"
+                                        HorizontalContentAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        Margin="12,0,4,0"
+                                        AutomationProperties.Name="关闭提示"
+                                        ToolTip="关闭提示"
+                                        Click="HideNotice_Click" />
                             </Grid>
                         </Border>
 

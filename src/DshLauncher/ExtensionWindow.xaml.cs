@@ -2056,6 +2056,20 @@ public partial class ExtensionWindow : UserControl
 
     private void ExtensionList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelection();
 
+    /// <summary>
+    /// 变更集 144：列表 Delete 快捷键 —— 等价于点「删除」按钮（复用同一流程，含二次确认）。
+    /// 守门：焦点在输入框内不抢键；未选中条目、或按钮不可用（实例运行中/内置条目）时不动。
+    /// </summary>
+    private void ExtensionList_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete) { return; }
+        if (Keyboard.FocusedElement is System.Windows.Controls.TextBox) { return; }
+        if (ExtensionList.SelectedItem is not ExtensionEntry) { return; }
+        if (!RemoveButton.IsEnabled) { return; }
+        e.Handled = true;
+        Remove_Click(RemoveButton, new RoutedEventArgs());
+    }
+
     private void UpdateSelection()
     {
         if (ExtensionList.SelectedItem is not ExtensionEntry entry)

@@ -118,6 +118,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public MainWindow()
     {
+        _noticeTimer.Tick += (_, _) => HideNotice();   // 变更集 144：提示条到点自动消失
         RecentInstancesView = new ListCollectionView(Instances)
         {
             Filter = item => item is ManagerInstance instance && _recentInstanceIds.Contains(instance.Id)
@@ -8013,6 +8014,60 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    // 变更集 144（用户口径）：提示条自动消失 —— 时长按文字长度自适应（4s + 每 30 字 1s，上限 12s）；
+    // 「失败/异常/错误/崩溃」类文案或带 detail 的提示**常驻**（读者往往要照着文案去处理）；
+    // 鼠标悬停暂停倒计时、移开按剩余时间继续；右侧 × 可手动关闭。
+    private static readonly string[] NoticePersistentKeywords = { "失败", "异常", "错误", "崩溃" };
+    private readonly DispatcherTimer _noticeTimer = new();
+    private readonly Stopwatch _noticeWatch = new();
+    private TimeSpan _noticeInterval = TimeSpan.Zero;
+    private TimeSpan _noticeRemaining = TimeSpan.Zero;
+    private bool _noticePersistent;
+
+    private static TimeSpan NoticeDuration(string message)
+    {
+        var seconds = 4 + (message.Length / 30);
+        return TimeSpan.FromSeconds(seconds > 12 ? 12 : seconds);
+    }
+
+    private void StartNoticeCountdown(TimeSpan span)
+    {
+        _noticeTimer.Stop();
+        _noticeInterval = span;
+        _noticeTimer.Interval = span > TimeSpan.Zero ? span : TimeSpan.FromMilliseconds(1);
+        _noticeWatch.Restart();
+        _noticeTimer.Start();
+    }
+
+    private void HideNotice()
+    {
+        _noticeTimer.Stop();
+        _noticeWatch.Reset();
+        _noticeRemaining = TimeSpan.Zero;
+        if (PageNoticeVisibility != Visibility.Collapsed)
+        {
+            PageNoticeVisibility = Visibility.Collapsed;
+            OnPropertyChanged(nameof(PageNoticeVisibility));
+        }
+    }
+
+    private void PageNotice_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_noticePersistent || !_noticeTimer.IsEnabled) { return; }
+        _noticeTimer.Stop();
+        _noticeRemaining = _noticeInterval - _noticeWatch.Elapsed;
+    }
+
+    private void PageNotice_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_noticePersistent || _noticeRemaining <= TimeSpan.Zero) { return; }
+        var remaining = _noticeRemaining;
+        _noticeRemaining = TimeSpan.Zero;
+        StartNoticeCountdown(remaining);
+    }
+
+    private void HideNotice_Click(object sender, RoutedEventArgs e) => HideNotice();
+
     private void ShowNotice(string message, string? detail = null)
     {
         PageNotice = message;
@@ -8025,6 +8080,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(PageNoticeVisibility));
         OnPropertyChanged(nameof(PageNoticeDetail));
         OnPropertyChanged(nameof(PageNoticeDetailVisibility));
+
+        _noticePersistent = PageNoticeDetail.Length > 0
+            || NoticePersistentKeywords.Any(keyword => message.Contains(keyword, StringComparison.Ordinal));
+        if (_noticePersistent)
+        {
+            _noticeTimer.Stop();
+            _noticeWatch.Reset();
+            _noticeRemaining = TimeSpan.Zero;
+        }
+        else
+        {
+            StartNoticeCountdown(NoticeDuration(message));
+        }
     }
 
     private void ShowStartFailure(string? detail, string fallback = "DSh 启动失败。")
