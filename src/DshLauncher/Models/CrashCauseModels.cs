@@ -31,7 +31,19 @@ public enum CrashCauseKind
     PermissionDenied,
 
     /// <summary>磁盘空间不足或文件损坏（ENOSPC/JSON 解析失败）。</summary>
-    DiskOrCorruption
+    DiskOrCorruption,
+
+    /// <summary>进程被 abort（变更集 126；本机实测退出码 134）。</summary>
+    ProcessAborted,
+
+    /// <summary>启动参数非法（变更集 126；本机实测 node 参数错退出码 9）。</summary>
+    InvalidLaunchArguments,
+
+    /// <summary>被强制结束（变更集 126；本机实测 TerminateProcess 退出码 -1）。</summary>
+    ForceKilled,
+
+    /// <summary>本机级崩溃或被系统终止（变更集 126；NTSTATUS 族负值退出码，只报原始码）。</summary>
+    NativeCrash
 }
 
 /// <summary>判定置信度：低置信不向用户下结论。</summary>
@@ -71,3 +83,31 @@ public sealed record CrashCauseInput(
     int? Port,
     bool? PortOccupied,
     bool? NodeRuntimeAvailable);
+
+/// <summary>
+/// 变更集 126：一次归因的全部命中——<see cref="Primary"/> 是规则序最前（置信最高）的主因，
+/// <see cref="Secondary"/> 是其余独立线索（同类只留最先命中、已剔除“未知”）。
+/// 通知只显示主因；次因并入崩溃记录证据与日志，用于排查时交叉验证。
+/// </summary>
+public sealed record CrashCauseReport(CrashCause Primary, IReadOnlyList<CrashCause> Secondary)
+{
+    /// <summary>次因的标签摘要（无次因时为空串）。</summary>
+    public string SecondarySummary
+    {
+        get
+        {
+            if (Secondary.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var labels = new string[Secondary.Count];
+            for (var index = 0; index < Secondary.Count; index++)
+            {
+                labels[index] = Secondary[index].Label;
+            }
+
+            return string.Join("；", labels);
+        }
+    }
+}

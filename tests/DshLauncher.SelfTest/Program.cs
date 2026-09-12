@@ -2356,6 +2356,49 @@ Check("skill-market/来源选项：既无配置也无条目时只有“全部来
     SkillMarketQuery.BuildSourceChoices(Array.Empty<MarketSourceSetting>(), Array.Empty<SkillMarketItem>())
         is [{ Tag: "", Selectable: true, Label: "全部来源（0 个技能）" }, { Selectable: false }]);
 
+// 变更集 126：崩溃归因——退出码专项映射（只用本机实测码）+ 多因复合
+static CrashCauseInput CrashProbe(int? exitCode, params string[] logLines) => new(
+    exitCode,
+    logLines.Select(text => new InstanceLogLine(DateTimeOffset.UnixEpoch, "dsh", text)).ToArray(),
+    Array.Empty<StartupEvidence>(),
+    null,
+    null,
+    null,
+    true);
+Check("crash/退出码 0：正常退出",
+    CrashCauseClassifier.Classify(CrashProbe(0)) is { Kind: CrashCauseKind.NormalExit });
+Check("crash/退出码 134：进程被中止（本机实测码）",
+    CrashCauseClassifier.Classify(CrashProbe(134)) is
+        { Kind: CrashCauseKind.ProcessAborted, Confidence: CrashConfidence.High });
+Check("crash/退出码 9：启动参数非法（本机实测码）",
+    CrashCauseClassifier.Classify(CrashProbe(9)) is
+        { Kind: CrashCauseKind.InvalidLaunchArguments, Confidence: CrashConfidence.High });
+Check("crash/退出码 -1：被强制结束（本机实测码）",
+    CrashCauseClassifier.Classify(CrashProbe(-1)) is
+        { Kind: CrashCauseKind.ForceKilled, Confidence: CrashConfidence.Medium });
+Check("crash/负值退出码：本机级崩溃，且只报原始码不下具体结论",
+    CrashCauseClassifier.Classify(CrashProbe(unchecked((int)0xC0000005))) is
+        { Kind: CrashCauseKind.NativeCrash, Evidence: var ntEvidence }
+    && ntEvidence.Contains("0xC0000005", StringComparison.OrdinalIgnoreCase));
+Check("crash/退出码 1：仍标未知（node 通用失败码，单看码不下结论）",
+    CrashCauseClassifier.Classify(CrashProbe(1)) is
+        { Kind: CrashCauseKind.Unknown, Confidence: CrashConfidence.Low, IsConfident: false });
+Check("crash/优先级：日志签名胜过退出码（主因仍是端口占用）",
+    CrashCauseClassifier.Classify(CrashProbe(134, "Error: listen EADDRINUSE: address already in use :::8787")) is
+        { Kind: CrashCauseKind.PortInUse, Confidence: CrashConfidence.High });
+var crashReport = CrashCauseClassifier.ClassifyAll(CrashProbe(
+    134,
+    "Error: listen EADDRINUSE: address already in use :::8787",
+    "ENOSPC: no space left on device, write"));
+Check("crash/多因复合：主因 + 次因（磁盘与退出码线索都在）",
+    crashReport.Primary.Kind == CrashCauseKind.PortInUse
+    && crashReport.Secondary.Any(cause => cause.Kind == CrashCauseKind.DiskOrCorruption)
+    && crashReport.Secondary.Any(cause => cause.Kind == CrashCauseKind.ProcessAborted)
+    && crashReport.SecondarySummary.Contains("磁盘", StringComparison.Ordinal),
+    string.Join(" | ", crashReport.Secondary.Select(cause => cause.Kind.ToString())));
+Check("crash/单一命中时没有次因",
+    CrashCauseClassifier.ClassifyAll(CrashProbe(134)).Secondary.Count == 0);
+
 try
 {
     Directory.Delete(scratch, recursive: true);

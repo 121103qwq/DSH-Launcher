@@ -1305,8 +1305,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var evidenceSnapshot = _startupEvidence.Snapshot(instance.Id).Take(5).ToArray();
         var resourceSnapshot = _watchdog.GetResource(instance.Id);
 
-        // 归因：签名规则 + 轻量探针（端口占用 / Node 可用）；低置信一律标未知。
-        var cause = CrashCauseClassifier.Classify(new CrashCauseInput(
+        // 归因（变更集 126）：签名规则 + 轻量探针（端口占用 / Node 可用）+ 退出码专项映射；
+        // 主因＝规则序最前，其余独立线索作为次因并入崩溃记录与日志（通知只显示主因）。
+        var report = CrashCauseClassifier.ClassifyAll(new CrashCauseInput(
             exitCode,
             tailLog,
             evidenceSnapshot,
@@ -1314,6 +1315,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             instance.Port,
             CrashCauseClassifier.ProbePortOccupied(instance.Port),
             _nodeRuntime.IsAvailable));
+        var cause = report.Primary;
 
         var logs = tailLog
             .Select(line => $"{line.At:HH:mm:ss} [{line.Source}] {line.Text}")
@@ -1337,7 +1339,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 Resource = resource,
                 Cause = cause.Label,
                 CauseConfidence = cause.Confidence.ToString(),
-                CauseEvidence = cause.Evidence,
+                CauseEvidence = report.SecondarySummary.Length == 0
+                    ? cause.Evidence
+                    : $"{cause.Evidence}；另有线索：{report.SecondarySummary}",
                 Advice = cause.Advice,
                 ActionKey = cause.ActionKey
             });
@@ -1347,6 +1351,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             exitCode,
             cause = cause.Kind.ToString(),
             confidence = cause.Confidence.ToString(),
+            secondary = report.Secondary.Count == 0
+                ? null
+                : string.Join(",", report.Secondary.Select(item => item.Kind.ToString())),
             decision = plan.Decision.ToString(),
             attempt = plan.Attempt,
             limit = plan.Limit
