@@ -2305,6 +2305,35 @@ Check("ui-plugin/未启用 TUI 扫描：无已启用提供者时标记为需启�
     InstanceUiPluginScanner.Classify("dsh-ssh-tui", "0.4.0", new[] { "tui" }, Array.Empty<string>(), false)
         is { Kind: UiPluginKind.Tui, Enabled: false });
 
+// 变更集 123：Agent 页（技能市场）排序 / 来源筛选——纯函数 SkillMarketQuery.Apply
+var skillSamples = new[]
+{
+    new SkillMarketItem("acme/skills", "alpha", "第一个技能", 5, "main",
+        new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero), true, Category: "开发"),
+    new SkillMarketItem("acme/skills", "beta", "第二个技能", 50, "main",
+        new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero), true, Category: "文档"),
+    new SkillMarketItem("other/pack", "gamma", "第三个技能", 10, "main",
+        new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero), true, Category: "开发")
+};
+static string SkillNames(IReadOnlyList<SkillMarketItem> list) =>
+    string.Join(",", list.Select(item => item.Name));
+Check("skill-market/综合排序：保持服务返回顺序",
+    SkillNames(SkillMarketQuery.Apply(skillSamples, null, null, null, "Relevance")) == "alpha,beta,gamma");
+Check("skill-market/热门：按 Star 降序",
+    SkillNames(SkillMarketQuery.Apply(skillSamples, null, null, null, "Stars")) == "beta,gamma,alpha");
+Check("skill-market/最近更新：按 UpdatedAt 降序",
+    SkillNames(SkillMarketQuery.Apply(skillSamples, null, null, null, "UpdatedAt")) == "gamma,beta,alpha");
+Check("skill-market/来源：按配置的仓库（owner/repo）筛选",
+    SkillNames(SkillMarketQuery.Apply(skillSamples, null, null, "acme/skills", null)) == "alpha,beta");
+Check("skill-market/来源：兼容完整 URL 形态",
+    SkillNames(SkillMarketQuery.Apply(skillSamples, null, null, "https://github.com/other/pack", null)) == "gamma");
+Check("skill-market/分类与搜索词仍然生效",
+    SkillNames(SkillMarketQuery.Apply(skillSamples, "开发", null, null, null)) == "alpha,gamma"
+    && SkillNames(SkillMarketQuery.Apply(skillSamples, null, "第二个", null, null)) == "beta");
+Check("skill-market/不筛选时返回全量（含未知排序键回退）",
+    SkillMarketQuery.Apply(skillSamples, null, null, null, null).Count == 3
+    && SkillMarketQuery.Apply(skillSamples, null, null, null, "Unknown").Count == 3);
+
 try
 {
     Directory.Delete(scratch, recursive: true);

@@ -179,15 +179,13 @@ public partial class ExtensionWindow : UserControl
     {
         var query = SkillMarketSearchBox.Text.Trim();
         var category = (SkillMarketCategoryList.SelectedItem as ListBoxItem)?.Tag?.ToString() ?? string.Empty;
+        // 变更集 123：Agent 页也支持「来源 / 排序」（与扩展页对齐；来源取设置页为 Skill 配的仓库）
+        var sourceFilter = (SkillMarketSourceBox?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
+        var sortKey = (SkillMarketSortBox?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Relevance";
         var instanceStopped = _instance.RuntimeStatus != InstanceRuntimeStatus.Running
             && _instance.RuntimeOwnership == InstanceRuntimeOwnership.None;
-        var rendered = items
-            .Where(item => string.IsNullOrWhiteSpace(category)
-                || string.Equals(item.Category, category, StringComparison.Ordinal))
-            .Where(item => string.IsNullOrWhiteSpace(query)
-                || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || item.Repository.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || (item.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+        var filtered = SkillMarketQuery.Apply(items, category, query, sourceFilter, sortKey);
+        var rendered = filtered
             .Select(item => new SkillMarketItemViewModel(
                 item,
                 instanceStopped,
@@ -206,8 +204,52 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
+    /// <summary>变更集 123：Agent 页的来源下拉——列出设置页为 Skill 配置的市场源（仓库），默认“全部来源”。</summary>
+    private void RefreshSkillMarketSourceChoices()
+    {
+        if (SkillMarketSourceBox is null)
+        {
+            return;
+        }
+
+        var previous = (SkillMarketSourceBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? string.Empty;
+        var choices = new List<ComboBoxItem> { new() { Content = "全部来源", Tag = string.Empty } };
+        try
+        {
+            foreach (var entry in new MarketSourceSettingsService().ReadEntries(MarketSourceKind.Skill))
+            {
+                choices.Add(new ComboBoxItem
+                {
+                    Content = entry.Enabled ? entry.Value : entry.Value + "（已停用）",
+                    Tag = entry.Value
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            LauncherLog.Warn("读取 Skill 市场源失败：" + ex.Message);
+        }
+
+        SkillMarketSourceBox.ItemsSource = choices;
+        SkillMarketSourceBox.SelectedItem = choices.FirstOrDefault(item =>
+            string.Equals(item.Tag?.ToString(), previous, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+    }
+
+    private void SkillMarketFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // 防初始化期误触发：SelectedIndex="0" 会在 InitializeComponent 阶段就引发本事件，
+        // 此时同页其它控件（搜索框/分类/列表）还没构造，直接渲染会 NRE（变更集 123 修）。
+        if (!IsLoaded || SkillMarketSearchBox is null || SkillMarketCategoryList is null || SkillMarketList is null)
+        {
+            return;
+        }
+
+        RenderSkillMarketItems(_skillMarketSnapshot);
+    }
+
     private async Task RefreshSkillMarketAsync()
     {
+        RefreshSkillMarketSourceChoices();
         if (_skillMarketService is null || _isSkillMarketLoading)
         {
             return;

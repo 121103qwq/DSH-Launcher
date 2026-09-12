@@ -639,6 +639,30 @@
                         <ListBoxItem Tag="Agent">Agent</ListBoxItem>
                         <ListBoxItem Tag="其他">其他</ListBoxItem>
                     </ListBox>
+                    <TextBlock Text="排序"
+                               Foreground="{StaticResource MutedBrush}"
+                               VerticalAlignment="Center"
+                               Margin="18,0,8,0" />
+                    <ComboBox x:Name="SkillMarketSortBox"
+                              Width="132"
+                              Height="34"
+                              SelectedIndex="0"
+                              ToolTip="排序方式"
+                              SelectionChanged="SkillMarketFilter_SelectionChanged">
+                        <ComboBoxItem Tag="Relevance">综合排序</ComboBoxItem>
+                        <ComboBoxItem Tag="Stars">热门（Star）</ComboBoxItem>
+                        <ComboBoxItem Tag="UpdatedAt">最近更新</ComboBoxItem>
+                    </ComboBox>
+                    <TextBlock Text="来源"
+                               Foreground="{StaticResource MutedBrush}"
+                               VerticalAlignment="Center"
+                               Margin="18,0,8,0" />
+                    <ComboBox x:Name="SkillMarketSourceBox"
+                              Width="168"
+                              Height="34"
+                              SelectedIndex="0"
+                              ToolTip="按“设置 / 诊断 → 市场源”里为 Skill 配置的仓库筛选"
+                              SelectionChanged="SkillMarketFilter_SelectionChanged" />
                 </StackPanel>
 
                 <ListBox Grid.Row="3"
