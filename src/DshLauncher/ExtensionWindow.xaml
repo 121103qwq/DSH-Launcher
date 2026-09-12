@@ -319,7 +319,7 @@
                                     <Setter Property="HorizontalContentAlignment" Value="Center" />
                                     <Style.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
-                                            <Setter Property="Background" Value="#E3F0FD" />
+                                            <Setter Property="Background" Value="{StaticResource HighlightSurfaceBrush}" />
                                             <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                                         </Trigger>
                                     </Style.Triggers>
@@ -426,7 +426,7 @@
                                         </Grid.ColumnDefinitions>
                                         <Border Width="36"
                                                 Height="36"
-                                                Background="#E2EFFB"
+                                                Background="{StaticResource HighlightSurfaceBrush}"
                                                 CornerRadius="{StaticResource ItemCornerRadius}"
                                                 VerticalAlignment="Top">
                                             <Grid>
@@ -625,7 +625,7 @@
                                 <Setter Property="HorizontalContentAlignment" Value="Center" />
                                 <Style.Triggers>
                                     <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="#E3F0FD" />
+                                        <Setter Property="Background" Value="{StaticResource HighlightSurfaceBrush}" />
                                         <Setter Property="Foreground" Value="{StaticResource BlueBrush}" />
                                     </Trigger>
                                 </Style.Triggers>

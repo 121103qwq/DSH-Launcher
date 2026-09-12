@@ -78,7 +78,7 @@
                             Margin="0,0,0,12"
                             Visibility="Collapsed">
                         <TextBlock x:Name="WarningText"
-                                   Foreground="#8B5A12"
+                                   Foreground="{StaticResource WarningTextBrush}"
                                    FontSize="11"
                                    TextWrapping="Wrap" />
                     </Border>
@@ -108,7 +108,7 @@
                                                                FontSize="13"
                                                                VerticalAlignment="Center"
                                                                Margin="8,0,0,0" />
-                                                    <Border Background="#EAF2FE"
+                                                    <Border Background="{StaticResource PageBrush}"
                                                             BorderBrush="{StaticResource BlueBrush}"
                                                             BorderThickness="1"
                                                             CornerRadius="3"
@@ -118,7 +118,7 @@
                                                                    Foreground="{StaticResource BlueDarkBrush}"
                                                                    FontSize="11" />
                                                     </Border>
-                                                    <Border Background="#F4F5F7"
+                                                    <Border Background="{StaticResource NeutralSurfaceBrush}"
                                                             BorderBrush="{StaticResource LineBrush}"
                                                             BorderThickness="1"
                                                             CornerRadius="3"

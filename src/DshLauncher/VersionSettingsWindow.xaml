@@ -774,7 +774,7 @@
                 </StackPanel>
 
                 <TextBlock x:Name="VersionRequiredText"
-                           Foreground="#B86D1D"
+                           Foreground="{StaticResource WarningTextBrush}"
                            TextWrapping="Wrap"
                            Margin="0,18,0,0"
                            Visibility="Collapsed" />

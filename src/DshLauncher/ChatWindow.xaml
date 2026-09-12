@@ -11,7 +11,7 @@
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True"
         Topmost="False"
-        Background="#F4F8FC"
+        Background="{StaticResource InfoSurfaceBrush}"
         Loaded="Window_OnLoaded">
     <Grid>
         <wv2:WebView2 x:Name="Browser" />

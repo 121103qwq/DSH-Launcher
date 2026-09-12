@@ -24,13 +24,10 @@
 - [ ] 图标与文字的间距令牌化（当前 6/7/9px 混用）
 
 ### 1.2 颜色令牌
-- [ ] 清除散落硬编码（2026-09-09 扫描）：
-  - `MainWindow.xaml` 标题栏 `#55FFFFFF` / `#80FFFFFF`、提醒条 `#FFF4DF` / `#8B5A12`、边框 `#D6E4F1`
-  - `VersionSettingsWindow.xaml:494` 警告文字 `#B86D1D`
-  - `ChatWindow.xaml:14` 背景 `#F4F8FC`
-  - `ExtensionWindow.xaml:419` 高亮背景 `#E2EFFB`
-- [ ] 新增缺失令牌：`TitleBarChromeBrush`/`TitleBarChromeHoverBrush`、`WarningTextBrush`、`InfoSurfaceBrush`、`HighlightSurfaceBrush`
-- [ ] 复核 App.xaml 令牌表：命名统一（`*Brush`）、语义色成对（前景/背景）
+- [x] 清除散落硬编码（**2026-09-13 完成，变更集 127 / work-log/118**）：实测 **38 处 / 7 个文件**（不是 2026-09-09 记的 8 处），全部收敛进 `App.xaml`
+- [x] 新增缺失令牌（**2026-09-13**，共 16 个）：`TitleBarChromeBrush`/`TitleBarChromeBorderBrush`/`TitleBarChromeHoverBrush`/`TitleBarChromePressedBrush`/`TitleBarCloseHoverBrush`、`DangerSurfaceBrush`/`SuccessSurfaceBrush`/`SuccessBorderBrush`/`InfoSurfaceBrush`/`HighlightSurfaceBrush`/`NeutralSurfaceBrush`、`StatusIdleBrush`、`EmptyStateGradientStartColor`/`EmptyStateGradientEndColor`（Color 型）+ `EmptyStateAccentBrush`/`EmptyStateAccentSoftBrush`；`WarningTextBrush` 等既有令牌改为被真实引用
+- [x] 复核 App.xaml 令牌表（**2026-09-13**）：命名统一（画刷 `*Brush`、颜色 `*Color`）、语义色成对；`docs/UI-DESIGN.md` 颜色表同步
+- [x] 硬化 harness 断言（**2026-09-13**）：旧的「8 色白名单」断言升级为**全量门禁**——遍历 `src/DshLauncher/**/*.xaml`，断言 `App.xaml` 之外无颜色字面量
 
 ### 1.3 字体与层级
 - [ ] `ExtensionWindow.xaml:494` 存在 `FontSize="10"`（低于规范 11px 下限）→ 提到 11 或删
@@ -104,11 +101,17 @@ grep -rn 'Text="[←→▶◀⌄◇✦☷⚙—□×▣✕✓]"' --include=*.xam
 grep -rn 'Width="[2-9][0-9][0-9]"' --include=*.xaml src/DshLauncher
 ```
 
-- 字号：`ExtensionWindow.xaml:494` 一处 10px
-- 硬编码颜色：8 处（见 1.2）
-- 图标字符：`MainWindow` 标题栏/导航/启动按钮 + `VersionSettingsWindow` 页签，共 11 种符号
-- 固定列宽：对话表 6 列、扩展侧栏 2 处
-- 内嵌页 2 个 / 独立窗口 4 个，返回交互不统一
+> **复核（2026-09-13，master `15eb116` / 变更集 126 之后）——以下为实测数字，上方 2026-09-09 的旧数字作废。**
+
+- **字号**：全仓 XAML `FontSize` 共 **181 处**，偏离规范阶梯 **26 处**——`10px` **2 处**（`ExtensionWindow.xaml:504`、`MainWindow.xaml:241`，低于 11px 下限）、`16px` 15 处、`17px` 2 处、`21px` 2 处、`13/14/22/28/30px` 各 1 处
+- **硬编码颜色**：**38 处 / 7 个文件**（已排除 App.xaml 的令牌定义）——`MainWindow.xaml` 22、`PluginMatrixWindow.xaml` 6、`EnvironmentScanWindow.xaml` 3、`ExtensionWindow.xaml` 3、`VersionControlWindow.xaml` 2、`ChatWindow.xaml` 1、`VersionSettingsWindow.xaml` 1
+- **图标字符**：**11 种 / 12 处**（`▶`×2、`←`、`⌄`、`▾`、`◇`、`✦`、`☷`、`⚙`、`—`、`□`、`×`）
+- **固定宽度 ≥200**：**22 处**（对话表 6 列、扩展侧栏、日志中心、各内嵌页左栏 320、模态窗 430/660/680 等）
+- **窗口框架**：**独立窗口 5 个**（`MainWindow`/`ChatWindow`/`NewVersionWindow`/`PackImportWindow`/`VersionSwitchWindow`）+ **内嵌页 8 个**（`Conversation`/`EnvironmentScan`/`Extension`/`LauncherTask`/`LogCenter`/`PluginMatrix`/`VersionControl`/`VersionSettings`），返回/关闭交互不统一
+- **资源引用**：`StaticResource` 549 处、`Binding` 184 处、`TemplateBinding` 46 处、**`DynamicResource` 0 处** —— 1.12 的「主题色 5 选 / 深色模式」必须先决定：把需要换肤的令牌改成 `DynamicResource`，还是整字典替换
+- **令牌表**：`App.xaml` 现 34 个键；1.2 里点名的 `WarningTextBrush`/`DangerTextBrush`/`InfoBackgroundBrush`/`WarningBackgroundBrush`/`HoverSurfaceBrush` **都已存在**，真正缺的是 `TitleBarChromeBrush`/`TitleBarChromeHoverBrush`/`InfoSurfaceBrush`/`HighlightSurfaceBrush`
+- **高 DPI**：仓库内**没有 `app.manifest`**，csproj 也无 DPI 相关属性 → 走 WPF 默认；125%/150%/200% 的实际表现**待截图实测**（1.11）
+- **截图/UI 断言工具链（可复用，不必新建）**：`_verify-p0/func-check/uia.ps1` 提供 UIA 查找 + 截图；harness 已有 `p1/ui: 设计令牌齐备 + CheckBox/ProgressBar 自定义样式` 与字号契约断言（`_verify-p0/Program.cs` 约 2624/2632 行），本轮在其上扩展
 
 ## 3. 验收方式
 
@@ -123,3 +126,5 @@ grep -rn 'Width="[2-9][0-9][0-9]"' --include=*.xaml src/DshLauncher
 |---|---|
 | 2026-09-09 | 建立本待办（变更集 56 后挂起）：扫描出 10px 字号 1 处、硬编码颜色 8 处、图标字符 11 种、固定列宽 8 处 |
 | 2026-09-11 | 新增 1.13 下拉/右键菜单外观与层级（触发点：「导入实例」下拉加入「导入整合包」后需与整体风格统一） |
+| 2026-09-13 | **变更集 127（UI 统一 A：颜色令牌化）**：38 处硬编码颜色 → 16 个新令牌；harness 门禁升级为全量；前后截图逐像素对比（25 张）无布局回归 |
+| 2026-09-13 | 动手前复核：旧扫描数字作废（颜色 8→**38** 处、字号 1→**26** 处偏离阶梯、固定宽 →**22** 处、窗口 4+2→**5 窗口 + 8 内嵌页**）；补测 `DynamicResource` **0 处**、令牌表 34 键与真实缺项——已写入上方第 2 节 |

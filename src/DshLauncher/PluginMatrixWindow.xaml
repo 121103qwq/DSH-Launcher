@@ -35,13 +35,13 @@
                     </StackPanel>
                 </Grid>
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
-                    <Border Background="#E7F6EC" BorderBrush="#2E7D32" BorderThickness="1" CornerRadius="3" Padding="7,2">
-                        <TextBlock Text="已启用" Foreground="#1B5E20" FontSize="11" />
+                    <Border Background="{StaticResource SuccessSurfaceBrush}" BorderBrush="{StaticResource SuccessBorderBrush}" BorderThickness="1" CornerRadius="3" Padding="7,2">
+                        <TextBlock Text="已启用" Foreground="{StaticResource SuccessTextBrush}" FontSize="11" />
                     </Border>
-                    <Border Background="#FFF9EA" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="3" Padding="7,2" Margin="8,0,0,0">
-                        <TextBlock Text="已装未启用" Foreground="#8B5A12" FontSize="11" />
+                    <Border Background="{StaticResource WarningBackgroundBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" CornerRadius="3" Padding="7,2" Margin="8,0,0,0">
+                        <TextBlock Text="已装未启用" Foreground="{StaticResource WarningTextBrush}" FontSize="11" />
                     </Border>
-                    <Border Background="#F4F5F7" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="3" Padding="7,2" Margin="8,0,0,0">
+                    <Border Background="{StaticResource NeutralSurfaceBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="3" Padding="7,2" Margin="8,0,0,0">
                         <TextBlock Text="未安装" Foreground="{StaticResource MutedBrush}" FontSize="11" />
                     </Border>
                     <TextBlock x:Name="StatusText"

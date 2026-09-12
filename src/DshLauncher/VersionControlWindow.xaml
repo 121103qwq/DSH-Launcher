@@ -55,7 +55,7 @@
                                 <Setter Property="BorderThickness" Value="1" />
                                 <Style.Triggers>
                                     <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="#E3F0FD" />
+                                        <Setter Property="Background" Value="{StaticResource HighlightSurfaceBrush}" />
                                         <Setter Property="BorderBrush" Value="{StaticResource BlueBrush}" />
                                     </Trigger>
                                 </Style.Triggers>
@@ -73,7 +73,7 @@
                                             <ColumnDefinition Width="32" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <Border Width="26" Height="26" Background="#DCECFB" CornerRadius="{StaticResource ItemCornerRadius}">
+                                        <Border Width="26" Height="26" Background="{StaticResource HighlightSurfaceBrush}" CornerRadius="{StaticResource ItemCornerRadius}">
                                             <TextBlock Text="D" Foreground="{StaticResource BlueBrush}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="8,0,0,0">

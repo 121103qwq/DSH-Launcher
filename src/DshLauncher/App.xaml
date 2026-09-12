@@ -26,6 +26,28 @@
         <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#F8FBFE" />
         <SolidColorBrush x:Key="HoverSurfaceBrush" Color="#F7FAFD" />
 
+        <!-- 标题栏 chrome（原 MainWindow 里散落的白色叠加） -->
+        <SolidColorBrush x:Key="TitleBarChromeBrush" Color="#55FFFFFF" />
+        <SolidColorBrush x:Key="TitleBarChromeBorderBrush" Color="#80FFFFFF" />
+        <SolidColorBrush x:Key="TitleBarChromeHoverBrush" Color="#80FFFFFF" />
+        <SolidColorBrush x:Key="TitleBarChromePressedBrush" Color="#B3FFFFFF" />
+        <SolidColorBrush x:Key="TitleBarCloseHoverBrush" Color="#CE2111" />
+
+        <!-- 语义面（原散落各页的浅色底/描边） -->
+        <SolidColorBrush x:Key="DangerSurfaceBrush" Color="#FEF3F2" />
+        <SolidColorBrush x:Key="SuccessSurfaceBrush" Color="#E7F6EC" />
+        <SolidColorBrush x:Key="SuccessBorderBrush" Color="#2E7D32" />
+        <SolidColorBrush x:Key="InfoSurfaceBrush" Color="#F4F8FC" />
+        <SolidColorBrush x:Key="HighlightSurfaceBrush" Color="#E3F0FD" />
+        <SolidColorBrush x:Key="NeutralSurfaceBrush" Color="#F4F5F7" />
+        <SolidColorBrush x:Key="StatusIdleBrush" Color="#96A3B5" />
+
+        <!-- 空态插画（MainWindow 无实例引导；GradientStop 需要 Color 类型） -->
+        <Color x:Key="EmptyStateGradientStartColor">#4890F5</Color>
+        <Color x:Key="EmptyStateGradientEndColor">#96C0F9</Color>
+        <SolidColorBrush x:Key="EmptyStateAccentBrush" Color="#7FB2F9" />
+        <SolidColorBrush x:Key="EmptyStateAccentSoftBrush" Color="#C6DCFC" />
+
         <!-- 圆角/间距 token（规范见 docs/UI-DESIGN.md） -->
         <CornerRadius x:Key="CardCornerRadius">12</CornerRadius>
         <CornerRadius x:Key="PanelCornerRadius">10</CornerRadius>

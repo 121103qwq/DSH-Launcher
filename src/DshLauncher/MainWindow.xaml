@@ -42,10 +42,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#55FFFFFF" />
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource TitleBarChromeBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#B3FFFFFF" />
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource TitleBarChromePressedBrush}" />
                             </Trigger>
                             <!-- 关闭按钮：Tag=Close，悬停红色警示（PCL 式） -->
                             <MultiDataTrigger>
@@ -53,7 +53,7 @@
                                     <Condition Binding="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Value="Close" />
                                     <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource TemplatedParent}}" Value="True" />
                                 </MultiDataTrigger.Conditions>
-                                <Setter TargetName="Chrome" Property="Background" Value="#CE2111" />
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource TitleBarCloseHoverBrush}" />
                             </MultiDataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -75,7 +75,7 @@
     <Border x:Name="AppRootBorder"
             Margin="4"
             Background="{StaticResource PageBrush}"
-            BorderBrush="#D6E4F1"
+            BorderBrush="{StaticResource LineBrush}"
             BorderThickness="1"
             CornerRadius="18">
             <Grid>
@@ -110,8 +110,8 @@
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center"
                             Foreground="White"
-                            Background="#55FFFFFF"
-                            BorderBrush="#80FFFFFF"
+                            Background="{StaticResource TitleBarChromeBrush}"
+                            BorderBrush="{StaticResource TitleBarChromeBorderBrush}"
                             BorderThickness="1"
                             Cursor="Hand"
                             Visibility="Collapsed"
@@ -129,10 +129,10 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="BackChrome" Property="Background" Value="#80FFFFFF" />
+                                        <Setter TargetName="BackChrome" Property="Background" Value="{StaticResource TitleBarChromeHoverBrush}" />
                                     </Trigger>
                                     <Trigger Property="IsPressed" Value="True">
-                                        <Setter TargetName="BackChrome" Property="Background" Value="#B3FFFFFF" />
+                                        <Setter TargetName="BackChrome" Property="Background" Value="{StaticResource TitleBarChromePressedBrush}" />
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -150,8 +150,8 @@
                             Height="44"
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center"
-                            Background="#55FFFFFF"
-                            BorderBrush="#80FFFFFF"
+                            Background="{StaticResource TitleBarChromeBrush}"
+                            BorderBrush="{StaticResource TitleBarChromeBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="{StaticResource PanelCornerRadius}"
                             ClipToBounds="True"
@@ -290,7 +290,7 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                         <Border Visibility="{Binding PageNoticeVisibility}"
-                                Background="#FFF4DF"
+                                Background="{StaticResource WarningBackgroundBrush}"
                                 BorderBrush="{StaticResource WarningBrush}"
                                 BorderThickness="1"
                                 CornerRadius="9"
@@ -302,7 +302,7 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{Binding PageNotice}"
-                                           Foreground="#8B5A12"
+                                           Foreground="{StaticResource WarningTextBrush}"
                                            TextWrapping="Wrap"
                                            VerticalAlignment="Center" />
                                 <Button Grid.Column="1"
@@ -354,12 +354,12 @@
                                                     SnapsToDevicePixels="True"
                                                     UseLayoutRounding="True">
                                                 <TextBlock Text="安全模式"
-                                                           Foreground="#8B5A12"
+                                                           Foreground="{StaticResource WarningTextBrush}"
                                                            FontSize="12"
                                                            FontWeight="SemiBold" />
                                             </Border>
                                             <Border Visibility="{Binding SelectedInstanceCooldownVisibility}"
-                                                    Background="#FEF3F2"
+                                                    Background="{StaticResource DangerSurfaceBrush}"
                                                     BorderBrush="{StaticResource DangerBrush}"
                                                     BorderThickness="1"
                                                     CornerRadius="{StaticResource PanelCornerRadius}"
@@ -420,7 +420,7 @@
                                     </Grid>
                                     <Grid Grid.Row="1" Margin="0,16,0,0">
                                         <StackPanel VerticalAlignment="Center" Visibility="{Binding NoInstancesVisibility}">
-                                            <Border Width="58" Height="58" Background="#EAF2FE" CornerRadius="18" HorizontalAlignment="Center">
+                                            <Border Width="58" Height="58" Background="{StaticResource PageBrush}" CornerRadius="18" HorizontalAlignment="Center">
                                                 <TextBlock Text="＋" Foreground="{StaticResource BlueBrush}" FontSize="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                             </Border>
                                             <TextBlock Text="尚未创建 DSh 版本"
@@ -701,13 +701,13 @@
                                                             <Ellipse Width="9" Height="9" VerticalAlignment="Top" Margin="0,5,0,0">
                                                                 <Ellipse.Style>
                                                                     <Style TargetType="Ellipse">
-                                                                        <Setter Property="Fill" Value="#96A3B5" />
+                                                                        <Setter Property="Fill" Value="{StaticResource StatusIdleBrush}" />
                                                                         <Style.Triggers>
                                                                             <DataTrigger Binding="{Binding RuntimeStatus}" Value="Running">
-                                                                                <Setter Property="Fill" Value="#2EA66B" />
+                                                                                <Setter Property="Fill" Value="{StaticResource GreenBrush}" />
                                                                             </DataTrigger>
                                                                             <DataTrigger Binding="{Binding RuntimeStatus}" Value="Error">
-                                                                                <Setter Property="Fill" Value="#D94A4A" />
+                                                                                <Setter Property="Fill" Value="{StaticResource DangerBrush}" />
                                                                             </DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
@@ -730,13 +730,13 @@
                                                 <Ellipse Width="112" Height="112" HorizontalAlignment="Left" VerticalAlignment="Top">
                                                     <Ellipse.Fill>
                                                         <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                            <GradientStop Color="#4890F5" Offset="0" />
-                                                            <GradientStop Color="#96C0F9" Offset="1" />
+                                                            <GradientStop Color="{StaticResource EmptyStateGradientStartColor}" Offset="0" />
+                                                            <GradientStop Color="{StaticResource EmptyStateGradientEndColor}" Offset="1" />
                                                         </LinearGradientBrush>
                                                     </Ellipse.Fill>
                                                 </Ellipse>
-                                                <Ellipse Width="34" Height="34" HorizontalAlignment="Right" VerticalAlignment="Bottom" Fill="#7FB2F9" Margin="8,0,16,10" />
-                                                <Ellipse Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Bottom" Fill="#C6DCFC" Margin="30,0,0,2" />
+                                                <Ellipse Width="34" Height="34" HorizontalAlignment="Right" VerticalAlignment="Bottom" Fill="{StaticResource EmptyStateAccentBrush}" Margin="8,0,16,10" />
+                                                <Ellipse Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Bottom" Fill="{StaticResource EmptyStateAccentSoftBrush}" Margin="30,0,0,2" />
                                                 <Path Data="M 8,0 L 8,58 L 78,58" Stroke="White" StrokeThickness="5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="24,0,0,0" Opacity="0.92" />
                                                 <TextBlock Text="DSH" FontSize="24" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-6,16,0" Opacity="0.95" />
                                             </Grid>

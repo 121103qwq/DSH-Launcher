@@ -30,8 +30,13 @@
 | `SuccessTextBrush` / `DangerTextBrush` / `DangerBrush` | #25875A / #A25A54 / #B42318 | 成功文字/危险文字/危险操作 |
 | `WarningBrush` / `WarningBackgroundBrush` | #F1C26B / #FFF9EA | 警告描边/警告底 |
 | `GreenBrush` | #2EA66B | 状态点（成功） |
+| `StatusIdleBrush` | #96A3B5 | 状态点（空闲/未知） |
+| `DangerSurfaceBrush` / `SuccessSurfaceBrush` / `SuccessBorderBrush` | #FEF3F2 / #E7F6EC / #2E7D32 | 危险底/成功底/成功描边 |
+| `InfoSurfaceBrush` / `HighlightSurfaceBrush` / `NeutralSurfaceBrush` | #F4F8FC / #E3F0FD / #F4F5F7 | 信息底/高亮底/中性底 |
+| `TitleBarChromeBrush` / `TitleBarChromeBorderBrush` / `TitleBarChromeHoverBrush` / `TitleBarChromePressedBrush` / `TitleBarCloseHoverBrush` | #55FFFFFF / #80FFFFFF / #80FFFFFF / #B3FFFFFF / #CE2111 | 标题栏按钮常态/描边/悬停/按下/关闭悬停 |
+| `EmptyStateGradientStartColor` / `EmptyStateGradientEndColor`（Color） + `EmptyStateAccentBrush` / `EmptyStateAccentSoftBrush` | #4890F5 / #96C0F9 / #7FB2F9 / #C6DCFC | 空态插画（GradientStop 需 Color 型） |
 
-> **禁止**在窗口 XAML 里硬编码上述语义色（harness 有断言）。
+> **禁止**在窗口 XAML 里硬编码**任何**颜色字面量（`#RRGGBB` / `#AARRGGBB`）——令牌只在 `App.xaml` 定义；harness 断言「颜色已全部令牌化」逐文件扫描整个 `src/DshLauncher`（变更集 127 起为全量门禁）。
 
 ### 字体与字号
 
