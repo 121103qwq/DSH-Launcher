@@ -2781,8 +2781,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         StackPanel NewCategoryPanel() => new()
         {
             Margin = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Top,
-            MaxWidth = 980
+            VerticalAlignment = VerticalAlignment.Top
         };
 
         void AddPageHeader(StackPanel target, string title, string description)
@@ -3172,7 +3171,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // 左侧分类 + 右侧内容（与版本设置页同一套导航外观，见 docs/UI-DESIGN.md）
         var host = new Grid();
-        host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(196) });
+        host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(320) });
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 

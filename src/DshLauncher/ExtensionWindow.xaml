@@ -22,8 +22,8 @@
     </UserControl.Resources>
     <Grid Margin="0">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="340" />
-            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="18" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 

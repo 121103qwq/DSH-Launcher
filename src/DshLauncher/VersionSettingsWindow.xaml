@@ -7,19 +7,23 @@
              Unloaded="Window_OnUnloaded">
     <Grid Background="{StaticResource PageBrush}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="180" />
+            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="18" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <Grid Grid.Column="0">
             <!-- 阴影单独一层：避免 DropShadowEffect 把导航文字一起栅格化 -->
+            <!-- 变更集 121：左栏统一为应用标准圆角卡（CardCornerRadius=12），与扩展 / 版本控制 / 设置·诊断页一致 -->
             <Border Background="{StaticResource CardBrush}"
                     BorderBrush="{StaticResource LineBrush}"
-                    BorderThickness="0,0,1,0"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}"
                     Effect="{StaticResource CardShadowSoft}" />
             <Border Background="{StaticResource CardBrush}"
                     BorderBrush="{StaticResource LineBrush}"
-                    BorderThickness="0,0,1,0"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}"
                     Padding="10,18">
             <StackPanel>
                 <TextBlock x:Name="VersionSettingsHeaderText"
@@ -58,7 +62,7 @@
             </Border>
         </Grid>
 
-        <ScrollViewer Grid.Column="1"
+        <ScrollViewer Grid.Column="2"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled"
                       HorizontalContentAlignment="Stretch"

@@ -6,8 +6,8 @@
              Unloaded="Window_OnUnloaded">
     <Grid Margin="0">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="280" />
-            <ColumnDefinition Width="20" />
+            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="18" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
