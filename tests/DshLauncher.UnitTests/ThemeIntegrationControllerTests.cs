@@ -56,6 +56,69 @@ public sealed class ThemeIntegrationControllerTests
     }
 
     [Fact]
+    public async Task LateMarketReadCannotOverwriteNewerProfileState()
+    {
+        var requestReceived = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var responseReady = new TaskCompletionSource<HttpResponseMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new DelegateHandler(request =>
+        {
+            requestReceived.TrySetResult(true);
+            return responseReady.Task;
+        });
+        using var client = new HttpClient(handler);
+        using var marketService = new DshMarketThemeService(client);
+        using var controller = new ThemeIntegrationController(marketService);
+
+        var webGeneration = controller.BeginProfileSelection("web");
+        var read = controller.ReadMarketAsync(
+            CreateRunningInstance(),
+            profileGeneration: webGeneration);
+        await requestReceived.Task;
+
+        controller.BeginProfileSelection("headless");
+        controller.MarkMarketUnavailable("new Profile is ready");
+        responseReady.SetResult(CreateMarketResponse());
+        await read;
+
+        Assert.False(controller.MarketState.IsAvailable);
+        Assert.Equal("new Profile is ready", controller.MarketState.Error);
+    }
+
+    [Fact]
+    public async Task DisablingHotReloadInvalidatesLateMarketRead()
+    {
+        var requestReceived = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var responseReady = new TaskCompletionSource<HttpResponseMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new DelegateHandler(request =>
+        {
+            requestReceived.TrySetResult(true);
+            return responseReady.Task;
+        });
+        using var client = new HttpClient(handler);
+        using var marketService = new DshMarketThemeService(client);
+        using var controller = new ThemeIntegrationController(marketService);
+
+        var generation = controller.BeginProfileSelection("web");
+        controller.SetUseDshMarketHotReload(true);
+        var read = controller.ReadMarketAsync(
+            CreateRunningInstance(),
+            profileGeneration: generation);
+        await requestReceived.Task;
+
+        controller.SetUseDshMarketHotReload(false);
+        controller.MarkMarketUnavailable("hot reload disabled");
+        responseReady.SetResult(CreateMarketResponse());
+        await read;
+
+        Assert.False(controller.MarketState.IsAvailable);
+        Assert.Equal("hot reload disabled", controller.MarketState.Error);
+    }
+
+    [Fact]
     public async Task SwitchingBackToWebReprobesCapability()
     {
         using var handler = new DelegateHandler(async request =>
@@ -103,6 +166,15 @@ public sealed class ThemeIntegrationControllerTests
                         }
                     }
                 }),
+                Encoding.UTF8,
+                "application/json")
+        };
+
+    private static HttpResponseMessage CreateMarketResponse() =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{\"installed\":{\"old-theme\":{}},\"live\":[\"old-theme\"]}",
                 Encoding.UTF8,
                 "application/json")
         };

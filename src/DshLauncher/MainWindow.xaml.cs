@@ -20,6 +20,7 @@ using WpfColor = System.Windows.Media.Color;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
+using DshLauncher.Controls;
 
 namespace DshLauncher;
 
@@ -105,6 +106,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _instanceMonitorTickInProgress;
     private DateTimeOffset _lastAutomaticMaintenanceAt = DateTimeOffset.MinValue;
     private string? _githubCredentialLoadError;
+    private VisualEffectsController? _visualEffects;
 
     public MainWindow()
     {
@@ -151,6 +153,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         // 用“无法优雅关闭”保证 Launcher 重开后不会出现第二次 Node MSI 与残留安装重叠。
         _nodeInstaller.LingeringInstallerCompleted += OnLingeringInstallerCompleted;
         InitializeComponent();
+        InitializeHeaderLayout();
+        _visualEffects = new VisualEffectsController(this, VisualBackdropLayer, VisualInteractionLayer);
+        try
+        {
+            _visualEffects.Apply(_versionSettingsService.ReadLauncherSettings().VisualEffects);
+        }
+        catch (InvalidDataException)
+        {
+            // A configuration from a newer Launcher must remain untouched.
+            _visualEffects.Apply(new VisualEffectsSettings());
+        }
         _instanceMonitorTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
         {
             Interval = TimeSpan.FromSeconds(3)
@@ -1291,7 +1304,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
-        SwitchSection(section);
+        if (section == _currentSection && PageTitle == section)
+        {
+            SetNavigationSelection(section);
+            return;
+        }
+
+        if (!_shutdownCleanupStarted)
+        {
+            SwitchSection(section);
+        }
     }
 
     private void TaskCenter_Click(object sender, RoutedEventArgs e) => SwitchSection("任务");
@@ -1423,12 +1445,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             current = GetParentObject(current);
         }
-
-        if (CanScroll(MainScrollViewer, e.Delta))
-        {
-            ScrollMouseWheel(MainScrollViewer, e.Delta);
-            e.Handled = true;
-        }
     }
 
     private static void ScrollMouseWheel(ScrollViewer viewer, int delta)
@@ -1512,19 +1528,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             PageTitle = "下载";
             PageSubtitle = "获取 Launcher 更新和官方 DSh 版本";
-            ShowEmbeddedPage(CreateDownloadsPage());
+            ShowEmbeddedPage(CreateDownloadsPage);
         }
         else if (section == "任务")
         {
             PageTitle = "任务";
             PageSubtitle = "集中查看下载、安装与维护任务";
-            ShowEmbeddedPage(new TaskCenterView(LauncherTaskService.Shared));
+            ShowEmbeddedPage(() => new TaskCenterView(LauncherTaskService.Shared));
         }
         else if (section == "Provider")
         {
             PageTitle = "Provider";
             PageSubtitle = "全局管理 Coding Provider、默认模型与运行时在线状态";
-            ShowEmbeddedPage(new ProviderManagementWindow(
+            ShowEmbeddedPage(() => new ProviderManagementWindow(
                 () => Instances.ToArray(),
                 _modelService,
                 _codingModelPolicyService,
@@ -1551,7 +1567,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     _ => "管理当前实例的 session.jsonl / .zstd 对话文件"
                 };
 
-                object page = section switch
+                object CreatePage() => section switch
                 {
                     "扩展" => new ExtensionWindow(
                         instance,
@@ -1583,14 +1599,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                         modelPolicyService: _codingModelPolicyService,
                         modelOptionsProvider: ReadGlobalModelOptionsAsync)
                 };
-                ShowEmbeddedPage(page);
+                ShowEmbeddedPage(CreatePage);
             }
         }
         else
         {
             PageTitle = section;
             PageSubtitle = "DSH Launcher Core 设置与诊断";
-            ShowEmbeddedPage(CreateSettingsPage());
+            ShowEmbeddedPage(CreateSettingsPage);
         }
 
         OnPropertyChanged(nameof(PageTitle));
@@ -1600,16 +1616,28 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ShowMainDashboard()
     {
-        EmbeddedPageHost.Content = null;
-        EmbeddedPageHost.Visibility = Visibility.Collapsed;
-        MainDashboardGrid.Visibility = Visibility.Visible;
+        if (EmbeddedPageHost.Content is null && !UiMotion.HasPendingReplacement(MainPageFrame))
+        {
+            return;
+        }
+
+        UiMotion.Transition(MainPageFrame, () =>
+        {
+            EmbeddedPageHost.Content = null;
+            EmbeddedPageHost.Visibility = Visibility.Collapsed;
+            MainDashboardGrid.Visibility = Visibility.Visible;
+        });
     }
 
-    private void ShowEmbeddedPage(object page)
+    private void ShowEmbeddedPage(Func<object> createPage)
     {
-        MainDashboardGrid.Visibility = Visibility.Collapsed;
-        EmbeddedPageHost.Content = page;
-        EmbeddedPageHost.Visibility = Visibility.Visible;
+        UiMotion.Transition(MainPageFrame, () =>
+        {
+            var page = createPage();
+            MainDashboardGrid.Visibility = Visibility.Collapsed;
+            EmbeddedPageHost.Content = page;
+            EmbeddedPageHost.Visibility = Visibility.Visible;
+        });
     }
 
     private void ShowLogCenter()
@@ -1622,7 +1650,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PageNoticeVisibility = Visibility.Collapsed;
         PageTitle = "日志";
         PageSubtitle = "查看最近 7 天的 Launcher 运行记录";
-        ShowEmbeddedPage(new LogCenterView(
+        ShowEmbeddedPage(() => new LogCenterView(
             _launcherLogService,
             () => SwitchSection("设置 / 诊断")));
         OnPropertyChanged(nameof(PageTitle));
@@ -1642,7 +1670,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PageNoticeVisibility = Visibility.Collapsed;
         PageTitle = "空间管理";
         PageSubtitle = $"查看 {instance.Name} 的存储占用和安全清理候选";
-        ShowEmbeddedPage(new StorageManagementView(
+        ShowEmbeddedPage(() => new StorageManagementView(
             instance,
             storageService,
             () => SwitchSection("设置 / 诊断"),
@@ -1663,7 +1691,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         ContextInstanceSelector.Visibility = Visibility.Collapsed;
         PageTitle = "版本控制";
         PageSubtitle = "按版本选择、复制版本或导入整合包；每个版本使用独立 DSH_HOME";
-        ShowEmbeddedPage(new VersionControlWindow(
+        ShowEmbeddedPage(() => new VersionControlWindow(
             Instances,
             SelectedInstance,
             _versionPackageService,
@@ -1715,7 +1743,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         PageSubtitle = SelectedInstance is { } selected
             ? $"当前实例：{selected.Name} · 管理个性化、配置、插件和分享导出"
             : "按 PCL2 的版本设置方式管理个性化、配置、插件和分享导出";
-        ShowEmbeddedPage(new VersionSettingsWindow(
+        ShowEmbeddedPage(() => new VersionSettingsWindow(
             SelectedInstance,
             Instances,
             _versionSettingsService,
@@ -1921,10 +1949,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             (WpfBrush)FindResource("BlueBrush")));
         categoryStyle.Triggers.Add(selectedTrigger);
         categoryList.ItemContainerStyle = categoryStyle;
-        root.Children.Add(new Border
+        root.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(14),
@@ -1937,31 +1963,45 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             HorizontalContentAlignment = System.Windows.HorizontalAlignment.Stretch,
             VerticalContentAlignment = VerticalAlignment.Top
         };
-        Grid.SetColumn(contentHost, 2);
-        root.Children.Add(contentHost);
+        var contentScroll = CreatePageScrollViewer(contentHost);
+        Grid.SetColumn(contentScroll, 2);
+        root.Children.Add(contentScroll);
 
         void ShowCategory()
         {
             var key = (categoryList.SelectedItem as ListBoxItem)?.Tag?.ToString();
-            if (string.Equals(key, "dsh", StringComparison.Ordinal))
+            void ReplaceContent()
             {
-                contentHost.Content = CreateDshDownloadsPanel();
-                return;
+                if (string.Equals(key, "dsh", StringComparison.Ordinal))
+                {
+                    contentHost.Content = CreateDshDownloadsPanel();
+                }
+                else if (string.Equals(key, "desktop", StringComparison.Ordinal))
+                {
+                    contentHost.Content = CreateDshDesktopDownloadsPanel();
+                }
+                else
+                {
+                    var panel = new StackPanel
+                    {
+                        MaxWidth = 980,
+                        HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+                    };
+                    AddLauncherUpdateSection(panel);
+                    contentHost.Content = panel;
+                }
+
+                contentScroll.ScrollToTop();
             }
 
-            if (string.Equals(key, "desktop", StringComparison.Ordinal))
+            if (contentHost.Content is null)
             {
-                contentHost.Content = CreateDshDesktopDownloadsPanel();
-                return;
+                ReplaceContent();
             }
-
-            var panel = new StackPanel
+            else
             {
-                MaxWidth = 980,
-                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
-            };
-            AddLauncherUpdateSection(panel);
-            contentHost.Content = panel;
+                UiMotion.Transition(contentHost, ReplaceContent);
+            }
         }
 
         categoryList.SelectionChanged += (_, _) => ShowCategory();
@@ -1992,10 +2032,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         var content = new StackPanel();
-        panel.Children.Add(new Border
+        panel.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -2122,10 +2160,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         var content = new StackPanel();
-        panel.Children.Add(new Border
+        panel.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -2323,6 +2359,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    private static ScrollViewer CreatePageScrollViewer(UIElement content) => new()
+    {
+        Content = content,
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        HorizontalContentAlignment = System.Windows.HorizontalAlignment.Stretch,
+        PanningMode = PanningMode.VerticalOnly
+    };
+
     private FrameworkElement CreateSettingsPage()
     {
         var panel = new StackPanel
@@ -2331,6 +2376,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             VerticalAlignment = VerticalAlignment.Top,
             MaxWidth = 980
         };
+        AddVisualEffectsSection(panel);
         AddLauncherUpdateSection(panel);
         panel.Children.Add(new TextBlock
         {
@@ -2568,7 +2614,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         AddLauncherIntegrationSection(panel);
         AddStorageManagementSection(panel);
         AddDiagnosticsSection(panel);
-        return panel;
+        return CreatePageScrollViewer(panel);
     }
 
     private void AddGitHubApiSection(StackPanel panel)
@@ -2582,10 +2628,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         var content = new StackPanel();
-        panel.Children.Add(new Border
+        panel.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -2787,10 +2831,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         var content = new StackPanel();
-        panel.Children.Add(new Border
+        panel.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -2848,10 +2890,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 32, 0, 0)
         });
         var content = new StackPanel();
-        panel.Children.Add(new Border
+        panel.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -2928,10 +2968,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Margin = new Thickness(0, 32, 0, 0)
         });
         var content = new StackPanel();
-        panel.Children.Add(new Border
+        panel.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -3018,10 +3056,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         var content = new StackPanel();
-        panel.Children.Add(new Border
+        panel.Children.Add(new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -3360,10 +3396,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         var content = new StackPanel();
-        var card = new Border
+        var card = new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -3447,10 +3481,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         });
 
         var globalCardContent = new StackPanel();
-        var globalCard = new Border
+        var globalCard = new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -3495,10 +3527,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         syncAll.Unchecked += (_, _) => HandleSyncAllChanged();
 
         var versionCardContent = new StackPanel();
-        var versionCard = new Border
+        var versionCard = new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -3623,10 +3653,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         panel.Children.Add(versionCard);
 
         var workspaceCardContent = new StackPanel();
-        var workspaceCard = new Border
+        var workspaceCard = new VisualSurface
         {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(20),
@@ -5731,6 +5759,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     protected override void OnClosed(EventArgs e)
     {
+        _visualEffects?.Dispose();
+        _visualEffects = null;
         LauncherTaskService.Shared.Changed -= LauncherTasks_Changed;
         _windowSource?.RemoveHook(WindowProcedure);
         _windowSource = null;

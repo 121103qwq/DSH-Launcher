@@ -1,21 +1,22 @@
 <UserControl x:Class="DshLauncher.ProviderManagementWindow"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DshLauncher.Controls"
              FontFamily="{StaticResource UiFont}"
              HorizontalAlignment="Stretch"
              VerticalAlignment="Stretch"
              Loaded="Window_OnLoaded"
              Unloaded="Window_OnUnloaded">
-    <Grid Margin="18" MinHeight="590">
+    <Grid Margin="18">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="250" />
             <ColumnDefinition Width="18" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0"
-                Background="{StaticResource CardBrush}"
-                BorderBrush="{StaticResource LineBrush}"
+        <controls:VisualSurface Grid.Column="0"
+                Background="{DynamicResource CardBrush}"
+                BorderBrush="{DynamicResource LineBrush}"
                 BorderThickness="1"
                 CornerRadius="12"
                 Padding="18">
@@ -67,7 +68,7 @@
                            FontSize="11"
                            TextWrapping="Wrap" />
             </Grid>
-        </Border>
+        </controls:VisualSurface>
 
         <Grid Grid.Column="2">
             <Grid.RowDefinitions>
@@ -77,8 +78,8 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Border Background="{StaticResource CardBrush}"
-                    BorderBrush="{StaticResource LineBrush}"
+            <controls:VisualSurface Background="{DynamicResource CardBrush}"
+                    BorderBrush="{DynamicResource LineBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
                     Padding="17">
@@ -107,11 +108,11 @@
                             Margin="10,0,0,0"
                             Padding="16,8" />
                 </Grid>
-            </Border>
+            </controls:VisualSurface>
 
-            <Border Grid.Row="1"
-                    Background="{StaticResource CardBrush}"
-                    BorderBrush="{StaticResource LineBrush}"
+            <controls:VisualSurface Grid.Row="1"
+                    Background="{DynamicResource CardBrush}"
+                    BorderBrush="{DynamicResource LineBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
                     Padding="14"
@@ -131,11 +132,11 @@
                             Margin="10,0,0,0"
                             Padding="16,8" />
                 </Grid>
-            </Border>
+            </controls:VisualSurface>
 
-            <Border Grid.Row="2"
-                    Background="{StaticResource CardBrush}"
-                    BorderBrush="{StaticResource LineBrush}"
+            <controls:VisualSurface Grid.Row="2"
+                    Background="{DynamicResource CardBrush}"
+                    BorderBrush="{DynamicResource LineBrush}"
                     BorderThickness="1"
                     CornerRadius="12"
                     Padding="8">
@@ -157,7 +158,7 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Border Background="#FAFCFE"
-                                    BorderBrush="{StaticResource LineBrush}"
+                                    BorderBrush="{DynamicResource LineBrush}"
                                     BorderThickness="1"
                                     CornerRadius="10"
                                     Padding="15">
@@ -200,7 +201,7 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-            </Border>
+            </controls:VisualSurface>
 
             <TextBlock Grid.Row="3"
                        x:Name="StatusText"

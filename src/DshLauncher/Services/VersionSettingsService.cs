@@ -417,6 +417,11 @@ public sealed class VersionSettingsService
             .OrderBy(workspace => workspace, StringComparer.OrdinalIgnoreCase)
             .ToList();
         settings.DshInstallDirectory = NormalizePath(settings.DshInstallDirectory);
+        settings.VisualEffects ??= new VisualEffectsSettings();
+        if (!Enum.IsDefined(settings.VisualEffects.Material))
+        {
+            settings.VisualEffects.Material = VisualMaterial.LiquidGlass;
+        }
     }
 
     private static string? NormalizePath(string? value)

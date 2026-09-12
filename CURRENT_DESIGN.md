@@ -1,5 +1,8 @@
 # DSH Launcher 当前设计
 
+- 华丽视觉是 Launcher 主窗口独立的可选装饰层，默认关闭；设置即时生效并保存在 Launcher 全局配置，不进入实例 HOME，也不改变 Chat 主题或 Windows 设置。原始实体、毛玻璃与轻量液态玻璃可叠加独立的流体背景、粒子、光晕、拖尾、点击波纹和背景视差；轻量玻璃只柔化装饰背景并绘制透明表面/边缘高光，不模拟真实折射。关闭后保留选择并撤销新增资源与动画，但原有页面过渡继续工作；隐藏/最小化暂停，低图形能力下简化效果。动态资源只覆盖主窗口，正文不应用模糊。
+- 顶栏采用品牌/实例入口、导航、窗口操作三列；品牌和导航保留字号层级并按字体基线对齐。空间不足时收紧导航间距、隐藏装饰图标，设置入口简写为“设置”，保留 880 DIP 最小窗口宽度和全部入口。
+
 - Launcher 更新只读取 `121103qwq/DSH-Launcher` 的非草稿、非预发布 GitHub Release，并只接受精确命名为 `DSH.Launcher.exe` 的官方附件。启动后在后台检查较新稳定版并由用户决定是否更新，不静默下载；设置页列出可验证的稳定版，高于当前版本执行更新，低于当前版本执行回退。下载显示真实字节进度并校验附件大小、Release 版本和 GitHub SHA-256；校验后复制独立 helper，等待当前 Launcher 正常退出再原子替换和重启，不请求 UAC，也不修改实例、`DSH_HOME` 或配置快照。
 - 顶栏“下载”按 PCL2 的资源分组方式提供 Launcher、DSh 版本和 DSH Desktop 三个入口：Launcher 页复用稳定版更新/回退，DSh 页读取官方 npm metadata 并把所选版本带入独立版本创建流程；DSH Desktop 页读取社区项目 `anywhere-labs/dsh-desktop` 的最新稳定 GitHub Release，项目源与 GitHub 源下载均按 Release 大小和 SHA-256 校验，随后只打开交互式 Windows x64 安装程序。安装结束后复用现有 Runtime 检测和实例导入，不静默安装，也不把该社区项目描述为 DeepSeek 官方产品。
 - 每个版本在 `version-settings.json` 中保存当前 Plugin 管理 Profile，默认 `web`。扩展页枚举 `DSH_HOME\profiles`（排除共享 `node_modules`）并可切换；Plugin 列表、官方 CLI、失败快照/回档、健康检查和导入依赖恢复使用当前 Profile。包含 `@deepseek-ai/dsh-web-app` 的 Profile 可由 Launcher 通过 `dsh --profile <name>` 启动 Web UI；headless/tui 等非 Web Profile 只允许管理，不进入 HTTP 健康检查。版本加密快照覆盖所有安全 Profile 的配置文件；ModPack 格式仍按标准保持单 web Profile。
@@ -12,6 +15,8 @@
 - Plugin 失败诊断：Plugin 安装、更新、卸载和手动安装失败时，先使用现有 web profile 快照回档，再在当前实例 `DSH_HOME\\.dsh-launcher\\reports` 生成完整诊断 ZIP。该本地报告按用户要求保留原始错误、凭据和相关配置，不包含会话文件、`node_modules` 或运行依赖；若当前 DSh 可用，Launcher 会打开或复用 Chat，发送报告路径和继续排查安装的指令。该报告是本地排障包，不改变 `.dshpack` 的分享脱敏规则。
 
 - 市场分类切换分别保存 Plugin 与 Skill 列表的滚动位置；搜索、排序和来源筛选仍只在当前内存快照上重新筛选。
+- 界面响应：主内容使用有限高度 Grid，启动、扩展、Agent、对话和版本列表在各自区域滚动，不再用整页滚动和窗口高度补偿撑开列表；下载与版本设置的侧栏不随右侧内容滚动。主导航、下载分类和版本设置子页采用完整的“120ms 渐出 → 替换内容 → 240ms 渐入”，以透明度为主、少量位移辅助，导航选中态即时反馈。按用户明确要求，Launcher 页面和按钮动效独立启用，不受 Windows `ClientAreaAnimation` 开关控制，也不修改系统设置。渐出期间只保留最后一次请求并延后创建页面；渐入中再次切页时保留旧动画的透明度快照直到新时钟接管，不短暂跳回全亮。卸载/取消会清理动画及尚未执行的替换，不保留已卸载页面或引入常驻计时器。动效回归通过隐藏渲染宿主驱动 WPF 时钟并检查中间透明度，不允许因系统禁动画而跳过断言。
+- 扩展页左栏的路径按行省略并保留悬停全文；操作区不足时左栏独立滚动，内部已安装列表仍以有限视口虚拟化。市场卡片统一拉伸到列表宽度。扩展、Skill、对话和备份加载在后台形成快照后提交；卸载、取消或过期请求不得回写，Profile/热加载配置串行保存，主题状态在控制器内校验代次后才提交。
 - `.dshpack` 和 ModPack 导入始终创建新的版本，但运行时只从当前 Launcher 设置的 DSh 安装位置解析，不沿用整合包或模板的 `RootPath`；该位置没有可用运行时时拒绝导入。包内 DSh 版本只用于兼容提示，注册实例的版本号始终读取当前实际 Runtime，避免把 ModPack 的版本范围误当成已安装版本。
 - 版本设置可以把已检测到的 DSH Desktop，或用户选择的本地 EXE、COM、BAT、CMD、PowerShell 脚本、LNK 快捷方式及其它 Windows 可打开文件绑定为“打开窗口”；Launcher 为可直接启动的入口注入该版本的 `DSH_HOME` / `DSH_AGENTS_HOME`，并保留独立的“Launcher 启动”按钮。手动绑定路径属于本机版本设置，不进入可分享 `.dshpack`。
 - 已安装 Plugin 管理列表对名称和描述使用单行省略并保留悬停全文；状态明确显示“已启用”或“已禁用”，不显示布尔值。

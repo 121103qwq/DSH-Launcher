@@ -41,15 +41,18 @@ public partial class ExtensionWindow : UserControl
     private bool _isMarketplaceLoading;
     private bool _isMarketplaceMutating;
     private bool _controlLoaded;
+    private CancellationTokenSource? _extensionRefreshCancellation;
     private CancellationTokenSource? _marketplaceCancellation;
+    private CancellationTokenSource? _marketplaceLoadCancellation;
     private CancellationTokenSource? _searchDebounceCancellation;
     private CancellationTokenSource? _skillSearchDebounceCancellation;
     private CancellationTokenSource? _skillMarketCancellation;
-    private Window? _agentLayoutOwner;
+    private readonly SemaphoreSlim _versionSettingsGate = new(1, 1);
     private readonly Dictionary<string, double> _marketplaceScrollOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double> _skillMarketScrollOffsets = new(StringComparer.Ordinal);
     private string _activeMarketplaceCategoryKey = string.Empty;
     private string _activeSkillMarketCategoryKey = string.Empty;
+    private int _skillMarketRenderVersion;
     private bool _profileSelectionReady;
     private bool _isUnloaded;
     private bool _chatWindowEventsAttached;
@@ -80,8 +83,6 @@ public partial class ExtensionWindow : UserControl
         _versionSettingsService = versionSettingsService;
         _versionSnapshotService = versionSnapshotService;
         InitializeComponent();
-        _themeIntegration.SetUseDshMarketHotReload(
-            _versionSettingsService?.Read(instance).UseDshMarketHotReload ?? true);
         DshMarketHotReloadCheckBox.IsChecked = _themeIntegration.UseDshMarketHotReload;
         MarketplaceCategoryList.Visibility = _agentOnly ? Visibility.Collapsed : Visibility.Visible;
         SkillMarketCategoryList.Visibility = _agentOnly ? Visibility.Visible : Visibility.Collapsed;
@@ -114,28 +115,47 @@ public partial class ExtensionWindow : UserControl
         }
         else
         {
-            SetupProfileSelector();
             ImportSkillButton.Visibility = Visibility.Collapsed;
             ImportPresetButton.Visibility = Visibility.Collapsed;
         }
     }
 
-    private void SetupProfileSelector()
+    private async Task SetupProfileSelectorAsync()
     {
-        var profiles = _service.ListProfiles(_instance).ToList();
-        var configured = _service.GetActiveProfileName(_instance);
+        // Profile enumeration and version-settings migration/read can touch a
+        // large imported DSH_HOME. Keep both off the UI thread while retaining
+        // the existing fallback-to-web behavior.
+        var profileState = await Task.Run(() =>
+        {
+            var profiles = _service.ListProfiles(_instance).ToArray();
+            var settings = _versionSettingsService?.Read(_instance);
+            var configured = settings is null
+                ? _service.GetActiveProfileName(_instance)
+                : DshProfileService.NormalizeName(settings.ActiveProfileName);
+            return (profiles, configured, settings);
+        });
+        if (_isUnloaded)
+        {
+            return;
+        }
+
+        var profiles = profileState.profiles;
+        var configured = profileState.configured;
         var selected = profiles.FirstOrDefault(profile =>
                 string.Equals(profile, configured, StringComparison.OrdinalIgnoreCase))
             ?? profiles.First();
+
+        _themeIntegration.SetUseDshMarketHotReload(
+            profileState.settings?.UseDshMarketHotReload ?? true);
+        DshMarketHotReloadCheckBox.IsChecked = _themeIntegration.UseDshMarketHotReload;
         ProfileSelectorBox.ItemsSource = profiles;
         ProfileSelectorBox.SelectedItem = selected;
         ProfileSelectorPanel.Visibility = Visibility.Visible;
         if (!string.Equals(selected, configured, StringComparison.OrdinalIgnoreCase)
+            && profileState.settings is not null
             && _versionSettingsService is not null)
         {
-            var settings = _versionSettingsService.Read(_instance);
-            settings.ActiveProfileName = selected;
-            _versionSettingsService.Save(_instance, settings);
+            await UpdateVersionSettingsAsync(settings => settings.ActiveProfileName = selected);
         }
 
         _profileSelectionReady = true;
@@ -150,20 +170,30 @@ public partial class ExtensionWindow : UserControl
             return;
         }
 
+        ProfileSelectorBox.IsEnabled = false;
+        var profileGeneration = 0L;
         try
         {
-            var profileGeneration = _themeIntegration.BeginProfileSelection(profileName);
+            profileGeneration = _themeIntegration.BeginProfileSelection(profileName);
+            _themeIntegration.MarkMarketUnavailable("正在读取当前 Profile 的主题状态。 ");
+            _extensionRefreshCancellation?.Cancel();
+            _marketplaceLoadCancellation?.Cancel();
+            _marketplaceCancellation?.Cancel();
             UpdateChatThemeControls();
             if (_versionSettingsService is not null)
             {
-                var settings = _versionSettingsService.Read(_instance);
-                settings.ActiveProfileName = profileName;
-                _versionSettingsService.Save(_instance, settings);
+                await UpdateVersionSettingsAsync(settings => settings.ActiveProfileName = profileName);
+            }
+
+            if (_isUnloaded || !_themeIntegration.IsCurrentProfile(profileGeneration))
+            {
+                return;
             }
 
             StatusText.Text = $"已切换 Plugin 管理 Profile：{profileName}。";
             await RefreshAsync();
-            if (_themeIntegration.IsCurrentProfile(profileGeneration)
+            if (!_isUnloaded
+                && _themeIntegration.IsCurrentProfile(profileGeneration)
                 && string.Equals(profileName, "web", StringComparison.OrdinalIgnoreCase))
             {
                 await _themeIntegration.ProbeChatCapabilityAsync(
@@ -171,7 +201,12 @@ public partial class ExtensionWindow : UserControl
                     profileGeneration: profileGeneration);
             }
 
-            if (_themeIntegration.IsCurrentProfile(profileGeneration))
+            if (_isUnloaded || !_themeIntegration.IsCurrentProfile(profileGeneration))
+            {
+                return;
+            }
+
+            if (!_isUnloaded && _themeIntegration.IsCurrentProfile(profileGeneration))
             {
                 if (_marketplaceSnapshot.Count > 0)
                 {
@@ -181,14 +216,54 @@ public partial class ExtensionWindow : UserControl
                 UpdateChatThemeControls();
             }
         }
+        catch (Exception) when (_isUnloaded
+            || (profileGeneration != 0 && !_themeIntegration.IsCurrentProfile(profileGeneration)))
+        {
+            // A profile switch or unload superseded this operation.
+        }
         catch (Exception ex)
         {
-            ShowError(ex);
+            if (!_isUnloaded)
+            {
+                ShowError(ex);
+            }
+        }
+        finally
+        {
+            if (!_isUnloaded)
+            {
+                ProfileSelectorBox.IsEnabled = true;
+            }
         }
     }
 
     private string GetSelectedProfileName() =>
         ProfileSelectorBox.SelectedItem as string ?? _service.GetActiveProfileName(_instance);
+
+    private async Task UpdateVersionSettingsAsync(Action<VersionSettingsData> update)
+    {
+        var settingsService = _versionSettingsService;
+        if (settingsService is null)
+        {
+            return;
+        }
+
+        await _versionSettingsGate.WaitAsync();
+        try
+        {
+            var instance = _instance;
+            await Task.Run(() =>
+            {
+                var settings = settingsService.Read(instance);
+                update(settings);
+                settingsService.Save(instance, settings);
+            });
+        }
+        finally
+        {
+            _versionSettingsGate.Release();
+        }
+    }
 
     private void SetupSkillMarket()
     {
@@ -220,35 +295,79 @@ public partial class ExtensionWindow : UserControl
 
     private void RenderSkillMarketItems(
         IReadOnlyList<SkillMarketItem> items,
-        string? restoreCategoryKey = null)
+        string? restoreCategoryKey = null,
+        bool updateStatus = true)
     {
-        var query = SkillMarketSearchBox.Text.Trim();
+        if (_isUnloaded)
+        {
+            return;
+        }
+
+        // Keep search/category projection off the UI thread. The installed
+        // names are indexed once per render instead of scanning the installed
+        // list for every marketplace item.
+        var renderVersion = ++_skillMarketRenderVersion;
+        var snapshot = items;
+        var query = SkillMarketSearchBox.Text;
         var category = (SkillMarketCategoryList.SelectedItem as ListBoxItem)?.Tag?.ToString() ?? string.Empty;
         var instanceStopped = _instance.RuntimeStatus != InstanceRuntimeStatus.Running
             && _instance.RuntimeOwnership == InstanceRuntimeOwnership.None;
-        var rendered = items
+        var installedSkills = _installedSkills;
+
+        _ = Task.Run(() =>
+        {
+            var filtered = FilterSkillMarketItems(snapshot, query, category);
+            var installedNames = installedSkills
+                .Where(entry => entry.Kind == ExtensionKind.Skill && entry.Managed)
+                .Select(entry => entry.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var rendered = filtered
+                .Select(item => new SkillMarketItemViewModel(
+                    item,
+                    instanceStopped,
+                    installedNames.Contains(item.Name)))
+                .ToArray();
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_isUnloaded || renderVersion != _skillMarketRenderVersion)
+                {
+                    return;
+                }
+
+                SkillMarketList.ItemsSource = rendered;
+                if (updateStatus)
+                {
+                    SkillMarketStatusText.Text = snapshot.Count == 0
+                        ? "目录为空；点击“刷新目录”从 GitHub 搜索。"
+                        : $"显示 {rendered.Length} / {snapshot.Count} 个 Skill · 安装要求实例已停止";
+                }
+
+                if (restoreCategoryKey is not null)
+                {
+                    Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => RestoreScrollOffset(
+                        SkillMarketList,
+                        _skillMarketScrollOffsets,
+                        restoreCategoryKey)));
+                }
+            });
+        });
+    }
+
+    internal static IReadOnlyList<SkillMarketItem> FilterSkillMarketItems(
+        IReadOnlyList<SkillMarketItem> snapshot,
+        string? query,
+        string? category)
+    {
+        var normalizedQuery = query?.Trim();
+        return snapshot
             .Where(item => string.IsNullOrWhiteSpace(category)
                 || string.Equals(item.Category, category, StringComparison.Ordinal))
-            .Where(item => string.IsNullOrWhiteSpace(query)
-                || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || item.Repository.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || (item.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
-            .Select(item => new SkillMarketItemViewModel(
-                item,
-                instanceStopped,
-                IsSkillInstalled(item, _installedSkills)))
+            .Where(item => string.IsNullOrWhiteSpace(normalizedQuery)
+                || item.Name.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                || item.Repository.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)
+                || (item.Description?.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase) ?? false))
             .ToArray();
-        SkillMarketList.ItemsSource = rendered;
-        SkillMarketStatusText.Text = items.Count == 0
-            ? "目录为空；点击“刷新目录”从 GitHub 搜索。"
-            : $"显示 {rendered.Length} / {items.Count} 个 Skill · 安装要求实例已停止";
-        if (restoreCategoryKey is not null)
-        {
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => RestoreScrollOffset(
-                SkillMarketList,
-                _skillMarketScrollOffsets,
-                restoreCategoryKey)));
-        }
     }
 
     private async Task RefreshSkillMarketAsync()
@@ -260,8 +379,8 @@ public partial class ExtensionWindow : UserControl
 
         _isSkillMarketLoading = true;
         _skillMarketCancellation?.Cancel();
-        _skillMarketCancellation?.Dispose();
-        _skillMarketCancellation = new CancellationTokenSource();
+        var cancellation = new CancellationTokenSource();
+        _skillMarketCancellation = cancellation;
         _lastSkillProgressItemCount = -1;
         _lastSkillProgressRenderAt = DateTimeOffset.MinValue;
         SkillMarketRefreshButton.IsEnabled = false;
@@ -270,7 +389,7 @@ public partial class ExtensionWindow : UserControl
         {
             var progress = new Progress<SkillMarketRefreshProgress>(state =>
             {
-                if (!_isSkillMarketLoading || _isUnloaded)
+                if (!_isSkillMarketLoading || _isUnloaded || cancellation.IsCancellationRequested)
                 {
                     return;
                 }
@@ -282,7 +401,7 @@ public partial class ExtensionWindow : UserControl
                         || state.Completed >= state.Total);
                 if (shouldRender)
                 {
-                    RenderSkillMarketItems(state.Items);
+                    RenderSkillMarketItems(state.Items, updateStatus: false);
                     _lastSkillProgressItemCount = state.Items.Count;
                     _lastSkillProgressRenderAt = now;
                 }
@@ -291,10 +410,13 @@ public partial class ExtensionWindow : UserControl
                     ? $"{state.Stage}…"
                     : $"{state.Stage}：{state.Completed} / {state.Total}";
             });
-            var items = await _skillMarketService.SearchAsync(
-                _skillMarketCancellation.Token,
-                progress);
-            if (_isUnloaded)
+            // SearchAsync starts by reading its local cache synchronously; run
+            // the complete discovery path away from WPF's synchronization
+            // context so that cache I/O and JSON projection cannot hitch input.
+            var items = await Task.Run(
+                () => _skillMarketService.SearchAsync(cancellation.Token, progress),
+                cancellation.Token);
+            if (_isUnloaded || cancellation.IsCancellationRequested)
             {
                 return;
             }
@@ -302,14 +424,30 @@ public partial class ExtensionWindow : UserControl
             _skillMarketSnapshot = items;
             RenderSkillMarketItems(items);
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // A page unload superseded the online search.
+        }
         catch (Exception ex)
         {
-            SkillMarketStatusText.Text = $"刷新 Skill 目录失败：{ex.Message}";
+            if (!_isUnloaded)
+            {
+                SkillMarketStatusText.Text = $"刷新 Skill 目录失败：{ex.Message}";
+            }
         }
         finally
         {
             _isSkillMarketLoading = false;
-            SkillMarketRefreshButton.IsEnabled = true;
+            if (ReferenceEquals(_skillMarketCancellation, cancellation))
+            {
+                _skillMarketCancellation = null;
+            }
+
+            cancellation.Dispose();
+            if (!_isUnloaded)
+            {
+                SkillMarketRefreshButton.IsEnabled = true;
+            }
         }
     }
 
@@ -436,15 +574,24 @@ public partial class ExtensionWindow : UserControl
     {
         _isUnloaded = false;
         _controlLoaded = true;
+        _profileSelectionReady = false;
         if (!_chatWindowEventsAttached)
         {
             ChatWindow.OpenChatWindowsChanged += ChatWindow_OpenChatWindowsChanged;
             _chatWindowEventsAttached = true;
         }
-        UpdateChatThemeControls();
         _activeMarketplaceCategoryKey = GetSelectedCategoryKey();
         _activeSkillMarketCategoryKey = GetSelectedSkillCategoryKey();
-        AttachAgentLayoutOwner();
+        if (!_agentOnly)
+        {
+            await SetupProfileSelectorAsync();
+            if (_isUnloaded)
+            {
+                return;
+            }
+        }
+
+        UpdateChatThemeControls();
         if (!_agentOnly)
         {
             // Show the cached catalog first; only go online when there is no
@@ -469,18 +616,19 @@ public partial class ExtensionWindow : UserControl
             _chatWindowEventsAttached = false;
         }
         _skillMarketCancellation?.Cancel();
-        _skillMarketCancellation?.Dispose();
         _skillMarketCancellation = null;
+        _extensionRefreshCancellation?.Cancel();
+        _extensionRefreshCancellation = null;
+        _marketplaceLoadCancellation?.Cancel();
+        _marketplaceLoadCancellation = null;
         _marketplaceCancellation?.Cancel();
-        _marketplaceCancellation?.Dispose();
         _marketplaceCancellation = null;
         _skillSearchDebounceCancellation?.Cancel();
-        if (_agentLayoutOwner is not null)
-        {
-            _agentLayoutOwner.SizeChanged -= AgentLayoutOwner_SizeChanged;
-            _agentLayoutOwner = null;
-        }
-
+        _skillSearchDebounceCancellation?.Dispose();
+        _searchDebounceCancellation?.Cancel();
+        _searchDebounceCancellation?.Dispose();
+        _skillMarketRenderVersion++;
+        _marketplaceRenderVersion++;
         if (!_themeIntegrationDisposed)
         {
             _themeIntegration.Dispose();
@@ -488,58 +636,32 @@ public partial class ExtensionWindow : UserControl
         }
     }
 
-    private void AttachAgentLayoutOwner()
-    {
-        if (!_agentOnly)
-        {
-            return;
-        }
-
-        var owner = Window.GetWindow(this);
-        if (!ReferenceEquals(_agentLayoutOwner, owner))
-        {
-            if (_agentLayoutOwner is not null)
-            {
-                _agentLayoutOwner.SizeChanged -= AgentLayoutOwner_SizeChanged;
-            }
-
-            _agentLayoutOwner = owner;
-            if (_agentLayoutOwner is not null)
-            {
-                _agentLayoutOwner.SizeChanged += AgentLayoutOwner_SizeChanged;
-            }
-        }
-
-        UpdateAgentPanelHeights();
-    }
-
-    private void AgentLayoutOwner_SizeChanged(object sender, SizeChangedEventArgs e) =>
-        UpdateAgentPanelHeights();
-
-    private void UpdateAgentPanelHeights()
-    {
-        if (!_agentOnly)
-        {
-            return;
-        }
-
-        var windowHeight = _agentLayoutOwner?.ActualHeight > 0
-            ? _agentLayoutOwner.ActualHeight
-            : SystemParameters.WorkArea.Height;
-        var rightHeight = Math.Clamp(windowHeight - 170, 500, 760);
-        var leftHeight = Math.Clamp(rightHeight - 36, 464, 700);
-        InstalledPanel.Height = leftHeight;
-        SkillMarketPanel.Height = rightHeight;
-    }
-
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
 
     private async Task RefreshAsync()
     {
+        if (_isUnloaded)
+        {
+            return;
+        }
+
+        var profileGeneration = _themeIntegration.ProfileGeneration;
+        _extensionRefreshCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _extensionRefreshCancellation = cancellation;
         try
         {
             var selectedId = (ExtensionList.SelectedItem as ExtensionEntry)?.Id;
-            var entries = await Task.Run(async () => await _service.ListAsync(_instance));
+            var entries = await Task.Run(
+                () => _service.ListAsync(_instance, cancellation.Token),
+                cancellation.Token);
+            if (_isUnloaded
+                || cancellation.IsCancellationRequested
+                || profileGeneration != _themeIntegration.ProfileGeneration)
+            {
+                return;
+            }
+
             var rendered = (_agentOnly
                     ? entries.Where(entry => entry.Kind is ExtensionKind.Skill or ExtensionKind.Preset or ExtensionKind.Workflow)
                     : entries.Where(entry => entry.Kind is ExtensionKind.Plugin or ExtensionKind.Mcp))
@@ -576,9 +698,22 @@ public partial class ExtensionWindow : UserControl
                 : $"已读取 {rendered.Count} 个 Plugin / MCP。";
             UpdateSelection();
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // A newer refresh, profile switch, or unload superseded this read.
+        }
         catch (Exception ex)
         {
             ShowError(ex);
+        }
+        finally
+        {
+            if (ReferenceEquals(_extensionRefreshCancellation, cancellation))
+            {
+                _extensionRefreshCancellation = null;
+            }
+
+            cancellation.Dispose();
         }
     }
 
@@ -870,23 +1005,46 @@ public partial class ExtensionWindow : UserControl
             return false;
         }
 
+        var profileGeneration = _themeIntegration.ProfileGeneration;
+        var cancellation = new CancellationTokenSource();
+        _marketplaceLoadCancellation = cancellation;
         try
         {
             // 缓存可达 MB 级 JSON；解析放到后台线程，打开页面不阻塞 UI。
-            var cached = await Task.Run(() => _marketplaceService.ReadCached(_instance));
+            var cached = await Task.Run(
+                () => _marketplaceService.ReadCached(_instance),
+                cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
             if (cached is null)
             {
                 MarketplaceStatusText.Text = "还没有本地缓存；点击“刷新目录”可从在线来源读取插件目录。";
                 return false;
             }
 
-            await SetMarketplaceSnapshotAsync(cached, fromCache: true);
+            await SetMarketplaceSnapshotAsync(
+                cached,
+                fromCache: true,
+                cancellationToken: cancellation.Token,
+                expectedProfileGeneration: profileGeneration);
             return true;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            return false;
         }
         catch (Exception ex)
         {
             MarketplaceStatusText.Text = $"读取插件市场缓存失败：{ex.Message}";
             return false;
+        }
+        finally
+        {
+            if (ReferenceEquals(_marketplaceLoadCancellation, cancellation))
+            {
+                _marketplaceLoadCancellation = null;
+            }
+
+            cancellation.Dispose();
         }
     }
 
@@ -900,34 +1058,69 @@ public partial class ExtensionWindow : UserControl
         _isMarketplaceLoading = true;
         UpdateMarketplaceUpdateAllButton();
         _marketplaceCancellation?.Cancel();
-        _marketplaceCancellation?.Dispose();
-        _marketplaceCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        _marketplaceCancellation = cancellation;
+        var profileGeneration = _themeIntegration.ProfileGeneration;
         MarketplaceStatusText.Text = _marketplaceSnapshot.Count == 0
             ? "正在读取插件目录，请稍候…"
             : "正在后台更新目录，当前先显示本地缓存。";
 
         try
         {
-            var result = await _marketplaceService.SearchAsync(
-                _instance,
-                query: null,
-                _marketplaceCancellation.Token);
-            await SetMarketplaceSnapshotAsync(result, fromCache: false, _marketplaceCancellation.Token);
+            // SearchAsync includes synchronous custom-source/cache file work;
+            // keep the whole discovery path away from the WPF context.
+            var result = await Task.Run(
+                () => _marketplaceService.SearchAsync(
+                    _instance,
+                    query: null,
+                    cancellation.Token),
+                cancellation.Token);
+            if (_isUnloaded
+                || cancellation.IsCancellationRequested
+                || profileGeneration != _themeIntegration.ProfileGeneration)
+            {
+                return;
+            }
+
+            await SetMarketplaceSnapshotAsync(
+                result,
+                fromCache: false,
+                cancellationToken: cancellation.Token,
+                expectedProfileGeneration: profileGeneration);
+            if (_isUnloaded
+                || cancellation.IsCancellationRequested
+                || profileGeneration != _themeIntegration.ProfileGeneration)
+            {
+                return;
+            }
+
             MarketplaceStatusText.Text = result.Warnings.Count == 0
                 ? "目录已更新。列表中的插件在真正安装前还会再次检查。"
                 : $"目录已更新，但有 {result.Warnings.Count} 个来源暂时不可用；仍显示其他来源的结果。";
         }
-        catch (OperationCanceledException) when (_marketplaceCancellation?.IsCancellationRequested == true)
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
-            MarketplaceStatusText.Text = "读取插件目录超时或已取消，请稍后重试。";
+            if (!_isUnloaded && profileGeneration == _themeIntegration.ProfileGeneration)
+            {
+                MarketplaceStatusText.Text = "读取插件目录超时或已取消，请稍后重试。";
+            }
         }
         catch (Exception ex)
         {
-            MarketplaceStatusText.Text = $"读取插件目录失败：{ex.Message}";
+            if (!_isUnloaded && profileGeneration == _themeIntegration.ProfileGeneration)
+            {
+                MarketplaceStatusText.Text = $"读取插件目录失败：{ex.Message}";
+            }
         }
         finally
         {
             _isMarketplaceLoading = false;
+            if (ReferenceEquals(_marketplaceCancellation, cancellation))
+            {
+                _marketplaceCancellation = null;
+            }
+
+            cancellation.Dispose();
             UpdateMarketplaceUpdateAllButton();
         }
     }
@@ -935,19 +1128,36 @@ public partial class ExtensionWindow : UserControl
     private async Task SetMarketplaceSnapshotAsync(
         MarketplaceSearchResult result,
         bool fromCache,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? expectedProfileGeneration = null)
     {
+        var profileGeneration = expectedProfileGeneration ?? _themeIntegration.ProfileGeneration;
+        if (_isUnloaded || profileGeneration != _themeIntegration.ProfileGeneration)
+        {
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
         _marketplaceSnapshot = result.Items;
         var selectedProfileName = GetSelectedProfileName();
         var isWebProfile = string.Equals(selectedProfileName, "web", StringComparison.OrdinalIgnoreCase);
         var useThemeHotReload = _themeIntegration.UseDshMarketHotReload && isWebProfile;
-        var profileGeneration = _themeIntegration.ProfileGeneration;
         var installed = await Task.Run(
             () => _service.ListAsync(_instance, cancellationToken),
             cancellationToken);
+        if (_isUnloaded
+            || cancellationToken.IsCancellationRequested
+            || profileGeneration != _themeIntegration.ProfileGeneration)
+        {
+            return;
+        }
+
         if (useThemeHotReload)
         {
-            await _themeIntegration.ReadMarketAsync(_instance, cancellationToken);
+            await _themeIntegration.ReadMarketAsync(
+                _instance,
+                cancellationToken,
+                profileGeneration);
         }
         else
         {
@@ -965,9 +1175,17 @@ public partial class ExtensionWindow : UserControl
         {
             _themeIntegration.SetChatCapability(
                 ThemeCapabilityProbeResult.Unsupported(
-                    "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 "),
+                "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 "),
                 profileGeneration);
         }
+
+        if (_isUnloaded
+            || cancellationToken.IsCancellationRequested
+            || profileGeneration != _themeIntegration.ProfileGeneration)
+        {
+            return;
+        }
+
         _installedPlugins = installed
             .Where(entry => entry.Kind == ExtensionKind.Plugin)
             .ToArray();
@@ -990,7 +1208,7 @@ public partial class ExtensionWindow : UserControl
 
     private void RenderMarketplaceItems(string? restoreCategoryKey = null)
     {
-        if (_marketplaceService is null)
+        if (_marketplaceService is null || _isUnloaded)
         {
             return;
         }
@@ -1034,7 +1252,7 @@ public partial class ExtensionWindow : UserControl
                 mutating);
             Dispatcher.BeginInvoke(() =>
             {
-                if (renderVersion != _marketplaceRenderVersion)
+                if (_isUnloaded || renderVersion != _marketplaceRenderVersion)
                 {
                     return;
                 }
@@ -1079,9 +1297,10 @@ public partial class ExtensionWindow : UserControl
             items = items.Where(IsFeaturedMarketplaceItem).ToList();
         }
         var rendered = new List<MarketplaceItem>(items.Count);
+        var installedByIdentity = BuildInstalledPluginIndex(installedPlugins);
         foreach (var item in items)
         {
-            var installedEntry = MarketplaceService.FindInstalledPlugin(item, installedPlugins);
+            var installedEntry = FindInstalledPlugin(item, installedByIdentity);
             var isInstalled = installedEntry is not null;
             var isTheme = string.Equals(
                 MarketplaceService.NormalizeCategory(item.Category),
@@ -1127,9 +1346,10 @@ public partial class ExtensionWindow : UserControl
         IReadOnlyList<ExtensionEntry> installedPlugins)
     {
         var updates = new Dictionary<string, MarketplaceItem>(StringComparer.OrdinalIgnoreCase);
+        var installedByIdentity = BuildInstalledPluginIndex(installedPlugins);
         foreach (var item in snapshot)
         {
-            var installed = MarketplaceService.FindInstalledPlugin(item, installedPlugins);
+            var installed = FindInstalledPlugin(item, installedByIdentity);
             if (installed is null
                 || !installed.Managed
                 || MarketplaceService.GetUpdateStatus(item.Version, installed.Version)
@@ -1156,6 +1376,44 @@ public partial class ExtensionWindow : UserControl
         return updates.Values
             .OrderBy(static item => item.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
+    }
+
+    private static Dictionary<string, (ExtensionEntry Entry, int Order)> BuildInstalledPluginIndex(
+        IReadOnlyList<ExtensionEntry> installedPlugins)
+    {
+        var index = new Dictionary<string, (ExtensionEntry Entry, int Order)>(StringComparer.OrdinalIgnoreCase);
+        for (var order = 0; order < installedPlugins.Count; order++)
+        {
+            var entry = installedPlugins[order];
+            if (entry.Kind != ExtensionKind.Plugin)
+            {
+                continue;
+            }
+
+            foreach (var identity in MarketplaceService.GetPluginIdentities(entry))
+            {
+                index.TryAdd(identity, (entry, order));
+            }
+        }
+
+        return index;
+    }
+
+    private static ExtensionEntry? FindInstalledPlugin(
+        MarketplaceItem item,
+        IReadOnlyDictionary<string, (ExtensionEntry Entry, int Order)> installedByIdentity)
+    {
+        (ExtensionEntry Entry, int Order)? match = null;
+        foreach (var identity in MarketplaceService.GetPluginIdentities(item))
+        {
+            if (installedByIdentity.TryGetValue(identity, out var candidate)
+                && (match is null || candidate.Order < match.Value.Order))
+            {
+                match = candidate;
+            }
+        }
+
+        return match?.Entry;
     }
 
     private void UpdateMarketplaceUpdateAllButton()
@@ -1828,21 +2086,34 @@ public partial class ExtensionWindow : UserControl
 
     private async void DshMarketHotReloadCheckBox_Changed(object sender, RoutedEventArgs e)
     {
-        if (!_controlLoaded || _agentOnly || _versionSettingsService is null)
+        if (!_controlLoaded
+            || !_profileSelectionReady
+            || _agentOnly
+            || _versionSettingsService is null)
         {
             return;
         }
 
-        _themeIntegration.SetUseDshMarketHotReload(DshMarketHotReloadCheckBox.IsChecked == true);
+        var useHotReload = DshMarketHotReloadCheckBox.IsChecked == true;
+        _themeIntegration.SetUseDshMarketHotReload(useHotReload);
         var profileGeneration = _themeIntegration.ProfileGeneration;
         try
         {
-            var settings = _versionSettingsService.Read(_instance);
-            settings.UseDshMarketHotReload = _themeIntegration.UseDshMarketHotReload;
-            _versionSettingsService.Save(_instance, settings);
-            if (_themeIntegration.UseDshMarketHotReload)
+            await UpdateVersionSettingsAsync(settings => settings.UseDshMarketHotReload = useHotReload);
+            if (_isUnloaded || !_themeIntegration.IsCurrentProfile(profileGeneration))
             {
-                await _themeIntegration.ReadMarketAsync(_instance);
+                return;
+            }
+
+            if (useHotReload)
+            {
+                await _themeIntegration.ReadMarketAsync(
+                    _instance,
+                    profileGeneration: profileGeneration);
+                if (_isUnloaded || !_themeIntegration.IsCurrentProfile(profileGeneration))
+                {
+                    return;
+                }
             }
             else
             {
@@ -1862,7 +2133,7 @@ public partial class ExtensionWindow : UserControl
                         "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 "),
                     profileGeneration);
             }
-            if (!_themeIntegration.IsCurrentProfile(profileGeneration))
+            if (_isUnloaded || !_themeIntegration.IsCurrentProfile(profileGeneration))
             {
                 return;
             }
@@ -1871,6 +2142,10 @@ public partial class ExtensionWindow : UserControl
                 : "已关闭 dsh-market 热加载；Plugin 仍可正常安装和管理。";
             UpdateChatThemeControls();
             RenderMarketplaceItems();
+        }
+        catch (Exception) when (_isUnloaded || !_themeIntegration.IsCurrentProfile(profileGeneration))
+        {
+            // A profile switch or unload superseded this settings operation.
         }
         catch (Exception ex)
         {

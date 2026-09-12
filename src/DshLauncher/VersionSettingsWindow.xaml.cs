@@ -81,7 +81,7 @@ public partial class VersionSettingsWindow : UserControl
         LoadConfigurationControls();
         LoadPluginSettingsControls();
         RefreshSnapshots();
-        ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
+        ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton, animate: false);
 
         if (_instance is null)
         {
@@ -188,23 +188,43 @@ public partial class VersionSettingsWindow : UserControl
 
     private void Export_Click(object sender, RoutedEventArgs e) => ShowPage(ExportButton);
 
-    private void ShowPage(WpfButton activeButton)
+    private void ShowPage(WpfButton activeButton, bool animate = true)
     {
-        PersonalizationPage.Visibility = ReferenceEquals(activeButton, PersonalizationButton)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        ConfigurationPage.Visibility = ReferenceEquals(activeButton, ConfigurationButton)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        PluginPage.Visibility = ReferenceEquals(activeButton, PluginsButton)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        SnapshotPage.Visibility = ReferenceEquals(activeButton, SnapshotsButton)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        ExportPage.Visibility = ReferenceEquals(activeButton, ExportButton)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, SnapshotsButton, ExportButton })
+        {
+            button.Background = ReferenceEquals(button, activeButton)
+                ? new System.Windows.Media.SolidColorBrush(WpfColor.FromRgb(227, 240, 253))
+                : WpfBrushes.Transparent;
+            button.Foreground = ReferenceEquals(button, activeButton)
+                ? (WpfBrush)FindResource("BlueBrush")
+                : (WpfBrush)FindResource("TextBrush");
+        }
+
+        if (animate)
+        {
+            UiMotion.Transition(VersionPageContent, () => ApplyPage(activeButton));
+        }
+        else
+        {
+            ApplyPage(activeButton);
+        }
+    }
+
+    private void ApplyPage(WpfButton activeButton)
+    {
+        foreach (var (button, page) in new[]
+        {
+            (PersonalizationButton, PersonalizationPage),
+            (ConfigurationButton, ConfigurationPage),
+            (PluginsButton, PluginPage),
+            (SnapshotsButton, SnapshotPage),
+            (ExportButton, ExportPage)
+        })
+        {
+            var selected = ReferenceEquals(activeButton, button);
+            page.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+        }
+        VersionPageScrollViewer.ScrollToTop();
 
         PageHeaderText.Text = activeButton == ConfigurationButton
             ? "配置"
@@ -224,16 +244,6 @@ public partial class VersionSettingsWindow : UserControl
                 : activeButton == ExportButton
                     ? "导出可以分享的版本设计，不带隐私内容和会话。"
                     : "查看当前版本和它自己的 DSH_HOME。";
-
-        foreach (var button in new[] { PersonalizationButton, ConfigurationButton, PluginsButton, SnapshotsButton, ExportButton })
-        {
-            button.Background = ReferenceEquals(button, activeButton)
-                ? new System.Windows.Media.SolidColorBrush(WpfColor.FromRgb(227, 240, 253))
-                : WpfBrushes.Transparent;
-            button.Foreground = ReferenceEquals(button, activeButton)
-                ? (WpfBrush)FindResource("BlueBrush")
-                : (WpfBrush)FindResource("TextBrush");
-        }
     }
 
     private void SnapshotBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSnapshotButtons();

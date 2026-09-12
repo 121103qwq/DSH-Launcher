@@ -1,6 +1,7 @@
 <UserControl x:Class="DshLauncher.ConversationWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DshLauncher.Controls"
         FontFamily="{StaticResource UiFont}"
         HorizontalAlignment="Stretch"
         VerticalAlignment="Stretch"
@@ -101,7 +102,7 @@
                        TextWrapping="Wrap" />
         </Border>
 
-        <TabControl Grid.Row="2" MinHeight="560">
+        <TabControl Grid.Row="2">
             <TabItem Header="对话文件">
                 <Grid Margin="0,12,0,0">
                     <Grid.RowDefinitions>
@@ -119,14 +120,13 @@
                         <Button Content="备份选中对话" Click="Backup_Click" Margin="0,0,8,0" />
                         <Button Content="删除选中对话" Click="Delete_Click" />
                     </WrapPanel>
-                    <Border Grid.Row="1"
-                            BorderBrush="{StaticResource LineBrush}"
+                    <controls:VisualSurface Grid.Row="1"
+                            BorderBrush="{DynamicResource LineBrush}"
                             BorderThickness="1"
                             CornerRadius="10"
-                            Background="White"
+                            Background="{DynamicResource CardBrush}"
                             Padding="8">
-                        <ListView x:Name="ConversationList"
-                                  MaxHeight="640"
+                        <ListView Background="Transparent" x:Name="ConversationList"
                                   BorderThickness="0"
                                   SelectionChanged="ConversationList_SelectionChanged"
                                   MouseDoubleClick="ConversationList_MouseDoubleClick"
@@ -141,7 +141,7 @@
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                    </Border>
+                    </controls:VisualSurface>
                 </Grid>
             </TabItem>
 
@@ -165,14 +165,13 @@
                                FontSize="11"
                                TextWrapping="Wrap"
                                Margin="0,0,0,12" />
-                    <Border Grid.Row="2"
-                            BorderBrush="{StaticResource LineBrush}"
+                    <controls:VisualSurface Grid.Row="2"
+                            BorderBrush="{DynamicResource LineBrush}"
                             BorderThickness="1"
                             CornerRadius="10"
-                            Background="White"
+                            Background="{DynamicResource CardBrush}"
                             Padding="8">
-                        <ListView x:Name="BackupList"
-                                  MaxHeight="640"
+                        <ListView Background="Transparent" x:Name="BackupList"
                                   BorderThickness="0"
                                   SelectionChanged="BackupList_SelectionChanged"
                                   ScrollViewer.VerticalScrollBarVisibility="Auto">
@@ -186,7 +185,7 @@
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                    </Border>
+                    </controls:VisualSurface>
                 </Grid>
             </TabItem>
 
@@ -198,8 +197,8 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Border Background="{StaticResource CardBrush}"
-                            BorderBrush="{StaticResource LineBrush}"
+                    <controls:VisualSurface Background="{DynamicResource CardBrush}"
+                            BorderBrush="{DynamicResource LineBrush}"
                             BorderThickness="1"
                             CornerRadius="10"
                             Padding="16">
@@ -233,11 +232,11 @@
                                         Padding="15,8" />
                             </Grid>
                         </StackPanel>
-                    </Border>
+                    </controls:VisualSurface>
 
-                    <Border Grid.Row="2"
-                            Background="{StaticResource CardBrush}"
-                            BorderBrush="{StaticResource LineBrush}"
+                    <controls:VisualSurface Grid.Row="2"
+                            Background="{DynamicResource CardBrush}"
+                            BorderBrush="{DynamicResource LineBrush}"
                             BorderThickness="1"
                             CornerRadius="10"
                             Padding="12">
@@ -257,10 +256,8 @@
                             </StackPanel>
                             <ListView Grid.Row="1"
                                       x:Name="SessionModelList"
-                                      MinHeight="260"
-                                      MaxHeight="470"
                                       BorderThickness="1"
-                                      BorderBrush="{StaticResource LineBrush}"
+                                      BorderBrush="{DynamicResource LineBrush}"
                                       SelectionChanged="SessionModelList_SelectionChanged"
                                       ScrollViewer.VerticalScrollBarVisibility="Auto">
                                 <ListView.View>
@@ -287,7 +284,7 @@
                                         Padding="15,8" />
                             </Grid>
                         </Grid>
-                    </Border>
+                    </controls:VisualSurface>
                 </Grid>
             </TabItem>
         </TabControl>

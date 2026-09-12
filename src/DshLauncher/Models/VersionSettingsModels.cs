@@ -1,6 +1,93 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace DshLauncher.Models;
+
+public enum VisualMaterial
+{
+    Solid,
+    FrostedGlass,
+    LiquidGlass
+}
+
+public sealed class VisualEffectsSettings
+{
+    public bool Enabled { get; set; }
+
+    [JsonConverter(typeof(VisualMaterialJsonConverter))]
+    public VisualMaterial Material { get; set; } = VisualMaterial.LiquidGlass;
+
+    public bool AmbientMotion { get; set; } = true;
+
+    public bool Particles { get; set; } = true;
+
+    public bool PointerHalo { get; set; } = true;
+
+    public bool PointerTrail { get; set; }
+
+    public bool ClickRipples { get; set; } = true;
+
+    public bool Parallax { get; set; } = true;
+
+    public VisualEffectsSettings Clone() => new()
+    {
+        Enabled = Enabled,
+        Material = Material,
+        AmbientMotion = AmbientMotion,
+        Particles = Particles,
+        PointerHalo = PointerHalo,
+        PointerTrail = PointerTrail,
+        ClickRipples = ClickRipples,
+        Parallax = Parallax
+    };
+}
+
+/// <summary>
+/// VisualMaterial is an optional Launcher setting. A newer Launcher may add a
+/// material before this one understands it, so an unknown token only falls
+/// back to the current safe material instead of invalidating the whole file.
+/// </summary>
+internal sealed class VisualMaterialJsonConverter : JsonConverter<VisualMaterial>
+{
+    public override bool HandleNull => true;
+
+    public override VisualMaterial Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String
+            && Enum.TryParse<VisualMaterial>(reader.GetString(), ignoreCase: true, out var material)
+            && Enum.IsDefined(material))
+        {
+            return material;
+        }
+
+        if (reader.TokenType == JsonTokenType.Number
+            && reader.TryGetInt32(out var numeric)
+            && Enum.IsDefined(typeof(VisualMaterial), numeric))
+        {
+            return (VisualMaterial)numeric;
+        }
+
+        if (reader.TokenType is not JsonTokenType.Null)
+        {
+            reader.Skip();
+        }
+
+        return VisualMaterial.LiquidGlass;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        VisualMaterial value,
+        JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(Enum.IsDefined(value)
+            ? value.ToString()
+            : VisualMaterial.LiquidGlass.ToString());
+    }
+}
 
 public enum ConversationSyncMode
 {
@@ -93,6 +180,12 @@ public sealed class LauncherSettingsData
     /// The plaintext token is never written to Launcher configuration.
     /// </summary>
     public string? GitHubTokenCiphertext { get; set; }
+
+    /// <summary>
+    /// Optional in JSON so older Launcher settings remain readable. A missing
+    /// or null value is normalized to a disabled default profile.
+    /// </summary>
+    public VisualEffectsSettings VisualEffects { get; set; } = new();
 }
 
 public sealed record VersionExportOptions(

@@ -8,10 +8,14 @@
         <SolidColorBrush x:Key="BlueBrush" Color="#1778D5" />
         <SolidColorBrush x:Key="BlueDarkBrush" Color="#0E5FAF" />
         <SolidColorBrush x:Key="PageBrush" Color="#EEF5FD" />
+        <SolidColorBrush x:Key="ContentPageBrush" Color="#EEF5FD" />
         <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF" />
         <SolidColorBrush x:Key="TextBrush" Color="#26384A" />
         <SolidColorBrush x:Key="MutedBrush" Color="#718196" />
         <SolidColorBrush x:Key="LineBrush" Color="#D7E4F2" />
+        <SolidColorBrush x:Key="HeaderSurfaceBrush" Color="#1778D5" />
+        <SolidColorBrush x:Key="HeaderControlBrush" Color="#2578C4" />
+        <SolidColorBrush x:Key="SurfaceHighlightBrush" Color="#00FFFFFF" />
         <Style x:Key="ContextInstanceMenuStyle" TargetType="ContextMenu">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -78,14 +82,64 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
+                        <Border x:Name="ButtonChrome"
+                                Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="8"
-                                Padding="{TemplateBinding Padding}">
+                                Padding="{TemplateBinding Padding}"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="ButtonPressScale" ScaleX="1" ScaleY="1" />
+                            </Border.RenderTransform>
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonChrome" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <ScaleTransform ScaleX="0.985" ScaleY="0.985" />
+                                    </Setter.Value>
+                                </Setter>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ButtonChrome"
+                                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                             From="1"
+                                                             To="0.985"
+                                                             Duration="0:0:0.08"
+                                                             FillBehavior="Stop" />
+                                            <DoubleAnimation Storyboard.TargetName="ButtonChrome"
+                                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                             From="1"
+                                                             To="0.985"
+                                                             Duration="0:0:0.08"
+                                                             FillBehavior="Stop" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard HandoffBehavior="SnapshotAndReplace">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ButtonChrome"
+                                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                             From="0.985"
+                                                             To="1"
+                                                             Duration="0:0:0.08"
+                                                             FillBehavior="Stop" />
+                                            <DoubleAnimation Storyboard.TargetName="ButtonChrome"
+                                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                             From="0.985"
+                                                             To="1"
+                                                             Duration="0:0:0.08"
+                                                             FillBehavior="Stop" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>

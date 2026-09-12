@@ -3,7 +3,9 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using UserControl = System.Windows.Controls.UserControl;
+using Button = System.Windows.Controls.Button;
 using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
@@ -23,6 +25,26 @@ public partial class ConversationWindow : UserControl
     private readonly Func<Task<IReadOnlyList<CodingModelOption>>>? _modelOptionsProvider;
     private IReadOnlyList<ModelChoice> _modelChoices = Array.Empty<ModelChoice>();
     private IReadOnlySet<string>? _searchMatches;
+    private CancellationTokenSource _pageCancellation = new();
+    private CancellationTokenSource? _conversationRefreshCancellation;
+    private CancellationTokenSource? _backupRefreshCancellation;
+    private CancellationTokenSource? _searchCancellation;
+    private IReadOnlyList<Button> _loadingSensitiveButtons = Array.Empty<Button>();
+    private string? _selectedConversationPath;
+    private string? _selectedBackupPath;
+    private ConversationStorageInfo? _storageInfo;
+    private int _entriesVersion;
+    private long _conversationRefreshGeneration;
+    private long _backupRefreshGeneration;
+    private long _searchGeneration;
+    private Task? _synchronizationTask;
+    private bool _pageActive;
+    private bool _conversationLoading;
+    private bool _backupLoading;
+    private bool _synchronizing;
+    private bool _modelConfigurationLoading;
+    private bool _actionInProgress;
+    private bool _suppressSelectionTracking;
     private bool _searchInProgress;
     private bool _instanceSelectorReady;
 
@@ -47,6 +69,7 @@ public partial class ConversationWindow : UserControl
         _modelPolicyService = modelPolicyService;
         _modelOptionsProvider = modelOptionsProvider;
         InitializeComponent();
+        Unloaded += Window_OnUnloaded;
     }
 
     private ObservableCollection<ConversationEntry> Entries { get; } = new();
@@ -55,48 +78,163 @@ public partial class ConversationWindow : UserControl
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
+        if (_pageActive)
+        {
+            return;
+        }
+
+        if (_pageCancellation.IsCancellationRequested)
+        {
+            _pageCancellation = new CancellationTokenSource();
+        }
+
+        _pageActive = true;
+        _loadingSensitiveButtons = FindVisualChildren<Button>(this)
+            .Where(IsLoadingSensitiveButton)
+            .ToArray();
+        UpdateLoadingUi();
+
         VersionSelectorBox.ItemsSource = _instances ?? new[] { _instance };
         VersionSelectorBox.SelectedItem = (_instances ?? new[] { _instance }).FirstOrDefault(candidate =>
             string.Equals(candidate.Id, _instance.Id, StringComparison.Ordinal));
         _instanceSelectorReady = true;
         await SynchronizeAsync();
+        if (!_pageActive)
+        {
+            return;
+        }
+
         await RefreshAsync();
+        if (!_pageActive)
+        {
+            return;
+        }
+
         await RefreshBackupsAsync(updateStatus: false);
+        if (!_pageActive)
+        {
+            return;
+        }
+
         await RefreshModelConfigurationAsync();
+    }
+
+    private void Window_OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        _pageActive = false;
+        _pageCancellation.Cancel();
+        CancelAndDispose(ref _conversationRefreshCancellation);
+        CancelAndDispose(ref _backupRefreshCancellation);
+        CancelAndDispose(ref _searchCancellation);
+        _conversationRefreshGeneration++;
+        _backupRefreshGeneration++;
+        _searchGeneration++;
+        _conversationLoading = false;
+        _backupLoading = false;
+        _synchronizing = false;
+        _modelConfigurationLoading = false;
+        _actionInProgress = false;
+        _searchInProgress = false;
+        UpdateLoadingUi();
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
+        if (!CanStartExternalOperation())
+        {
+            return;
+        }
+
         await SynchronizeAsync();
         await RefreshAsync();
     }
 
-    private async Task SynchronizeAsync()
+    private async Task SynchronizeAsync(bool internalOperation = false)
     {
-        if (_synchronizeConversations is not null)
+        if (_synchronizeConversations is null
+            || !_pageActive
+            || (!internalOperation && IsBusy)
+            )
         {
-            await _synchronizeConversations();
+            return;
         }
+
+        if (_synchronizationTask is { IsCompleted: false } existing)
+        {
+            await existing;
+            return;
+        }
+
+        _synchronizing = true;
+        UpdateLoadingUi();
+        var task = SynchronizeCoreAsync();
+        _synchronizationTask = task;
+        await task;
     }
 
-    private async Task RefreshAsync()
+    private async Task SynchronizeCoreAsync()
     {
         try
         {
-            var selectedPath = (ConversationList.SelectedItem as ConversationEntry)?.FullPath;
+            if (_pageActive)
+            {
+                await _synchronizeConversations!();
+            }
+        }
+        catch (OperationCanceledException) when (!_pageActive || _pageCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (_pageActive)
+            {
+                ShowError(ex);
+            }
+        }
+        finally
+        {
+            if (_pageActive)
+            {
+                _synchronizing = false;
+                UpdateLoadingUi();
+            }
+        }
+    }
+
+    private async Task RefreshAsync(bool internalOperation = false)
+    {
+        if (!_pageActive
+            || _conversationLoading
+            || (!internalOperation && IsBusy))
+        {
+            return;
+        }
+
+        var operationGeneration = ++_conversationRefreshGeneration;
+        CancelAndDispose(ref _conversationRefreshCancellation);
+        _conversationRefreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation.Token);
+        var operationToken = _conversationRefreshCancellation.Token;
+        _conversationLoading = true;
+        CancelAndDispose(ref _searchCancellation);
+        _searchInProgress = false;
+        UpdateLoadingUi();
+        try
+        {
             var result = await Task.Run(() => (
                 Storage: _service.GetStorageInfo(_instance),
-                Entries: _service.List(_instance)));
-            var entries = result.Entries;
-            Entries.Clear();
-            foreach (var entry in entries) Entries.Add(entry);
-            UpdateStorageNotice(result.Storage);
-            ApplyConversationFilter();
-            if (selectedPath is not null)
+                Entries: _service.List(_instance)), operationToken);
+            if (!IsCurrentConversationRefresh(operationGeneration, operationToken))
             {
-                ConversationList.SelectedItem = Entries.FirstOrDefault(entry =>
-                    string.Equals(entry.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
+                return;
             }
+
+            _storageInfo = result.Storage;
+            var selectedPath = _selectedConversationPath;
+            Entries.Clear();
+            foreach (var entry in result.Entries) Entries.Add(entry);
+            _entriesVersion++;
+            UpdateStorageNotice(result.Storage);
+            ApplyConversationFilter(selectedPath);
 
             StatusText.Text = result.Storage.Kind == ConversationStorageKind.Sqlite
                 ? "当前版本的对话由 SQLite 统一会话库管理；Launcher 没有把它误报为缺失的 JSONL 文件。"
@@ -108,17 +246,153 @@ public partial class ConversationWindow : UserControl
                 RefreshSessionModelRows();
             }
         }
+        catch (OperationCanceledException) when (!_pageActive || operationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            ShowError(ex);
+            if (IsCurrentConversationRefresh(operationGeneration, operationToken))
+            {
+                ShowError(ex);
+            }
+        }
+        finally
+        {
+            if (IsCurrentConversationRefresh(operationGeneration, operationToken))
+            {
+                _conversationLoading = false;
+                UpdateLoadingUi();
+            }
+        }
+    }
+
+    private bool IsBusy => _conversationLoading
+        || _backupLoading
+        || _synchronizing
+        || _modelConfigurationLoading
+        || _actionInProgress
+        || _searchInProgress;
+
+    private bool CanStartExternalOperation() => _pageActive && !IsBusy;
+
+    private bool IsCurrentConversationRefresh(long generation, CancellationToken token) =>
+        IsCurrentLoad(generation, _conversationRefreshGeneration, _pageActive, token);
+
+    private bool IsCurrentBackupRefresh(long generation, CancellationToken token) =>
+        IsCurrentLoad(generation, _backupRefreshGeneration, _pageActive, token);
+
+    private bool IsCurrentSearch(long generation, CancellationToken token) =>
+        IsCurrentLoad(generation, _searchGeneration, _pageActive, token);
+
+    internal static bool IsCurrentLoad(
+        long requestedGeneration,
+        long currentGeneration,
+        bool pageActive,
+        CancellationToken cancellationToken) =>
+        pageActive
+        && requestedGeneration == currentGeneration
+        && !cancellationToken.IsCancellationRequested;
+
+    internal static string? FindSelectionPath(
+        IEnumerable<string> availablePaths,
+        string? selectedPath)
+    {
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            return null;
+        }
+
+        return availablePaths.FirstOrDefault(path =>
+            string.Equals(path, selectedPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void CancelAndDispose(ref CancellationTokenSource? source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        source.Cancel();
+        source.Dispose();
+        source = null;
+    }
+
+    private bool TryBeginAction()
+    {
+        if (!CanStartExternalOperation())
+        {
+            return false;
+        }
+
+        _actionInProgress = true;
+        UpdateLoadingUi();
+        return true;
+    }
+
+    private void EndAction()
+    {
+        _actionInProgress = false;
+        if (_pageActive)
+        {
+            UpdateLoadingUi();
+        }
+    }
+
+    private void UpdateLoadingUi()
+    {
+        var enabled = _pageActive && !IsBusy;
+        foreach (var button in _loadingSensitiveButtons)
+        {
+            button.IsEnabled = enabled;
+        }
+
+        VersionSelectorBox.IsEnabled = enabled;
+        ConversationList.IsEnabled = enabled;
+        BackupList.IsEnabled = enabled;
+        ConversationSearchBox.IsEnabled = enabled;
+
+        var supportsJsonl = _storageInfo?.SupportsJsonlImport ?? true;
+        ImportButton.IsEnabled = enabled && supportsJsonl;
+        RestoreBackupButton.IsEnabled = enabled && supportsJsonl;
+    }
+
+    private static bool IsLoadingSensitiveButton(Button button) => button.Content is string text
+        && text is "刷新"
+            or "打开选中对话"
+            or "导入 session.jsonl / .zstd"
+            or "导出选中对话"
+            or "备份选中对话"
+            or "删除选中对话"
+            or "刷新备份"
+            or "恢复选中备份"
+            or "搜索正文"
+            or "清空"
+            or "保存工作区模型"
+            or "保存单独对话模型";
+
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var descendant in FindVisualChildren<T>(child))
+            {
+                yield return descendant;
+            }
         }
     }
 
     private void UpdateStorageNotice(ConversationStorageInfo storage)
     {
+        _storageInfo = storage;
         var sqliteOnly = storage.Kind == ConversationStorageKind.Sqlite;
-        ImportButton.IsEnabled = storage.SupportsJsonlImport;
-        RestoreBackupButton.IsEnabled = storage.SupportsJsonlImport;
         StorageNoticePanel.Visibility = storage.Kind == ConversationStorageKind.Jsonl
             ? Visibility.Collapsed
             : Visibility.Visible;
@@ -129,7 +403,9 @@ public partial class ConversationWindow : UserControl
 
     private void VersionSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_instanceSelectorReady
+        if (!_pageActive
+            || !_instanceSelectorReady
+            || IsBusy
             || VersionSelectorBox.SelectedItem is not ManagerInstance target
             || string.Equals(target.Id, _instance.Id, StringComparison.Ordinal))
         {
@@ -172,7 +448,7 @@ public partial class ConversationWindow : UserControl
 
     private async Task SearchConversationsAsync()
     {
-        if (_searchInProgress)
+        if (!CanStartExternalOperation() || _searchInProgress)
         {
             return;
         }
@@ -186,28 +462,49 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
+        var operationGeneration = ++_searchGeneration;
+        CancelAndDispose(ref _searchCancellation);
+        _searchCancellation = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation.Token);
+        var operationToken = _searchCancellation.Token;
+        var entriesVersion = _entriesVersion;
+        var entriesSnapshot = Entries.ToArray();
         _searchInProgress = true;
-        ConversationSearchBox.IsEnabled = false;
+        UpdateLoadingUi();
         StatusText.Text = $"正在搜索 {Entries.Count} 个对话的标题、工作区和正文…";
         try
         {
             var matches = await Task.Run(() =>
-                _service.Search(Entries.ToArray(), query));
+                _service.Search(entriesSnapshot, query), operationToken);
+            if (!IsCurrentSearch(operationGeneration, operationToken)
+                || entriesVersion != _entriesVersion)
+            {
+                return;
+            }
+
             _searchMatches = matches
                 .Select(static entry => entry.FullPath)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             ApplyConversationFilter();
             StatusText.Text = $"“{query}”找到 {ConversationList.Items.Count} 个结果。";
         }
+        catch (OperationCanceledException) when (!_pageActive || operationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            ShowError(ex);
+            if (IsCurrentSearch(operationGeneration, operationToken))
+            {
+                ShowError(ex);
+            }
         }
         finally
         {
-            _searchInProgress = false;
-            ConversationSearchBox.IsEnabled = true;
-            ConversationSearchBox.Focus();
+            if (IsCurrentSearch(operationGeneration, operationToken))
+            {
+                _searchInProgress = false;
+                UpdateLoadingUi();
+                ConversationSearchBox.Focus();
+            }
         }
     }
 
@@ -219,8 +516,9 @@ public partial class ConversationWindow : UserControl
         StatusText.Text = $"显示 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。";
     }
 
-    private void ApplyConversationFilter()
+    private void ApplyConversationFilter(string? preferredPath = null)
     {
+        preferredPath ??= _selectedConversationPath;
         var scope = (ConversationScopeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "All";
         IEnumerable<ConversationEntry> filtered = scope switch
         {
@@ -241,7 +539,23 @@ public partial class ConversationWindow : UserControl
             filtered = filtered.Where(entry => _searchMatches.Contains(entry.FullPath));
         }
 
-        ConversationList.ItemsSource = filtered.ToArray();
+        var snapshot = filtered.ToArray();
+        _suppressSelectionTracking = true;
+        try
+        {
+            ConversationList.ItemsSource = snapshot;
+            var selectedPath = FindSelectionPath(snapshot.Select(static entry => entry.FullPath), preferredPath);
+            ConversationList.SelectedItem = selectedPath is null
+                ? null
+                : snapshot.FirstOrDefault(entry =>
+                    string.Equals(entry.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            _suppressSelectionTracking = false;
+        }
+
+        _selectedConversationPath = (ConversationList.SelectedItem as ConversationEntry)?.FullPath;
     }
 
     private async Task RefreshModelConfigurationAsync()
@@ -253,9 +567,21 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
+        if (!_pageActive)
+        {
+            return;
+        }
+
+        _modelConfigurationLoading = true;
+        UpdateLoadingUi();
         try
         {
             var options = await _modelOptionsProvider();
+            if (!_pageActive)
+            {
+                return;
+            }
+
             _modelChoices = new[] { new ModelChoice("自动继承", null) }
                 .Concat(options.Select(option => new ModelChoice(option.DisplayText, option)))
                 .ToArray();
@@ -267,7 +593,18 @@ public partial class ConversationWindow : UserControl
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"读取模型配置失败：{ex.Message}";
+            if (_pageActive)
+            {
+                StatusText.Text = $"读取模型配置失败：{ex.Message}";
+            }
+        }
+        finally
+        {
+            if (_pageActive)
+            {
+                _modelConfigurationLoading = false;
+                UpdateLoadingUi();
+            }
         }
     }
 
@@ -470,29 +807,72 @@ public partial class ConversationWindow : UserControl
     private async void RefreshBackups_Click(object sender, RoutedEventArgs e) =>
         await RefreshBackupsAsync();
 
-    private async Task RefreshBackupsAsync(bool updateStatus = true)
+    private async Task RefreshBackupsAsync(bool updateStatus = true, bool internalOperation = false)
     {
+        if (!_pageActive
+            || _backupLoading
+            || (!internalOperation && IsBusy))
+        {
+            return;
+        }
+
+        var operationGeneration = ++_backupRefreshGeneration;
+        CancelAndDispose(ref _backupRefreshCancellation);
+        _backupRefreshCancellation = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation.Token);
+        var operationToken = _backupRefreshCancellation.Token;
+        _backupLoading = true;
+        UpdateLoadingUi();
         try
         {
-            var selectedPath = (BackupList.SelectedItem as ConversationBackupEntry)?.FullPath;
-            var backups = await Task.Run(() => _service.ListBackups(_instance));
+            var backups = await Task.Run(() => _service.ListBackups(_instance), operationToken);
+            if (!IsCurrentBackupRefresh(operationGeneration, operationToken))
+            {
+                return;
+            }
+
+            var preservedPath = _selectedBackupPath;
             Backups.Clear();
             foreach (var backup in backups) Backups.Add(backup);
-            BackupList.ItemsSource = Backups;
-            if (selectedPath is not null)
+            _suppressSelectionTracking = true;
+            try
             {
-                BackupList.SelectedItem = Backups.FirstOrDefault(backup =>
-                    string.Equals(backup.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
+                BackupList.ItemsSource = Backups;
+                var selectedPath = FindSelectionPath(
+                    Backups.Select(static backup => backup.FullPath),
+                    preservedPath);
+                BackupList.SelectedItem = selectedPath is null
+                    ? null
+                    : Backups.FirstOrDefault(backup =>
+                        string.Equals(backup.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase));
             }
+            finally
+            {
+                _suppressSelectionTracking = false;
+            }
+            _selectedBackupPath = (BackupList.SelectedItem as ConversationBackupEntry)?.FullPath;
 
             if (updateStatus)
             {
                 StatusText.Text = $"已读取 {Backups.Count} 个对话备份。";
             }
         }
+        catch (OperationCanceledException) when (!_pageActive || operationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            ShowError(ex);
+            if (IsCurrentBackupRefresh(operationGeneration, operationToken))
+            {
+                ShowError(ex);
+            }
+        }
+        finally
+        {
+            if (IsCurrentBackupRefresh(operationGeneration, operationToken))
+            {
+                _backupLoading = false;
+                UpdateLoadingUi();
+            }
         }
     }
 
@@ -526,6 +906,11 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
+        if (!TryBeginAction())
+        {
+            return;
+        }
+
         try
         {
             if (!await _openConversation(entry))
@@ -539,12 +924,26 @@ public partial class ConversationWindow : UserControl
         }
         catch (Exception ex)
         {
-            ShowError(ex);
+            if (_pageActive)
+            {
+                ShowError(ex);
+            }
+        }
+        finally
+        {
+            EndAction();
         }
     }
 
     private async void Import_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryBeginAction())
+        {
+            return;
+        }
+
+        try
+        {
         using var dialog = new Forms.OpenFileDialog
         {
             Title = "导入 DSh session.jsonl",
@@ -558,7 +957,7 @@ public partial class ConversationWindow : UserControl
         string? workspaceOverride = null;
         if (_instances is { Count: > 0 })
         {
-            var choice = ShowImportTargetDialog();
+            var choice = await ShowImportTargetDialogAsync();
             if (choice is null)
             {
                 StatusText.Text = "已取消导入。";
@@ -568,19 +967,34 @@ public partial class ConversationWindow : UserControl
             (targetInstance, workspaceOverride) = choice.Value;
         }
 
-        try
+        var target = await Task.Run(
+            () => _service.Import(targetInstance, dialog.FileName, workspaceOverride),
+            _pageCancellation.Token);
+        await SynchronizeAsync(internalOperation: true);
+        if (!_pageActive)
         {
-            var target = await Task.Run(() => _service.Import(targetInstance, dialog.FileName, workspaceOverride));
-            await SynchronizeAsync();
-            StatusText.Text = $"对话已导入到 {targetInstance.Name}：{target}";
-            await RefreshAsync();
+            return;
         }
-        catch (Exception ex) { ShowError(ex); }
+
+        StatusText.Text = $"对话已导入到 {targetInstance.Name}：{target}";
+        await RefreshAsync(internalOperation: true);
+        }
+        catch (OperationCanceledException) when (!_pageActive || _pageCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (_pageActive) ShowError(ex);
+        }
+        finally
+        {
+            EndAction();
+        }
     }
 
     private const string ImportWorkspaceAuto = "（按文件自带工作目录）";
 
-    private (ManagerInstance Instance, string? Workspace)? ShowImportTargetDialog()
+    private async Task<(ManagerInstance Instance, string? Workspace)?> ShowImportTargetDialogAsync()
     {
         var instances = _instances!;
         var versionBox = new System.Windows.Controls.ComboBox
@@ -597,43 +1011,77 @@ public partial class ConversationWindow : UserControl
             IsEditable = true,
             Margin = new Thickness(0, 6, 0, 0)
         };
-
-        void LoadWorkspaces(ManagerInstance selected)
-        {
-            try
-            {
-                var workspaces = _service.List(selected)
-                    .Select(entry => entry.WorkingDirectory)
-                    .Where(directory => !string.IsNullOrWhiteSpace(directory))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(directory => directory, StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                workspaceBox.ItemsSource = new[] { ImportWorkspaceAuto }.Concat(workspaces).ToArray();
-            }
-            catch
-            {
-                workspaceBox.ItemsSource = new[] { ImportWorkspaceAuto };
-            }
-
-            workspaceBox.SelectedIndex = 0;
-        }
-
-        LoadWorkspaces(instances[Math.Max(0, versionBox.SelectedIndex)]);
-        versionBox.SelectionChanged += (_, _) =>
-        {
-            if (versionBox.SelectedItem is ManagerInstance selected)
-            {
-                LoadWorkspaces(selected);
-            }
-        };
-
-        var confirmButton = new System.Windows.Controls.Button
+        var confirmButton = new Button
         {
             Content = "导入",
             Style = (Style)FindResource("PrimaryButton"),
             Padding = new Thickness(16, 8, 16, 8),
             MinWidth = 90
         };
+
+        Window dialog = null!;
+        var dialogClosed = false;
+        var workspaceLoadGeneration = 0;
+
+        async Task LoadWorkspacesAsync(ManagerInstance selected)
+        {
+            var generation = ++workspaceLoadGeneration;
+            var token = _pageCancellation.Token;
+            // A new target must never keep the previous instance's workspace.
+            workspaceBox.ItemsSource = new[] { ImportWorkspaceAuto };
+            workspaceBox.SelectedIndex = 0;
+            workspaceBox.IsEnabled = false;
+            confirmButton.IsEnabled = false;
+            try
+            {
+                var workspaces = await Task.Run(() => _service.List(selected), token);
+                if (!IsCurrentLoad(generation, workspaceLoadGeneration, _pageActive && !dialogClosed, token))
+                {
+                    return;
+                }
+
+                var workspaceNames = workspaces
+                    .Select(entry => entry.WorkingDirectory)
+                    .Where(directory => !string.IsNullOrWhiteSpace(directory))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(directory => directory, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                workspaceBox.ItemsSource = new[] { ImportWorkspaceAuto }.Concat(workspaceNames).ToArray();
+            }
+            catch (OperationCanceledException) when (!_pageActive || token.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception)
+            {
+                // Current failures keep the automatic destination; stale failures
+                // are discarded just like stale successful snapshots.
+            }
+            finally
+            {
+                if (IsCurrentLoad(generation, workspaceLoadGeneration, _pageActive && !dialogClosed, token))
+                {
+                    workspaceBox.SelectedIndex = 0;
+                    workspaceBox.IsEnabled = true;
+                    confirmButton.IsEnabled = true;
+                }
+            }
+        }
+
+        await LoadWorkspacesAsync(instances[Math.Max(0, versionBox.SelectedIndex)]);
+        if (!_pageActive)
+        {
+            return null;
+        }
+
+        versionBox.SelectionChanged += async (_, _) =>
+        {
+            if (versionBox.SelectedItem is ManagerInstance selected)
+            {
+                await LoadWorkspacesAsync(selected);
+            }
+        };
+
         var cancelButton = new System.Windows.Controls.Button
         {
             Content = "取消",
@@ -650,7 +1098,7 @@ public partial class ConversationWindow : UserControl
         buttons.Children.Add(confirmButton);
         buttons.Children.Add(cancelButton);
 
-        var dialog = new Window
+        dialog = new Window
         {
             Title = "选择导入目标",
             Owner = Window.GetWindow(this),
@@ -678,6 +1126,11 @@ public partial class ConversationWindow : UserControl
         };
         confirmButton.Click += (_, _) => dialog.DialogResult = true;
         cancelButton.Click += (_, _) => dialog.DialogResult = false;
+        dialog.Closed += (_, _) =>
+        {
+            dialogClosed = true;
+            workspaceLoadGeneration++;
+        };
 
         if (dialog.ShowDialog() != true
             || versionBox.SelectedItem is not ManagerInstance target)
@@ -710,12 +1163,32 @@ public partial class ConversationWindow : UserControl
         };
         if (dialog.ShowDialog() != Forms.DialogResult.OK) return;
 
+        if (!TryBeginAction())
+        {
+            return;
+        }
+
         try
         {
-            var target = await Task.Run(() => _service.Export(_instance, entry, dialog.FileName));
-            StatusText.Text = $"对话已导出：{target}";
+            var target = await Task.Run(
+                () => _service.Export(_instance, entry, dialog.FileName),
+                _pageCancellation.Token);
+            if (_pageActive)
+            {
+                StatusText.Text = $"对话已导出：{target}";
+            }
         }
-        catch (Exception ex) { ShowError(ex); }
+        catch (OperationCanceledException) when (!_pageActive || _pageCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (_pageActive) ShowError(ex);
+        }
+        finally
+        {
+            EndAction();
+        }
     }
 
     private async void Backup_Click(object sender, RoutedEventArgs e)
@@ -726,13 +1199,31 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
+        if (!TryBeginAction())
+        {
+            return;
+        }
+
         try
         {
-            var target = await Task.Run(() => _service.Backup(_instance, entry));
-            await RefreshBackupsAsync(updateStatus: false);
-            StatusText.Text = $"对话已备份：{target}";
+            var target = await Task.Run(() => _service.Backup(_instance, entry), _pageCancellation.Token);
+            await RefreshBackupsAsync(updateStatus: false, internalOperation: true);
+            if (_pageActive)
+            {
+                StatusText.Text = $"对话已备份：{target}";
+            }
         }
-        catch (Exception ex) { ShowError(ex); }
+        catch (OperationCanceledException) when (!_pageActive || _pageCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (_pageActive) ShowError(ex);
+        }
+        finally
+        {
+            EndAction();
+        }
     }
 
     private async void RestoreBackup_Click(object sender, RoutedEventArgs e)
@@ -759,17 +1250,34 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
+        if (!TryBeginAction())
+        {
+            return;
+        }
+
         try
         {
-            var target = await Task.Run(() => _service.RestoreBackup(_instance, backup));
-            await SynchronizeAsync();
-            await RefreshAsync();
-            await RefreshBackupsAsync(updateStatus: false);
-            StatusText.Text = $"对话已恢复：{target}";
+            var target = await Task.Run(
+                () => _service.RestoreBackup(_instance, backup),
+                _pageCancellation.Token);
+            await SynchronizeAsync(internalOperation: true);
+            await RefreshAsync(internalOperation: true);
+            await RefreshBackupsAsync(updateStatus: false, internalOperation: true);
+            if (_pageActive)
+            {
+                StatusText.Text = $"对话已恢复：{target}";
+            }
+        }
+        catch (OperationCanceledException) when (!_pageActive || _pageCancellation.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            ShowError(ex);
+            if (_pageActive) ShowError(ex);
+        }
+        finally
+        {
+            EndAction();
         }
     }
 
@@ -791,27 +1299,58 @@ public partial class ConversationWindow : UserControl
             return;
         }
 
+        if (!TryBeginAction())
+        {
+            return;
+        }
+
         try
         {
-            await Task.Run(() => _service.Delete(_instance, entry));
+            await Task.Run(() => _service.Delete(_instance, entry), _pageCancellation.Token);
             if (_propagateDeletion is not null)
             {
                 await _propagateDeletion(entry.RelativePath);
             }
             else
             {
-                await SynchronizeAsync();
+                await SynchronizeAsync(internalOperation: true);
             }
-            StatusText.Text = "对话文件已删除。";
-            await RefreshAsync();
+            if (_pageActive)
+            {
+                StatusText.Text = "对话文件已删除。";
+            }
+            await RefreshAsync(internalOperation: true);
         }
-        catch (Exception ex) { ShowError(ex); }
+        catch (OperationCanceledException) when (!_pageActive || _pageCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (_pageActive) ShowError(ex);
+        }
+        finally
+        {
+            EndAction();
+        }
     }
 
-    private void ConversationList_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelection();
+    private void ConversationList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_suppressSelectionTracking)
+        {
+            _selectedConversationPath = (ConversationList.SelectedItem as ConversationEntry)?.FullPath;
+        }
+
+        UpdateSelection();
+    }
 
     private void BackupList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (!_suppressSelectionTracking)
+        {
+            _selectedBackupPath = (BackupList.SelectedItem as ConversationBackupEntry)?.FullPath;
+        }
+
         if (BackupList.SelectedItem is ConversationBackupEntry backup)
         {
             StatusText.Text = backup.HasValidHeader

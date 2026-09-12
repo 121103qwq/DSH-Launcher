@@ -18,6 +18,14 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 ## 主要功能
 
+### 华丽视觉与流畅切页
+
+- 在“设置 → 华丽视觉”中开启，默认保留原有外观；切换后立即生效并自动保存。
+- 可选原始实体、毛玻璃、液态玻璃（轻量），并分别开关流体背景、漂浮粒子、鼠标光晕、拖尾、点击波纹与层次视差。
+- 玻璃只作用于 Launcher 内部的装饰背景，不是桌面透明或真实光学折射；正文和输入内容保持清晰。
+- 背景可以持续缓慢流动，窗口隐藏或最小化时暂停；关闭华丽视觉不会关闭页面的渐出、渐入动画。
+- 顶栏支持窄窗口紧凑布局，导航文字与品牌对齐，入口不因空间不足而消失。
+
 ### 多版本与多实例
 
 - 每个版本使用独立的 `DSH_HOME` 与 `DSH_AGENTS_HOME`。
@@ -166,6 +174,6 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.1.2**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.2.0**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
 
 本次更新补齐跨电脑密码快照、GitHub 请求缓存与配额提示，并修复旧凭据导入、实例选择丢失、快照遗漏 pnpm 构建配置、主题预览大图限制及切换 Profile 后主题状态残留等问题。

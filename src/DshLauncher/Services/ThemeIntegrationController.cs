@@ -40,6 +40,8 @@ public sealed class ThemeIntegrationController : IDisposable
 {
     private readonly DshMarketThemeService _marketService;
     private readonly bool _ownsMarketService;
+    private readonly object _stateSync = new();
+    private long _marketRequestVersion;
     private bool _disposed;
 
     public ThemeIntegrationController(DshMarketThemeService? marketService = null)
@@ -58,45 +60,95 @@ public sealed class ThemeIntegrationController : IDisposable
     public ThemeCapabilityProbeResult ChatCapability { get; private set; } =
         ThemeCapabilityProbeResult.Unknown("尚未探测当前实例的 Chat 主题能力。 ");
 
-    public void SetUseDshMarketHotReload(bool enabled) => UseDshMarketHotReload = enabled;
+    public void SetUseDshMarketHotReload(bool enabled)
+    {
+        lock (_stateSync)
+        {
+            UseDshMarketHotReload = enabled;
+            _marketRequestVersion++;
+        }
+    }
 
     public long BeginProfileSelection(string profileName)
     {
-        ProfileGeneration++;
-        ChatCapability = string.Equals(profileName, "web", StringComparison.OrdinalIgnoreCase)
-            ? ThemeCapabilityProbeResult.Unknown("正在探测当前 Profile 的 Chat 主题能力。 ")
-            : ThemeCapabilityProbeResult.Unsupported(
-                "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 ");
-        return ProfileGeneration;
+        lock (_stateSync)
+        {
+            ProfileGeneration++;
+            _marketRequestVersion++;
+            ChatCapability = string.Equals(profileName, "web", StringComparison.OrdinalIgnoreCase)
+                ? ThemeCapabilityProbeResult.Unknown("正在探测当前 Profile 的 Chat 主题能力。 ")
+                : ThemeCapabilityProbeResult.Unsupported(
+                    "Chat 主题联动只作用于 web profile，当前 Profile 不支持。 ");
+            return ProfileGeneration;
+        }
     }
 
-    public bool IsCurrentProfile(long generation) => generation == ProfileGeneration;
+    public bool IsCurrentProfile(long generation)
+    {
+        lock (_stateSync)
+        {
+            return generation == ProfileGeneration;
+        }
+    }
 
     public bool SetChatCapability(
         ThemeCapabilityProbeResult capability,
         long? profileGeneration = null)
     {
-        if (profileGeneration is not null && profileGeneration != ProfileGeneration)
+        lock (_stateSync)
         {
-            return false;
-        }
+            if (_disposed
+                || (profileGeneration is not null && profileGeneration != ProfileGeneration))
+            {
+                return false;
+            }
 
-        ChatCapability = capability;
-        return true;
+            ChatCapability = capability;
+            return true;
+        }
     }
 
     public DshMarketThemeState MarkMarketUnavailable(string reason)
     {
-        MarketState = DshMarketThemeState.Unavailable(reason);
-        return MarketState;
+        lock (_stateSync)
+        {
+            _marketRequestVersion++;
+            MarketState = DshMarketThemeState.Unavailable(reason);
+            return MarketState;
+        }
     }
 
     public async Task<DshMarketThemeState> ReadMarketAsync(
         ManagerInstance instance,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? profileGeneration = null)
     {
-        MarketState = await _marketService.ReadAsync(instance, cancellationToken);
-        return MarketState;
+        var expectedProfileGeneration = profileGeneration ?? ProfileGeneration;
+        long requestVersion;
+        lock (_stateSync)
+        {
+            if (_disposed || expectedProfileGeneration != ProfileGeneration)
+            {
+                return MarketState;
+            }
+
+            requestVersion = ++_marketRequestVersion;
+        }
+
+        var state = await _marketService.ReadAsync(instance, cancellationToken);
+        lock (_stateSync)
+        {
+            if (_disposed
+                || cancellationToken.IsCancellationRequested
+                || expectedProfileGeneration != ProfileGeneration
+                || requestVersion != _marketRequestVersion)
+            {
+                return MarketState;
+            }
+
+            MarketState = state;
+            return MarketState;
+        }
     }
 
     public async Task<ThemeCapabilityProbeResult> ProbeChatCapabilityAsync(
@@ -157,12 +209,16 @@ public sealed class ThemeIntegrationController : IDisposable
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_stateSync)
         {
-            return;
-        }
+            if (_disposed)
+            {
+                return;
+            }
 
-        _disposed = true;
+            _disposed = true;
+            _marketRequestVersion++;
+        }
         if (_ownsMarketService)
         {
             _marketService.Dispose();

@@ -1664,7 +1664,9 @@ static Task TestMainWindowCodeResourceReferences()
         && extensionWindowXaml.Contains("Value=\"已禁用\"", StringComparison.Ordinal)
         && extensionWindowXaml.Contains("TextTrimming=\"CharacterEllipsis\"", StringComparison.Ordinal)
         && extensionWindowXaml.Contains("<RowDefinition Height=\"*\" MinHeight=\"96\" />", StringComparison.Ordinal)
-        && extensionWindowCode.Contains("Math.Clamp(rightHeight - 36, 464, 700)", StringComparison.Ordinal)
+        && mainWindowXaml.Contains("x:Name=\"MainPageFrame\"", StringComparison.Ordinal)
+        && !mainWindowXaml.Contains("x:Name=\"MainScrollViewer\"", StringComparison.Ordinal)
+        && !extensionWindowCode.Contains("UpdateAgentPanelHeights", StringComparison.Ordinal)
         && !extensionWindowXaml.Contains("InstanceSelectorBox", StringComparison.Ordinal)
         && !extensionWindowCode.Contains("InstanceSelector_SelectionChanged", StringComparison.Ordinal),
         "扩展和 Agent 左栏必须为已安装列表保留可见高度、限制长文本并显示启用状态，但不能重复提供实例选择器。 ");
