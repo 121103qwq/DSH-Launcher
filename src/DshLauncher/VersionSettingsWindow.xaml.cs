@@ -1128,7 +1128,7 @@ public partial class VersionSettingsWindow : UserControl
         {
             Text = "启动方式显示",
             FontWeight = FontWeights.SemiBold,
-            FontSize = 14
+            FontSize = 13
         });
         content.Children.Add(new TextBlock
         {
@@ -1161,16 +1161,8 @@ public partial class VersionSettingsWindow : UserControl
         refresh.Click += (_, _) => RefreshLaunchModeVisibilitySection();
         content.Children.Add(refresh);
 
-        PersonalizationPage.Children.Add(new Border
-        {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = (CornerRadius)FindResource("CardCornerRadius"),
-            Padding = (Thickness)FindResource("CardPadding"),
-            Margin = new Thickness(0, 14, 0, 0),
-            Child = content
-        });
+        content.Margin = new Thickness(0, 18, 0, 0);
+        LaunchModeExtraSections.Children.Add(content);
 
         RefreshLaunchModeVisibilitySection();
     }
@@ -1290,7 +1282,7 @@ public partial class VersionSettingsWindow : UserControl
         {
             Text = "终端启动的工作区",
             FontWeight = FontWeights.SemiBold,
-            FontSize = 14
+            FontSize = 13
         });
         content.Children.Add(new TextBlock
         {
@@ -1375,16 +1367,8 @@ public partial class VersionSettingsWindow : UserControl
         };
         content.Children.Add(_terminalWorkspaceStatusText);
 
-        PersonalizationPage.Children.Add(new Border
-        {
-            Background = (WpfBrush)FindResource("CardBrush"),
-            BorderBrush = (WpfBrush)FindResource("LineBrush"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = (CornerRadius)FindResource("CardCornerRadius"),
-            Padding = (Thickness)FindResource("CardPadding"),
-            Margin = new Thickness(0, 14, 0, 0),
-            Child = content
-        });
+        content.Margin = new Thickness(0, 18, 0, 0);
+        LaunchModeExtraSections.Children.Add(content);
 
         UpdateTerminalWorkspaceStatus();
     }
