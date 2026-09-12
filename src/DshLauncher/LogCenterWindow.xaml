@@ -1,0 +1,84 @@
+<UserControl x:Class="DshLauncher.LogCenterWindow"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="{StaticResource UiFont}"
+             Loaded="Window_OnLoaded"
+             Unloaded="Window_OnUnloaded">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Background="{StaticResource CardBrush}"
+                BorderBrush="{StaticResource LineBrush}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource CardCornerRadius}"
+                Padding="{StaticResource CardPadding}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid>
+                    <StackPanel>
+                        <TextBlock Text="日志中心" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="只读浏览 Launcher 的结构化日志（launcher.log 及其轮转旧文件）：按天分组，可按级别 / 实例 / 关键字过滤。启动与停止事件带实例名、端口与 PID；错误行带错误码（E1xxx 环境 / E2xxx 插件 / E3xxx 网络 …）。删除日志请用「存储与清理」。"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                        <Button x:Name="BackButton" Content="← 返回设置" Click="Back_Click" Padding="12,7" Margin="0,0,7,0" />
+                        <Button Content="刷新" Click="Refresh_Click" Padding="12,7" Margin="0,0,7,0" />
+                        <Button Content="打开日志目录" Click="OpenFolder_Click" Padding="12,7" />
+                    </StackPanel>
+                </Grid>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
+                    <TextBlock Text="级别" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0" />
+                    <ComboBox x:Name="LevelBox" Width="96" Height="30" SelectionChanged="Filter_Changed" />
+                    <TextBlock Text="实例" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center" Margin="14,0,6,0" />
+                    <ComboBox x:Name="InstanceBox" Width="150" Height="30" SelectionChanged="Filter_Changed" />
+                    <TextBox x:Name="KeywordBox"
+                             Width="220"
+                             Height="30"
+                             VerticalContentAlignment="Center"
+                             Margin="14,0,0,0"
+                             TextChanged="Keyword_Changed"
+                             ToolTip="在消息 / 错误码 / 实例名里搜索（忽略大小写）" />
+                    <TextBlock x:Name="StatusText"
+                               Foreground="{StaticResource MutedBrush}"
+                               FontSize="11"
+                               VerticalAlignment="Center"
+                               Margin="14,0,0,0" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <Border Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}" />
+            <Border Background="{StaticResource CardBrush}"
+                    BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource CardCornerRadius}"
+                    Padding="{StaticResource CardPadding}">
+                <Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="LogPanel" />
+                    </ScrollViewer>
+                    <TextBlock x:Name="EmptyText"
+                               Text="暂时没有匹配的日志。"
+                               Foreground="{StaticResource MutedBrush}"
+                               FontSize="12"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Visibility="Collapsed" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -2127,6 +2127,81 @@ File.WriteAllText(launchModePath, launchModeText.Replace("\"Isolated\"", "\"NoSu
 Check("launch-mode/未知值保守回落 Desktop（不抛异常）",
     launchModeSettings.Read(launchModeInstance).OpenMode == VersionOpenMode.Desktop);
 
+// ===========================================================================
+// 10. 日志中心（LogCenterService，work-log/86）
+// ===========================================================================
+var logCenterRoot = Path.Combine(scratch, "log-center");
+Directory.CreateDirectory(logCenterRoot);
+var logCenterPreviousRoot = Environment.GetEnvironmentVariable(LauncherLog.LogRootVariable);
+Environment.SetEnvironmentVariable(LauncherLog.LogRootVariable, logCenterRoot);
+try
+{
+    const string proxyLine =
+        """{"utc":"2026-09-12T08:01:19.0812221+00:00","level":"INFO","code":"E3001","msg":"代理未启用（直连）。","ctx":{"server":null,"noProxy":null}}""";
+    const string stopLine =
+        """{"utc":"2026-09-09T12:00:00.0000000+00:00","level":"INFO","code":null,"msg":"实例已停止。","ctx":{"instance":"常用实例","instanceId":"ceafc5fc","pid":21104,"port":56241}}""";
+    const string errorLine =
+        """{"utc":"2026-09-12T08:30:00.0000000+00:00","level":"ERROR","code":"E9001","msg":"启动失败","ctx":{"instance":"常用实例","instanceId":"ceafc5fc"}}""";
+
+    Check("log-center/解析结构化行：级别/错误码/消息/实例字段",
+        LogCenterService.TryParse(stopLine, out var parsedStop)
+        && parsedStop.Level == "INFO" && parsedStop.Code is null && parsedStop.Message == "实例已停止。"
+        && parsedStop.Instance == "常用实例" && parsedStop.InstanceId == "ceafc5fc"
+        && LogCenterService.TryParse(proxyLine, out var parsedProxy)
+        && parsedProxy.Code == "E3001" && parsedProxy.Instance is null);
+    Check("log-center/坏行与缺 utc 行不污染解析（返回 false）",
+        !LogCenterService.TryParse("{ not json", out _)
+        && !LogCenterService.TryParse("""{"level":"INFO","msg":"no utc"}""", out _)
+        && !LogCenterService.TryParse(string.Empty, out _));
+
+    var sampleEntries = new List<LogCenterEntry>();
+    LogCenterService.TryParse(proxyLine, out var entryProxy);
+    LogCenterService.TryParse(stopLine, out var entryStop);
+    LogCenterService.TryParse(errorLine, out var entryError);
+    sampleEntries.AddRange(new[] { entryProxy, entryStop, entryError });
+
+    Check("log-center/过滤：级别精确、关键字跨消息/错误码/实例、实例名或 ID 均可",
+        LogCenterService.Filter(sampleEntries, level: "ERROR").Count == 1
+        && LogCenterService.Filter(sampleEntries, level: "ERROR")[0].Message == "启动失败"
+        && LogCenterService.Filter(sampleEntries, keyword: "E3001").Count == 1
+        && LogCenterService.Filter(sampleEntries, keyword: "常用实例").Count == 2
+        && LogCenterService.Filter(sampleEntries, instance: "ceafc5fc").Count == 2
+        && LogCenterService.Filter(sampleEntries, instance: "常用实例").Count == 2
+        && LogCenterService.Filter(sampleEntries, level: "WARN", keyword: "某", instance: "无").Count == 0);
+
+    Check("log-center/实例下拉去重且不含空值",
+        LogCenterService.CollectInstances(sampleEntries) is ["常用实例"]);
+
+    var dayGroups = LogCenterService.GroupByDay(sampleEntries);
+    Check("log-center/按本地日期分组：新→旧，组内也新→旧（跨天数据按本地时区算）",
+        dayGroups.Count == 2
+        && dayGroups[0].Day > dayGroups[1].Day
+        && dayGroups[0].Entries.Count == 2
+        && dayGroups[0].Entries[0].Message == "启动失败"
+        && dayGroups[0].Entries[1].Message == "代理未启用（直连）。"
+        && dayGroups[1].Entries.Count == 1 && dayGroups[1].Entries[0].Message == "实例已停止。");
+
+    File.WriteAllText(Path.Combine(logCenterRoot, "launcher.log.old"), stopLine + "\n", Encoding.UTF8);
+    File.WriteAllText(
+        Path.Combine(logCenterRoot, "launcher.log"),
+        string.Join("\n", proxyLine, "{ broken line", errorLine) + "\n",
+        Encoding.UTF8);
+    var logSnapshot = LogCenterService.Load();
+    Check("log-center/读取含轮转旧文件：合并排序、坏行计数",
+        logSnapshot.Entries.Count == 3 && logSnapshot.SkippedLines == 1 && logSnapshot.TotalLines == 4
+        && !logSnapshot.Truncated
+        && logSnapshot.Entries[0].Message == "启动失败"
+        && logSnapshot.Entries[2].Message == "实例已停止。");
+    var truncatedSnapshot = LogCenterService.Load(maxEntries: 2);
+    Check("log-center/尾部上限：只留最近 N 条并置 Truncated",
+        truncatedSnapshot.Truncated && truncatedSnapshot.Entries.Count == 2
+        && truncatedSnapshot.Entries[0].Message == "启动失败");
+}
+finally
+{
+    Environment.SetEnvironmentVariable(LauncherLog.LogRootVariable, logCenterPreviousRoot);
+}
+
 try
 {
     Directory.Delete(scratch, recursive: true);

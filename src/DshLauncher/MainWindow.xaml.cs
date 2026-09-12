@@ -4154,6 +4154,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ToolTip = "清点 Launcher 自有文件（崩溃日志/轮转旧日志/市场缓存/插件回滚点/会话备份/换版本导出）；" +
                       "会话、凭据、实例数据、自动快照不在清理范围内，删除走回收站"
         };
+        var logCenterButton = new System.Windows.Controls.Button
+        {
+            Content = "打开日志中心",
+            Margin = new Thickness(8, 0, 0, 0),
+            ToolTip = "只读浏览 launcher.log（含轮转旧文件）：按天分组，可按级别 / 实例 / 关键字过滤；删除日志仍在「存储与清理」"
+        };
+        logCenterButton.Click += (_, _) => ShowEmbeddedPage(new LogCenterWindow(() => SwitchSection("设置 / 诊断")));
         var webView2CacheButton = new System.Windows.Controls.Button
         {
             Content = "清除桌面窗口缓存",
@@ -4181,6 +4188,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var buttons = new WrapPanel();
         buttons.Children.Add(exportButton);
         buttons.Children.Add(openLogButton);
+        buttons.Children.Add(logCenterButton);
         buttons.Children.Add(storageButton);
         buttons.Children.Add(webView2CacheButton);
         var status = new TextBlock
