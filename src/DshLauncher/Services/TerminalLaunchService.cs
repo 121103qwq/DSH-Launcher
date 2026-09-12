@@ -20,7 +20,8 @@ public static class TerminalLaunchService
         string? dshHome,
         string? dshExecutablePath,
         string? profileName,
-        bool noOpen = false)
+        bool noOpen = false,
+        string? extraArguments = null)
     {
         if (string.IsNullOrWhiteSpace(dshHome) || string.IsNullOrWhiteSpace(dshExecutablePath))
         {
@@ -31,6 +32,34 @@ public static class TerminalLaunchService
         var home = dshHome!.Trim().Replace("'", "''");
         var executable = dshExecutablePath!.Trim().Replace("'", "''");
         var suffix = noOpen ? " --no-open" : string.Empty;
+        if (!string.IsNullOrWhiteSpace(extraArguments))
+        {
+            suffix += " " + extraArguments!.Trim();
+        }
+
         return $"$env:DSH_HOME='{home}'; & '{executable}' --profile {profile}{suffix}";
+    }
+
+    /// <summary>
+    /// 生成"安装 / 升级该 profile 的 TUI 插件"命令（首次或换机时用；变更集 117）。
+    /// 与 README 的手工安装写法一致：<c>dsh plugin --profile &lt;名&gt; add &lt;包&gt;</c>。
+    /// </summary>
+    public static string? BuildPluginInstallCommand(
+        string? dshHome,
+        string? dshExecutablePath,
+        string? profileName,
+        string? packageName)
+    {
+        if (string.IsNullOrWhiteSpace(dshHome)
+            || string.IsNullOrWhiteSpace(dshExecutablePath)
+            || string.IsNullOrWhiteSpace(packageName))
+        {
+            return null;
+        }
+
+        var profile = string.IsNullOrWhiteSpace(profileName) ? "web" : profileName!.Trim();
+        var home = dshHome!.Trim().Replace("'", "''");
+        var executable = dshExecutablePath!.Trim().Replace("'", "''");
+        return $"$env:DSH_HOME='{home}'; & '{executable}' plugin --profile {profile} add {packageName!.Trim()}";
     }
 }

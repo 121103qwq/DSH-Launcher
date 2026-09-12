@@ -2129,6 +2129,11 @@ Check("terminal/命令生成：含 DSH_HOME + --profile；noOpen 时带 --no-ope
         == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile dsh-tui"
     && TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", "web", noOpen: true)
         == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile web --no-open"
+    && TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", "dsh-tui", extraArguments: "--continue")
+        == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile dsh-tui --continue"
+    && TerminalLaunchService.BuildPluginInstallCommand(@"C:\home", @"C:\dsh\dsh.cmd", "dsh-tui", "@deepseek-harness-tui/dsh-tui")
+        == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui"
+    && TerminalLaunchService.BuildPluginInstallCommand(@"C:\home", @"C:\dsh\dsh.cmd", "dsh-tui", null) is null
     && TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", null)
         == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile web"
     && TerminalLaunchService.BuildPowerShellCommand(null, @"C:\dsh\dsh.cmd", "web") is null);

@@ -250,25 +250,54 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
+        // 变更集 117（work-log/100）：TUI 的三种用法分三条命令给——①安装/升级 ②新会话 ③继续上次。
+        var continued = TerminalLaunchService.BuildPowerShellCommand(
+            _instance.DshHome,
+            _instance.DshExecutablePath,
+            chosenProfile,
+            noOpen,
+            "--continue");
+        var pluginName = chosenScan.TuiPlugins
+            .Select(plugin => plugin.Name)
+            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
+        var install = TerminalLaunchService.BuildPluginInstallCommand(
+            _instance.DshHome,
+            _instance.DshExecutablePath,
+            chosenProfile,
+            pluginName);
+
         var names = string.Join("、", chosenScan.TuiPlugins.Select(plugin =>
             plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
         TerminalCommandBox.Text = command;
+        TerminalContinueCommandBox.Text = continued ?? command;
+        TerminalInstallCommandBox.Text = install ?? string.Empty;
+        var installVisibility = install is null ? Visibility.Collapsed : Visibility.Visible;
+        TerminalInstallLabel.Visibility = installVisibility;
+        TerminalInstallCommandBox.Visibility = installVisibility;
+        CopyTerminalInstallButton.Visibility = installVisibility;
         TerminalCommandHintText.Text = noOpen
-            ? $"检测到 {names}（profile：{chosenProfile}）· 已带 --no-open，不会弹浏览器。"
+            ? $"检测到 {names}（profile：{chosenProfile}）· 命令②已带 --no-open，不会弹浏览器。"
             : $"检测到 {names}（profile：{chosenProfile}）。";
         TerminalCommandCard.Visibility = Visibility.Visible;
     }
 
     private void CopyTerminalCommand_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(TerminalCommandBox.Text))
+        var text = sender switch
+        {
+            System.Windows.Controls.Button { Tag: "install" } => TerminalInstallCommandBox.Text,
+            System.Windows.Controls.Button { Tag: "continue" } => TerminalContinueCommandBox.Text,
+            System.Windows.Controls.Button { Tag: "new" } => TerminalCommandBox.Text,
+            _ => null
+        };
+        if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
         try
         {
-            System.Windows.Clipboard.SetText(TerminalCommandBox.Text);
+            System.Windows.Clipboard.SetText(text);
             TerminalCommandHintText.Text = "命令已复制；粘到 PowerShell 里执行即可。";
         }
         catch (Exception ex)
