@@ -852,6 +852,7 @@ public sealed class VersionPackageService
                 ?? new VersionSettingsData();
             settings.NodeExecutablePath = null;
             settings.CustomOpenTargetPath = null;
+            settings.TerminalWorkingDirectory = null; // 机器相关路径，与上面两项同策略不随包分发（work-log/92）
             if (settings.OpenMode == VersionOpenMode.Custom)
             {
                 settings.OpenMode = VersionOpenMode.Desktop;

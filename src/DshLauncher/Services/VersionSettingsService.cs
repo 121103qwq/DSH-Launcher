@@ -120,6 +120,8 @@ public sealed class VersionSettingsService
             LaunchModeVisibility = settings.LaunchModeVisibility is null
                 ? null
                 : new Dictionary<string, bool>(settings.LaunchModeVisibility, StringComparer.Ordinal),
+            TerminalWorkingDirectory = settings.TerminalWorkingDirectory,
+            TerminalAskWorkspaceEachTime = settings.TerminalAskWorkspaceEachTime,
             CrashPolicy = settings.CrashPolicy,
             CrashRestartLimit = settings.CrashRestartLimit
         };

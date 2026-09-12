@@ -30,7 +30,14 @@ public enum VersionOpenMode
     /// 由实例卡片「启动」切分按钮的 ▼ 菜单选择（work-log/81、82）；实际启动链路在
     /// <c>SafeProfileService</c>（Tier1/Tier2）。
     /// </summary>
-    Isolated
+    Isolated,
+
+    /// <summary>
+    /// 终端启动：在 Windows Terminal 里跑 <c>dsh --profile &lt;活动 profile&gt;</c>（如 dsh-tui），
+    /// **不经启动器托管进程**。与其它方式一致「只切换不启动」；活动 profile 不是终端面
+    /// （或该方式被隐藏）时回退为 Web 启动（work-log/92，变更集 109）。
+    /// </summary>
+    Terminal
 }
 
 /// <summary>
@@ -49,6 +56,7 @@ public sealed class VersionOpenModeConverter : JsonConverter<VersionOpenMode>
             "Desktop" or "Launcher" => VersionOpenMode.Desktop,
             "Custom" => VersionOpenMode.Custom,
             "Isolated" => VersionOpenMode.Isolated,
+            "Terminal" => VersionOpenMode.Terminal,
             _ => VersionOpenMode.Desktop
         };
     }
@@ -115,6 +123,15 @@ public sealed class VersionSettingsData
     /// 实例级，随 version-settings.json 保存（work-log/89，变更集 106）。
     /// </summary>
     public Dictionary<string, bool>? LaunchModeVisibility { get; set; }
+
+    /// <summary>
+    /// 「终端启动」的工作目录。dsh-TUI 用**进程 cwd** 当工作区（插件无 --cwd/--workspace 参数），
+    /// 所以启动目录就是 TUI 打开的工作区；空值＝回退用户主目录（work-log/92，变更集 109）。
+    /// </summary>
+    public string? TerminalWorkingDirectory { get; set; }
+
+    /// <summary>每次「终端启动」都先弹文件夹选择器挑工作区（选中的目录会回写上一项）。</summary>
+    public bool TerminalAskWorkspaceEachTime { get; set; }
 
     /// <summary>空闲阈值（分钟，5–240，默认 30）。</summary>
     public int? AutoStopIdleMinutes { get; set; }

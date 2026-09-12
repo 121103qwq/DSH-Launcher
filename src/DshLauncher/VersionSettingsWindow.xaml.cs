@@ -36,6 +36,9 @@ public partial class VersionSettingsWindow : UserControl
     private VersionSettingsData _settings = new();
     private StackPanel? _uiLaunchModeRows;
     private TextBlock? _uiLaunchModeStatusText;
+    private System.Windows.Controls.TextBox? _terminalWorkspaceBox;
+    private System.Windows.Controls.CheckBox? _terminalAskEachTimeCheck;
+    private TextBlock? _terminalWorkspaceStatusText;
 
     public VersionSettingsWindow(
         ManagerInstance? instance,
@@ -91,6 +94,7 @@ public partial class VersionSettingsWindow : UserControl
         LoadConfigurationControls();
         LoadPluginSettingsControls();
         AppendLaunchModeVisibilitySection();
+        AppendTerminalWorkspaceSection();
         ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
 
         if (_instance is null)
@@ -1090,7 +1094,9 @@ public partial class VersionSettingsWindow : UserControl
         CustomOpenTargetPath = _settings.CustomOpenTargetPath,
         LaunchModeVisibility = _settings.LaunchModeVisibility is null
             ? null
-            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal)
+            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal),
+        TerminalWorkingDirectory = _settings.TerminalWorkingDirectory,
+        TerminalAskWorkspaceEachTime = _settings.TerminalAskWorkspaceEachTime
     };
 
     private void OpenModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
@@ -1272,6 +1278,183 @@ public partial class VersionSettingsWindow : UserControl
         _uiLaunchModeRows.Children.Add(row);
     }
 
+    // ------------------------------------------------------------------
+    // 终端启动的工作区（work-log/92，变更集 109）：dsh-TUI 用进程 cwd 当工作区，
+    // 这里决定「终端启动」在哪个目录拉起它——可固定目录，也可每次弹选择器。
+    // ------------------------------------------------------------------
+
+    private void AppendTerminalWorkspaceSection()
+    {
+        var content = new StackPanel();
+        content.Children.Add(new TextBlock
+        {
+            Text = "终端启动的工作区",
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 14
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = "「终端启动」在 Windows Terminal 里跑 dsh --profile <活动 profile>。"
+                + "dsh-tui 用进程工作目录当工作区（插件没有 --cwd 参数），所以这里决定 TUI 打开哪个目录；留空＝用户主目录。",
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 8)
+        });
+
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        _terminalWorkspaceBox = new System.Windows.Controls.TextBox
+        {
+            Text = _settings.TerminalWorkingDirectory ?? string.Empty,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(8, 6, 8, 6)
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_terminalWorkspaceBox, "终端工作区");
+        _terminalWorkspaceBox.LostFocus += (_, _) => SaveTerminalWorkspace();
+        _terminalWorkspaceBox.KeyDown += (_, args) =>
+        {
+            if (args.Key == System.Windows.Input.Key.Enter)
+            {
+                SaveTerminalWorkspace();
+            }
+        };
+        Grid.SetColumn(_terminalWorkspaceBox, 0);
+        row.Children.Add(_terminalWorkspaceBox);
+
+        var browse = new WpfButton
+        {
+            Content = "浏览…",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        browse.Click += (_, _) => BrowseTerminalWorkspace();
+        Grid.SetColumn(browse, 1);
+        row.Children.Add(browse);
+
+        var clear = new WpfButton
+        {
+            Content = "清除",
+            Padding = new Thickness(12, 7, 12, 7),
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        clear.Click += (_, _) =>
+        {
+            if (_terminalWorkspaceBox is not null)
+            {
+                _terminalWorkspaceBox.Text = string.Empty;
+            }
+
+            SaveTerminalWorkspace();
+        };
+        Grid.SetColumn(clear, 2);
+        row.Children.Add(clear);
+
+        content.Children.Add(row);
+
+        _terminalAskEachTimeCheck = new System.Windows.Controls.CheckBox
+        {
+            Content = "每次终端启动都先让我选目录（选中的目录会记住）",
+            IsChecked = _settings.TerminalAskWorkspaceEachTime,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_terminalAskEachTimeCheck, "每次终端启动都先让我选目录");
+        _terminalAskEachTimeCheck.Checked += (_, _) => SaveTerminalWorkspace();
+        _terminalAskEachTimeCheck.Unchecked += (_, _) => SaveTerminalWorkspace();
+        content.Children.Add(_terminalAskEachTimeCheck);
+
+        _terminalWorkspaceStatusText = new TextBlock
+        {
+            Foreground = (WpfBrush)FindResource("MutedBrush"),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        content.Children.Add(_terminalWorkspaceStatusText);
+
+        PersonalizationPage.Children.Add(new Border
+        {
+            Background = (WpfBrush)FindResource("CardBrush"),
+            BorderBrush = (WpfBrush)FindResource("LineBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = (CornerRadius)FindResource("CardCornerRadius"),
+            Padding = (Thickness)FindResource("CardPadding"),
+            Margin = new Thickness(0, 14, 0, 0),
+            Child = content
+        });
+
+        UpdateTerminalWorkspaceStatus();
+    }
+
+    private void SaveTerminalWorkspace()
+    {
+        if (_instance is null || _terminalWorkspaceBox is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _settings.TerminalWorkingDirectory = string.IsNullOrWhiteSpace(_terminalWorkspaceBox.Text)
+                ? null
+                : _terminalWorkspaceBox.Text.Trim();
+            _settings.TerminalAskWorkspaceEachTime = _terminalAskEachTimeCheck?.IsChecked == true;
+            _settingsService.Save(_instance, _settings);
+            UpdateTerminalWorkspaceStatus(saved: true);
+            _settingsSaved();
+        }
+        catch (Exception ex)
+        {
+            if (_terminalWorkspaceStatusText is not null)
+            {
+                _terminalWorkspaceStatusText.Text = "保存失败：" + ex.Message;
+            }
+        }
+    }
+
+    private void BrowseTerminalWorkspace()
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "选择终端启动的工作区",
+            Multiselect = false
+        };
+        var current = _terminalWorkspaceBox?.Text?.Trim();
+        dialog.InitialDirectory = !string.IsNullOrWhiteSpace(current) && Directory.Exists(current)
+            ? current!
+            : TerminalLaunchService.ResolveWorkingDirectory(
+                null,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        if (dialog.ShowDialog(Window.GetWindow(this)) == true && _terminalWorkspaceBox is not null)
+        {
+            _terminalWorkspaceBox.Text = dialog.FolderName;
+            SaveTerminalWorkspace();
+        }
+    }
+
+    private void UpdateTerminalWorkspaceStatus(bool saved = false)
+    {
+        if (_terminalWorkspaceStatusText is null)
+        {
+            return;
+        }
+
+        var path = _terminalWorkspaceBox?.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _terminalWorkspaceStatusText.Text = "当前：留空＝回退用户主目录。";
+            return;
+        }
+
+        _terminalWorkspaceStatusText.Text = Directory.Exists(path)
+            ? (saved ? "已保存：" : "当前：") + path
+            : "目录不存在：" + path + "（启动时会回退到用户主目录）";
+    }
+
     private void SaveLaunchModeVisibility(string key, bool visible)
     {
         if (_instance is null)
@@ -1398,7 +1581,9 @@ public partial class VersionSettingsWindow : UserControl
         CustomOpenTargetPath = _settings.CustomOpenTargetPath,
         LaunchModeVisibility = _settings.LaunchModeVisibility is null
             ? null
-            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal)
+            : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal),
+        TerminalWorkingDirectory = _settings.TerminalWorkingDirectory,
+        TerminalAskWorkspaceEachTime = _settings.TerminalAskWorkspaceEachTime
     };
 
     private async void RefreshPlugins_Click(object sender, RoutedEventArgs e) => await LoadPluginsAsync();
@@ -1521,7 +1706,9 @@ public partial class VersionSettingsWindow : UserControl
                 UseDshMarketHotReload = _settings.UseDshMarketHotReload,
                 LaunchModeVisibility = _settings.LaunchModeVisibility is null
                     ? null
-                    : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal)
+                    : new Dictionary<string, bool>(_settings.LaunchModeVisibility, StringComparer.Ordinal),
+                TerminalWorkingDirectory = _settings.TerminalWorkingDirectory,
+                TerminalAskWorkspaceEachTime = _settings.TerminalAskWorkspaceEachTime
             };
             var snapshot = TryCreateSnapshot("保存窗口与 Node 设置前");
             _settingsService.Save(_instance, updated);

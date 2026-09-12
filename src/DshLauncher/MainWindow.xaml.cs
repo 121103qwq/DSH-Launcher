@@ -393,6 +393,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 {
                     VersionOpenMode.Web => "Web 启动",
                     VersionOpenMode.Isolated => "隔离启动",
+                    VersionOpenMode.Terminal => "终端启动",
                     _ => "Desktop 启动"
                 };
 
@@ -443,9 +444,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private VersionOpenMode GetEffectiveOpenMode()
     {
         var mode = GetSelectedOpenMode();
-        return mode == VersionOpenMode.Desktop && SelectedInstance is { } instance && HasVendorDesktopSurface(instance)
-            ? VersionOpenMode.Web
-            : mode;
+        if (SelectedInstance is not { } instance)
+        {
+            return mode;
+        }
+
+        try
+        {
+            var settings = _versionSettingsService.Read(instance);
+            var terminalVisible = settings.LaunchModeVisibility is null
+                || !settings.LaunchModeVisibility.TryGetValue("terminal", out var visible)
+                || visible;
+            var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
+            var terminalSupported = PresentationSurfaceService.SupportsTerminalLaunch(
+                PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName)));
+            return LaunchModePolicy.Effective(mode, HasVendorDesktopSurface(instance), terminalSupported, terminalVisible);
+        }
+        catch
+        {
+            return mode; // 判不到不替换（与 Desktop 回退同一原则，work-log/92）
+        }
     }
 
     /// <summary>该实例当前 profile 是否含 dsh 自带的 desktop surface bundle（判不到＝false）。</summary>
@@ -3601,7 +3619,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (sender is not System.Windows.Controls.MenuItem { Tag: string tag }
             || SelectedInstance is not { } instance
             || !Enum.TryParse<VersionOpenMode>(tag, out var mode)
-            || mode is not (VersionOpenMode.Web or VersionOpenMode.Desktop or VersionOpenMode.Isolated))
+            || mode is not (VersionOpenMode.Web or VersionOpenMode.Desktop or VersionOpenMode.Isolated or VersionOpenMode.Terminal))
         {
             return;
         }
@@ -3624,6 +3642,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             VersionOpenMode.Web => "已切换为 Web 启动；点击左侧启动按钮生效。",
             VersionOpenMode.Isolated => "已切换为隔离启动；点击左侧启动按钮生效（会剥离第三方插件、不改你的配置）。",
+            VersionOpenMode.Terminal => "已切换为终端启动；点击左侧启动按钮生效（在 Windows Terminal 里跑该 profile，不经启动器托管）。",
             _ => "已切换为 Desktop 启动；点击左侧启动按钮生效。"
         });
     }
@@ -3676,16 +3695,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
                     var surface = PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName));
                     var supported = PresentationSurfaceService.SupportsTerminalLaunch(surface);
+                    item.IsChecked = mode == VersionOpenMode.Terminal; // 与其它方式一致：勾选＝当前生效方式（work-log/92）
                     item.IsEnabled = supported;
                     item.ToolTip = supported
-                        ? $"在 Windows Terminal 里打开（profile：{profileName}）。"
+                        ? $"终端启动：在 Windows Terminal 里跑 dsh --profile {profileName}（点击左侧启动按钮生效）。"
                         : $"当前呈现面是「{PresentationSurfaceService.Describe(surface)}」，不是在终端打开的终端面（如 dsh-tui 这类 profile）。";
                     break;
             }
         }
     }
 
-    private async void OpenInTerminal_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 在终端打开当前活动 profile（主按钮「终端启动」调用；菜单项已改为只切换方式，不再直接调用）。
+    /// 含呈现面校验、TUI 插件未启用时的快捷启用、profile 存在性预检、工作区解析（可选每次弹选择器）。
+    /// </summary>
+    private async Task TryOpenTerminalInActiveProfileAsync()
     {
         if (SelectedInstance is not { } instance)
         {
@@ -3747,8 +3771,40 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return;
         }
 
+        // 工作区：dsh-TUI 用**进程 cwd** 当工作区（插件没有 --cwd/--workspace 参数），所以启动目录就是它打开的工作区。
+        // 实例设置里可以固定一个目录；开了「每次选择」就先弹文件夹选择器，选中的目录回写设置（work-log/92，变更集 109）。
+        var terminalSettings = _versionSettingsService.Read(instance);
+        var workingDirectory = TerminalLaunchService.ResolveWorkingDirectory(
+            terminalSettings.TerminalWorkingDirectory,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        if (terminalSettings.TerminalAskWorkspaceEachTime)
+        {
+            var picker = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "选择终端启动的工作区",
+                InitialDirectory = workingDirectory,
+                Multiselect = false
+            };
+            if (picker.ShowDialog(this) != true)
+            {
+                ShowNotice("已取消：未选择工作区，终端未打开。");
+                return;
+            }
+
+            workingDirectory = picker.FolderName;
+            try
+            {
+                terminalSettings.TerminalWorkingDirectory = workingDirectory;
+                _versionSettingsService.Save(instance, terminalSettings);
+            }
+            catch (Exception ex)
+            {
+                ShowNotice("工作区只用于本次启动，保存设置失败：" + ex.Message);
+            }
+        }
+
         var arguments = PresentationSurfaceService.BuildWindowsTerminalArguments(
-            instance.DshExecutablePath, profileName, instance.RootPath);
+            instance.DshExecutablePath, profileName, workingDirectory);
         if (arguments is null)
         {
             ShowNotice("该实例缺少可用的 dsh 入口，无法在终端打开；请先在版本控制里修复运行目录。");
@@ -3764,7 +3820,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 arguments,
                 instance.DshHome,
                 instance.DshExecutablePath));
-            ShowNotice($"已在终端打开实例「{instance.Name}」（profile：{profileName}）。");
+            ShowNotice($"已在终端打开实例「{instance.Name}」（profile：{profileName}，工作区：{workingDirectory}）。");
         }
         catch (Exception ex)
         {
@@ -5140,7 +5196,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     UseDshMarketHotReload = current.UseDshMarketHotReload,
                     LaunchModeVisibility = current.LaunchModeVisibility is null
                         ? null
-                        : new Dictionary<string, bool>(current.LaunchModeVisibility, StringComparer.Ordinal)
+                        : new Dictionary<string, bool>(current.LaunchModeVisibility, StringComparer.Ordinal),
+                    TerminalWorkingDirectory = current.TerminalWorkingDirectory,
+                    TerminalAskWorkspaceEachTime = current.TerminalAskWorkspaceEachTime
                 };
                 var snapshot = instance.RuntimeStatus != InstanceRuntimeStatus.Running
                     && instance.RuntimeOwnership != InstanceRuntimeOwnership.Attached
@@ -5956,6 +6014,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         if (IsCustomOpenBound)
         {
             OpenCustomTarget();
+            return;
+        }
+
+        // 终端启动方式（work-log/92，变更集 109）：主按钮在 Windows Terminal 里拉起活动 profile；
+        // 运行中不重复拉起（沿用“打开已运行实例”，避免两个进程写同一个 DSH_HOME）。
+        if (GetEffectiveOpenMode() == VersionOpenMode.Terminal
+            && SelectedInstance is { } terminalTarget
+            && !_instanceRunner.IsRunning(terminalTarget.Id)
+            && terminalTarget.RuntimeOwnership != InstanceRuntimeOwnership.Attached)
+        {
+            await TryOpenTerminalInActiveProfileAsync();
             return;
         }
 

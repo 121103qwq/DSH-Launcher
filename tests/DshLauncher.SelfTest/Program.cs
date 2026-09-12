@@ -2140,6 +2140,31 @@ File.WriteAllText(launchModePath, launchModeText.Replace("\"Isolated\"", "\"NoSu
 Check("launch-mode/未知值保守回落 Desktop（不抛异常）",
     launchModeSettings.Read(launchModeInstance).OpenMode == VersionOpenMode.Desktop);
 
+launchModeData = launchModeSettings.Read(launchModeInstance);
+launchModeData.OpenMode = VersionOpenMode.Terminal;
+launchModeData.TerminalWorkingDirectory = @"C:\work\project";
+launchModeData.TerminalAskWorkspaceEachTime = true;
+launchModeSettings.Save(launchModeInstance, launchModeData);
+var launchModeTerminal = launchModeSettings.Read(launchModeInstance);
+Check("launch-mode/Terminal 落盘读回，终端工作区与“每次选择”开关不丢（work-log/92）",
+    launchModeTerminal.OpenMode == VersionOpenMode.Terminal
+    && launchModeTerminal.TerminalWorkingDirectory == @"C:\work\project"
+    && launchModeTerminal.TerminalAskWorkspaceEachTime);
+
+Check("launch-mode/终端生效规则：非终端面或入口隐藏时回退 Web，可用时保持（判不到不替换）",
+    LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, true) == VersionOpenMode.Terminal
+    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, false, true) == VersionOpenMode.Web
+    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, false) == VersionOpenMode.Web
+    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, true, false, false) == VersionOpenMode.Web
+    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, false, false, false) == VersionOpenMode.Desktop
+    && LaunchModePolicy.Effective(VersionOpenMode.Isolated, true, false, false) == VersionOpenMode.Isolated);
+
+var terminalFallback = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+Check("launch-mode/终端工作区解析：目录存在时用它，否则回退；空回退给用户主目录",
+    TerminalLaunchService.ResolveWorkingDirectory(Path.GetTempPath(), "C:/nope") == Path.GetFullPath(Path.GetTempPath())
+    && TerminalLaunchService.ResolveWorkingDirectory(@"C:\definitely-missing-92831", terminalFallback) == Path.GetFullPath(terminalFallback)
+    && TerminalLaunchService.ResolveWorkingDirectory(null, null) == terminalFallback);
+
 // ===========================================================================
 // 10. 日志中心（LogCenterService，work-log/86）
 // ===========================================================================
