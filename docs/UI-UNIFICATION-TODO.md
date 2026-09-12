@@ -48,10 +48,11 @@
 - [ ] 同屏按钮数量 >3 时的排布规则（WrapPanel vs 主次分离）
 
 ### 1.6 表格与列表
-- [ ] `ConversationWindow` 表格列宽（240/180/160/260/170/260）改为按比例 + `MinWidth`，窄窗口不横向滚动
-- [ ] `ExtensionWindow` 侧栏 340 固定宽、按钮 148/168 固定宽 → 自适应
-- [ ] 长列表统一虚拟化设置与 `HorizontalContentAlignment=Stretch`
-- [ ] 列头排序/空态/行高统一
+- [x] 对话页表格列宽自适应（**2026-09-13 变更集 134**）：`GridViewColumn` **没有 `MinWidth`、`Width` 是像素 double（不支持星号）** → 改为**代码按可用宽度分配**（权重 + 最小宽，`SizeChanged`/`Loaded` 触发；`ConversationWindow.DistributeColumns`）；17 列全部纳入，窗口变宽即铺满
+- [x] 扩展页侧栏与筛选控件自适应（**2026-09-13**）：侧栏 `320` → `0.26*` + `MinWidth 260`/`MaxWidth 380`；`MarketplaceSortBox`/`MarketplaceSourceBox`/`SkillMarketSourceBox` 固定 `Width`（148/168/240）→ `MinWidth`
+- [x] 长列表统一虚拟化（**2026-09-13**）：**16 个列表元素显式声明** `IsVirtualizing` + `VirtualizationMode=Recycling` + `CanContentScroll`（⚠️ 隐式样式 + `BasedOn="{StaticResource {x:Type ListView}}"` 会让列表创建即崩，**已列入门禁禁止**）
+- [ ] **列头与行高统一（待做）**：需先解决"统一外观要不要 BasedOn 主题样式"（隐式做法已证明会崩）；`HorizontalContentAlignment=Stretch` 保持各处显式声明（不做隐式覆盖，避免影响个别列表）
+- [ ] 列头排序（功能项，本应用尚未提供；空态见 §1.7）
 
 ### 1.7 空态 / 加载态 / 错误态
 - [ ] 每个列表/页面都有：空态引导、加载中骨架或进度、错误态（`DangerBrush` + 重试入口）
@@ -137,4 +138,5 @@ grep -rn 'Width="[2-9][0-9][0-9]"' --include=*.xaml src/DshLauncher
 | 2026-09-13 | **变更集 131（UI 统一 D：菜单统一）**：隐式 MenuItem 样式 + 禁用态 + 危险项样式；菜单面颜色令牌化（新增 `MenuHoverBrush`）；C# 动态菜单状态点改令牌；**过程中因 StaticResource 前向引用把启动器改崩一次，harness 冒烟断言抓住并修复** |
 | 2026-09-13 | **变更集 132（UI 统一 A2：颜色令牌化收尾）**：补齐 127 的盲区（App.xaml 样式 28 处 + C# 24 处）→ 16 个新令牌；门禁升级为「令牌定义行唯一合法」；新增菜单样式断言 |
 | 2026-09-13 | **变更集 133（§1.13 内容层：导入实例菜单双行化）**：5 项加 11px 说明 + ToolTip 讲清与新建版本的区别 + `AutomationProperties.Name`；`docs/UI-DESIGN.md` 补「双行菜单项」规范；记录 `.ps1` 纯 ASCII 与 popup 截图两个工具坑 |
+| 2026-09-13 | **变更集 134（UI 统一 E：表格与侧栏自适应）**：对话页 17 列改代码分配；扩展页侧栏/筛选控件自适应；16 个列表显式虚拟化；**踩坑 3 个**（GridViewColumn 无 MinWidth / 隐式 BasedOn 主题样式致页面构造崩溃 / 批量脚本两次误伤） |
 | 2026-09-13 | 动手前复核：旧扫描数字作废（颜色 8→**38** 处、字号 1→**26** 处偏离阶梯、固定宽 →**22** 处、窗口 4+2→**5 窗口 + 8 内嵌页**）；补测 `DynamicResource` **0 处**、令牌表 34 键与真实缺项——已写入上方第 2 节 |

@@ -22,7 +22,8 @@
     </UserControl.Resources>
     <Grid Margin="0">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="320" />
+            <!-- 变更集 134：侧栏由固定 320 改为比例 + 上下限（窄窗口不再挤压右栏） -->
+            <ColumnDefinition Width="0.26*" MinWidth="260" MaxWidth="380" />
             <ColumnDefinition Width="18" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
@@ -304,7 +305,7 @@
                                  BorderThickness="0"
                                  Background="Transparent"
                                  SelectedIndex="0"
-                                 SelectionChanged="MarketplaceFilter_SelectionChanged">
+                                 SelectionChanged="MarketplaceFilter_SelectionChanged" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" >
                             <ListBox.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Orientation="Horizontal" />
@@ -343,7 +344,7 @@
                                    VerticalAlignment="Center"
                                    Margin="0,0,8,0" />
                         <ComboBox x:Name="MarketplaceSortBox"
-                                  Width="148"
+                                  MinWidth="148"
                                   Height="38"
                                   SelectedIndex="0"
                                   ToolTip="排序方式"
@@ -357,7 +358,7 @@
                                    VerticalAlignment="Center"
                                    Margin="18,0,8,0" />
                         <ComboBox x:Name="MarketplaceSourceBox"
-                                  Width="168"
+                                  MinWidth="168"
                                   Height="38"
                                   SelectedIndex="0"
                                   ToolTip="次级来源筛选"
@@ -610,7 +611,7 @@
                              BorderThickness="0"
                              Background="Transparent"
                              SelectedIndex="0"
-                             SelectionChanged="SkillMarketCategoryList_SelectionChanged">
+                             SelectionChanged="SkillMarketCategoryList_SelectionChanged" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" >
                         <ListBox.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <StackPanel Orientation="Horizontal" />
@@ -658,7 +659,7 @@
                                VerticalAlignment="Center"
                                Margin="18,0,8,0" />
                     <ComboBox x:Name="SkillMarketSourceBox"
-                              Width="240"
+                              MinWidth="180"
                               Height="34"
                               SelectedIndex="0"
                               ToolTip="按技能所在仓库筛选；“全部来源”旁的数字是当前列表的技能总数。仓库来自内置 GitHub 搜索，也可在“设置 / 诊断 → 市场源”里补充配置源"

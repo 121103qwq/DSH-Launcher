@@ -175,6 +175,13 @@
 - 列表容器设 `ClipToBounds=True`，避免滚动内容压出圆角。
 
 ### 数据表（ListView + GridView）
+
+**2026-09-13 实测补充（变更集 134，见 work-log/125）**
+
+- **列宽自适应**：`GridViewColumn.Width` 是**像素 `double`**——**没有 `MinWidth`，也不支持星号比例**。做法：XAML 写设计初值，窗口 `SizeChanged`/`Loaded` 时由代码把"最小宽之外的剩余宽度"按权重分配（`ConversationWindow.DistributeColumns`）。
+- **长列表虚拟化**：在 `ListBox`/`ListView` **元素上显式**声明 `VirtualizingStackPanel.IsVirtualizing="True"` + `VirtualizingStackPanel.VirtualizationMode="Recycling"` + `ScrollViewer.CanContentScroll="True"`。
+- ⚠️ **禁止**用隐式样式 + `BasedOn="{StaticResource {x:Type ListView}}"` 批量设置：本应用里该键**解析不到主题样式**，会在**创建列表时**抛 `XamlParseException`（"无法找到名为 System.Windows.Controls.ListView 的资源"），表现为"点页面没反应、内容停在上一页"。harness 已断言禁止该写法。
+- **列头与行高统一：待做**（要统一 `GridViewColumnHeader`/`ListViewItem` 外观同样需要主题样式 `BasedOn`，得先找到安全做法：定义在窗口 Resources 里并实测，或写完整模板）。
 允许横向滚动（`HorizontalScrollBarVisibility=Auto`）。列宽总和应 ≤ 默认窗口内容宽度，
 避免默认尺寸下就出现横向滚动条；窄窗口才出现属正常。
 

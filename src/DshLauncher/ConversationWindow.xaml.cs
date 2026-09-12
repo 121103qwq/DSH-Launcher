@@ -39,11 +39,55 @@ public partial class ConversationWindow : UserControl
         _instances = instances;
         _selectInstance = selectInstance;
         InitializeComponent();
+
+        // 变更集 134（UI 统一 E）：三张表的列宽随可用宽度分配。
+        // 为什么在代码里做：GridViewColumn.Width 是像素 double，既没有 MinWidth，也不支持星号比例。
+        SizeChanged += (_, _) => ApplyAdaptiveColumns();
+        Loaded += (_, _) => ApplyAdaptiveColumns();
     }
 
     private ObservableCollection<ConversationEntry> Entries { get; } = new();
 
     private ObservableCollection<ConversationBackupEntry> Backups { get; } = new();
+
+    /// <summary>
+    /// 变更集 134（UI 统一 E）：三张表按可用宽度分配列宽——权重分配“最小宽之外的剩余”，窄窗口不出现横向滚动。
+    /// </summary>
+    private void ApplyAdaptiveColumns()
+    {
+        DistributeColumns(SearchResultsList,
+            new[] { 1.2, 1.2, 2.4, 0.5, 1.0, 1.0 },
+            new[] { 150.0, 140.0, 200.0, 56.0, 110.0, 120.0 });
+        DistributeColumns(ConversationList,
+            new[] { 1.6, 1.2, 1.1, 0.6, 0.7, 1.0 },
+            new[] { 170.0, 130.0, 120.0, 70.0, 80.0, 110.0 });
+        DistributeColumns(BackupList,
+            new[] { 1.6, 1.1, 1.2, 0.6, 1.6 },
+            new[] { 170.0, 130.0, 130.0, 70.0, 170.0 });
+    }
+
+    private static void DistributeColumns(System.Windows.Controls.ListView? list, double[] weights, double[] minimums)
+    {
+        if (list?.View is not GridView view || view.Columns.Count != weights.Length)
+        {
+            return;
+        }
+
+        // 预留右侧滚动条与内边距，避免“刚刚好”时又冒出横向滚动条
+        var available = list.ActualWidth - SystemParameters.VerticalScrollBarWidth - 16;
+        if (available <= 0)
+        {
+            return;
+        }
+
+        var minimumTotal = minimums.Sum();
+        var slack = Math.Max(available, minimumTotal) - minimumTotal;
+        var weightTotal = weights.Sum();
+        for (var i = 0; i < weights.Length; i++)
+        {
+            view.Columns[i].Width = Math.Round(minimums[i] + (slack * weights[i] / weightTotal));
+        }
+    }
 
     private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {

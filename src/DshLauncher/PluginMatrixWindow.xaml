@@ -71,7 +71,7 @@
                               BorderThickness="0"
                               Background="Transparent"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
-                              ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" />
                     <TextBlock x:Name="EmptyText"
                                Text="没有可对比的插件：至少有一个实例装有并启用了第三方插件后才会出现矩阵行。"
                                Foreground="{StaticResource MutedBrush}"

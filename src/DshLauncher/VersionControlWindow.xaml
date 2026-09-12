@@ -44,7 +44,7 @@
                              SelectedItem="{Binding SelectedVersion, Mode=TwoWay}"
                              MouseDoubleClick="VersionList_MouseDoubleClick"
                              BorderThickness="0"
-                             Background="Transparent">
+                             Background="Transparent" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" >
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="Padding" Value="0" />
@@ -297,7 +297,7 @@
                             <ListBox x:Name="SwitchHistoryList"
                                      Height="110"
                                      Margin="0,10,0,0"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingStackPanel.IsVirtualizing="True" VirtualizingStackPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True" />
                             <TextBlock x:Name="SwitchHistoryStatusText"
                                        Foreground="{StaticResource MutedBrush}"
                                        FontSize="11"
