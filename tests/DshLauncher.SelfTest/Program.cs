@@ -2124,9 +2124,11 @@ Check("launch-mode/生效规则：运行时自带桌面封装时回退 Web（判
     && LaunchModePolicy.Effective(VersionOpenMode.Isolated, true) == VersionOpenMode.Isolated
     && LaunchModePolicy.Effective(VersionOpenMode.Web, true) == VersionOpenMode.Web);
 
-Check("terminal/命令生成：含 DSH_HOME 设置 + --profile；缺入口返回 null（不猜）",
+Check("terminal/命令生成：含 DSH_HOME + --profile；noOpen 时带 --no-open；缺入口返回 null（不猜）",
     TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", "dsh-tui")
         == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile dsh-tui"
+    && TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", "web", noOpen: true)
+        == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile web --no-open"
     && TerminalLaunchService.BuildPowerShellCommand(@"C:\home", @"C:\dsh\dsh.cmd", null)
         == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile web"
     && TerminalLaunchService.BuildPowerShellCommand(null, @"C:\dsh\dsh.cmd", "web") is null);

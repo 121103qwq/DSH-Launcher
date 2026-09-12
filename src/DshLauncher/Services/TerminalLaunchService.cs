@@ -12,8 +12,15 @@ public static class TerminalLaunchService
     /// <summary>
     /// 生成 PowerShell 命令：设置 DSH_HOME 后调用该版本的 dsh 跑指定 profile。
     /// 缺入口或 home 时返回 null（调用方提示，不猜）。
+    /// <paramref name="noOpen"/> = true 时追加 <c>--no-open</c>：目标 profile 的栈里含 web-app 时会起
+    /// Web UI，dsh 默认会在默认浏览器里打开它（变更集 115 实测：手敲命令弹浏览器的根因）。
+    /// 该选项由 dsh-web-app 定义，纯终端面 profile 不要加。
     /// </summary>
-    public static string? BuildPowerShellCommand(string? dshHome, string? dshExecutablePath, string? profileName)
+    public static string? BuildPowerShellCommand(
+        string? dshHome,
+        string? dshExecutablePath,
+        string? profileName,
+        bool noOpen = false)
     {
         if (string.IsNullOrWhiteSpace(dshHome) || string.IsNullOrWhiteSpace(dshExecutablePath))
         {
@@ -23,6 +30,7 @@ public static class TerminalLaunchService
         var profile = string.IsNullOrWhiteSpace(profileName) ? "web" : profileName!.Trim();
         var home = dshHome!.Trim().Replace("'", "''");
         var executable = dshExecutablePath!.Trim().Replace("'", "''");
-        return $"$env:DSH_HOME='{home}'; & '{executable}' --profile {profile}";
+        var suffix = noOpen ? " --no-open" : string.Empty;
+        return $"$env:DSH_HOME='{home}'; & '{executable}' --profile {profile}{suffix}";
     }
 }

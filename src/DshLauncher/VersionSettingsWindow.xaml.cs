@@ -233,10 +233,17 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
+        // 目标 profile 的栈里含 web-app 时 dsh 会起 Web UI 并默认弹浏览器 → 补 --no-open 抑制
+        // （该选项由 dsh-web-app 定义：纯终端面 profile 不加；旧版 dsh 不支持时也不加）。
+        var chosenInfo = profiles.Describe(_instance, chosenProfile);
+        var noOpen = PresentationSurfaceService.Detect(chosenProfile, chosenInfo.Bundles) == PresentationSurface.Web
+            && DshInstanceRunner.SupportsNoOpen(_instance.DetectedVersion);
+
         var command = TerminalLaunchService.BuildPowerShellCommand(
             _instance.DshHome,
             _instance.DshExecutablePath,
-            chosenProfile);
+            chosenProfile,
+            noOpen);
         if (command is null)
         {
             TerminalCommandCard.Visibility = Visibility.Collapsed;
@@ -246,7 +253,9 @@ public partial class VersionSettingsWindow : UserControl
         var names = string.Join("、", chosenScan.TuiPlugins.Select(plugin =>
             plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
         TerminalCommandBox.Text = command;
-        TerminalCommandHintText.Text = $"检测到 {names}（profile：{chosenProfile}）。";
+        TerminalCommandHintText.Text = noOpen
+            ? $"检测到 {names}（profile：{chosenProfile}）· 已带 --no-open，不会弹浏览器。"
+            : $"检测到 {names}（profile：{chosenProfile}）。";
         TerminalCommandCard.Visibility = Visibility.Visible;
     }
 
