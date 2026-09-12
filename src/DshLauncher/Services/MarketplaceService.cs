@@ -714,9 +714,6 @@ public sealed class MarketplaceService
         return null;
     }
 
-    private static bool TryGetNpmPackageName(string value, out string packageName) =>
-        TrySplitNpmSpec(value, out packageName, out _);
-
     internal static bool TrySplitNpmSpec(string value, out string packageName, out string? version)
     {
         packageName = string.Empty;
@@ -2110,9 +2107,6 @@ public sealed class MarketplaceService
 
         return parsed;
     }
-
-    private static string? ReadValueString(JsonElement value) =>
-        value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private static string[] ReadStringArray(JsonElement element, string propertyName)
     {

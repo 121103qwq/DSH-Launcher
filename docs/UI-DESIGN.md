@@ -23,14 +23,13 @@
 
 | 令牌 | 值 | 用途 |
 |---|---|---|
-| `BlueBrush` / `BlueDarkBrush` / `BlueBrightBrush` | #1370F3 / #0B5BCB / #4890F5 | 主色、悬停、强调 |
-| `PaleBlueBrush` / `HoverBlueBrush` / `SelectedBlueBrush` | #96C0F9 / #E0EAFD / #EAF2FE | 浅色交互态 |
+| `BlueBrush` / `BlueDarkBrush` | #1370F3 / #0B5BCB | 主色、悬停 |
 | `PageBrush` / `CardBrush` / `PanelBackgroundBrush` / `InfoBackgroundBrush` / `HoverSurfaceBrush` | #EAF2FE / #FFFFFF / #F8FBFE / #F5F9FD / #F7FAFD | 页面/卡片/次级面板/信息底/悬停底 |
-| `TextBrush` / `MutedBrush` / `FaintBrush` | #343D4A / #8C8C8C / #A6A6A6 | 正文/次要/更弱 |
+| `TextBrush` / `MutedBrush` | #343D4A / #8C8C8C | 正文/次要 |
 | `LineBrush` | #D5E6FD | 描边、分隔线 |
 | `SuccessTextBrush` / `DangerTextBrush` / `DangerBrush` | #25875A / #A25A54 / #B42318 | 成功文字/危险文字/危险操作 |
 | `WarningBrush` / `WarningBackgroundBrush` | #F1C26B / #FFF9EA | 警告描边/警告底 |
-| `GreenBrush` / `RedBrush` | #2EA66B / #CE2111 | 状态点、强提示 |
+| `GreenBrush` | #2EA66B | 状态点（成功） |
 
 > **禁止**在窗口 XAML 里硬编码上述语义色（harness 有断言）。
 
@@ -59,10 +58,8 @@
 | `CardCornerRadius` | 12 | 主卡片、页面级面板 |
 | `PanelCornerRadius` | 10 | 卡片内次级面板、列表容器 |
 | `ItemCornerRadius` | 8 | 列表项、按钮、输入框、小卡片 |
-| `ChipCornerRadius` | 10 | 状态胶囊 |
 | `CardPadding` | 18 | 主卡片内边距 |
 | `PanelPadding` | 16 | 次级面板内边距 |
-| `SectionMargin` | 0,16,0,0 | 区块之间的垂直间距 |
 | `ItemMargin` | 0,0,0,8 | 列表项之间的间距 |
 
 页面外边距统一 18–22；卡片标题到内容 14–16；按钮组内间距 8。
@@ -183,7 +180,7 @@ ClearType 会被系统降级为灰度抗锯齿，**11px 以下小字会明显发
 - [ ] 长文本有省略/换行策略，且不会撑破容器。
 - [ ] 列表项 `HorizontalContentAlignment=Stretch`、长列表开虚拟化。
 - [ ] 默认窗口尺寸下不出现横向滚动条；窄窗口才出现属正常。
-- [ ] 空态有引导；错误提示用 `DangerBrush`/`RedBrush`。
+- [ ] 空态有引导；错误提示用 `DangerBrush`。
 - [ ] 需要联网的对话框先弹窗、后异步补数据；打开/创建类按钮有忙碌态与防重入。
 - [ ] 运行 `_verify-p0` harness（`p1/ui:` 契约断言）通过。
 

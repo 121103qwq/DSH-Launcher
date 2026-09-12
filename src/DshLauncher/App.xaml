@@ -8,21 +8,12 @@
         <!-- 蓝系：PCL 式 10 级渐变体系（#0b5bcb→#1370f3→#4890f5→…→#eaf2fe） -->
         <SolidColorBrush x:Key="BlueBrush" Color="#1370F3" />
         <SolidColorBrush x:Key="BlueDarkBrush" Color="#0B5BCB" />
-        <SolidColorBrush x:Key="BlueBrightBrush" Color="#4890F5" />
-        <SolidColorBrush x:Key="PaleBlueBrush" Color="#96C0F9" />
-        <SolidColorBrush x:Key="HoverBlueBrush" Color="#E0EAFD" />
-        <SolidColorBrush x:Key="SelectedBlueBrush" Color="#EAF2FE" />
         <SolidColorBrush x:Key="PageBrush" Color="#EAF2FE" />
         <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF" />
         <SolidColorBrush x:Key="TextBrush" Color="#343D4A" />
         <SolidColorBrush x:Key="MutedBrush" Color="#8C8C8C" />
-        <SolidColorBrush x:Key="FaintBrush" Color="#A6A6A6" />
         <SolidColorBrush x:Key="LineBrush" Color="#D5E6FD" />
-        <SolidColorBrush x:Key="RedBrush" Color="#CE2111" />
         <SolidColorBrush x:Key="GreenBrush" Color="#2EA66B" />
-        <SolidColorBrush x:Key="WhiteFaintBrush" Color="#55FFFFFF" />
-        <SolidColorBrush x:Key="WhiteSoftBrush" Color="#80FFFFFF" />
-        <SolidColorBrush x:Key="WhiteStrongBrush" Color="#B3FFFFFF" />
 
         <!-- 语义色（开发历史中散落的硬编码收敛于此）：状态/危险/警告/信息底 -->
         <SolidColorBrush x:Key="SuccessTextBrush" Color="#25875A" />
@@ -39,10 +30,8 @@
         <CornerRadius x:Key="CardCornerRadius">12</CornerRadius>
         <CornerRadius x:Key="PanelCornerRadius">10</CornerRadius>
         <CornerRadius x:Key="ItemCornerRadius">8</CornerRadius>
-        <CornerRadius x:Key="ChipCornerRadius">10</CornerRadius>
         <Thickness x:Key="CardPadding">18</Thickness>
         <Thickness x:Key="PanelPadding">16</Thickness>
-        <Thickness x:Key="SectionMargin">0,16,0,0</Thickness>
         <Thickness x:Key="ItemMargin">0,0,0,8</Thickness>
         <LinearGradientBrush x:Key="TitleBarGradient" StartPoint="0,0" EndPoint="1,0">
             <GradientStop Color="#0B5BCB" Offset="0" />

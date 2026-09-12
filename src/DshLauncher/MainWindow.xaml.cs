@@ -85,7 +85,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isNodeDetectionInProgress;
     private readonly Services.LifecycleBusyGuard _lifecycleGuard = new();
     private bool _isLifecycleInProgress => _lifecycleGuard.IsBusy;
-    private bool _isDshInstallInProgress;
     private bool _isRuntimePrepareInProgress;
     private bool _isLoadingCachedInstances;
     private bool _blockWindowCloseForMsi;
@@ -714,8 +713,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var launcherBusy = _isLifecycleInProgress
             || _isRuntimePrepareInProgress
-            || _isNodeDetectionInProgress
-            || _isDshInstallInProgress;
+            || _isNodeDetectionInProgress;
         var now = DateTimeOffset.UtcNow;
         foreach (var instance in Instances.ToArray())
         {
@@ -813,16 +811,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             "空闲自动停止",
             $"空闲超过 {minutes} 分钟"));
     }
-
-    public bool CanInstallDsh => !_isDshInstallInProgress
-        && !_isNodeDetectionInProgress
-        && _nodeRuntime.IsAvailable
-        && (_dshRuntime.NodeEngine is null
-            || _nodeRuntime.GetCompatibility(_dshRuntime.NodeEngine) == NodeRuntimeCompatibility.Compatible);
-
-    public string DshInstallButtonText => _isDshInstallInProgress
-        ? "安装中…"
-        : _dshRuntime.IsAvailable ? "安装/更新 DSh" : "安装 DSh";
 
     public bool CanRefreshNode => !_isNodeDetectionInProgress;
 
@@ -948,20 +936,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private async void RefreshNode_Click(object sender, RoutedEventArgs e)
-    {
-        await RefreshDshAsync(forceRefresh: true);
-        var runtime = await RefreshNodeAsync();
-        if (runtime is null)
-        {
-            return;
-        }
-
-        ShowNotice(runtime.IsAvailable
-            ? $"运行环境检测完成：Node.js {runtime.VersionText}（{NodeStatusText}），{_dshRuntime.DisplayVersionText}。"
-            : "运行环境检测完成：当前没有找到可用的 node.exe。Launcher 本身仍可继续运行。");
-    }
-
     private async Task<NodeRuntimeInfo?> RefreshNodeAsync()
     {
         if (_isNodeDetectionInProgress)
@@ -993,7 +967,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
-            OnPropertyChanged(nameof(CanInstallDsh));
             return _nodeRuntime;
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
@@ -1008,7 +981,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodeVersionText));
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
-            OnPropertyChanged(nameof(CanInstallDsh));
             ShowNotice(_nodeRuntime.Error ?? "Node.js 检测失败。");
             return _nodeRuntime;
         }
@@ -1022,7 +994,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(NodePathText));
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(StartInstanceButtonText));
-            OnPropertyChanged(nameof(CanInstallDsh));
             _runtimePanelUpdateStatus?.Invoke();
         }
     }
@@ -1076,9 +1047,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(NodeStatusText));
         OnPropertyChanged(nameof(NodeStatusBrush));
         OnPropertyChanged(nameof(NodeVersionText));
-        OnPropertyChanged(nameof(CanInstallDsh));
         OnPropertyChanged(nameof(CanStartInstance));
-        OnPropertyChanged(nameof(DshInstallButtonText));
         // 注意：被动检测不触发重绑定。实例 root 位于临时不可用的卷（可移动盘/
         // 网络盘断开）时按“失效”持久化改写注册，会在卷恢复后丢失原 runtime 选择；
         // 重绑定只发生在用户确认的准备/修复流程（PrepareRuntimeAsync）。
@@ -5470,8 +5439,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             progressWindow.Close();
             _isRuntimePrepareInProgress = false;
             OnPropertyChanged(nameof(CanStartInstance));
-            OnPropertyChanged(nameof(CanInstallDsh));
-            OnPropertyChanged(nameof(DshInstallButtonText));
         }
     }
 
@@ -6441,102 +6408,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void InstallNode_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "https://nodejs.org/en/download",
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"无法打开 Node.js 官方安装页：{ex.Message}");
-        }
-    }
-
-    private void InstallNodeMirror_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "https://npmmirror.com/mirrors/node/",
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"无法打开 Node.js 国内镜像页：{ex.Message}");
-        }
-    }
-
-    private async void InstallDsh_Click(object sender, RoutedEventArgs e)
-    {
-        await InstallDshAsync(DshInstallService.OfficialRegistry, "npm 官方源");
-    }
-
-    private async void InstallDshMirror_Click(object sender, RoutedEventArgs e)
-    {
-        await InstallDshAsync(DshInstallService.ChinaRegistry, "npmmirror 国内镜像");
-    }
-
-    private async Task InstallDshAsync(string registry, string sourceName)
-    {
-        if (_isDshInstallInProgress)
-        {
-            return;
-        }
-
-        if (!_nodeRuntime.IsAvailable)
-        {
-            ShowNotice("当前没有可用的 Node.js。请先安装 Node.js，再执行 DSh 安装。");
-            InstallNode_Click(this, new RoutedEventArgs());
-            return;
-        }
-
-        _isDshInstallInProgress = true;
-        OnPropertyChanged(nameof(CanInstallDsh));
-        OnPropertyChanged(nameof(DshInstallButtonText));
-        ShowNotice($"正在使用当前 Node.js 通过 {sourceName} 执行 npm install --global @deepseek-ai/dsh，请稍候…");
-
-        try
-        {
-            var installDirectory = GetConfiguredDshInstallDirectory();
-            var result = await _dshInstaller.InstallAsync(
-                _nodeRuntime,
-                registry,
-                installDirectory,
-                _windowCancellation.Token);
-            if (!result.IsSuccess)
-            {
-                ShowNotice(result.Error ?? "DSh 安装失败。");
-                return;
-            }
-
-            RevealRuntimeAfterBootstrap(TestRuntimeKind.Dsh);
-            await RefreshDshAsync(forceRefresh: true);
-            ShowNotice(installDirectory is null
-                ? $"DSh 安装/更新完成：{_dshRuntime.DisplayVersionText}。可以重新检测并注册实例。"
-                : $"DSh 安装/更新完成：{_dshRuntime.DisplayVersionText} · {installDirectory}。");
-        }
-        catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            ShowNotice($"DSh 安装失败：{ex.Message}");
-        }
-        finally
-        {
-            _isDshInstallInProgress = false;
-            OnPropertyChanged(nameof(CanInstallDsh));
-            OnPropertyChanged(nameof(DshInstallButtonText));
-        }
-    }
-
     private void UpdateInstanceStatus(ManagerInstance original, InstanceRuntimeStatus status, string? error)
     {
         try
@@ -7079,11 +6950,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         return false;
     }
 
-    private void Brand_Click(object sender, RoutedEventArgs e)
-    {
-        SwitchSection("启动");
-    }
-
     private void ContextInstanceSettings_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedInstance is null)
@@ -7462,12 +7328,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref NativeMonitorInfo info);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr windowHandle, out NativeRect rect);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool GetClientRect(IntPtr windowHandle, out NativeRect rect);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeWindowPos

@@ -1522,14 +1522,6 @@ public sealed partial class ExtensionService
         }
     }
 
-    private static void SetInstanceEnvironment(ProcessStartInfo startInfo, ManagerInstance instance)
-    {
-        startInfo.Environment["DSH_HOME"] = instance.DshHome;
-        // The DSh skill provider otherwise falls back to the user's global
-        // .agents directory, which would leak Skills across instances.
-        startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(instance.DshHome, ".agents");
-    }
-
     private static async Task<ProcessResult> RunProcessAsync(
         ProcessStartInfo startInfo,
         CancellationToken cancellationToken,
@@ -1660,8 +1652,6 @@ public sealed partial class ExtensionService
             throw new ArgumentException("Plugin 来源包含 Windows 命令行保留字符。", nameof(packageSpec));
         }
     }
-
-    private static string QuoteCmdArgument(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
 
     private static string SafeSegment(string? value, string label)
     {

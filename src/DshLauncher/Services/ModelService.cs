@@ -243,44 +243,6 @@ public sealed class ModelService
         lines.RemoveRange(start, end - start);
     }
 
-    private static void RemoveNestedProvider(string path, string sectionName, string provider)
-    {
-        if (!File.Exists(path))
-        {
-            return;
-        }
-
-        var existing = File.ReadAllLines(path, Encoding.UTF8).ToList();
-        var sectionStart = FindTopLevelStart(existing, sectionName);
-        if (sectionStart < 0)
-        {
-            return;
-        }
-
-        var sectionEnd = FindTopLevelEnd(existing, sectionStart);
-        var section = existing.GetRange(sectionStart, sectionEnd - sectionStart);
-        var providersStart = FindIndentedSectionStart(section, "providers", 2);
-        if (providersStart < 0)
-        {
-            return;
-        }
-
-        NormalizeNestedProviderMapping(section, providersStart);
-
-        var providersEnd = FindIndentedSectionEnd(section, providersStart, 2);
-        var providerStart = FindProviderStart(section, providersStart + 1, providersEnd, provider);
-        if (providerStart < 0)
-        {
-            return;
-        }
-
-        var providerEnd = FindProviderEnd(section, providerStart, providersEnd);
-        section.RemoveRange(providerStart, providerEnd - providerStart);
-        existing.RemoveRange(sectionStart, sectionEnd - sectionStart);
-        existing.InsertRange(sectionStart, section);
-        WriteSettings(path, existing);
-    }
-
     private static void ReplaceOpenAiProviders(
         string path,
         IEnumerable<ModelProviderInfo> providers)
@@ -466,12 +428,6 @@ public sealed class ModelService
             && body[last].Length - body[last].TrimStart().Length == expectedBraceIndent
             && string.Equals(body[first].Trim().TrimEnd(','), "{", StringComparison.Ordinal)
             && string.Equals(body[last].Trim().TrimEnd(','), "}", StringComparison.Ordinal);
-    }
-
-    private static bool IsStandaloneMappingBrace(string line)
-    {
-        var trimmed = line.Trim().TrimEnd(',');
-        return trimmed is "{" or "}";
     }
 
     private static void ReplaceTopLevelSection(List<string> lines, string name, IReadOnlyList<string> replacement)

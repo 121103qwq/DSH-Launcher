@@ -1356,16 +1356,6 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         return nodeDirectory + Path.PathSeparator + string.Join(Path.PathSeparator, entries);
     }
 
-    private static void AddLauncherPatch(ProcessStartInfo startInfo, ManagerInstance instance)
-    {
-        var patchPath = Path.Combine(instance.DshHome, "launcher.patch.yml");
-        if (IsRegularFile(patchPath))
-        {
-            startInfo.ArgumentList.Add("--patch");
-            startInfo.ArgumentList.Add(patchPath);
-        }
-    }
-
     private static bool IsRegularFile(string path)
     {
         try
