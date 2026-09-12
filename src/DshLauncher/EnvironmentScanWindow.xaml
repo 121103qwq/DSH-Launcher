@@ -22,7 +22,7 @@
                 </Grid.RowDefinitions>
                 <Grid>
                     <StackPanel>
-                        <TextBlock Text="扫描本机 DSH 环境" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="扫描本机 DSH 环境" FontSize="20" FontWeight="SemiBold" />
                         <TextBlock Text="枚举 %USERPROFILE%\.dsh* 与 DSH_HOME 环境变量指向的 home；勾选后按 home 建实例（一个 home 一个实例，只支持带 profiles/web 的 home）。"
                                    Foreground="{StaticResource MutedBrush}"
                                    FontSize="11"

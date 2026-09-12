@@ -4,6 +4,8 @@
         Title="新建干净版本"
         Width="430"
         Height="340"
+        MinWidth="430"
+        MinHeight="320"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"

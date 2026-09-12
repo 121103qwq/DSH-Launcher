@@ -22,7 +22,7 @@
                 </Grid.RowDefinitions>
                 <Grid>
                     <StackPanel>
-                        <TextBlock Text="任务中心" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="任务中心" FontSize="20" FontWeight="SemiBold" />
                         <TextBlock Text="Launcher 的长任务：运行环境准备（Node / DSh 安装与修复）、插件与技能操作、实例导入、更换运行版本。运行中的任务可以在这里取消（与原有进度窗的取消等效）；任务结束时写入 launcher-tasks.json，保留最近 50 条。"
                                    Foreground="{StaticResource MutedBrush}"
                                    FontSize="11"

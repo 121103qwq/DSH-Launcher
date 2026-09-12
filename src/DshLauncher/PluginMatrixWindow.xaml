@@ -22,7 +22,7 @@
                 </Grid.RowDefinitions>
                 <Grid>
                     <StackPanel>
-                        <TextBlock Text="插件 × 实例矩阵" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="插件 × 实例矩阵" FontSize="20" FontWeight="SemiBold" />
                         <TextBlock Text="行 = 插件（至少在一个实例启用），列 = 实例；用于对比同一插件在各实例的安装/启用状态。只读视图，启停请到「插件管理」。"
                                    Foreground="{StaticResource MutedBrush}"
                                    FontSize="11"
