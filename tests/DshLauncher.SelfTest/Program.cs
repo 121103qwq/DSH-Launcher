@@ -2133,6 +2133,18 @@ Check("terminal/命令生成：含 DSH_HOME + --profile；noOpen 时带 --no-ope
         == @"$env:DSH_HOME='C:\home'; & 'C:\dsh\dsh.cmd' --profile web"
     && TerminalLaunchService.BuildPowerShellCommand(null, @"C:\dsh\dsh.cmd", "web") is null);
 
+Check("terminal/受限同步选择：只挑呈现面为 Terminal 的 profile（web 面不选、无则 null）",
+    ExtensionService.PickTerminalProfile(new[]
+    {
+        new DshProfileInfo("web", true, new[] { "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app" }, null, false, false, null),
+        new DshProfileInfo("dsh-tui", true, new[] { "@deepseek-ai/dsh-base", "@deepseek-harness-tui/dsh-tui" }, null, false, false, null)
+    }) == "dsh-tui"
+    && ExtensionService.PickTerminalProfile(new[]
+    {
+        new DshProfileInfo("web", true, new[] { "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app" }, null, false, false, null)
+    }) is null
+    && ExtensionService.PickTerminalProfile(Array.Empty<DshProfileInfo>()) is null);
+
 launchModeData = launchModeSettings.Read(launchModeInstance);
 launchModeData.OpenMode = null;
 launchModeSettings.Save(launchModeInstance, launchModeData);

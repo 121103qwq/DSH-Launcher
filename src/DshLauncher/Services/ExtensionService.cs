@@ -704,6 +704,67 @@ public sealed partial class ExtensionService
         await Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 变更集 116（work-log/99）：受限同步——把从界面装/更新的插件也装进该实例的"终端面 profile"（如 dsh-tui）。
+    /// 只处理 add/update；只挑呈现面为 Terminal 的 profile（<c>List()</c> 默认已跳过 node_modules 与 Launcher
+    /// 自建的 .dsh-safe / .dsh-bisect）；与活动 profile 相同则跳过；失败只记录并回报、不影响主流程。
+    /// </summary>
+    private async Task<string> SyncToTerminalProfileAsync(
+        ManagerInstance instance,
+        string action,
+        string packageSpec,
+        NodeRuntimeInfo? nodeRuntime,
+        string? allowBuildPackageName,
+        PluginInstallMode installMode,
+        CancellationToken cancellationToken,
+        string primaryOutput)
+    {
+        if (action is not ("add" or "update"))
+        {
+            return primaryOutput;
+        }
+
+        try
+        {
+            var activeProfile = _activeProfile(instance);
+            var terminalProfile = PickTerminalProfile(new DshProfileService().List(instance));
+            if (string.IsNullOrWhiteSpace(terminalProfile)
+                || string.Equals(terminalProfile, activeProfile, StringComparison.OrdinalIgnoreCase))
+            {
+                return primaryOutput;
+            }
+
+            var sibling = new ExtensionService(
+                _isRunning,
+                _sourceInspector,
+                _snapshotService,
+                activeProfile: _ => terminalProfile!);
+            var siblingOutput = await sibling.RunPluginCommandAsync(
+                instance,
+                action,
+                packageSpec,
+                nodeRuntime,
+                allowBuildPackageName,
+                installMode,
+                cancellationToken,
+                progress: null);
+            var note = $"已同步到终端面 profile「{terminalProfile}」。";
+            return string.IsNullOrWhiteSpace(siblingOutput)
+                ? $"{primaryOutput} {note}"
+                : $"{primaryOutput} {note} {siblingOutput}";
+        }
+        catch (Exception ex)
+        {
+            LauncherLog.Warn("同步插件到终端面 profile 失败：" + ex.Message);
+            return $"{primaryOutput}（同步到终端面 profile 失败：{ex.Message}；可在终端里手动补装）";
+        }
+    }
+
+    /// <summary>挑该实例的终端面 profile（可测）：bundles 呈现面为 Terminal 的第一个；没有则 null。</summary>
+    internal static string? PickTerminalProfile(IEnumerable<DshProfileInfo> profiles) =>
+        profiles.FirstOrDefault(info =>
+            PresentationSurfaceService.Detect(info.Name, info.Bundles) == PresentationSurface.Terminal)?.Name;
+
     private async Task<string> RunPluginCommandAsync(
         ManagerInstance instance,
         string action,
@@ -814,7 +875,15 @@ public sealed partial class ExtensionService
                 rollback);
         }
 
-        return FormatProcessOutput(attempt.Output, failure: false);
+        return await SyncToTerminalProfileAsync(
+            instance,
+            action,
+            packageSpec,
+            nodeRuntime,
+            allowBuildPackageName,
+            installMode,
+            cancellationToken,
+            FormatProcessOutput(attempt.Output, failure: false));
     }
 
     private sealed record PluginCommandAttempt(
