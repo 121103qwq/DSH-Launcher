@@ -452,13 +452,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             var settings = _versionSettingsService.Read(instance);
-            var terminalVisible = settings.LaunchModeVisibility is null
-                || !settings.LaunchModeVisibility.TryGetValue("terminal", out var visible)
-                || visible;
+            bool ModeVisible(string key) => settings.LaunchModeVisibility is null
+                || !settings.LaunchModeVisibility.TryGetValue(key, out var value)
+                || value;
             var profileName = DshProfileService.ResolveActiveName(instance, _versionSettingsService);
             var terminalSupported = PresentationSurfaceService.SupportsTerminalLaunch(
                 PresentationSurfaceService.Detect(profileName, ReadProfileBundles(instance, profileName)));
-            return LaunchModePolicy.Effective(mode, HasVendorDesktopSurface(instance), terminalSupported, terminalVisible);
+            return LaunchModePolicy.Effective(
+                mode,
+                HasVendorDesktopSurface(instance),
+                terminalSupported,
+                ModeVisible("terminal"),
+                ModeVisible("isolated"));
         }
         catch
         {

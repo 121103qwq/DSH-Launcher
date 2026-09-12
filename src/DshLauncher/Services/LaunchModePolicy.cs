@@ -10,11 +10,13 @@ public static class LaunchModePolicy
     /// <param name="vendorDesktopSurface">运行时自带 desktop surface（启动器的「Desktop 启动」不再适用）。</param>
     /// <param name="terminalSurfaceSupported">活动 profile 的呈现面允许在终端打开（终端面）。</param>
     /// <param name="terminalModeVisible">「在终端打开」入口未被实例设置隐藏。</param>
+    /// <param name="isolatedModeVisible">「隔离启动」入口未被实例设置隐藏（变更集 111，work-log/94）。</param>
     public static DshLauncher.Models.VersionOpenMode Effective(
         DshLauncher.Models.VersionOpenMode selected,
         bool vendorDesktopSurface,
         bool terminalSurfaceSupported,
-        bool terminalModeVisible)
+        bool terminalModeVisible,
+        bool isolatedModeVisible)
     {
         if (selected == DshLauncher.Models.VersionOpenMode.Desktop && vendorDesktopSurface)
         {
@@ -22,6 +24,11 @@ public static class LaunchModePolicy
         }
 
         if (selected == DshLauncher.Models.VersionOpenMode.Terminal && (!terminalSurfaceSupported || !terminalModeVisible))
+        {
+            return DshLauncher.Models.VersionOpenMode.Web;
+        }
+
+        if (selected == DshLauncher.Models.VersionOpenMode.Isolated && !isolatedModeVisible)
         {
             return DshLauncher.Models.VersionOpenMode.Web;
         }

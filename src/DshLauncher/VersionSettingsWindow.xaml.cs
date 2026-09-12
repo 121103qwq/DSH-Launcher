@@ -169,18 +169,103 @@ public partial class VersionSettingsWindow : UserControl
     {
         WindowTitleBox.Text = _settings.WindowTitle ?? string.Empty;
         NodePathBox.Text = _settings.NodeExecutablePath ?? string.Empty;
-        var openMode = _settings.OpenMode ?? VersionOpenMode.Desktop;
-        OpenModeBox.SelectedValue = openMode.ToString();
         CustomOpenTargetBox.Text = _settings.CustomOpenTargetPath ?? string.Empty;
-        UpdateCustomOpenTargetEnabled();
-        OpenModeStatusText.Text = openMode switch
+        ApplyOpenModeChoices();
+    }
+
+    /// <summary>
+    /// 刷新「默认启动方式」下拉（变更集 111，work-log/94）：
+    /// 1）按「启动方式显示」过滤被关闭的方式（隔离、终端）；2）终端项按呈现面置灰；
+    /// 3）当前默认若被关闭/不可用则回退 Web 并说明；4）「未设置」= OpenMode 为 null（按运行时自动）。
+    /// </summary>
+    private void ApplyOpenModeChoices()
+    {
+        var visibility = _settings.LaunchModeVisibility;
+        bool ModeVisible(string key) => visibility is null || !visibility.TryGetValue(key, out var value) || value;
+
+        var terminalVisible = ModeVisible("terminal");
+        var terminalSupported = false;
+        if (_instance is not null)
         {
+            try
+            {
+                var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
+                var profileInfo = new DshProfileService().Describe(_instance, profileName);
+                terminalSupported = PresentationSurfaceService.SupportsTerminalLaunch(
+                    PresentationSurfaceService.Detect(profileName, profileInfo.Bundles));
+            }
+            catch
+            {
+                terminalSupported = false; // 判不到不当成可用
+            }
+        }
+
+        OpenModeTerminalItem.Visibility = terminalVisible ? Visibility.Visible : Visibility.Collapsed;
+        OpenModeTerminalItem.IsEnabled = terminalSupported;
+        OpenModeTerminalItem.ToolTip = terminalSupported
+            ? "在 Windows Terminal 里跑 dsh --profile <活动 profile>；点左侧启动按钮生效。"
+            : "当前 profile 的呈现面不是终端面（如 dsh-tui 这类 profile），暂不可选。";
+        OpenModeIsolatedItem.Visibility = ModeVisible("isolated") ? Visibility.Visible : Visibility.Collapsed;
+
+        var stored = _settings.OpenMode; // null = 未设置（按运行时自动）
+        VersionOpenMode? display = stored;
+        string? fallbackReason = null;
+        if (stored == VersionOpenMode.Isolated && !ModeVisible("isolated"))
+        {
+            display = VersionOpenMode.Web;
+            fallbackReason = "原默认「隔离启动」已在「启动方式显示」里关闭";
+        }
+        else if (stored == VersionOpenMode.Terminal && (!terminalVisible || !terminalSupported))
+        {
+            display = VersionOpenMode.Web;
+            fallbackReason = terminalVisible
+                ? "原默认「终端启动」需要终端面 profile，当前 profile 不是"
+                : "原默认「终端启动」已在「启动方式显示」里关闭";
+        }
+
+        OpenModeBox.SelectedValue = display is null ? "Unset" : display.Value.ToString();
+        OpenModeStatusText.Text = BuildOpenModeStatus(display, fallbackReason);
+        UpdateCustomOpenTargetEnabled();
+    }
+
+    private static string BuildOpenModeStatus(VersionOpenMode? mode, string? fallbackReason)
+    {
+        var text = mode switch
+        {
+            null => "未设置：按运行时自动——运行时自带桌面封装时打开原生窗口，否则按 Web 启动。",
             VersionOpenMode.Custom => "当前版本将使用手动绑定的本地入口，并继承此版本的 DSH_HOME。",
             VersionOpenMode.Web => "当前版本将使用 dsh 原生方式启动：服务启动后由 dsh 在默认浏览器打开 WebUI。",
+            VersionOpenMode.Terminal => "当前版本将用「终端启动」：在 Windows Terminal 里跑该 profile（如 dsh-tui）；点左侧启动按钮生效。",
             VersionOpenMode.Isolated => "当前版本将用隔离 profile 启动：剥离第三方插件、保留 dsh 核心；不会修改你的 profile 与配置。",
             _ => "当前版本将使用启动器方式启动：服务启动后自动打开内部 Chat 窗口，不会重复弹浏览器。"
         };
-        LoadEnvironmentVariables();
+        return fallbackReason is null ? text : $"{fallbackReason}，当前按 Web 启动生效；重新打开开关即可恢复。";
+    }
+
+    /// <summary>「未设置」：清掉 OpenMode（null），回到按运行时自动的历史默认（变更集 111）。</summary>
+    private void SaveUnsetOpenMode()
+    {
+        if (_instance is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var updated = CopySettings();
+            updated.OpenMode = null;
+            var snapshot = TryCreateSnapshot("保存打开方式前");
+            _settingsService.Save(_instance, updated);
+            _settings = updated;
+            OpenModeStatusText.Text = snapshot is null
+                ? "已保存：未设置（按运行时自动）。"
+                : "已保存：未设置（按运行时自动），并已保留修改前快照。";
+            _settingsSaved();
+        }
+        catch (Exception ex)
+        {
+            OpenModeStatusText.Text = "保存打开方式失败：" + ex.Message;
+        }
     }
 
     private void LoadEnvironmentVariables()
@@ -1454,6 +1539,7 @@ public partial class VersionSettingsWindow : UserControl
             map[key] = visible;
             _settings.LaunchModeVisibility = map;
             _settingsService.Save(_instance, _settings);
+            ApplyOpenModeChoices(); // 关闭某个方式的显示时，「默认启动方式」下拉同步过滤/回退（变更集 111）
             if (_uiLaunchModeStatusText is not null)
             {
                 _uiLaunchModeStatusText.Text = (visible ? "已开启" : "已关闭") + "该方式在卡片 ▼ 菜单里的显示（立即生效）。";
@@ -1500,7 +1586,14 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
-        if (!Enum.TryParse<VersionOpenMode>(OpenModeBox.SelectedValue?.ToString(), out var openMode))
+        var selectedTag = OpenModeBox.SelectedValue?.ToString();
+        if (string.Equals(selectedTag, "Unset", StringComparison.Ordinal))
+        {
+            SaveUnsetOpenMode(); // 「未设置（按运行时自动）」：清掉 OpenMode（变更集 111）
+            return;
+        }
+
+        if (!Enum.TryParse<VersionOpenMode>(selectedTag, out var openMode))
         {
             OpenModeStatusText.Text = "打开方式无效。";
             return;

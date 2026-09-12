@@ -2151,13 +2151,20 @@ Check("launch-mode/Terminal 落盘读回，终端工作区与“每次选择”�
     && launchModeTerminal.TerminalWorkingDirectory == @"C:\work\project"
     && launchModeTerminal.TerminalAskWorkspaceEachTime);
 
-Check("launch-mode/终端生效规则：非终端面或入口隐藏时回退 Web，可用时保持（判不到不替换）",
-    LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, true) == VersionOpenMode.Terminal
-    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, false, true) == VersionOpenMode.Web
-    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, false) == VersionOpenMode.Web
-    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, true, false, false) == VersionOpenMode.Web
-    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, false, false, false) == VersionOpenMode.Desktop
-    && LaunchModePolicy.Effective(VersionOpenMode.Isolated, true, false, false) == VersionOpenMode.Isolated);
+Check("launch-mode/生效规则：桌面封装 / 非终端面 / 入口被隐藏时回退 Web，可用时保持（判不到不替换）",
+    LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, true, true) == VersionOpenMode.Terminal
+    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, false, true, true) == VersionOpenMode.Web
+    && LaunchModePolicy.Effective(VersionOpenMode.Terminal, false, true, false, true) == VersionOpenMode.Web
+    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, true, false, false, true) == VersionOpenMode.Web
+    && LaunchModePolicy.Effective(VersionOpenMode.Desktop, false, false, false, true) == VersionOpenMode.Desktop
+    && LaunchModePolicy.Effective(VersionOpenMode.Isolated, false, false, false, true) == VersionOpenMode.Isolated
+    && LaunchModePolicy.Effective(VersionOpenMode.Isolated, false, false, false, false) == VersionOpenMode.Web);
+
+launchModeData = launchModeSettings.Read(launchModeInstance);
+launchModeData.OpenMode = null;
+launchModeSettings.Save(launchModeInstance, launchModeData);
+Check("launch-mode/「未设置」置空可落盘读回（OpenMode 为 null，变更集 111）",
+    launchModeSettings.Read(launchModeInstance).OpenMode is null);
 
 var terminalFallback = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 Check("launch-mode/终端工作区解析：目录存在时用它，否则回退；空回退给用户主目录",
