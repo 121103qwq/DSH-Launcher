@@ -2226,7 +2226,7 @@ var uiHome = Path.Combine(scratch, "ui-plugin-home");
 Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "web"));
 Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "@deepseek-harness-tui", "dsh-tui"));
 Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "dsh-gui-hanhua"));
-Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "dsh-ssh-tui"));
+Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "web", "node_modules", "dsh-ssh-tui"));
 Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "node-pty"));
 Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "picocolors"));
 Directory.CreateDirectory(Path.Combine(uiHome, "profiles", "node_modules", "lodash"));
@@ -2243,7 +2243,7 @@ File.WriteAllText(
     """{ "name": "dsh-gui-hanhua", "version": "1.0.0", "keywords": ["gui"], "dsh": { "bundle": { "patch": "./cordis.patch.yml" } } }""",
     Encoding.UTF8);
 File.WriteAllText(
-    Path.Combine(uiHome, "profiles", "node_modules", "dsh-ssh-tui", "package.json"),
+    Path.Combine(uiHome, "profiles", "web", "node_modules", "dsh-ssh-tui", "package.json"),
     """{ "name": "dsh-ssh-tui", "version": "0.4.0", "keywords": ["tui", "terminal"], "dsh": { "bundle": { "patch": "./cordis.patch.yml" } } }""",
     Encoding.UTF8);
 // 负例1：直接依赖但没声明 dsh（普通库，keywords 里的 terminal 不应命中）

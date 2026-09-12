@@ -80,7 +80,16 @@ public static class InstanceUiPluginScanner
         var candidates = new HashSet<string>(bundles, StringComparer.OrdinalIgnoreCase);
         candidates.UnionWith(dependencies);
 
-        foreach (var packageDirectory in EnumeratePackageDirectories(Path.Combine(instance.DshHome, "profiles", "node_modules")))
+        // 两种布局都要扫：0.1.5+ 用共享 profiles/node_modules；0.1.2 等旧版把依赖装在 profiles/<名>/node_modules。
+        var seenPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var nodeModulesDirectories = new[]
+        {
+            Path.Combine(profileDirectory, "node_modules"),
+            Path.Combine(instance.DshHome, "profiles", "node_modules")
+        };
+
+        foreach (var nodeModulesDirectory in nodeModulesDirectories)
+        foreach (var packageDirectory in EnumeratePackageDirectories(nodeModulesDirectory))
         {
             var manifestPath = Path.Combine(packageDirectory, "package.json");
             if (!File.Exists(manifestPath))
@@ -98,6 +107,11 @@ public static class InstanceUiPluginScanner
                 if (string.IsNullOrWhiteSpace(packageName) || !candidates.Contains(packageName!))
                 {
                     continue; // 只算该 profile 的直接插件；传递依赖库（picocolors/node-pty 等）不算
+                }
+
+                if (!seenPackages.Add(packageName!))
+                {
+                    continue; // 两处布局可能都有同名包，只取第一次遇到的
                 }
 
                 if (!IsDshPlugin(root))
