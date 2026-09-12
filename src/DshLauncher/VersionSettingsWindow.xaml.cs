@@ -88,6 +88,7 @@ public partial class VersionSettingsWindow : UserControl
         LoadWorkspaceNames();
         LoadConfigurationControls();
         LoadPluginSettingsControls();
+        RefreshTerminalCommandCard();
         ShowPage(_openPluginPage ? PluginsButton : PersonalizationButton);
 
         if (_instance is null)
@@ -162,6 +163,71 @@ public partial class VersionSettingsWindow : UserControl
     {
         WindowTitleBox.Text = _settings.WindowTitle ?? string.Empty;
         NodePathBox.Text = _settings.NodeExecutablePath ?? string.Empty;
+    }
+
+    /// <summary>
+    /// 「终端启动（TUI 插件）」（变更集 113）：扫到 TUI 插件时给出可粘贴的完整命令。
+    /// TUI 不由启动器托管，命令里带 DSH_HOME 与活动 profile，避开退到 ~/.dsh 找不到 profile。
+    /// </summary>
+    private void RefreshTerminalCommandCard()
+    {
+        if (_instance is null || TerminalCommandCard is null || TerminalCommandBox is null)
+        {
+            return;
+        }
+
+        var profileName = DshProfileService.ResolveActiveName(_instance, _settingsService);
+        UiPluginScanResult scan;
+        try
+        {
+            scan = InstanceUiPluginScanner.Scan(_instance, profileName);
+        }
+        catch (Exception ex)
+        {
+            TerminalCommandCard.Visibility = Visibility.Collapsed;
+            LauncherLog.Warn("扫描 TUI 插件失败：" + ex.Message);
+            return;
+        }
+
+        if (!scan.HasTuiProvider)
+        {
+            TerminalCommandCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var command = TerminalLaunchService.BuildPowerShellCommand(
+            _instance.DshHome,
+            _instance.DshExecutablePath,
+            profileName);
+        if (command is null)
+        {
+            TerminalCommandCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var names = string.Join("、", scan.TuiPlugins.Select(plugin =>
+            plugin.Name + (plugin.Enabled ? string.Empty : "（未启用）")));
+        TerminalCommandBox.Text = command;
+        TerminalCommandHintText.Text = $"检测到 {names}（profile：{profileName}）。";
+        TerminalCommandCard.Visibility = Visibility.Visible;
+    }
+
+    private void CopyTerminalCommand_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(TerminalCommandBox.Text))
+        {
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(TerminalCommandBox.Text);
+            TerminalCommandHintText.Text = "命令已复制；粘到 PowerShell 里执行即可。";
+        }
+        catch (Exception ex)
+        {
+            TerminalCommandHintText.Text = "复制失败：" + ex.Message;
+        }
     }
 
     private void LoadEnvironmentVariables()

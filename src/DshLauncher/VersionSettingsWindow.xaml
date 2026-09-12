@@ -126,6 +126,36 @@
                                                Margin="0,8,0,0" />
                                 </StackPanel>
                             </Border>
+                            <Border x:Name="TerminalCommandCard"
+                                    Background="{StaticResource InfoBackgroundBrush}"
+                                    CornerRadius="{StaticResource PanelCornerRadius}"
+                                    Padding="{StaticResource CardPadding}"
+                                    Margin="0,14,0,0"
+                                    Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock Text="终端启动（TUI 插件）" FontWeight="SemiBold" />
+                                    <TextBlock Text="该实例扫到 TUI 插件（如 dsh-tui）。TUI 不由启动器托管，请在终端里执行下面的命令：已带上 DSH_HOME 与活动 profile，直接粘进 PowerShell 即可；实例正在运行时可先停止。"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               FontSize="11"
+                                               TextWrapping="Wrap"
+                                               Margin="0,6,0,0" />
+                                    <TextBox x:Name="TerminalCommandBox"
+                                             IsReadOnly="True"
+                                             TextWrapping="Wrap"
+                                             Height="54"
+                                             VerticalScrollBarVisibility="Auto"
+                                             Margin="0,10,0,0" />
+                                    <WrapPanel Margin="0,8,0,0">
+                                        <Button x:Name="CopyTerminalCommandButton" Content="复制命令" Click="CopyTerminalCommand_Click" Padding="10,6" />
+                                        <TextBlock x:Name="TerminalCommandHintText"
+                                                   FontSize="11"
+                                                   Foreground="{StaticResource MutedBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="8,0,0,0"
+                                                   VerticalAlignment="Center" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
                             <Border Background="{StaticResource InfoBackgroundBrush}"
                                     CornerRadius="{StaticResource PanelCornerRadius}"
                                     Padding="{StaticResource CardPadding}"
