@@ -4,10 +4,10 @@
              FontFamily="{StaticResource UiFont}"
              Loaded="Window_OnLoaded"
              Unloaded="Window_OnUnloaded">
-    <Grid Margin="0">
+    <Grid Margin="0" MaxWidth="1200" HorizontalAlignment="Center">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="280" />
-            <ColumnDefinition Width="20" />
+            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="18" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 

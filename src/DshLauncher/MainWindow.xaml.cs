@@ -2782,7 +2782,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             Margin = new Thickness(0),
             VerticalAlignment = VerticalAlignment.Top,
-            MaxWidth = 980
+            MaxWidth = 1200
         };
 
         void AddPageHeader(StackPanel target, string title, string description)
@@ -3171,8 +3171,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         AddCredentialAuditSection(diagnosePanel);
 
         // 左侧分类 + 右侧内容（与版本设置页同一套导航外观，见 docs/UI-DESIGN.md）
-        var host = new Grid();
-        host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(196) });
+        var host = new Grid
+        {
+            MaxWidth = 1200,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+        };
+        host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(320) });
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
         host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 

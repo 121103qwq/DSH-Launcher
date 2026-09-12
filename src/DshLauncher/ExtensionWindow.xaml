@@ -20,10 +20,10 @@
             <Setter Property="Margin" Value="0,0,6,6" />
         </Style>
     </UserControl.Resources>
-    <Grid Margin="0">
+    <Grid Margin="0" MaxWidth="1200" HorizontalAlignment="Center">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="340" />
-            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="18" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
