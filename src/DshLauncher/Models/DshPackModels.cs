@@ -3,7 +3,8 @@ namespace DshLauncher.Models;
 public enum VersionPackageKind
 {
     DshPack,
-    ModPack
+    ModPack,
+    Dspack
 }
 
 public sealed record DshPackPreview(
@@ -27,9 +28,12 @@ public sealed record DshPackPreview(
 
     public int ProviderCount => Providers.Count;
 
-    public string PackageKindText => PackageKind == VersionPackageKind.ModPack
-        ? "DSH ModPack (.tgz)"
-        : "DSH Launcher (.dshpack)";
+    public string PackageKindText => PackageKind switch
+    {
+        VersionPackageKind.ModPack => "DSH ModPack (.tgz)",
+        VersionPackageKind.Dspack => "DSH-PackForge Profile (.dspack)",
+        _ => "DSH Launcher (.dshpack)"
+    };
 }
 
 public sealed record VersionPackageConversionResult(

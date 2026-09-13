@@ -79,6 +79,15 @@ public sealed class ConversationSyncService
                 new[] { "会话路径无效，不能同步删除。" });
         }
 
+        var deletedFileName = normalized[(normalized.LastIndexOf('/') + 1)..];
+        if (!SessionFormatHelper.TryParseFileName(deletedFileName, out var deletedFormat))
+        {
+            return new ConversationSyncResult(
+                0,
+                component.Count(IsRunning),
+                new[] { "会话路径不是 canonical Session 文件，不能同步删除。" });
+        }
+
         var stopped = component.Where(version => !IsRunning(version)).ToArray();
         var errors = new List<string>();
         var deletedAt = DateTime.UtcNow;
@@ -86,6 +95,13 @@ public sealed class ConversationSyncService
         {
             try
             {
+                if (!SessionFormatHelper.IsRuntimeFormatSupported(version, deletedFormat.Version))
+                {
+                    errors.Add(
+                        $"{version.Name}/{normalized}：当前 DSh runtime 不具备 Session v{deletedFormat.Version} 的 format catalog，已跳过删除。");
+                    continue;
+                }
+
                 DeleteSessionFile(version, normalized);
                 UpdateDeletionState(version, normalized, deletedAt, deleted: true);
             }
@@ -227,6 +243,15 @@ public sealed class ConversationSyncService
                     continue;
                 }
 
+                if (!SessionFormatHelper.IsRuntimeFormatSupported(
+                        targetVersion,
+                        source.Format.Version))
+                {
+                    errors.Add(
+                        $"{targetVersion.Name}/{source.RelativePath}：目标 DSh runtime 不具备 Session v{source.Format.Version} 的 format catalog，已跳过写入。");
+                    continue;
+                }
+
                 var targetPath = Path.Combine(
                     SessionsRoot(targetVersion),
                     relativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -320,8 +345,7 @@ public sealed class ConversationSyncService
                 }
 
                 var fileName = Path.GetFileName(entry);
-                if (!fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-                    && !fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase))
+                if (!SessionFormatHelper.TryParseFileName(fileName, out var format))
                 {
                     continue;
                 }
@@ -329,10 +353,17 @@ public sealed class ConversationSyncService
                 SessionFile? sessionFile = null;
                 try
                 {
-                    if (!ConversationService.HasRecognizedSessionHeader(entry))
+                    if (!ConversationService.TryReadSessionHeader(entry, out _))
                     {
                         errors.Add(
                             $"{instance.Name}/{Path.GetRelativePath(root, entry)}：会话 header 无效，已跳过。 ");
+                        continue;
+                    }
+
+                    if (!SessionFormatHelper.IsRuntimeFormatSupported(instance, format.Version))
+                    {
+                        errors.Add(
+                            $"{instance.Name}/{Path.GetRelativePath(root, entry)}：当前 DSh runtime 不具备 Session v{format.Version} 的 format catalog，已跳过。");
                         continue;
                     }
 
@@ -342,7 +373,8 @@ public sealed class ConversationSyncService
                         entry,
                         Path.GetRelativePath(root, entry),
                         info.Length,
-                        info.LastWriteTimeUtc);
+                        info.LastWriteTimeUtc,
+                        format);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -614,8 +646,7 @@ public sealed class ConversationSyncService
         }
 
         var fileName = normalized[(normalized.LastIndexOf('/') + 1)..];
-        return fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-            || fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase)
+        return SessionFormatHelper.TryParseFileName(fileName, out _)
             ? normalized
             : null;
     }
@@ -664,7 +695,8 @@ public sealed class ConversationSyncService
         string FullPath,
         string RelativePath,
         long Length,
-        DateTime LastWriteTimeUtc);
+        DateTime LastWriteTimeUtc,
+        SessionFileFormat Format);
 
     private sealed class ConversationSyncState
     {

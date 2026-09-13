@@ -26,6 +26,7 @@ public sealed class PageLayoutTests
     [InlineData("ExtensionWindow.xaml", "MarketplaceList")]
     [InlineData("ExtensionWindow.xaml", "SkillMarketList")]
     [InlineData("VersionControlWindow.xaml", "VersionList")]
+    [InlineData("ModPackMarketView.xaml", "PackList")]
     public void LongListsOwnTheirScrollingViewport(string file, string name)
     {
         var list = Named(ReadXaml(file), name);

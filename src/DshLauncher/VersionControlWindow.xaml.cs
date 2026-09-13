@@ -621,7 +621,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         using var dialog = new Forms.OpenFileDialog
         {
             Title = "导入 DSh 整合包",
-            Filter = $"支持的整合包 (*{_packageService.PackageExtension};*.tgz;*.tar.gz)|*{_packageService.PackageExtension};*.tgz;*.tar.gz|DSH Launcher (*{_packageService.PackageExtension})|*{_packageService.PackageExtension}|DSH ModPack (*.tgz;*.tar.gz)|*.tgz;*.tar.gz|所有文件|*.*",
+            Filter = $"支持的整合包 (*{_packageService.PackageExtension};*.tgz;*.tar.gz;*.dspack)|*{_packageService.PackageExtension};*.tgz;*.tar.gz;*.dspack|DSH Launcher (*{_packageService.PackageExtension})|*{_packageService.PackageExtension}|DSH-PackForge (*.tgz;*.tar.gz;*.dspack)|*.tgz;*.tar.gz;*.dspack|所有文件|*.*",
             CheckFileExists = true,
             Multiselect = false
         };

@@ -238,7 +238,7 @@ public partial class ConversationWindow : UserControl
 
             StatusText.Text = result.Storage.Kind == ConversationStorageKind.Sqlite
                 ? "当前版本的对话由 SQLite 统一会话库管理；Launcher 没有把它误报为缺失的 JSONL 文件。"
-                : $"已读取 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。压缩 session.jsonl.zstd 可查看、打开和导入。";
+                : $"已读取 {ConversationList.Items.Count} / {Entries.Count} 个当前版本对话文件。支持 session.jsonl、session.vN.jsonl 及其 .zstd 压缩格式；同一会话只显示最高代际。";
             UpdateSelection();
             if (_modelChoices.Count > 0)
             {
@@ -360,7 +360,7 @@ public partial class ConversationWindow : UserControl
     private static bool IsLoadingSensitiveButton(Button button) => button.Content is string text
         && text is "刷新"
             or "打开选中对话"
-            or "导入 session.jsonl / .zstd"
+            or "导入对话文件"
             or "导出选中对话"
             or "备份选中对话"
             or "删除选中对话"
@@ -913,6 +913,17 @@ public partial class ConversationWindow : UserControl
 
         try
         {
+            var check = await Task.Run(() =>
+            {
+                var allowed = _service.CanOpen(_instance, entry, out var reason);
+                return (Allowed: allowed, Reason: reason);
+            }, _pageCancellation.Token);
+            if (!_pageActive || _pageCancellation.IsCancellationRequested) return;
+            if (!check.Allowed)
+            {
+                StatusText.Text = $"无法打开：{check.Reason}";
+                return;
+            }
             if (!await _openConversation(entry))
             {
                 StatusText.Text = "当前实例没有运行，或没有可用的 Chat 地址；请先启动实例。";
@@ -946,7 +957,7 @@ public partial class ConversationWindow : UserControl
         {
         using var dialog = new Forms.OpenFileDialog
         {
-            Title = "导入 DSh session.jsonl",
+            Title = "导入 DSh 对话文件（JSONL / Zstandard）",
             Filter = "DSh session (*.jsonl;*.jsonl.zstd)|*.jsonl;*.jsonl.zstd|所有文件 (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = false
@@ -1291,7 +1302,7 @@ public partial class ConversationWindow : UserControl
 
         if (System.Windows.MessageBox.Show(
                 Window.GetWindow(this),
-                $"确定删除会话文件“{entry.RelativePath}”？此操作不可由 Launcher 撤销。",
+                $"确定删除会话文件“{entry.RelativePath}”？此操作不可由 Launcher 撤销。\n\n只删除选中的代际文件；同目录保留的旧代际文件可能在刷新后重新显示。",
                 "确认删除",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)

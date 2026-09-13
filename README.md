@@ -32,6 +32,8 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - 每个版本使用独立的 `DSH_HOME` 与 `DSH_AGENTS_HOME`。
 - 支持复制现有版本、新建干净版本、删除版本和修改版本名称。
 - 支持 Launcher `.dshpack` 与 DSH-PackForge ModPack v2 `.tgz` 的导入、导出和双向转换；目录式 Skill 的常见文本脚本会随包保留并脱敏，密钥、dotenv 和会话不会进入分享包，导入时创建新版本且不覆盖已有版本，并通过官方 DSh Plugin CLI 恢复 Profile 依赖。
+- 在“下载 → 整合包”中搜索 [DSH-PackForge 社区市场](https://dsh-packforge.github.io/dsh-pack-market/) 的整合包，按大小和 SHA-256 校验下载内容，预览后安装到新版本。缺少校验信息的条目不可安装；支持取消，依赖恢复失败时保留已导入的版本。第三方插件可能执行代码，请只安装可信内容。暂不提供一键上传。
+- 可从市场或本地导入 `.dspack` Profile 包（容器 v2/v3，manifest v4；v3 也接受 manifest v5），映射到隔离版本的 `profiles/web`，直接依赖按清单固定版本或 commit。暂不支持 `dshhome` 整机包、非空 `files[]` 外部资源或无法确定 Git 插件包名的包，这些情况会明确拒绝，不生成不完整版本；也不自动替换当前 DSh Runtime。原有两种格式的导出和转换保持不变。
 - 同一个 DSh 运行目录可供多个隔离版本使用，并可同时启动多个实例。
 - 每个版本可把“打开窗口”绑定到 DSH Desktop，或本机的 EXE、BAT/CMD、PowerShell 脚本和 LNK 快捷方式；仍可随时改用 Launcher 启动。
 - 区分 Launcher 自己启动的 **Managed** 实例与连接外部服务的 **Attached** 实例；Attached 实例不会被停止或重启操作误杀。
@@ -78,7 +80,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 - Launcher 配置只保存 API Key 的环境变量名称；真实密钥继续由 DSh 官方 `.credentials.yaml` 管理。
 - Provider 自动同步只在双方都开启同步且实例已停止时生效，会原子复制官方凭据文件，但不会解析、显示、记录或打包其中的密钥；没有 llm Provider 配置时不会覆盖文件。
 - 导入或同步旧 DSh 数据时，会把历史 `version: 1` / `refs:` 凭据包装转换为当前官方插件接受的平铺格式；只调整结构，不显示密钥内容。
-- 管理 `session.jsonl` / `session.jsonl.zstd`：查看、打开、导入、导出、备份、恢复和删除。
+- 管理 `session.jsonl`、`session.vN.jsonl` 及其 `.zstd` 压缩文件（格式 v0–v3）：查看、打开、导入、导出、备份、恢复和文件级删除。同一会话只显示最高代际，保留旧代际供回退；目标 DSh 不支持该格式时明确拒绝导入、同步或打开，未知格式不会静默按旧格式处理。
 - 对话列表显示会话名称和所属实例，不直接暴露内部路径 ID。
 - 对话模型按“单独对话 → DSh 真实工作目录 → 全局默认”自动继承；从 Launcher 打开会话时通过 DSh 官方 `session.selectModel` 应用。
 - 对话可选择版本独立、按工作区同步或全量同步；运行中的版本不会被同步写入。
@@ -175,6 +177,10 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.2.1**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.2.2**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
 
-本次更新补齐跨电脑密码快照、GitHub 请求缓存与配额提示，并修复旧凭据导入、实例选择丢失、快照遗漏 pnpm 构建配置、主题预览大图限制及切换 Profile 后主题状态残留等问题。
+本次更新支持新版 `session.vN.jsonl` 对话文件、社区整合包市场和 `.dspack` Profile 导入，并补充 MIT 许可证。整合包一键上传、`dshhome` 整机包和 `files[]` 外部资源暂不支持。
+
+## 许可证
+
+DSH Launcher 自有代码采用 [MIT License](LICENSE)。允许商用、修改和再分发，但须保留版权与许可声明。第三方依赖、DSh Runtime 和社区整合包仍遵循各自的许可证。

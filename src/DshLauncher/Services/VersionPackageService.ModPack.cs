@@ -37,10 +37,16 @@ public sealed partial class VersionPackageService
             && signature[2] is 0x03 or 0x05 or 0x07
             && signature[3] is 0x04 or 0x06 or 0x08)
         {
+            stream.Position = 0;
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+            if (FindZipEntry(archive, "dspack.json") is not null)
+            {
+                return VersionPackageKind.Dspack;
+            }
             return VersionPackageKind.DshPack;
         }
 
-        throw new InvalidDataException("无法识别整合包格式；当前支持 .dshpack（ZIP）和 DSH ModPack .tgz（gzip tar）。 ");
+        throw new InvalidDataException("无法识别整合包格式；当前支持 .dshpack、.dspack（ZIP）和 DSH ModPack .tgz（gzip tar）。 ");
     }
 
     private static bool IsModPackPath(string path) =>
@@ -74,9 +80,11 @@ public sealed partial class VersionPackageService
             profile.Warnings);
     }
 
-    private ManagerInstance ImportModPackPackage(string packagePath, ManagerInstance template)
+    private ManagerInstance ImportModPackPackage(string packagePath, ManagerInstance template) =>
+        ImportPortableProfile(ReadModPack(packagePath), template);
+
+    private ManagerInstance ImportPortableProfile(PortableProfile profile, ManagerInstance template)
     {
-        var profile = ReadModPack(packagePath);
         var runtime = ResolveImportRuntime(template);
         var runtimeVersion = DshRuntimeDetector.TryReadPackageVersion(runtime.RootPath)
             ?? template.DetectedVersion;

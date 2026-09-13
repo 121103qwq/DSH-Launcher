@@ -1,0 +1,65 @@
+<UserControl x:Class="DshLauncher.ModPackMarketView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DshLauncher.Controls">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,12">
+            <TextBlock Text="整合包" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock Text="来源：DSH-PackForge 社区市场。下载后先预览，再安装到新的独立版本，不覆盖已有版本。"
+                       Foreground="{DynamicResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,12" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="SearchBox" ToolTip="搜索整合包名称、作者或描述" MinHeight="34"
+                         VerticalContentAlignment="Center" TextChanged="SearchBox_TextChanged" />
+                <Button x:Name="RefreshButton" Grid.Column="1" Content="刷新列表" Margin="10,0,0,0"
+                        Padding="14,7" Click="RefreshButton_Click" />
+            </Grid>
+        </StackPanel>
+        <controls:VisualSurface Grid.Row="1" CornerRadius="12" BorderThickness="1" Padding="8">
+            <ListBox x:Name="PackList" Background="Transparent" BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                     SelectionChanged="PackList_SelectionChanged">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource RoundedListItem}">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Padding" Value="12" />
+                        <Setter Property="Margin" Value="0,0,0,6" />
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel>
+                            <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
+                            <TextBlock Foreground="{DynamicResource MutedBrush}" FontSize="11" Margin="0,5,0,0">
+                                <Run Text="{Binding Author}" /><Run Text=" · " /><Run Text="{Binding Version}" />
+                            </TextBlock>
+                            <TextBlock Text="{Binding Description}" TextTrimming="CharacterEllipsis"
+                                       Foreground="{DynamicResource MutedBrush}" Margin="0,5,0,0" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </controls:VisualSurface>
+        <StackPanel Grid.Row="2" Margin="0,12,0,0">
+            <TextBlock x:Name="SelectionText" Text="请选择一个整合包。" TextWrapping="Wrap" MaxHeight="80"
+                       Foreground="{DynamicResource MutedBrush}" />
+            <Button x:Name="InstallButton" Content="下载并安装所选整合包" IsEnabled="False"
+                    Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
+                    Padding="16,9" Margin="0,10,0,0" Click="InstallButton_Click" />
+            <TextBlock x:Name="StatusText" Foreground="{DynamicResource BlueBrush}" FontSize="11"
+                       TextWrapping="Wrap" Margin="0,10,0,0" MaxHeight="72"
+                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+        </StackPanel>
+    </Grid>
+</UserControl>

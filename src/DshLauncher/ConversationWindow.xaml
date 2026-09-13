@@ -113,7 +113,7 @@
                         <Button Content="刷新" Click="Refresh_Click" Margin="0,0,8,0" />
                         <Button Content="打开选中对话" Click="Open_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" />
                         <Button x:Name="ImportButton"
-                                Content="导入 session.jsonl / .zstd"
+                                Content="导入对话文件"
                                 Click="Import_Click"
                                 Margin="0,0,8,0" />
                         <Button Content="导出选中对话" Click="Export_Click" Margin="0,0,8,0" />

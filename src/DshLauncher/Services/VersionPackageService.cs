@@ -140,6 +140,8 @@ public sealed partial class VersionPackageService
         }
 
         var destination = Path.GetFullPath(packagePath);
+        if (destination.EndsWith(".dspack", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException(".dspack 暂只支持导入，请导出为 .dshpack 或 .tgz。");
         if (IsModPackPath(destination))
         {
             return ExportModPackPackage(instance, destination, options);
@@ -281,7 +283,12 @@ public sealed partial class VersionPackageService
             throw new FileNotFoundException("找不到整合包文件。", packagePath);
         }
 
-        if (DetectPackageKind(packagePath) == VersionPackageKind.ModPack)
+        var kind = DetectPackageKind(packagePath);
+        if (kind == VersionPackageKind.Dspack)
+        {
+            return PreviewDspackPackage(packagePath);
+        }
+        if (kind == VersionPackageKind.ModPack)
         {
             return PreviewModPackPackage(packagePath);
         }
@@ -310,7 +317,12 @@ public sealed partial class VersionPackageService
             throw new FileNotFoundException("找不到整合包文件。", packagePath);
         }
 
-        if (DetectPackageKind(packagePath) == VersionPackageKind.ModPack)
+        var kind = DetectPackageKind(packagePath);
+        if (kind == VersionPackageKind.Dspack)
+        {
+            return ImportPortableProfile(ReadDspackProfile(packagePath), template);
+        }
+        if (kind == VersionPackageKind.ModPack)
         {
             return ImportModPackPackage(packagePath, template);
         }
@@ -370,7 +382,13 @@ public sealed partial class VersionPackageService
         }
 
         var sourceKind = DetectPackageKind(sourcePath);
+        if (sourceKind == VersionPackageKind.Dspack)
+        {
+            throw new NotSupportedException(".dspack 当前支持 Profile 导入，暂不支持格式转换。请导入后从版本设置导出。 ");
+        }
         var destination = Path.GetFullPath(destinationPath);
+        if (destination.EndsWith(".dspack", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("暂不支持转换为 .dspack，请选择 .dshpack 或 .tgz。");
         var destinationKind = IsModPackPath(destination)
             ? VersionPackageKind.ModPack
             : VersionPackageKind.DshPack;
@@ -464,9 +482,10 @@ public sealed partial class VersionPackageService
             throw new ArgumentException("整合包扩展名只能包含字母、数字和短横线，例如 .dshpack。", nameof(extension));
         }
 
-        if (string.Equals(normalized, ModPackPackageExtension, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, ModPackPackageExtension, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, ".dspack", StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException(".tgz 保留给 DSH ModPack，Launcher 原生整合包请使用 .dshpack 或其它非保留扩展名。", nameof(extension));
+            throw new ArgumentException(".tgz 和 .dspack 保留给 DSH-PackForge，Launcher 原生整合包请使用 .dshpack 或其它非保留扩展名。", nameof(extension));
         }
 
         return normalized.ToLowerInvariant();

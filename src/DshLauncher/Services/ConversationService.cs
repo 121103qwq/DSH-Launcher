@@ -13,11 +13,8 @@ namespace DshLauncher.Services;
 /// </summary>
 public sealed class ConversationService
 {
-    private const int MaxHeaderBytes = 256_000;
     private const int ZstdReadBufferSize = 64 * 1024;
     private const long MaxSearchCharactersPerSession = 32L * 1024 * 1024;
-    private const int SupportedSessionFormatVersion = 0;
-    private const long MaxSafeInteger = 9_007_199_254_740_991;
     private readonly LauncherPaths _paths;
     private readonly Func<string, bool> _isRunning;
 
@@ -39,11 +36,86 @@ public sealed class ConversationService
 
         var result = new List<ConversationEntry>();
         var titles = ReadSessionTitles(instance);
-        Walk(root, root, result, titles, instance.Name);
+        Walk(root, root, result, titles, instance.Name, highestGenerationOnly: true);
         return result
             .OrderByDescending(entry => entry.UpdatedAt)
             .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Enumerates every retained generation for maintenance operations. The
+    /// normal conversation page uses <see cref="List"/> and shows only the
+    /// highest generation in each session directory.
+    /// </summary>
+    public IReadOnlyList<ConversationEntry> ListAll(ManagerInstance instance)
+    {
+        var root = GetSessionsRoot(instance);
+        if (!Directory.Exists(root) || IsReparsePoint(root))
+        {
+            return Array.Empty<ConversationEntry>();
+        }
+
+        var result = new List<ConversationEntry>();
+        var titles = ReadSessionTitles(instance);
+        Walk(root, root, result, titles, instance.Name, highestGenerationOnly: false);
+        return result
+            .OrderByDescending(entry => entry.UpdatedAt)
+            .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Validates all conditions needed before opening a conversation. This is
+    /// intentionally independent of lifecycle state so callers can run it
+    /// before deciding whether a stopped instance needs to be started.
+    /// </summary>
+    public bool CanOpen(
+        ManagerInstance instance,
+        ConversationEntry entry,
+        out string reason)
+    {
+        reason = string.Empty;
+        if (instance is null || entry is null)
+        {
+            reason = "实例或会话为空。";
+            return false;
+        }
+
+        try
+        {
+            var source = ValidateEntry(instance, entry);
+            if (!SessionFormatHelper.TryReadHeader(source, out var header))
+            {
+                reason = "会话 header 无效，不能打开。";
+                return false;
+            }
+
+            if (entry.SessionId is not null
+                && !string.Equals(entry.SessionId, header.SessionId, StringComparison.Ordinal))
+            {
+                reason = "会话列表中的 session ID 已过期，请刷新后重试。";
+                return false;
+            }
+
+            if (!SessionFormatHelper.IsRuntimeFormatSupported(instance, header.Version))
+            {
+                reason =
+                    $"当前 DSh runtime 不具备 Session v{header.Version} 的官方 format catalog，不能打开该会话。";
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or InvalidDataException
+            or InvalidOperationException
+            or FileNotFoundException)
+        {
+            reason = ex.Message;
+            return false;
+        }
     }
 
     /// <summary>
@@ -189,7 +261,8 @@ public sealed class ConversationService
         {
             foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly))
             {
-                if (IsReparsePoint(path) || !IsSessionFileName(path))
+                if (IsReparsePoint(path)
+                    || !SessionFormatHelper.TryParseBackupFileName(path, out var format))
                 {
                     continue;
                 }
@@ -206,7 +279,7 @@ public sealed class ConversationService
                         header?.WorkingDirectory,
                         backedUpAt,
                         info.Length,
-                        info.Name.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase),
+                        format.IsCompressed,
                         header is not null,
                         header?.SessionId is null
                             ? "无法读取的备份"
@@ -267,9 +340,9 @@ public sealed class ConversationService
             throw new FileNotFoundException("选中的对话备份不存在，或是符号链接。", source);
         }
 
-        if (!IsSessionFileName(source))
+        if (!SessionFormatHelper.TryParseBackupFileName(source, out _))
         {
-            throw new InvalidDataException("只能恢复 DSh session.jsonl 或 session.jsonl.zstd 备份。");
+            throw new InvalidDataException("只能恢复 DSh canonical session.jsonl 或 session.vN.jsonl 备份。");
         }
 
         if (ReadHeader(source) is null)
@@ -327,16 +400,24 @@ public sealed class ConversationService
             throw new FileNotFoundException("导入会话文件不存在，或是符号链接。", source);
         }
 
-        var compressed = source.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase);
-        if (!compressed && !source.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
+        if (!SessionFormatHelper.TryParsePortableFileName(
+                source,
+                out var sourceFormat,
+                out _))
         {
-            throw new NotSupportedException("当前导入入口只接受 session.jsonl 或 session.jsonl.zstd。");
+            throw new NotSupportedException("当前导入入口只接受 JSONL 会话文件（.jsonl 或 .jsonl.zstd）。");
         }
 
         var header = ReadHeader(source);
         if (header is null)
         {
             throw new InvalidDataException("导入文件不是可识别的 DSh session.jsonl。");
+        }
+
+        if (!SessionFormatHelper.IsRuntimeFormatSupported(instance, header.Version))
+        {
+            throw new NotSupportedException(
+                $"当前 DSh runtime 不具备 Session v{header.Version} 的官方 format catalog，不能导入或继续该会话。");
         }
 
         var sessionsRoot = GetSessionsRoot(instance);
@@ -346,9 +427,17 @@ public sealed class ConversationService
             : header.WorkingDirectory;
         var projectDirectory = ProjectDirectory(sessionsRoot, effectiveWorkingDirectory);
         var sessionDirectory = Path.Combine(projectDirectory, EncodeSegment(header.SessionId));
-        var target = Path.Combine(sessionDirectory, compressed ? "session.jsonl.zstd" : "session.jsonl");
+        var target = Path.Combine(
+            sessionDirectory,
+            SessionFormatHelper.GetCanonicalFileName(header.Version, sourceFormat.IsCompressed));
         EnsurePathDoesNotEscape(target, sessionsRoot);
         EnsureNoReparseComponents(sessionDirectory, sessionsRoot);
+        if (Directory.Exists(sessionDirectory)
+            && ContainsCanonicalSessionFile(sessionDirectory))
+        {
+            throw new IOException($"实例中已经存在相同会话 ID：{header.SessionId}");
+        }
+
         if (File.Exists(target) || Directory.Exists(target))
         {
             throw new IOException($"实例中已经存在相同会话 ID：{header.SessionId}");
@@ -387,7 +476,56 @@ public sealed class ConversationService
         string root,
         ICollection<ConversationEntry> result,
         IReadOnlyDictionary<string, string?> titles,
-        string instanceName)
+        string instanceName,
+        bool highestGenerationOnly)
+    {
+        var files = new List<SessionFileCandidate>();
+        CollectSessionFiles(directory, files);
+        var selected = highestGenerationOnly
+            ? files
+                .GroupBy(
+                    candidate => Path.GetDirectoryName(candidate.FullPath) ?? string.Empty,
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(item => item.Format.Version)
+                    .ThenBy(item => item.FullPath, StringComparer.Ordinal)
+                    .First())
+            : files;
+        foreach (var candidate in selected)
+        {
+            try
+            {
+                var info = new FileInfo(candidate.FullPath);
+                var header = ReadHeader(candidate.FullPath);
+                var updatedAt = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+                result.Add(new ConversationEntry(
+                    Path.GetRelativePath(root, candidate.FullPath),
+                    Path.GetFullPath(candidate.FullPath),
+                    header?.SessionId,
+                    header?.WorkingDirectory,
+                    updatedAt,
+                    info.Length,
+                    candidate.Format.IsCompressed,
+                    header is not null,
+                    header?.SessionId is null
+                        ? "无法读取会话"
+                        : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, updatedAt),
+                    instanceName));
+            }
+            catch (IOException)
+            {
+                // A file can disappear while the user is viewing the list.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // An inaccessible session should not stop the manager page.
+            }
+        }
+    }
+
+    private static void CollectSessionFiles(
+        string directory,
+        ICollection<SessionFileCandidate> result)
     {
         try
         {
@@ -400,35 +538,19 @@ public sealed class ConversationService
 
                 if (Directory.Exists(entry))
                 {
-                    Walk(entry, root, result, titles, instanceName);
+                    CollectSessionFiles(entry, result);
                     continue;
                 }
 
                 var fileName = Path.GetFileName(entry);
-                if (!fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-                    && !fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase))
+                if (!SessionFormatHelper.TryParseFileName(fileName, out var format))
                 {
                     continue;
                 }
 
                 try
                 {
-                    var info = new FileInfo(entry);
-                    var header = ReadHeader(entry);
-                    var updatedAt = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
-                    result.Add(new ConversationEntry(
-                        Path.GetRelativePath(root, entry),
-                        Path.GetFullPath(entry),
-                        header?.SessionId,
-                        header?.WorkingDirectory,
-                        updatedAt,
-                        info.Length,
-                        fileName.EndsWith(".zstd", StringComparison.OrdinalIgnoreCase),
-                        header is not null,
-                        header?.SessionId is null
-                            ? "无法读取会话"
-                            : BuildDisplayName(titles, header.SessionId, header.WorkingDirectory, updatedAt),
-                        instanceName));
+                    result.Add(new SessionFileCandidate(Path.GetFullPath(entry), format));
                 }
                 catch (IOException)
                 {
@@ -563,12 +685,6 @@ public sealed class ConversationService
         return new DateTimeOffset(info.CreationTimeUtc, TimeSpan.Zero);
     }
 
-    private static bool IsSessionFileName(string path)
-    {
-        var fileName = Path.GetFileName(path);
-        return fileName.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
-            || fileName.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase);
-    }
     private string ValidateEntry(ManagerInstance instance, ConversationEntry entry)
     {
         var root = GetSessionsRoot(instance);
@@ -580,11 +696,9 @@ public sealed class ConversationService
             throw new FileNotFoundException("会话文件不存在，或是符号链接。", source);
         }
 
-        var fileName = Path.GetFileName(source);
-        if (!fileName.Equals("session.jsonl", StringComparison.OrdinalIgnoreCase)
-            && !fileName.Equals("session.jsonl.zstd", StringComparison.OrdinalIgnoreCase))
+        if (!SessionFormatHelper.TryParseFileName(source, out _))
         {
-            throw new InvalidDataException("只能操作 DSh session.jsonl 文件。");
+            throw new InvalidDataException("只能操作 DSh canonical session.jsonl 或 session.vN.jsonl 文件。");
         }
 
         return source;
@@ -610,9 +724,10 @@ public sealed class ConversationService
             while (pending.Count > 0)
             {
                 var directory = pending.Pop();
-                foreach (var path in Directory.EnumerateFiles(directory, "session.jsonl*", SearchOption.TopDirectoryOnly))
+                foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
                 {
-                    if (!IsReparsePoint(path) && IsSessionFileName(path))
+                    if (!IsReparsePoint(path)
+                        && SessionFormatHelper.TryParseFileName(path, out _))
                     {
                         return true;
                     }
@@ -634,6 +749,22 @@ public sealed class ConversationService
         }
 
         return false;
+    }
+
+    private static bool ContainsCanonicalSessionFile(string directory)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                .Any(path => !IsReparsePoint(path)
+                    && SessionFormatHelper.TryParseFileName(path, out _));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // An unreadable existing directory is not safe to treat as empty;
+            // reject the import rather than risk adding a second generation.
+            throw new IOException("无法确认目标会话目录是否已有其它代际文件。", ex);
+        }
     }
 
     private static bool IsSqlitePersistenceConfigured(ManagerInstance instance)
@@ -816,116 +947,16 @@ public sealed class ConversationService
         return false;
     }
 
-    private static HeaderInfo? ReadHeader(string path)
-    {
-        try
-        {
-            using var source = File.OpenRead(path);
-            if (path.EndsWith(".jsonl.zstd", StringComparison.OrdinalIgnoreCase))
-            {
-                using var decompressor = new DecompressionStream(
-                    source,
-                    ZstdReadBufferSize,
-                    checkEndOfStream: false,
-                    leaveOpen: false);
-                return ParseHeader(ReadHeaderLine(decompressor));
-            }
+    private static SessionHeaderInfo? ReadHeader(string path) =>
+        SessionFormatHelper.TryReadHeader(path, out var header) ? header : null;
 
-            return ParseHeader(ReadHeaderLine(source));
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-        catch (ZstdException)
-        {
-            return null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
+    internal static bool HasRecognizedSessionHeader(string path) =>
+        SessionFormatHelper.TryReadHeader(path, out _);
 
-    internal static bool HasRecognizedSessionHeader(string path) => ReadHeader(path) is not null;
-
-    private static HeaderInfo? ParseHeader(string? line)
-    {
-        if (string.IsNullOrWhiteSpace(line) || line.Length > MaxHeaderBytes)
-        {
-            return null;
-        }
-
-        using var document = JsonDocument.Parse(line);
-        var root = document.RootElement;
-        if (!root.TryGetProperty("type", out var type)
-            || type.ValueKind != JsonValueKind.String
-            || !string.Equals(type.GetString(), "session", StringComparison.Ordinal)
-            || !root.TryGetProperty("version", out var version)
-            || version.ValueKind != JsonValueKind.Number
-            || !version.TryGetInt32(out var versionNumber)
-            || versionNumber != SupportedSessionFormatVersion
-            || !root.TryGetProperty("id", out var id)
-            || id.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(id.GetString())
-            || !root.TryGetProperty("createdAt", out var createdAt)
-            || !IsSafeNonNegativeInteger(createdAt)
-            || !root.TryGetProperty("delegationDepth", out var delegationDepth)
-            || !IsSafeNonNegativeInteger(delegationDepth))
-        {
-            return null;
-        }
-
-        if (root.TryGetProperty("origin", out var origin)
-            && (origin.ValueKind != JsonValueKind.String || !string.Equals(origin.GetString(), "subagent", StringComparison.Ordinal)))
-        {
-            return null;
-        }
-
-        if (root.TryGetProperty("agentPreset", out var agentPreset)
-            && agentPreset.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        if (root.TryGetProperty("sandboxMode", out _)
-            || root.TryGetProperty("approvalPolicy", out _))
-        {
-            return null;
-        }
-
-        var sessionId = id.GetString()!;
-        if (sessionId.Length > 256 || sessionId.Any(char.IsControl))
-        {
-            return null;
-        }
-
-        if (root.TryGetProperty("cwd", out var cwdValue)
-            && cwdValue.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        var cwd = root.TryGetProperty("cwd", out cwdValue)
-            ? cwdValue.GetString()
-            : null;
-        if (cwd is not null && (cwd.Length > 4096 || cwd.Any(char.IsControl)))
-        {
-            return null;
-        }
-
-        return new HeaderInfo(sessionId, cwd);
-    }
-
-    private static bool IsSafeNonNegativeInteger(JsonElement value) =>
-        value.ValueKind == JsonValueKind.Number
-        && value.TryGetInt64(out var number)
-        && number >= 0
-        && number <= MaxSafeInteger;
+    internal static bool TryReadSessionHeader(
+        string path,
+        out SessionHeaderInfo header) =>
+        SessionFormatHelper.TryReadHeader(path, out header);
 
     private static string NormalizeExportDestination(string destinationPath, bool compressed)
     {
@@ -938,41 +969,6 @@ public sealed class ConversationService
         }
 
         return destination;
-    }
-
-    private static string? ReadHeaderLine(Stream stream)
-    {
-        using var buffer = new MemoryStream();
-        var chunk = new byte[4096];
-        while (buffer.Length <= MaxHeaderBytes)
-        {
-            var read = stream.Read(chunk, 0, chunk.Length);
-            if (read == 0)
-            {
-                break;
-            }
-
-            var newline = Array.IndexOf(chunk, (byte)'\n', 0, read);
-            var count = newline >= 0 ? newline + 1 : read;
-            if (buffer.Length + count > MaxHeaderBytes)
-            {
-                return null;
-            }
-
-            buffer.Write(chunk, 0, count);
-            if (newline >= 0)
-            {
-                break;
-            }
-        }
-
-        if (buffer.Length == 0)
-        {
-            return null;
-        }
-
-        var line = Encoding.UTF8.GetString(buffer.ToArray()).TrimEnd('\r', '\n');
-        return line.Length > 0 && line[0] == '\uFEFF' ? line[1..] : line;
     }
 
     private static string ProjectDirectory(string root, string? cwd) =>
@@ -1115,5 +1111,7 @@ public sealed class ConversationService
         }
     }
 
-    private sealed record HeaderInfo(string SessionId, string? WorkingDirectory);
+    private sealed record SessionFileCandidate(
+        string FullPath,
+        SessionFileFormat Format);
 }

@@ -68,6 +68,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly LauncherUpdateService _launcherUpdateService = new();
     private readonly DshVersionCatalogService _dshVersionCatalogService = new();
     private readonly DshDesktopInstallService _dshDesktopInstallService = new();
+    private readonly ModPackMarketService _modPackMarketService = new();
     private readonly LauncherLogService _launcherLogService = new();
     private readonly DiagnosticBundleService _diagnosticBundleService = new();
     private readonly LauncherIntegrationService _launcherIntegrationService = new();
@@ -1934,6 +1935,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         categoryList.Items.Add(new ListBoxItem { Content = "Launcher", Tag = "launcher" });
         categoryList.Items.Add(new ListBoxItem { Content = "DSh 版本", Tag = "dsh" });
         categoryList.Items.Add(new ListBoxItem { Content = "DSH Desktop", Tag = "desktop" });
+        categoryList.Items.Add(new ListBoxItem { Content = "整合包", Tag = "modpacks" });
         var categoryStyle = new Style(typeof(ListBoxItem), (Style)FindResource("RoundedListItem"));
         categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.PaddingProperty, new Thickness(16, 12, 16, 12)));
         categoryStyle.Setters.Add(new Setter(System.Windows.Controls.Control.MarginProperty, new Thickness(0, 0, 0, 6)));
@@ -1972,6 +1974,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var key = (categoryList.SelectedItem as ListBoxItem)?.Tag?.ToString();
             void ReplaceContent()
             {
+                var isModPackPage = string.Equals(key, "modpacks", StringComparison.Ordinal);
+                contentScroll.VerticalScrollBarVisibility = isModPackPage
+                    ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+                contentHost.VerticalContentAlignment = isModPackPage
+                    ? VerticalAlignment.Stretch : VerticalAlignment.Top;
                 if (string.Equals(key, "dsh", StringComparison.Ordinal))
                 {
                     contentHost.Content = CreateDshDownloadsPanel();
@@ -1979,6 +1986,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 else if (string.Equals(key, "desktop", StringComparison.Ordinal))
                 {
                     contentHost.Content = CreateDshDesktopDownloadsPanel();
+                }
+                else if (isModPackPage)
+                {
+                    contentHost.Content = new ModPackMarketView(
+                        _modPackMarketService, InstallMarketPackAsync, _windowCancellation.Token);
                 }
                 else
                 {
@@ -5769,6 +5781,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _launcherUpdateService.Dispose();
         _dshVersionCatalogService.Dispose();
         _dshDesktopInstallService.Dispose();
+        _modPackMarketService.Dispose();
         _windowCancellation.Dispose();
         base.OnClosed(e);
     }
