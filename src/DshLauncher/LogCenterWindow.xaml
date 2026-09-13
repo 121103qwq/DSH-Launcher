@@ -36,18 +36,24 @@
                                    TextWrapping="Wrap"
                                    Margin="0,4,0,0" />
                     </StackPanel>
-                    <!-- 变更集 150：四个按钮排成两行（用户要求减少横向占用）——外层竖向容器 + 两行右对齐按钮行。 -->
-                    <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16,0,0,0">
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="BackButton" AutomationProperties.Name="返回设置" Click="Back_Click" Padding="12,7" Margin="0,0,7,0"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="ArrowLeft" Size="16" Margin="{StaticResource IconTextGap}" /><TextBlock Text="返回设置" /></StackPanel></Button>
-                            <Button Content="刷新" Click="Refresh_Click" Padding="12,7" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,7,0,0">
-                            <Button Content="打开日志目录" Click="OpenFolder_Click" Padding="12,7" Margin="0,0,7,0" />
-                            <!-- 变更集 148：一键清理日志（复用「存储与清理」的 crash / old-logs 分类；当前 launcher.log 不动） -->
-                            <Button Style="{StaticResource DangerButton}" Content="清理日志" Click="CleanLogs_Click" Padding="12,7" />
-                        </StackPanel>
-                    </StackPanel>
+                    <!-- 变更集 151：四个按钮改为 2×2 Grid —— 两行**共享同一组 Auto 列**，
+                         于是同一列的按钮同宽、左右边都对齐（150 的两行 StackPanel 各自右对齐，列边不齐）。 -->
+                    <Grid Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16,0,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Button x:Name="BackButton" Grid.Row="0" Grid.Column="0" Margin="0,0,7,0"
+                                AutomationProperties.Name="返回设置" Click="Back_Click" Padding="12,7"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="ArrowLeft" Size="16" Margin="{StaticResource IconTextGap}" /><TextBlock Text="返回设置" /></StackPanel></Button>
+                        <Button Grid.Row="0" Grid.Column="1" Content="刷新" Click="Refresh_Click" Padding="12,7" />
+                        <Button Grid.Row="1" Grid.Column="0" Margin="0,7,7,0" Content="打开日志目录" Click="OpenFolder_Click" Padding="12,7" />
+                        <!-- 变更集 148：一键清理日志（复用「存储与清理」的 crash / old-logs 分类；当前 launcher.log 不动） -->
+                        <Button Grid.Row="1" Grid.Column="1" Margin="0,7,0,0" Style="{StaticResource DangerButton}" Content="清理日志" Click="CleanLogs_Click" Padding="12,7" />
+                    </Grid>
                 </Grid>
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
                     <TextBlock Text="级别" Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0" />
