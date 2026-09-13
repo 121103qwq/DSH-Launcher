@@ -74,7 +74,8 @@
         <Thickness x:Key="CardPadding">18</Thickness>
         <Thickness x:Key="PanelPadding">16</Thickness>
         <Thickness x:Key="ItemMargin">0,0,0,8</Thickness>
-        <Thickness x:Key="IconTextGap">0,0,8,0</Thickness>   <!-- 图标与文字的间距（变更集 130） -->
+        <Thickness x:Key="IconTextGap">0,0,8,0</Thickness>   <!-- 图标在文字**之前**时的间距（变更集 130） -->
+        <Thickness x:Key="IconTextGapTrailing">8,0,0,0</Thickness>   <!-- 图标在文字**之后**时的间距（变更集 148，如「中文官网 ↗」） -->
         <LinearGradientBrush x:Key="TitleBarGradient" StartPoint="0,0" EndPoint="1,0">
             <GradientStop Color="{StaticResource BlueDarkColor}" Offset="0" />
             <GradientStop Color="{StaticResource BlueColor}" Offset="1" />

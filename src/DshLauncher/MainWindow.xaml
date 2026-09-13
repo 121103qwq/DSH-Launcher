@@ -260,7 +260,7 @@
                         <Button AutomationProperties.Name="最小化窗口" Click="Minimize_Click"
                                 Style="{StaticResource WindowControlButton}"
                                 ToolTip="最小化">
-                            <controls:UiIcon Kind="Minimize" Size="22" />
+                            <controls:UiIcon Kind="Minimize" Size="18" />
                         </Button>
                         <Button AutomationProperties.Name="最大化 / 还原窗口" x:Name="MaximizeButton"
                                 Click="Maximize_Click"
@@ -269,13 +269,13 @@
                                 Height="34"
                                 Margin="0,0,2,0"
                                 ToolTip="最大化">
-                            <controls:UiIcon x:Name="MaximizeGlyph" Kind="Maximize" Size="22" />
+                            <controls:UiIcon x:Name="MaximizeGlyph" Kind="Maximize" Size="18" />
                         </Button>
                         <Button AutomationProperties.Name="关闭窗口" Click="Close_Click"
                                 Style="{StaticResource WindowControlButton}"
                                 Tag="Close"
                                 ToolTip="关闭">
-                            <controls:UiIcon Kind="Close" Size="22" />
+                            <controls:UiIcon Kind="Close" Size="18" />
                         </Button>
                     </StackPanel>
                 </Grid>

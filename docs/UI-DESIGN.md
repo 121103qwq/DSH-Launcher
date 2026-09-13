@@ -91,7 +91,8 @@
 - **注册表**：`App.xaml` 里的 `Icon.*` 几何资源（当前 **19 个**）：Play / Extensions / Agent / Conversations / Tasks / Settings / Palette / Plugins / Activity / Export / ArrowLeft / ChevronDown / Minimize / Maximize / Restore / Close / ExternalLink / Plus / Matrix。
 - **用法**：`<controls:UiIcon Kind="Play" Size="18" />`（`Controls/UiIcon.xaml`）。颜色**跟随继承的前景色**（`TextElement.Foreground` 与 `Control.Foreground` 是同一属性，所以按钮设过的 Foreground 会传进来）；需要单独着色就给 `UiIcon` 设 `Foreground`。
 - **尺寸**：图标阶梯 **12 / 14 / 16 / 18 / 20 / 22 / 24 / 30**（与字号阶梯对齐；22 是标题栏专用）。笔画粗细由控件按 `Size/12` 折算（Tabler 是 24 单位坐标系、描边宽 2）。
-- **标题栏三枚**（最小化 / 最大化·还原 / 关闭）**统一 22px**：矢量化后墨迹确定，不再需要像字体字形那样按字形单独调字号（旧方案 `—/□/×` 曾出现"× 明显偏小"，见 141 号）。最大化态由代码切换 `Kind`（`Maximize` ↔ `Restore`）。
+- **标题栏三枚**（最小化 / 最大化·还原 / 关闭）**统一 18px**（变更集 148 按验收反馈由 22 调小；矢量图标的墨迹约为 Size×0.83，18px 对应墨迹 ≈15px）：矢量化后墨迹确定，不再需要像字体字形那样按字形单独调字号（旧方案 `—/□/×` 曾出现"× 明显偏小"，见 141 号）。最大化态由代码切换 `Kind`（`Maximize` ↔ `Restore`）。
+- **间距语义**：图标在文字**之前**用 `IconTextGap`（右间距 8）；图标在文字**之后**（如「中文官网 ↗」）用 `IconTextGapTrailing`（左间距 8，变更集 148）。
 - **禁止裸字形当图标**：XAML 里不得再用 `Text="▶"` 这类几何符号充当图标（旧 17 字形已退役；harness 有断言）。文案里的标点（如破折号 `—`）不受影响。
 - **新增图标**：从 Tabler 同名 outline 图标取 `path` 数据 → 加进 `App.xaml` 的注册表 → 在 `THIRD-PARTY-NOTICES.md` 记录来源与版本 → 门禁会校验 `Kind` 必须在注册表内。
 ### 圆角 / 间距

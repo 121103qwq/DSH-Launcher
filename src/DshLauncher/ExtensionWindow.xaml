@@ -379,7 +379,7 @@
                                 Click="MarketplaceSite_Click"
                                 Padding="10,4"
                                 HorizontalAlignment="Right"
-                                ToolTip="打开插件官方（中文）网站"><StackPanel Orientation="Horizontal"><TextBlock Text="中文官网" /><controls:UiIcon Kind="ExternalLink" Size="16" Margin="{StaticResource IconTextGap}" /></StackPanel></Button>
+                                ToolTip="打开插件官方（中文）网站"><StackPanel Orientation="Horizontal"><TextBlock Text="中文官网" /><controls:UiIcon Kind="ExternalLink" Size="16" Margin="{StaticResource IconTextGapTrailing}" /></StackPanel></Button>
                     </Grid>
                     <TextBlock Text="输入时直接在本地目录中筛选；只有点击“刷新目录”才会联网。安装前会再次检查 package.json 和 DSh bundle。"
                                Foreground="{StaticResource MutedBrush}"

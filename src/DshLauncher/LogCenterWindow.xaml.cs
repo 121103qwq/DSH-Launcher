@@ -78,6 +78,41 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
         }
     }
 
+    /// <summary>
+    /// 变更集 148：一键清理日志 —— 复用既有的「存储与清理」分类（`crash` 崩溃日志、`old-logs` 轮转副本），
+    /// **当前 launcher.log 不动**（它是活跃日志，清掉会失去本次会话的诊断证据；要清可在「存储与清理」里操作）。
+    /// </summary>
+    private void CleanLogs_Click(object sender, RoutedEventArgs e)
+    {
+        var answer = AppDialog.Show(
+            Window.GetWindow(this),
+            "确定清理日志？\n\n会删除：崩溃日志（crash.log 及其轮转副本）与轮转旧日志（launcher.log.old / watchdog.log.1）。\n" +
+            "当前 launcher.log 会保留（正在写入的活跃日志）。实例、会话与配置不受影响。",
+            "确认清理日志",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = new LauncherStorageService().Clean(new[] { "crash", "old-logs" });
+            StatusTextStyler.Set(StatusText,
+                result.RemovedCount + " 个日志文件已清理，释放 " + FormatBytes(result.FreedBytes) + "；当前 launcher.log 已保留。");
+            RefreshData();
+        }
+        catch (Exception ex)
+        {
+            StatusTextStyler.Set(StatusText, "清理日志失败：" + ex.Message, isError: true);
+        }
+    }
+
+    private static string FormatBytes(long bytes) => bytes < 1024
+        ? bytes + " B"
+        : bytes < 1024 * 1024 ? (bytes / 1024.0).ToString("0.0") + " KB" : (bytes / 1048576.0).ToString("0.0") + " MB";
+
     private void RefreshData()
     {
         _snapshot = LogCenterService.Load();
