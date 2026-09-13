@@ -15,7 +15,8 @@ public sealed record LauncherStorageCategory(
     bool Cleanable,
     string? Note,
     IReadOnlyList<string>? IncludeDirectoryPrefixes = null,
-    IReadOnlyList<string>? ExcludeChildDirectoryNames = null)
+    IReadOnlyList<string>? ExcludeChildDirectoryNames = null,
+    IReadOnlyList<string>? Paths = null)
 {
     public string SizeText => SizeBytes < 1024
         ? $"{SizeBytes} B"
@@ -165,14 +166,26 @@ public sealed class LauncherStorageService
         return categories;
     }
 
-    /// <summary>清理指定类别（只处理 <see cref="LauncherStorageCategory.Cleanable"/> 的项）。</summary>
+    /// <summary>清理指定类别（只处理 <see cref=“LauncherStorageCategory.Cleanable”/> 的项）。</summary>
     public LauncherStorageCleanResult Clean(IEnumerable<string> categoryIds)
     {
         var wanted = new HashSet<string>(categoryIds ?? Array.Empty<string>(), StringComparer.Ordinal);
+        return CleanCategories(Scan().Where(item => wanted.Contains(item.Id)));
+    }
+
+    /// <summary>
+    /// 清理全部「可清理」类别。与 <c>Clean(可清理类别的 Id)</c> 结果一致，但只用一次清点
+    /// —— 界面「存储与清理」按钮在确认后不需要再自己扫一遍（变更集 152：原来一次点击要扫两次）。
+    /// </summary>
+    public LauncherStorageCleanResult CleanAllCleanable() =>
+        CleanCategories(Scan().Where(item => item.Cleanable));
+
+    private LauncherStorageCleanResult CleanCategories(IEnumerable<LauncherStorageCategory> categories)
+    {
         var removed = 0;
         long freed = 0;
         var failures = new List<string>();
-        foreach (var category in Scan().Where(item => wanted.Contains(item.Id)))
+        foreach (var category in categories)
         {
             if (!category.Cleanable)
             {
@@ -341,28 +354,33 @@ public sealed class LauncherStorageService
 
     private static IEnumerable<string> EnumerateCategoryFiles(LauncherStorageCategory category)
     {
-        var path = category.Path;
-        if (File.Exists(path))
+        // 变更集 153：文件类别可能登记多条路径（轮转旧日志 = launcher.log.old + watchdog.log.1；
+        // 市场缓存 = marketplace-cache.json + skill-market-cache.json）。原来只看 category.Path（第一条），
+        // 第一条不存在时整个类别就静默不删 —— 改为逐个路径处理：存在即产出、不存在跳过。
+        foreach (var path in category.Paths ?? new[] { category.Path })
         {
-            yield return path;
-            yield break;
-        }
+            if (File.Exists(path))
+            {
+                yield return path;
+                continue;
+            }
 
-        if (!Directory.Exists(path))
-        {
-            yield break;
-        }
-
-        // 目录类别在 BuildDirectoryCategory 阶段已经把范围收窄，这里再按“排除子目录”的约定过滤。
-        foreach (var file in SafeEnumerateFiles(path))
-        {
-            var relative = Path.GetRelativePath(path, file);
-            if (relative.Contains(Path.DirectorySeparatorChar))
+            if (!Directory.Exists(path))
             {
                 continue;
             }
 
-            yield return file;
+            // 目录类别在 BuildDirectoryCategory 阶段已经把范围收窄，这里再按“排除子目录”的约定过滤。
+            foreach (var file in SafeEnumerateFiles(path))
+            {
+                var relative = Path.GetRelativePath(path, file);
+                if (relative.Contains(Path.DirectorySeparatorChar))
+                {
+                    continue;
+                }
+
+                yield return file;
+            }
         }
     }
 
@@ -420,11 +438,14 @@ public sealed class LauncherStorageService
         bool cleanable,
         string? note)
     {
+        // 变更集 153：一个文件类别可能登记多条路径（如 轮转旧日志 = launcher.log.old + watchdog.log.1），
+        // 这里保留完整列表并在删除时逐条处理 —— 原来只留第一条，第一条不存在时删除会静默变成空操作。
+        var pathList = paths as IReadOnlyList<string> ?? paths.ToArray();
         long size = 0;
         var count = 0;
         DateTimeOffset? lastWrite = null;
         var primary = string.Empty;
-        foreach (var path in paths)
+        foreach (var path in pathList)
         {
             primary = string.IsNullOrEmpty(primary) ? path : primary;
             if (!File.Exists(path))
@@ -442,7 +463,7 @@ public sealed class LauncherStorageService
             }
         }
 
-        return new LauncherStorageCategory(id, title, description, primary, size, count, lastWrite, cleanable, note);
+        return new LauncherStorageCategory(id, title, description, primary, size, count, lastWrite, cleanable, note, Paths: pathList);
     }
 
     private static LauncherStorageCategory BuildDirectoryCategory(

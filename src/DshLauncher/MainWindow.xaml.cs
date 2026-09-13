@@ -4127,33 +4127,45 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Text = "诊断包包含 Launcher 日志、崩溃/守护日志、环境与版本、设置与状态文件（已脱敏）；" +
                    "不包含 .credentials.yaml / 会话内容，产物只落在本机，由你自行决定是否分享。"
         };
-        storageButton.Click += (_, _) =>
+        storageButton.Click += async (_, _) =>
         {
+            // 变更集 152：清点/清理都在后台线程（实测本机 Scan() = 13.2 s，同步跑会把 UI 线程占死），
+            // 期间按钮置忙并给出进度文案；判定口径与最终文案与改动前完全一致。
             var storage = new LauncherStorageService(instances: Instances);
-            if (!storagePreviewed)
+            storageButton.IsEnabled = false;
+            try
             {
-                var categories = storage.Scan().Where(item => item.Cleanable).ToArray();
-                var totalBytes = categories.Sum(item => item.SizeBytes);
-                var totalFiles = categories.Sum(item => item.FileCount);
-                status.Text = "可清理项：" + string.Join(
-                        "；",
-                        categories.Select(item => $"{item.Title} {item.SizeText}/{item.FileCount} 个文件"))
-                    + $"。合计 {totalBytes / 1024.0:F1} KB / {totalFiles} 个文件，删除走回收站（可恢复）。"
-                    + "再点一次「存储与清理」执行。";
-                storagePreviewed = true;
-                storageButton.Content = "确认清理？";
-                return;
-            }
+                if (!storagePreviewed)
+                {
+                    status.Text = "正在扫描可清理项…";
+                    var categories = await Task.Run(() => storage.Scan().Where(item => item.Cleanable).ToArray());
+                    var totalBytes = categories.Sum(item => item.SizeBytes);
+                    var totalFiles = categories.Sum(item => item.FileCount);
+                    status.Text = "可清理项：" + string.Join(
+                            "；",
+                            categories.Select(item => $"{item.Title} {item.SizeText}/{item.FileCount} 个文件"))
+                        + $"。合计 {totalBytes / 1024.0:F1} KB / {totalFiles} 个文件，删除走回收站（可恢复）。"
+                        + "再点一次「存储与清理」执行。";
+                    storagePreviewed = true;
+                    storageButton.Content = "确认清理？";
+                    return;
+                }
 
-            storagePreviewed = false;
-            storageButton.Content = "存储与清理";
-            var result = storage.Clean(storage.Scan().Where(item => item.Cleanable).Select(item => item.Id));
-            var failureText = result.Failures.Count == 0
-                ? string.Empty
-                : "；跳过：" + string.Join("；", result.Failures.Take(3));
-            status.Text = $"已清理 {result.RemovedCount} 个文件，释放 {result.FreedBytes / 1024.0:F1} KB"
-                + (string.IsNullOrEmpty(failureText) ? "。" : $"（{failureText}）")
-                + " 删除的文件在回收站，可恢复。";
+                storagePreviewed = false;
+                storageButton.Content = "存储与清理";
+                status.Text = "正在清理…";
+                var result = await Task.Run(() => storage.CleanAllCleanable());
+                var failureText = result.Failures.Count == 0
+                    ? string.Empty
+                    : "；跳过：" + string.Join("；", result.Failures.Take(3));
+                status.Text = $"已清理 {result.RemovedCount} 个文件，释放 {result.FreedBytes / 1024.0:F1} KB"
+                    + (string.IsNullOrEmpty(failureText) ? "。" : $"（{failureText}）")
+                    + " 删除的文件在回收站，可恢复。";
+            }
+            finally
+            {
+                storageButton.IsEnabled = true;
+            }
         };
         content.Children.Add(buttons);
         content.Children.Add(status);
