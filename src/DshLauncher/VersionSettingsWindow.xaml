@@ -39,25 +39,25 @@
                            Margin="10,0,10,18" />
 
                 <Button x:Name="PersonalizationButton"
-                        Content="▣   个性化"
+                        AutomationProperties.Name="个性化"
                         Click="Personalization_Click"
-                        Style="{StaticResource NavButton}" />
+                        Style="{StaticResource NavButton}"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="Palette" Size="18" Margin="{StaticResource IconTextGap}" /><TextBlock Text="个性化" /></StackPanel></Button>
                 <Button x:Name="ConfigurationButton"
-                        Content="⚙   配置"
+                        AutomationProperties.Name="配置"
                         Click="Configuration_Click"
-                        Style="{StaticResource NavButton}" />
+                        Style="{StaticResource NavButton}"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="Settings" Size="18" Margin="{StaticResource IconTextGap}" /><TextBlock Text="配置" /></StackPanel></Button>
                 <Button x:Name="PluginsButton"
-                        Content="♧   插件管理"
+                        AutomationProperties.Name="插件管理"
                         Click="Plugins_Click"
-                        Style="{StaticResource NavButton}" />
+                        Style="{StaticResource NavButton}"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="Plugins" Size="18" Margin="{StaticResource IconTextGap}" /><TextBlock Text="插件管理" /></StackPanel></Button>
                 <Button x:Name="HealthButton"
-                        Content="◎   运行状况"
+                        AutomationProperties.Name="运行状况"
                         Click="Health_Click"
-                        Style="{StaticResource NavButton}" />
+                        Style="{StaticResource NavButton}"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="Activity" Size="18" Margin="{StaticResource IconTextGap}" /><TextBlock Text="运行状况" /></StackPanel></Button>
                 <Button x:Name="ExportButton"
-                        Content="⇧   导出"
+                        AutomationProperties.Name="导出"
                         Click="Export_Click"
-                        Style="{StaticResource NavButton}" />
+                        Style="{StaticResource NavButton}"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="Export" Size="18" Margin="{StaticResource IconTextGap}" /><TextBlock Text="导出" /></StackPanel></Button>
             </StackPanel>
             </Border>
         </Grid>

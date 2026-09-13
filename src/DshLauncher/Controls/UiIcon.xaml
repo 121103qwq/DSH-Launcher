@@ -1,0 +1,16 @@
+<UserControl x:Class="DshLauncher.Controls.UiIcon"
+             UseLayoutRounding="True"
+             SnapsToDevicePixels="True"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False"
+             IsHitTestVisible="False">
+    <!-- 变更集 147：图标渲染体。几何来自 App.xaml 的 Icon.* 注册表（Tabler Icons，MIT）。 -->
+    <Path x:Name="Glyph"
+          Stretch="Uniform"
+          StrokeLineJoin="Round"
+          StrokeStartLineCap="Round"
+          StrokeEndLineCap="Round"
+          HorizontalAlignment="Center"
+          VerticalAlignment="Center" />
+</UserControl>

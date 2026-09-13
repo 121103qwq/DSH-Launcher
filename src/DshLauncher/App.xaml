@@ -493,6 +493,111 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- ============================================================================
+             图标几何注册表（变更集 147）。
+             来源：Tabler Icons v3.46.0（MIT License，Copyright (c) 2020-2026 Paweł Kuna）
+             出处/版本/许可全文：docs/THIRD-PARTY-NOTICES.md
+             用法：<controls:UiIcon Kind="Play" Size="18" />（一律走 UiIcon，不在 XAML 里写裸字形）
+             几何坐标系：24 x 24 描边路径（stroke-width 2）；笔画粗细由 UiIcon 按 Size/12 设置。
+             注意：Tabler 图标带一条 24x24 画布边框路径（M0 0h24v24H0z，用于对齐）；本注册表已剔除，
+             否则描边后会画出多余方框（2026-09-13 识图发现后修正）。
+             ============================================================================ -->
+        <GeometryGroup x:Key="Icon.Activity">
+            <PathGeometry Figures="M3 12h4l3 8l4 -16l3 8h4" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Agent">
+            <PathGeometry Figures="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m0 -12a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2m-7 12a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.ArrowLeft">
+            <PathGeometry Figures="M5 12l14 0" />
+            <PathGeometry Figures="M5 12l6 6" />
+            <PathGeometry Figures="M5 12l6 -6" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.ChevronDown">
+            <PathGeometry Figures="M6 9l6 6l6 -6" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Close">
+            <PathGeometry Figures="M18 6l-12 12" />
+            <PathGeometry Figures="M6 6l12 12" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Conversations">
+            <PathGeometry Figures="M21 14l-3 -3h-7a1 1 0 0 1 -1 -1v-6a1 1 0 0 1 1 -1h9a1 1 0 0 1 1 1v10" />
+            <PathGeometry Figures="M14 15v2a1 1 0 0 1 -1 1h-7l-3 3v-10a1 1 0 0 1 1 -1h2" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Export">
+            <PathGeometry Figures="M12 21l-8 -4.5v-9l8 -4.5l8 4.5v4.5" />
+            <PathGeometry Figures="M12 12l8 -4.5" />
+            <PathGeometry Figures="M12 12v9" />
+            <PathGeometry Figures="M12 12l-8 -4.5" />
+            <PathGeometry Figures="M15 18h7" />
+            <PathGeometry Figures="M19 15l3 3l-3 3" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Extensions">
+            <PathGeometry Figures="M4 7h3a1 1 0 0 0 1 -1v-1a2 2 0 0 1 4 0v1a1 1 0 0 0 1 1h3a1 1 0 0 1 1 1v3a1 1 0 0 0 1 1h1a2 2 0 0 1 0 4h-1a1 1 0 0 0 -1 1v3a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-1a2 2 0 0 0 -4 0v1a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h1a2 2 0 0 0 0 -4h-1a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.ExternalLink">
+            <PathGeometry Figures="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6" />
+            <PathGeometry Figures="M11 13l9 -9" />
+            <PathGeometry Figures="M15 4h5v5" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Matrix">
+            <PathGeometry Figures="M4 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4" />
+            <PathGeometry Figures="M14 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4" />
+            <PathGeometry Figures="M4 15a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4" />
+            <PathGeometry Figures="M14 15a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -4" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Maximize">
+            <PathGeometry Figures="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Minimize">
+            <PathGeometry Figures="M5 12l14 0" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Palette">
+            <PathGeometry Figures="M12 21a9 9 0 0 1 0 -18c4.97 0 9 3.582 9 8c0 1.06 -.474 2.078 -1.318 2.828c-.844 .75 -1.989 1.172 -3.182 1.172h-2.5a2 2 0 0 0 -1 3.75a1.3 1.3 0 0 1 -1 2.25" />
+            <PathGeometry Figures="M7.5 10.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+            <PathGeometry Figures="M11.5 7.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+            <PathGeometry Figures="M15.5 10.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Play">
+            <PathGeometry Figures="M7 4v16l13 -8l-13 -8" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Plugins">
+            <PathGeometry Figures="M9.785 6l8.215 8.215l-2.054 2.054a5.81 5.81 0 1 1 -8.215 -8.215l2.054 -2.054" />
+            <PathGeometry Figures="M4 20l3.5 -3.5" />
+            <PathGeometry Figures="M15 4l-3.5 3.5" />
+            <PathGeometry Figures="M20 9l-3.5 3.5" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Plus">
+            <PathGeometry Figures="M12 5l0 14" />
+            <PathGeometry Figures="M5 12l14 0" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Restore">
+            <PathGeometry Figures="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" />
+            <PathGeometry Figures="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Settings">
+            <PathGeometry Figures="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065" />
+            <PathGeometry Figures="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" />
+        </GeometryGroup>
+        <GeometryGroup x:Key="Icon.Tasks">
+            <PathGeometry Figures="M3.5 5.5l1.5 1.5l2.5 -2.5" />
+            <PathGeometry Figures="M3.5 11.5l1.5 1.5l2.5 -2.5" />
+            <PathGeometry Figures="M3.5 17.5l1.5 1.5l2.5 -2.5" />
+            <PathGeometry Figures="M11 6l9 0" />
+            <PathGeometry Figures="M11 12l9 0" />
+            <PathGeometry Figures="M11 18l9 0" />
+        </GeometryGroup>
+
+        <!-- 变更集 147：图标幽灵按钮（只放一个 UiIcon，透明无边框）。用于提示条「关闭」这类位置。
+             注意：必须定义在隐式 Button 样式（本文件上部）之后——StaticResource 要求先定义。 -->
+        <Style x:Key="IconGhostButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}" />
+        </Style>
+
         <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisual}" />
             <Setter Property="MinHeight" Value="38" />

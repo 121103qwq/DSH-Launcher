@@ -6823,7 +6823,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         var maximized = WindowState == WindowState.Maximized;
-        MaximizeGlyph.Text = maximized ? "❐" : "□";
+        MaximizeGlyph.Kind = maximized ? "Restore" : "Maximize";   // 变更集 147：图标化
         MaximizeButton.ToolTip = maximized ? "还原" : "最大化";
     }
 
