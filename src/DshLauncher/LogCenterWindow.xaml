@@ -22,6 +22,12 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Grid>
+                    <!-- 变更集 149：原来"文字"与"按钮行"叠在同一格 → 第 4 个按钮压住灰色说明文字。
+                         改为两列：文字占 * 自行换行，按钮独占 Auto 列，永不重叠。 -->
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
                     <StackPanel>
                         <TextBlock Text="日志中心" FontSize="20" FontWeight="SemiBold" />
                         <TextBlock Text="只读浏览 Launcher 的结构化日志（launcher.log 及其轮转旧文件）：按天分组，可按级别 / 实例 / 关键字过滤。启动与停止事件带实例名、端口与 PID；错误行带错误码（E1xxx 环境 / E2xxx 插件 / E3xxx 网络 …）。删除日志请用「存储与清理」。"
@@ -30,7 +36,7 @@
                                    TextWrapping="Wrap"
                                    Margin="0,4,0,0" />
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16,0,0,0">
                         <Button x:Name="BackButton" AutomationProperties.Name="返回设置" Click="Back_Click" Padding="12,7" Margin="0,0,7,0"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="ArrowLeft" Size="16" Margin="{StaticResource IconTextGap}" /><TextBlock Text="返回设置" /></StackPanel></Button>
                         <Button Content="刷新" Click="Refresh_Click" Padding="12,7" Margin="0,0,7,0" />
                         <Button Content="打开日志目录" Click="OpenFolder_Click" Padding="12,7" Margin="0,0,7,0" />

@@ -39,15 +39,14 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
 
     private readonly Services.ScrollMemory _logScroll = new(new Services.UiStateStore(), "page/logs");   // 变更集 146
 
-    private void Window_OnLoaded(object sender, RoutedEventArgs e)
+    private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
         _logScroll.Attach(LogScroll);   // 变更集 146：绑定到日志区滚动视图本身（不再靠"视觉树第一个"猜）
-        RefreshData();
+        await RefreshDataAsync();       // 变更集 149：首次加载也不阻塞 UI
     }
 
     private void Window_OnUnloaded(object sender, RoutedEventArgs e) => _keywordDebounce.Stop();
 
-    private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshData();
 
     private void Back_Click(object sender, RoutedEventArgs e) => _returnToSettings?.Invoke();
 
@@ -82,7 +81,7 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
     /// 变更集 148：一键清理日志 —— 复用既有的「存储与清理」分类（`crash` 崩溃日志、`old-logs` 轮转副本），
     /// **当前 launcher.log 不动**（它是活跃日志，清掉会失去本次会话的诊断证据；要清可在「存储与清理」里操作）。
     /// </summary>
-    private void CleanLogs_Click(object sender, RoutedEventArgs e)
+    private async void CleanLogs_Click(object sender, RoutedEventArgs e)
     {
         var answer = AppDialog.Show(
             Window.GetWindow(this),
@@ -96,16 +95,33 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
             return;
         }
 
+        // 变更集 149：文件清理与日志解析都可能耗时（Clean 内部要扫描分类、Load 要解析上万行），
+        // 全部移到后台线程；期间按钮置忙并给出进度提示，UI 不再卡住。
+        var busyButton = sender as System.Windows.Controls.Button;
+        if (busyButton is not null)
+        {
+            busyButton.IsEnabled = false;
+        }
+
+        StatusTextStyler.Set(StatusText, "正在清理日志…");
         try
         {
-            var result = new LauncherStorageService().Clean(new[] { "crash", "old-logs" });
+            var result = await Task.Run(() => new LauncherStorageService().Clean(new[] { "crash", "old-logs" }));
+            var snapshot = await Task.Run(() => LogCenterService.Load());
+            ApplySnapshot(snapshot);
             StatusTextStyler.Set(StatusText,
                 result.RemovedCount + " 个日志文件已清理，释放 " + FormatBytes(result.FreedBytes) + "；当前 launcher.log 已保留。");
-            RefreshData();
         }
         catch (Exception ex)
         {
             StatusTextStyler.Set(StatusText, "清理日志失败：" + ex.Message, isError: true);
+        }
+        finally
+        {
+            if (busyButton is not null)
+            {
+                busyButton.IsEnabled = true;
+            }
         }
     }
 
@@ -113,9 +129,21 @@ public partial class LogCenterWindow : System.Windows.Controls.UserControl
         ? bytes + " B"
         : bytes < 1024 * 1024 ? (bytes / 1024.0).ToString("0.0") + " KB" : (bytes / 1048576.0).ToString("0.0") + " MB";
 
-    private void RefreshData()
+    /// <summary>变更集 149：加载与渲染拆开——解析（可能上万行）放后台，UI 线程只做渲染。</summary>
+    private void RefreshData() => ApplySnapshot(LogCenterService.Load());
+
+    /// <summary>变更集 149：刷新也走后台加载，避免点一下卡一下。</summary>
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshDataAsync();
+
+    private async Task RefreshDataAsync()
     {
-        _snapshot = LogCenterService.Load();
+        var snapshot = await Task.Run(() => LogCenterService.Load());
+        ApplySnapshot(snapshot);
+    }
+
+    private void ApplySnapshot(LogCenterSnapshot snapshot)
+    {
+        _snapshot = snapshot;
 
         _suppressFilterEvents = true;
         try
