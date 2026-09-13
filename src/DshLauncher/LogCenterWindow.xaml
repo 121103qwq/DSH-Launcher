@@ -36,12 +36,17 @@
                                    TextWrapping="Wrap"
                                    Margin="0,4,0,0" />
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16,0,0,0">
-                        <Button x:Name="BackButton" AutomationProperties.Name="返回设置" Click="Back_Click" Padding="12,7" Margin="0,0,7,0"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="ArrowLeft" Size="16" Margin="{StaticResource IconTextGap}" /><TextBlock Text="返回设置" /></StackPanel></Button>
-                        <Button Content="刷新" Click="Refresh_Click" Padding="12,7" Margin="0,0,7,0" />
-                        <Button Content="打开日志目录" Click="OpenFolder_Click" Padding="12,7" Margin="0,0,7,0" />
-                        <!-- 变更集 148：一键清理日志（复用「存储与清理」的 crash / old-logs 分类；当前 launcher.log 不动） -->
-                        <Button Style="{StaticResource DangerButton}" Content="清理日志" Click="CleanLogs_Click" Padding="12,7" />
+                    <!-- 变更集 150：四个按钮排成两行（用户要求减少横向占用）——外层竖向容器 + 两行右对齐按钮行。 -->
+                    <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16,0,0,0">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="BackButton" AutomationProperties.Name="返回设置" Click="Back_Click" Padding="12,7" Margin="0,0,7,0"><StackPanel Orientation="Horizontal"><controls:UiIcon Kind="ArrowLeft" Size="16" Margin="{StaticResource IconTextGap}" /><TextBlock Text="返回设置" /></StackPanel></Button>
+                            <Button Content="刷新" Click="Refresh_Click" Padding="12,7" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,7,0,0">
+                            <Button Content="打开日志目录" Click="OpenFolder_Click" Padding="12,7" Margin="0,0,7,0" />
+                            <!-- 变更集 148：一键清理日志（复用「存储与清理」的 crash / old-logs 分类；当前 launcher.log 不动） -->
+                            <Button Style="{StaticResource DangerButton}" Content="清理日志" Click="CleanLogs_Click" Padding="12,7" />
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
