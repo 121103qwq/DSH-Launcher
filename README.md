@@ -20,7 +20,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 ### 华丽视觉与流畅切页
 
-- 华丽视觉默认开启；升级至 v1.2.3 时，旧配置也会自动开启一次并保留原配置备份，材质和单项效果选择不变。可在“设置 → 华丽视觉”关闭，后续启动不会强制重开；切换后立即生效并自动保存。
+- 华丽视觉默认开启；升级至 v1.2.4 时，旧配置也会自动开启一次并保留原配置备份，材质和单项效果选择不变。可在“设置 → 华丽视觉”关闭，后续启动不会强制重开；切换后立即生效并自动保存。
 - 可选原始实体、毛玻璃、液态玻璃（轻量），并分别开关流体背景、漂浮粒子、鼠标光晕、拖尾、点击波纹与层次视差。
 - 玻璃只作用于 Launcher 内部的装饰背景，不是桌面透明或真实光学折射；正文和输入内容保持清晰。
 - 背景可以持续缓慢流动，窗口隐藏或最小化时暂停；关闭华丽视觉不会关闭页面的渐出、渐入动画。
@@ -187,7 +187,7 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.2.3**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.2.4**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
 
 本次更新支持新版 `session.vN.jsonl` 对话文件、社区整合包市场和 `.dspack` Profile 导入，并补充 MIT 许可证。整合包一键上传、`dshhome` 整机包和 `files[]` 外部资源暂不支持。
 

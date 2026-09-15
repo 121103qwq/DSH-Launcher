@@ -187,7 +187,7 @@ public sealed class LauncherSettingsData
     /// </summary>
     public VisualEffectsSettings VisualEffects { get; set; } = new();
 
-    /// <summary>Records the one-time v1.2.3 enablement, so later opt-outs persist.</summary>
+    /// <summary>Records the one-time visual enablement, so later opt-outs persist.</summary>
     [JsonPropertyName("visualEffectsDefaultApplied")]
     public bool VisualEffectsDefaultApplied { get; set; }
 }

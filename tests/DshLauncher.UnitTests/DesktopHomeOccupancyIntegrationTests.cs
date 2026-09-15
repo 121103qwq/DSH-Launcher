@@ -205,15 +205,32 @@ public sealed class DesktopHomeOccupancyIntegrationTests
             FileName = host,
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardOutput = true,
             WorkingDirectory = Path.GetDirectoryName(host)!,
             WindowStyle = ProcessWindowStyle.Hidden
         };
         startInfo.ArgumentList.Add("/d");
         startInfo.ArgumentList.Add("/s");
         startInfo.ArgumentList.Add("/c");
-        startInfo.ArgumentList.Add("ping -n 120 127.0.0.1 > nul");
+        startInfo.ArgumentList.Add("echo READY& ping -n 120 127.0.0.1 > nul");
         startInfo.Environment["DSH_HOME"] = home;
-        return Process.Start(startInfo) ?? throw new InvalidOperationException("占用测试辅助进程未启动。");
+        var process = Process.Start(startInfo) ?? throw new InvalidOperationException("占用测试辅助进程未启动。");
+        try
+        {
+            // The PEB environment exists before the Windows loader finishes.
+            // Guard also inspects MainModule, so wait for the command body,
+            // not just a readable environment block, before checking owners.
+            var ready = process.StandardOutput.ReadLineAsync();
+            if (!ready.Wait(TimeSpan.FromSeconds(5)) || ready.Result != "READY")
+                throw new XunitException("占用测试辅助进程未报告 READY。");
+            return process;
+        }
+        catch
+        {
+            StopHelper(process);
+            process.Dispose();
+            throw;
+        }
     }
 
     private static void WaitUntilDesktopHelperIsReadable(Process process, string expectedHome)
