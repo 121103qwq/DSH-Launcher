@@ -105,6 +105,11 @@
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
+                        <Button Content="关联已有 DSH_HOME"
+                                Click="LinkExistingHome_Click"
+                                IsEnabled="{Binding CanAddInstance}"
+                                Margin="0,0,0,8"
+                                ToolTip="直接使用原桌面端的 DSH_HOME，不复制或初始化原目录" />
                         <Button Content="新建干净版本" Click="CreateCleanVersion_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,0,8" />
                         <Button Content="导入整合包" Click="ImportPackage_Click" Margin="0,0,0,8" />
                         <Button Content="转换整合包" Click="ConvertPackage_Click" />
@@ -152,7 +157,7 @@
                                         ToolTip="{Binding CloneButtonToolTip}"
                                         Padding="16,9"
                                         Margin="0,0,8,8" />
-                                <Button Content="删除版本"
+                                <Button Content="{Binding DeleteButtonText}"
                                         Click="DeleteVersion_Click"
                                         IsEnabled="{Binding CanDelete}"
                                         ToolTip="{Binding DeleteButtonToolTip}"

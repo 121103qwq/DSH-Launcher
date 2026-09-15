@@ -21,9 +21,12 @@ public sealed class ModelService
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly Func<string, bool> _isRunning;
 
-    public ModelService(Func<string, bool>? isRunning = null)
+    private readonly ExternalDshHomeGuard _homeGuard;
+
+    public ModelService(Func<string, bool>? isRunning = null, ExternalDshHomeGuard? homeGuard = null)
     {
         _isRunning = isRunning ?? (_ => false);
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
     }
 
     public string GetSettingsPath(ManagerInstance instance) =>
@@ -151,6 +154,7 @@ public sealed class ModelService
 
     private void EnsureStopped(ManagerInstance instance)
     {
+        _homeGuard.EnsureAvailable(instance);
         if (_isRunning(instance.Id))
         {
             throw new InvalidOperationException("实例正在运行，请先停止实例再修改模型配置。");
@@ -709,6 +713,7 @@ public sealed class ModelService
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _homeGuard.EnsureAvailable(instance);
         RemoveTopLevelSection(GetSettingsPath(instance), "agent-default-model");
         return Task.CompletedTask;
     }
@@ -739,6 +744,7 @@ public sealed class ModelService
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _homeGuard.EnsureAvailable(instance);
         var normalized = CodingModelPolicyService.NormalizeSelection(selection);
         var section = new List<string>
         {

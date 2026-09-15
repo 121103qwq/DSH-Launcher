@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using DshLauncher.Models;
 using WpfColor = System.Windows.Media.Color;
 using WpfColorConverter = System.Windows.Media.ColorConverter;
@@ -48,6 +49,11 @@ internal sealed class VisualEffectsController : IDisposable
         WpfColor.FromRgb(121, 139, 227),
         WpfColor.FromRgb(63, 192, 186)
     };
+
+    // Only four immutable decorative textures, created on first use. Keep
+    // them at 96 DPI: these already-soft backgrounds need no full-window or
+    // high-DPI render target, and text/content never enters this cache.
+    private static readonly Lazy<BitmapSource[]> BlobTextures = new(CreateBlobTextures);
 
     private readonly Window _window;
     private readonly Canvas _backgroundLayer;
@@ -182,7 +188,7 @@ internal sealed class VisualEffectsController : IDisposable
 
     /// <summary>
     /// Advances the deterministic animation clock for STA tests without a
-    /// visible window. Production code is driven by the dispatcher timer.
+    /// visible window, using the same frame scheduling as the compositor.
     /// </summary>
     internal void AdvanceForTest(double seconds)
     {
@@ -196,7 +202,7 @@ internal sealed class VisualEffectsController : IDisposable
             return;
         }
 
-        AdvanceAnimation(seconds, updateAmbient: true);
+        AdvanceFrame(seconds);
     }
 
     /// <summary>Injects a ripple for tests or another Window-owned input surface.</summary>
@@ -372,6 +378,7 @@ internal sealed class VisualEffectsController : IDisposable
                     Height = 8,
                     IsHitTestVisible = false,
                     Visibility = Visibility.Hidden,
+                    RenderTransform = new TranslateTransform(),
                     Fill = new SolidColorBrush(WpfColor.FromArgb(125, 78, 164, 229))
                 };
                 _interactionLayer.Children.Add(trail);
@@ -393,10 +400,11 @@ internal sealed class VisualEffectsController : IDisposable
                     StrokeThickness = 2
                 };
                 var scale = new ScaleTransform(1, 1);
+                var translation = new TranslateTransform();
                 ripple.RenderTransformOrigin = new WpfPoint(0.5, 0.5);
-                ripple.RenderTransform = scale;
+                ripple.RenderTransform = new TransformGroup { Children = { scale, translation } };
                 _interactionLayer.Children.Add(ripple);
-                _ripples.Add(new RippleState(ripple, scale));
+                _ripples.Add(new RippleState(ripple, scale, translation));
             }
         }
 
@@ -412,40 +420,64 @@ internal sealed class VisualEffectsController : IDisposable
         var blobCount = 4;
         for (var i = 0; i < blobCount; i++)
         {
-            var color = BlobColors[i % BlobColors.Length];
-            var brush = new RadialGradientBrush
-            {
-                Center = new WpfPoint(0.5, 0.5),
-                GradientOrigin = new WpfPoint(0.42, 0.38),
-                RadiusX = 0.72,
-                RadiusY = 0.72
-            };
-            brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(140, color.R, color.G, color.B), 0));
-            brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(58, color.R, color.G, color.B), 0.5));
-            brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(0, color.R, color.G, color.B), 1));
-            if (brush.CanFreeze)
-            {
-                brush.Freeze();
-            }
-
-            var element = new WpfEllipse
-            {
-                Width = 330 + i * 42,
-                Height = 280 + i * 38,
-                Fill = brush,
-                IsHitTestVisible = false,
-                Opacity = _settings.Material == VisualMaterial.LiquidGlass ? 0.84 : 0.62,
-                RenderTransformOrigin = new WpfPoint(0.5, 0.5),
-                RenderTransform = new TranslateTransform(),
-                Effect = _qualityTier < 2
-                    ? null
-                    : new BlurEffect { Radius = 26, RenderingBias = RenderingBias.Performance }
-            };
+            var element = CreateBackgroundBlob(i, _qualityTier);
+            element.IsHitTestVisible = false;
+            element.Opacity = _settings.Material == VisualMaterial.LiquidGlass ? 0.84 : 0.62;
+            element.RenderTransform = new TranslateTransform();
             _backgroundLayer.Children.Add(element);
             // Each blob completes a gentle loop in roughly 12-20 seconds.
             var cycleSeconds = 12d + i * 2.5d;
             _blobs.Add(new BlobState(element, i, Math.PI * 2 / cycleSeconds, 0.08 + i * 0.017));
         }
+    }
+
+    internal static FrameworkElement CreateBackgroundBlob(int index, int qualityTier)
+    {
+        if (qualityTier < 2) return CreateBlobEllipse(index);
+        var texture = BlobTextures.Value[index];
+        return new System.Windows.Controls.Image
+        {
+            Source = texture, Width = texture.Width, Height = texture.Height
+        };
+    }
+
+    private static WpfEllipse CreateBlobEllipse(int index)
+    {
+        var color = BlobColors[index];
+        var brush = new RadialGradientBrush
+        {
+            Center = new WpfPoint(0.5, 0.5),
+            GradientOrigin = new WpfPoint(0.42, 0.38),
+            RadiusX = 0.72, RadiusY = 0.72
+        };
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(140, color.R, color.G, color.B), 0));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(58, color.R, color.G, color.B), 0.5));
+        brush.GradientStops.Add(new GradientStop(WpfColor.FromArgb(0, color.R, color.G, color.B), 1));
+        brush.Freeze();
+        return new WpfEllipse { Width = 330 + index * 42, Height = 280 + index * 38, Fill = brush };
+    }
+
+    private static BitmapSource[] CreateBlobTextures()
+    {
+        var textures = new BitmapSource[BlobColors.Length];
+        for (var i = 0; i < textures.Length; i++)
+        {
+            const int padding = 26;
+            var ellipse = CreateBlobEllipse(i);
+            ellipse.Effect = new BlurEffect { Radius = padding, RenderingBias = RenderingBias.Performance };
+            var size = new System.Windows.Size(ellipse.Width + padding * 2, ellipse.Height + padding * 2);
+            var canvas = new Canvas { Width = size.Width, Height = size.Height };
+            Canvas.SetLeft(ellipse, padding);
+            Canvas.SetTop(ellipse, padding);
+            canvas.Children.Add(ellipse);
+            canvas.Measure(size);
+            canvas.Arrange(new Rect(size));
+            var bitmap = new RenderTargetBitmap((int)size.Width, (int)size.Height, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(canvas);
+            bitmap.Freeze();
+            textures[i] = bitmap;
+        }
+        return textures;
     }
 
     private void CreateParticle(int index)
@@ -487,9 +519,14 @@ internal sealed class VisualEffectsController : IDisposable
         _lastRenderingTime = renderingTime;
         if (seconds <= 0 || double.IsNaN(seconds) || double.IsInfinity(seconds))
         {
-            seconds = 1d / 60d;
+            return;
         }
 
+        AdvanceFrame(seconds);
+    }
+
+    private void AdvanceFrame(double seconds)
+    {
         // Keep the expensive ambient blob layout near 30 Hz while transient
         // pointer/ripple/trail state follows the compositor's frame rate.
         _ambientAccumulator += Math.Min(seconds, 0.25);
@@ -499,12 +536,12 @@ internal sealed class VisualEffectsController : IDisposable
             _ambientAccumulator %= AmbientFrameSeconds;
         }
 
-        UpdatePointerPosition(seconds);
-        AdvanceAnimation(seconds, updateAmbient);
+        var pointerChanged = UpdatePointerPosition(seconds);
+        AdvanceAnimation(seconds, updateAmbient, pointerChanged);
         UpdateRenderingSubscription();
     }
 
-    private void AdvanceAnimation(double seconds, bool updateAmbient)
+    private void AdvanceAnimation(double seconds, bool updateAmbient, bool pointerChanged = false)
     {
         _animationTime += Math.Min(seconds, 0.25);
         var width = Math.Max(1, _backgroundLayer.ActualWidth);
@@ -517,7 +554,7 @@ internal sealed class VisualEffectsController : IDisposable
             _liquidHighlight.EndPoint = new WpfPoint(sweep + 0.8, 1);
         }
 
-        if (updateAmbient || (_settings.Parallax && _hasPointer))
+        if (updateAmbient || (_settings.Parallax && pointerChanged))
         {
             for (var i = 0; i < _blobs.Count; i++)
             {
@@ -598,6 +635,12 @@ internal sealed class VisualEffectsController : IDisposable
             return;
         }
 
+        UpdatePointer(point);
+    }
+
+    internal void UpdatePointer(WpfPoint point)
+    {
+        if (_disposed || !_enabled || _highContrast) return;
         _lastPointer = point;
         _hasPointer = true;
         if (!_hasSmoothedPointer)
@@ -612,8 +655,7 @@ internal sealed class VisualEffectsController : IDisposable
         if (_settings.PointerTrail && _trailNodes.Count > 0)
         {
             var trail = _trailNodes[_trailCursor++ % _trailNodes.Count];
-            Canvas.SetLeft(trail.Element, point.X - trail.Element.Width / 2);
-            Canvas.SetTop(trail.Element, point.Y - trail.Element.Height / 2);
+            SetPosition(trail.Element, point.X - trail.Element.Width / 2, point.Y - trail.Element.Height / 2);
             trail.Element.Visibility = Visibility.Visible;
             trail.Element.Opacity = 0.72;
         }
@@ -649,8 +691,8 @@ internal sealed class VisualEffectsController : IDisposable
         ripple.Scale.ScaleY = 1;
         ripple.Element.Opacity = 0.75;
         ripple.Element.Visibility = Visibility.Visible;
-        Canvas.SetLeft(ripple.Element, point.X - ripple.Element.Width / 2);
-        Canvas.SetTop(ripple.Element, point.Y - ripple.Element.Height / 2);
+        ripple.Translation.X = point.X - ripple.Element.Width / 2;
+        ripple.Translation.Y = point.Y - ripple.Element.Height / 2;
         UpdateRenderingSubscription();
     }
 
@@ -681,14 +723,15 @@ internal sealed class VisualEffectsController : IDisposable
 
     private void WindowUnloaded(object sender, RoutedEventArgs e) => Pause();
 
-    private void UpdatePointerPosition(double seconds)
+    private bool UpdatePointerPosition(double seconds)
     {
         if (!_hasPointer)
         {
-            return;
+            return false;
         }
 
-        if (seconds <= 0)
+        var previous = _pointerPosition;
+        if (seconds <= 0 || (_lastPointer - _pointerPosition).Length <= 0.05)
         {
             _pointerPosition = _lastPointer;
         }
@@ -700,12 +743,14 @@ internal sealed class VisualEffectsController : IDisposable
             _pointerPosition = new WpfPoint(
                 _pointerPosition.X + (_lastPointer.X - _pointerPosition.X) * amount,
                 _pointerPosition.Y + (_lastPointer.Y - _pointerPosition.Y) * amount);
+            if ((_lastPointer - _pointerPosition).Length <= 0.05) _pointerPosition = _lastPointer;
         }
 
         if (_halo is not null)
         {
             SetPosition(_halo, _pointerPosition.X - _halo.Width / 2, _pointerPosition.Y - _halo.Height / 2);
         }
+        return previous != _pointerPosition;
     }
 
     private void UpdateRenderingSubscription()
@@ -827,7 +872,7 @@ internal sealed class VisualEffectsController : IDisposable
 
     private sealed class BlobState
     {
-        public BlobState(WpfEllipse element, int index, double speed, double amplitude)
+        public BlobState(FrameworkElement element, int index, double speed, double amplitude)
         {
             Element = element;
             Index = index;
@@ -835,7 +880,7 @@ internal sealed class VisualEffectsController : IDisposable
             Amplitude = amplitude;
         }
 
-        public WpfEllipse Element { get; }
+        public FrameworkElement Element { get; }
         public int Index { get; }
         public double Speed { get; }
         public double Amplitude { get; }
@@ -868,14 +913,16 @@ internal sealed class VisualEffectsController : IDisposable
 
     private sealed class RippleState
     {
-        public RippleState(WpfEllipse element, ScaleTransform scale)
+        public RippleState(WpfEllipse element, ScaleTransform scale, TranslateTransform translation)
         {
             Element = element;
             Scale = scale;
+            Translation = translation;
         }
 
         public WpfEllipse Element { get; }
         public ScaleTransform Scale { get; }
+        public TranslateTransform Translation { get; }
         public double Age { get; set; }
     }
 }

@@ -47,16 +47,21 @@ public sealed class VersionSnapshotService
     };
 
     private readonly LauncherPaths _paths;
+    private readonly VersionSettingsService _versionSettingsService;
     private readonly Func<string, bool> _isRunning;
+    private readonly ExternalDshHomeGuard _homeGuard;
     private readonly PasswordSnapshotEncryptionService _passwordSnapshotEncryption;
 
     public VersionSnapshotService(
         LauncherPaths? paths = null,
         Func<string, bool>? isRunning = null,
-        PasswordSnapshotEncryptionService? passwordSnapshotEncryption = null)
+        PasswordSnapshotEncryptionService? passwordSnapshotEncryption = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
         _paths = paths ?? new LauncherPaths();
+        _versionSettingsService = new VersionSettingsService(_paths);
         _isRunning = isRunning ?? (_ => false);
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
         _passwordSnapshotEncryption = passwordSnapshotEncryption ?? new PasswordSnapshotEncryptionService();
     }
 
@@ -178,7 +183,10 @@ public sealed class VersionSnapshotService
                     continue;
                 }
 
-                RejectReparsePoint(source, relativePath);
+                RejectExistingReparsePoint(
+                    GetManagedPathRoot(instance, relativePath),
+                    source,
+                    relativePath);
                 var fileLength = new FileInfo(source).Length;
                 if (fileLength > MaximumFileSize)
                 {
@@ -320,7 +328,10 @@ public sealed class VersionSnapshotService
                 }
 
                 var target = ResolveManagedPath(instance, relativePath);
-                RejectExistingReparsePoint(instance.DshHome, target, relativePath);
+                RejectExistingReparsePoint(
+                    GetManagedPathRoot(instance, relativePath),
+                    target,
+                    relativePath);
                 var entry = payload.Archive.GetEntry($"files/{relativePath.Replace('\\', '/')}");
                 if (entry is null)
                 {
@@ -353,12 +364,15 @@ public sealed class VersionSnapshotService
         }
     }
 
-    private static void ApplyStagedSnapshot(ManagerInstance instance, StagedSnapshot snapshot)
+    private void ApplyStagedSnapshot(ManagerInstance instance, StagedSnapshot snapshot)
     {
         foreach (var file in snapshot.Files)
         {
             var target = ResolveManagedPath(instance, file.RelativePath);
-            RejectExistingReparsePoint(instance.DshHome, target, file.RelativePath);
+            RejectExistingReparsePoint(
+                GetManagedPathRoot(instance, file.RelativePath),
+                target,
+                file.RelativePath);
             if (file.StagedPath is null)
             {
                 if (File.Exists(target))
@@ -670,18 +684,44 @@ public sealed class VersionSnapshotService
         }
     }
 
-    private static void EnsureSafeHome(ManagerInstance instance)
+    private void EnsureSafeHome(ManagerInstance instance)
     {
+        _homeGuard.EnsureAvailable(instance);
         if (!Directory.Exists(instance.DshHome))
         {
+            if (instance.UsesExternalDshHome)
+            {
+                throw new InvalidOperationException(
+                    "关联的外部 DSH_HOME 不存在，不能创建或恢复快照；请恢复原目录后重试。 ");
+            }
+
             Directory.CreateDirectory(instance.DshHome);
         }
 
         RejectReparsePoint(instance.DshHome, "DSH_HOME");
     }
 
-    private static string ResolveManagedPath(ManagerInstance instance, string relativePath)
+    private string ResolveManagedPath(ManagerInstance instance, string relativePath)
     {
+        if (instance.UsesExternalDshHome
+            && string.Equals(
+                relativePath.Replace('\\', '/'),
+                ".dsh-launcher/version-settings.json",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var metadataRoot = Path.GetFullPath(_paths.InstancesDirectory);
+            var externalTarget = Path.GetFullPath(_versionSettingsService.GetSettingsPath(instance));
+            var externalRelative = Path.GetRelativePath(metadataRoot, externalTarget);
+            if (Path.IsPathRooted(externalRelative)
+                || string.Equals(externalRelative, "..", StringComparison.Ordinal)
+                || externalRelative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("外部版本设置路径越过 Launcher 实例目录。 ");
+            }
+
+            return externalTarget;
+        }
+
         var root = Path.GetFullPath(instance.DshHome);
         var target = Path.GetFullPath(Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
         var relative = Path.GetRelativePath(root, target);
@@ -694,6 +734,15 @@ public sealed class VersionSnapshotService
 
         return target;
     }
+
+    private string GetManagedPathRoot(ManagerInstance instance, string relativePath) =>
+        instance.UsesExternalDshHome
+            && string.Equals(
+                relativePath.Replace('\\', '/'),
+                ".dsh-launcher/version-settings.json",
+                StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFullPath(_paths.InstancesDirectory)
+            : Path.GetFullPath(instance.DshHome);
 
     private static void RejectExistingReparsePoint(string rootPath, string path, string label)
     {

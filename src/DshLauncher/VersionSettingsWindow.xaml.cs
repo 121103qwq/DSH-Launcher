@@ -144,7 +144,11 @@ public partial class VersionSettingsWindow : UserControl
         SyncModelProvidersCheckBox.IsChecked = _settings.SyncModelProviders;
         IdleStopMinutesBox.Text = Math.Max(0, _settings.IdleStopMinutes).ToString();
         RestartOnCrashCheckBox.IsChecked = _settings.RestartOnCrash;
-        ConfigurationOptionsPanel.IsEnabled = !_settings.SyncAllConfiguration;
+        var externalHome = _instance?.UsesExternalDshHome == true;
+        ExternalHomeSyncNotice.Visibility = externalHome ? Visibility.Visible : Visibility.Collapsed;
+        SyncAllConfigurationCheckBox.IsEnabled = !externalHome;
+        SyncModelProvidersCheckBox.IsEnabled = !externalHome;
+        ConfigurationOptionsPanel.IsEnabled = !externalHome && !_settings.SyncAllConfiguration;
         UpdateWorkspaceEnabled();
     }
 
@@ -483,7 +487,8 @@ public partial class VersionSettingsWindow : UserControl
             return;
         }
 
-        ConfigurationOptionsPanel.IsEnabled = SyncAllConfigurationCheckBox.IsChecked != true;
+        ConfigurationOptionsPanel.IsEnabled = _instance?.UsesExternalDshHome != true
+            && SyncAllConfigurationCheckBox.IsChecked != true;
         UpdateWorkspaceEnabled();
     }
 

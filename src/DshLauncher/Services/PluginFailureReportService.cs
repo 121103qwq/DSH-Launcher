@@ -22,6 +22,11 @@ public sealed record PluginFailureReport(
 /// </summary>
 public sealed class PluginFailureReportService
 {
+    private readonly ExternalDshHomeGuard _homeGuard;
+
+    public PluginFailureReportService(ExternalDshHomeGuard? homeGuard = null) =>
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
+
     private static readonly string[] DiagnosticFiles =
     {
         "settings.yaml",
@@ -47,6 +52,7 @@ public sealed class PluginFailureReportService
         string rollbackMessage,
         string? snapshotPath)
     {
+        _homeGuard.EnsureAvailable(instance);
         var reportsDirectory = Path.Combine(instance.DshHome, ".dsh-launcher", "reports");
         EnsureDirectoryIsSafe(reportsDirectory);
         Directory.CreateDirectory(reportsDirectory);

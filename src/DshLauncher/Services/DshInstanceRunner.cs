@@ -26,16 +26,19 @@ public sealed class DshInstanceRunner : IAsyncDisposable
     private readonly Func<int> _portAllocator;
     private readonly DshHomeImportService _homeImporter;
     private readonly Func<ManagerInstance, string> _profileProvider;
+    private readonly ExternalDshHomeGuard _homeGuard;
     private bool _disposed;
 
     public DshInstanceRunner(
         Func<int>? portAllocator = null,
         DshHomeImportService? homeImporter = null,
-        Func<ManagerInstance, string>? profileProvider = null)
+        Func<ManagerInstance, string>? profileProvider = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
         _portAllocator = portAllocator ?? AllocateFreePort;
         _homeImporter = homeImporter ?? new DshHomeImportService();
         _profileProvider = profileProvider ?? (_ => DshProfileService.DefaultProfileName);
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
     }
 
     public bool IsRunning(string instanceId)
@@ -252,6 +255,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
 
         if (!Directory.Exists(instance.DshHome))
         {
+            if (instance.UsesExternalDshHome)
+            {
+                return DshInstanceRunResult.Failure("关联的外部 DSH_HOME 不存在，请恢复原目录或重新关联；Launcher 不会创建空目录替代原数据。");
+            }
+
             try
             {
                 Directory.CreateDirectory(instance.DshHome);
@@ -266,6 +274,11 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         try
         {
             profileName = DshProfileService.NormalizeName(_profileProvider(instance));
+            if (instance.UsesExternalDshHome
+                && !Directory.Exists(DshProfileService.GetProfileDirectory(instance, profileName)))
+            {
+                return DshInstanceRunResult.Failure($"外部 DSH_HOME 中不存在 Profile {profileName}，请在扩展页选择已有 Profile；Launcher 不会自动初始化原目录。");
+            }
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentException)
         {
@@ -290,6 +303,12 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                     "该实例已经连接到外部 DSh 服务，Launcher 不会再启动第二个进程。请先让外部服务退出，或在实例页清除连接状态。");
             }
 
+            var homeConflict = _homeGuard.GetConflict(instance);
+            if (homeConflict is not null)
+            {
+                return DshInstanceRunResult.Failure(homeConflict);
+            }
+
             RemoveExited(instance.Id);
             InstanceLock? instanceLock = null;
             try
@@ -309,7 +328,7 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         $"Profile {profileName} 不是 Web Profile，Launcher 无法把它作为浏览器实例启动。可在扩展页切换并管理其 Plugin，或选择包含 @deepseek-ai/dsh-web-app 的 Profile。 ");
                 }
 
-                if (!string.IsNullOrWhiteSpace(instance.ImportedFromDshHome))
+                if (!instance.UsesExternalDshHome && !string.IsNullOrWhiteSpace(instance.ImportedFromDshHome))
                 {
                     try
                     {

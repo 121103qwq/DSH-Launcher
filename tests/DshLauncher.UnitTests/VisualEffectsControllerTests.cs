@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DshLauncher.Models;
 using Xunit;
@@ -207,7 +208,139 @@ public sealed class VisualEffectsControllerTests
         });
     }
 
-    private static void RunOnSta(Action action)
+    [Fact]
+    public void BackgroundTexturesAreFrozenSharedBoundedAndNeedNoLiveBlur()
+    {
+        RunOnSta(() =>
+        {
+            long pixels = 0;
+            for (var i = 0; i < 4; i++)
+            {
+                var blob = Assert.IsType<Image>(VisualEffectsController.CreateBackgroundBlob(i, 2));
+                var texture = Assert.IsAssignableFrom<BitmapSource>(blob.Source);
+                Assert.True(texture.IsFrozen);
+                Assert.Null(blob.Effect);
+                Assert.Equal(96, texture.DpiX);
+                Assert.Equal(330 + i * 42 + 52, blob.Width);
+                Assert.Equal(280 + i * 38 + 52, blob.Height);
+                var second = Assert.IsType<Image>(VisualEffectsController.CreateBackgroundBlob(i, 2));
+                Assert.Same(texture, second.Source);
+                pixels += (long)texture.PixelWidth * texture.PixelHeight;
+                for (var tier = 0; tier < 2; tier++)
+                {
+                    var fallback = Assert.IsType<System.Windows.Shapes.Ellipse>(VisualEffectsController.CreateBackgroundBlob(i, tier));
+                    Assert.Null(fallback.Effect);
+                    Assert.True(fallback.Fill.IsFrozen);
+                }
+            }
+            Assert.InRange(pixels * 4, 1, 3 * 1024 * 1024);
+        });
+    }
+
+    [Theory]
+    [InlineData(60)]
+    [InlineData(120)]
+    [InlineData(144)]
+    public void StationaryPointerDoesNotBypassAmbientFrameBudget(int refreshRate)
+    {
+        RunOnSta(() =>
+        {
+            var background = new Canvas();
+            var interaction = new Canvas();
+            Layout(background);
+            Layout(interaction);
+            using var controller = new VisualEffectsController(new Window(), background, interaction);
+            controller.Apply(new VisualEffectsSettings
+            {
+                Enabled = true, AmbientMotion = true, Parallax = true,
+                Particles = false, PointerHalo = false, PointerTrail = false, ClickRipples = false
+            });
+            if (controller.HighContrastProtectionActive) return;
+            controller.Resume();
+            controller.UpdatePointer(new Point(400, 300));
+            var changes = 0;
+            var transform = (TranslateTransform)background.Children[0].RenderTransform;
+            for (var frame = 0; frame < refreshRate; frame++)
+            {
+                var before = transform.X;
+                controller.AdvanceForTest(1d / refreshRate);
+                if (before != transform.X) changes++;
+            }
+            Assert.InRange(changes, 29, 31);
+        });
+    }
+
+    [Fact]
+    public void PointerOnlyRenderingStopsAfterSmoothingAndRestartsOnMovement()
+    {
+        RunOnSta(() =>
+        {
+            var background = new Canvas();
+            var interaction = new Canvas();
+            Layout(background);
+            Layout(interaction);
+            using var controller = new VisualEffectsController(new Window(), background, interaction);
+            controller.Apply(new VisualEffectsSettings
+            {
+                Enabled = true, AmbientMotion = false, Particles = false,
+                Parallax = true, PointerHalo = true, PointerTrail = false, ClickRipples = false
+            });
+            if (controller.HighContrastProtectionActive) return;
+            controller.Resume();
+            controller.UpdatePointer(new Point(100, 100));
+            Assert.False(controller.IsRenderingSubscribed);
+            controller.UpdatePointer(new Point(600, 400));
+            Assert.True(controller.IsRenderingSubscribed);
+            for (var frame = 0; frame < 120; frame++) controller.AdvanceForTest(1d / 60);
+            Assert.False(controller.IsRenderingSubscribed);
+            var before = background.Children[0].RenderTransform.Value;
+            controller.AdvanceForTest(1d / 60);
+            Assert.Equal(before, background.Children[0].RenderTransform.Value);
+            controller.UpdatePointer(new Point(200, 200));
+            Assert.True(controller.IsRenderingSubscribed);
+        });
+    }
+
+    [Fact]
+    public void TrailAndRipplePositioningDoesNotInvalidateCanvasLayout()
+    {
+        RunOnSta(() =>
+        {
+            var background = new Canvas();
+            var interaction = new Canvas();
+            using var controller = new VisualEffectsController(new Window(), background, interaction);
+            controller.Apply(new VisualEffectsSettings
+            {
+                Enabled = true, AmbientMotion = false, Particles = false, Parallax = false,
+                PointerHalo = false, PointerTrail = true, ClickRipples = true
+            });
+            if (controller.HighContrastProtectionActive) return;
+            Layout(background);
+            Layout(interaction);
+            controller.Resume();
+            var point = new Point(300, 250);
+            controller.UpdatePointer(point);
+            controller.TriggerRippleForTest(point);
+            Assert.True(interaction.IsMeasureValid);
+            Assert.True(interaction.IsArrangeValid);
+            var ripple = interaction.Children.OfType<System.Windows.Shapes.Ellipse>()
+                .Single(element => element.Width == 22 && element.Visibility == Visibility.Visible);
+            for (var frame = 0; frame < 15; frame++) controller.AdvanceForTest(1d / 60);
+            var center = ripple.TranslatePoint(new Point(11, 11), interaction);
+            Assert.Equal(point.X, center.X, 5);
+            Assert.Equal(point.Y, center.Y, 5);
+            Assert.True(interaction.IsArrangeValid);
+        });
+    }
+
+    private static void Layout(FrameworkElement element)
+    {
+        element.Measure(new Size(900, 600));
+        element.Arrange(new Rect(0, 0, 900, 600));
+        element.UpdateLayout();
+    }
+
+    internal static void RunOnSta(Action action)
     {
         Exception? failure = null;
         var thread = new Thread(() =>

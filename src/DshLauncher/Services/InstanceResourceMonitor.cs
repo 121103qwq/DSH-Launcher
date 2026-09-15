@@ -10,6 +10,28 @@ using DshLauncher.Models;
 
 namespace DshLauncher.Services;
 
+/// <summary>Reused only within one point-in-time query, never cached between operations.</summary>
+internal sealed record ProcessTreeSnapshot(
+    IReadOnlyDictionary<int, string> Names,
+    IReadOnlyDictionary<int, List<int>> ChildrenByParent)
+{
+    public IReadOnlyList<int> FindProcessTree(int rootProcessId, CancellationToken cancellationToken)
+    {
+        var result = new List<int> { rootProcessId };
+        var seen = new HashSet<int> { rootProcessId };
+        for (var index = 0; index < result.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!ChildrenByParent.TryGetValue(result[index], out var children)) continue;
+            foreach (var child in children)
+            {
+                if (seen.Add(child)) result.Add(child);
+            }
+        }
+        return result;
+    }
+}
+
 /// <summary>
 /// Reads resources for an instance's recorded process and identifiable
 /// descendants. Each call is one sample; callers own polling and no timer or
@@ -169,15 +191,30 @@ public sealed class InstanceResourceMonitor
         }
     }
 
-    private static IReadOnlyList<int> FindProcessTree(
+    internal static IReadOnlyList<int> FindProcessTree(
         int rootProcessId,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            return CaptureProcessSnapshot(cancellationToken).FindProcessTree(rootProcessId, cancellationToken);
+        }
+        catch (Win32Exception)
+        {
+            // Resource sampling keeps its existing best-effort root fallback.
+            return [rootProcessId];
+        }
+    }
+
+    internal static ProcessTreeSnapshot CaptureProcessSnapshot(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var names = new Dictionary<int, string>();
         var childrenByParent = new Dictionary<int, List<int>>();
         var snapshot = CreateToolhelp32Snapshot(SnapshotProcess, 0);
         if (snapshot == InvalidHandleValue)
         {
-            return [rootProcessId];
+            throw new Win32Exception(Marshal.GetLastWin32Error());
         }
 
         try
@@ -188,7 +225,7 @@ public sealed class InstanceResourceMonitor
             };
             if (!Process32First(snapshot, ref entry))
             {
-                return [rootProcessId];
+                throw new Win32Exception(Marshal.GetLastWin32Error());
             }
 
             do
@@ -196,6 +233,10 @@ public sealed class InstanceResourceMonitor
                 cancellationToken.ThrowIfCancellationRequested();
                 var processId = entry.ProcessId;
                 var parentProcessId = entry.ParentProcessId;
+                if (processId is > 0 and <= int.MaxValue)
+                {
+                    names[(int)processId] = entry.ExecutableFile ?? string.Empty;
+                }
                 if (processId <= int.MaxValue
                     && parentProcessId <= int.MaxValue
                     && processId > 0
@@ -211,33 +252,13 @@ public sealed class InstanceResourceMonitor
                 }
             }
             while (Process32Next(snapshot, ref entry));
-
-            var result = new List<int> { rootProcessId };
-            var seen = new HashSet<int> { rootProcessId };
-            var pending = new Queue<int>();
-            pending.Enqueue(rootProcessId);
-            while (pending.Count > 0)
+            var error = Marshal.GetLastWin32Error();
+            if (error != 18) // ERROR_NO_MORE_FILES is the normal end of enumeration.
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var parentProcessId = pending.Dequeue();
-                if (!childrenByParent.TryGetValue(parentProcessId, out var children))
-                {
-                    continue;
-                }
-
-                foreach (var childProcessId in children)
-                {
-                    if (!seen.Add(childProcessId))
-                    {
-                        continue;
-                    }
-
-                    result.Add(childProcessId);
-                    pending.Enqueue(childProcessId);
-                }
+                throw new Win32Exception(error);
             }
 
-            return result;
+            return new ProcessTreeSnapshot(names, childrenByParent);
         }
         finally
         {

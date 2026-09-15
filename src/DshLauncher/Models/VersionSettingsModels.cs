@@ -12,7 +12,7 @@ public enum VisualMaterial
 
 public sealed class VisualEffectsSettings
 {
-    public bool Enabled { get; set; }
+    public bool Enabled { get; set; } = true;
 
     [JsonConverter(typeof(VisualMaterialJsonConverter))]
     public VisualMaterial Material { get; set; } = VisualMaterial.LiquidGlass;
@@ -183,9 +183,13 @@ public sealed class LauncherSettingsData
 
     /// <summary>
     /// Optional in JSON so older Launcher settings remain readable. A missing
-    /// or null value is normalized to a disabled default profile.
+    /// or null value is normalized to the enabled default profile.
     /// </summary>
     public VisualEffectsSettings VisualEffects { get; set; } = new();
+
+    /// <summary>Records the one-time v1.2.3 enablement, so later opt-outs persist.</summary>
+    [JsonPropertyName("visualEffectsDefaultApplied")]
+    public bool VisualEffectsDefaultApplied { get; set; }
 }
 
 public sealed record VersionExportOptions(

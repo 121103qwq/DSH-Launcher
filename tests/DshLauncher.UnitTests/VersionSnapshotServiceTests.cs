@@ -83,6 +83,72 @@ public sealed class VersionSnapshotServiceTests
         Assert.Equal(currentWorkspace, File.ReadAllText(workspacePath));
     }
 
+    [Fact]
+    public void ExternalSnapshotUsesLauncherVersionSettingsAndPreservesLegacyHomeMetadata()
+    {
+        using var temporary = new TestDirectory();
+        var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+        var instance = CreateTestInstance(
+            "snapshot-external",
+            Path.Combine(temporary.Path, "runtime"),
+            Path.Combine(temporary.Path, "dsh-home")) with
+        {
+            UsesExternalDshHome = true
+        };
+        var homeSettings = Path.Combine(instance.DshHome, "settings.yaml");
+        const string originalHomeSettings = "home-settings: original\n";
+        File.WriteAllText(homeSettings, originalHomeSettings, new UTF8Encoding(false));
+
+        var legacySettings = Path.Combine(instance.DshHome, ".dsh-launcher", "version-settings.json");
+        const string legacySettingsText = "{\"legacy\":true}";
+        Directory.CreateDirectory(Path.GetDirectoryName(legacySettings)!);
+        File.WriteAllText(legacySettings, legacySettingsText, new UTF8Encoding(false));
+
+        var launcherSettings = Path.Combine(paths.InstancesDirectory, instance.Id, "version-settings.json");
+        const string currentLauncherSettings = "{\"ActiveProfileName\":\"desktop\"}";
+        Directory.CreateDirectory(Path.GetDirectoryName(launcherSettings)!);
+        File.WriteAllText(launcherSettings, currentLauncherSettings, new UTF8Encoding(false));
+
+        var service = new VersionSnapshotService(paths);
+        var snapshot = service.CreateSnapshot(instance, "external settings");
+
+        File.WriteAllText(homeSettings, "home-settings: changed\n", new UTF8Encoding(false));
+        File.WriteAllText(launcherSettings, "{\"ActiveProfileName\":\"web\"}", new UTF8Encoding(false));
+        service.RestoreSnapshot(instance, snapshot.FilePath);
+
+        Assert.Equal(originalHomeSettings, File.ReadAllText(homeSettings));
+        Assert.Equal(currentLauncherSettings, File.ReadAllText(launcherSettings));
+        Assert.Equal(legacySettingsText, File.ReadAllText(legacySettings));
+    }
+
+    [Fact]
+    public void ExternalSnapshotOperationsDoNotRecreateMissingHome()
+    {
+        using var temporary = new TestDirectory();
+        var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+        var instance = CreateTestInstance(
+            "snapshot-missing-external",
+            Path.Combine(temporary.Path, "runtime"),
+            Path.Combine(temporary.Path, "dsh-home")) with
+        {
+            UsesExternalDshHome = true
+        };
+        Directory.Delete(instance.DshHome, recursive: true);
+        var service = new VersionSnapshotService(paths);
+
+        Assert.Throws<InvalidOperationException>(() => service.CreateSnapshot(instance, "missing"));
+        Assert.False(Directory.Exists(instance.DshHome));
+        Assert.Throws<InvalidOperationException>(() => service.ExportPasswordSnapshot(
+            instance,
+            Path.Combine(temporary.Path, "missing.dshpsnapshot"),
+            "password"));
+        Assert.False(Directory.Exists(instance.DshHome));
+        Assert.Throws<InvalidOperationException>(() => service.RestoreSnapshot(
+            instance,
+            Path.Combine(temporary.Path, "missing.dshsnapshot")));
+        Assert.False(Directory.Exists(instance.DshHome));
+    }
+
     private static ManagerInstance CreateTestInstance(string id, string rootPath, string dshHome)
     {
         Directory.CreateDirectory(rootPath);

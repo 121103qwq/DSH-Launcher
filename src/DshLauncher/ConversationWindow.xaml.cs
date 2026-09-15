@@ -69,6 +69,11 @@ public partial class ConversationWindow : UserControl
         _modelPolicyService = modelPolicyService;
         _modelOptionsProvider = modelOptionsProvider;
         InitializeComponent();
+        WorkspacePolicyControls.IsEnabled = !instance.UsesExternalDshHome;
+        if (instance.UsesExternalDshHome)
+        {
+            WorkspacePolicyDescription.Text = "外部关联保留原默认模型，不继承 Launcher 全局或工作区规则；可在下方为单独对话设置模型。";
+        }
         Unloaded += Window_OnUnloaded;
     }
 
@@ -673,6 +678,11 @@ public partial class ConversationWindow : UserControl
 
     private void SaveWorkspaceModel_Click(object sender, RoutedEventArgs e)
     {
+        if (_instance.UsesExternalDshHome)
+        {
+            return;
+        }
+
         if (_modelPolicyService is null
             || DshWorkspaceBox.SelectedItem is not string workspace
             || WorkspaceModelBox.SelectedItem is not ModelChoice choice)
@@ -758,6 +768,11 @@ public partial class ConversationWindow : UserControl
         if (session is not null)
         {
             return $"单独对话 · {session.Selection.DisplayText}";
+        }
+
+        if (_instance.UsesExternalDshHome)
+        {
+            return "自动 · 原 DSh 当前默认";
         }
 
         if (!string.IsNullOrWhiteSpace(entry.WorkingDirectory))

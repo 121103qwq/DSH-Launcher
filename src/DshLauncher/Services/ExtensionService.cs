@@ -36,17 +36,20 @@ public sealed class ExtensionService
     private readonly SourceProjectInspector _sourceInspector;
     private readonly VersionSnapshotService? _snapshotService;
     private readonly Func<ManagerInstance, string> _profileProvider;
+    private readonly ExternalDshHomeGuard _homeGuard;
 
     public ExtensionService(
         Func<string, bool>? isRunning = null,
         SourceProjectInspector? sourceInspector = null,
         VersionSnapshotService? snapshotService = null,
-        Func<ManagerInstance, string>? profileProvider = null)
+        Func<ManagerInstance, string>? profileProvider = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
         _isRunning = isRunning ?? (_ => false);
         _sourceInspector = sourceInspector ?? new SourceProjectInspector();
         _snapshotService = snapshotService;
         _profileProvider = profileProvider ?? (_ => DshProfileService.DefaultProfileName);
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
     }
 
     public string GetActiveProfileName(ManagerInstance instance) =>
@@ -777,6 +780,7 @@ public sealed class ExtensionService
             throw new ArgumentException("允许构建的 Plugin 包名格式不正确。", nameof(allowBuildPackageName));
         }
 
+        _homeGuard.EnsureAvailable(instance);
         var actionText = action switch
         {
             "add" => "安装",
@@ -1300,6 +1304,7 @@ public sealed class ExtensionService
 
     private void EnsureStopped(ManagerInstance instance)
     {
+        _homeGuard.EnsureAvailable(instance);
         if (_isRunning(instance.Id))
         {
             throw new InvalidOperationException("实例正在运行，请先停止实例再修改 Plugin、Skill、MCP 或 Agent Preset。");

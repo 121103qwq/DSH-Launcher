@@ -68,6 +68,11 @@ public sealed class ConversationSyncService
         string relativePath,
         IEnumerable<ManagerInstance> versions)
     {
+        if (focus.UsesExternalDshHome)
+        {
+            return new ConversationSyncResult(0, 0, Array.Empty<string>());
+        }
+
         var all = NormalizeVersions(versions.Append(focus));
         var component = FindComponent(focus, all);
         var normalized = NormalizeRelativePath(relativePath);

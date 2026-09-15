@@ -1,0 +1,231 @@
+<Window x:Class="DshLauncher.LinkExistingHomeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="关联已有 DSH_HOME"
+        Width="650"
+        Height="760"
+        MinWidth="560"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{StaticResource PageBrush}"
+        FontFamily="{StaticResource UiFont}"
+        Foreground="{StaticResource TextBrush}"
+        Loaded="Window_OnLoaded"
+        Closed="Window_OnClosed">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="关联已有 DSH_HOME" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock Text="直接使用另一个桌面端已经创建的配置目录，不复制文件，也不初始化原目录。"
+                       Foreground="{StaticResource MutedBrush}"
+                       TextWrapping="Wrap"
+                       Margin="0,6,0,0" />
+        </StackPanel>
+
+        <ScrollViewer x:Name="FormScrollViewer"
+                      Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      Margin="0,20,0,16">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="自动发现的 DSH_HOME" FontWeight="SemiBold" />
+                        <TextBlock Text="从本机已检测到的 DSh / Desktop 安装中读取候选；选择后仍需手动点击关联。"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                    <Button x:Name="RefreshCandidatesButton"
+                            Grid.Column="1"
+                            Content="刷新"
+                            Click="RefreshCandidates_Click"
+                            Padding="14,7"
+                            Margin="12,0,0,0" />
+                </Grid>
+                <ListBox x:Name="CandidateList"
+                         ItemsSource="{Binding Candidates}"
+                         SelectionChanged="CandidateList_SelectionChanged"
+                         Height="132"
+                         Margin="0,10,0,0"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource RoundedListItem}">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0,0,0,6" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Background" Value="#F5F9FD" />
+                            <Setter Property="BorderBrush" Value="Transparent" />
+                            <Setter Property="BorderThickness" Value="1" />
+                            <Style.Triggers>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter Property="Background" Value="#E3F0FD" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource BlueBrush}" />
+                                </Trigger>
+                                <DataTrigger Binding="{Binding IsRegistered}" Value="True">
+                                    <Setter Property="IsEnabled" Value="False" />
+                                    <Setter Property="Opacity" Value="0.68" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=Background}"
+                                    BorderBrush="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=BorderBrush}"
+                                    BorderThickness="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=BorderThickness}"
+                                    CornerRadius="8"
+                                    Padding="9">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Source}"
+                                                   Foreground="{StaticResource MutedBrush}"
+                                                   FontSize="11"
+                                                   Margin="0,2,0,0"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding DshHome}"
+                                                   Foreground="{StaticResource MutedBrush}"
+                                                   FontSize="11"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1"
+                                               Text="已关联"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="10,0,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsRegistered}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock x:Name="CandidateStatusText"
+                           Text="正在查找本机已有 DSH_HOME…"
+                           Foreground="{StaticResource MutedBrush}"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,0" />
+
+                <Separator Margin="0,16,0,14" />
+                <TextBlock Text="版本名称" Margin="0,0,0,6" />
+                <TextBox x:Name="NameBox" Height="36" Padding="10,6" MaxLength="80" />
+
+                <TextBlock Text="已有 DSH_HOME 目录" Margin="0,16,0,6" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="HomePathBox"
+                             Height="36"
+                             Padding="10,6"
+                             IsReadOnly="True"
+                             ToolTip="原 DSH_HOME 不会被复制、移动或初始化" />
+                    <Button Grid.Column="1"
+                            Content="选择目录"
+                            Click="BrowseHome_Click"
+                            Padding="14,8"
+                            Margin="8,0,0,0" />
+                </Grid>
+                <TextBlock x:Name="ProfileHintText"
+                           Text="请选择目录；Profile 会从该 DSH_HOME 中读取。"
+                           Foreground="{StaticResource MutedBrush}"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Margin="0,6,0,0" />
+
+                <TextBlock Text="使用的 DSh Runtime" Margin="0,16,0,6" />
+                <ComboBox x:Name="RuntimeBox" Height="48" Padding="8,4">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding RootPath}"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           FontSize="11"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <TextBlock Text="这里的 Runtime 只使用本机已经登记的项目；自动发现可能显示尚未登记的 Runtime，未自动匹配时请手动选择现有项目。"
+                           Foreground="{StaticResource MutedBrush}"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Margin="0,6,0,0" />
+
+                <TextBlock Text="原目录中的 Profile" Margin="0,16,0,6" />
+                <ComboBox x:Name="ProfileBox" Height="36" Padding="8,4" />
+                <TextBlock Text="仅列出所选目录中真实存在的 Profile；非 web Profile 可以管理，但当前启动流程会提示暂不支持。"
+                           Foreground="{StaticResource MutedBrush}"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Margin="0,6,0,0" />
+
+                <Border Background="#FFF9EA"
+                        BorderBrush="#F1C26B"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="12"
+                        Margin="0,18,0,0">
+                    <TextBlock Text="同一个 DSH_HOME 不能被两个桌面端并发写入。关联只记录路径，原目录内容保持不变；Launcher 会检测本机占用，发现占用时仍可关联，但在原桌面端退出前禁止启动和编辑。"
+                               Foreground="#7A4B00"
+                               TextWrapping="Wrap" />
+                </Border>
+                <Border x:Name="ConflictBorder"
+                        Background="#FFF1F0"
+                        BorderBrush="#F2B8B5"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="12"
+                        Margin="0,10,0,0"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="ConflictText"
+                               Foreground="#A4261A"
+                               TextWrapping="Wrap" />
+                </Border>
+                <TextBlock x:Name="StatusText"
+                           Foreground="{StaticResource BlueBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,14,0,0" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="取消" IsCancel="True" Padding="18,8" Margin="0,0,8,0" />
+            <Button x:Name="LinkButton"
+                    Content="关联"
+                    IsDefault="True"
+                    Click="Link_Click"
+                    Style="{StaticResource PrimaryButton}"
+                    Padding="18,8" />
+        </StackPanel>
+    </Grid>
+</Window>

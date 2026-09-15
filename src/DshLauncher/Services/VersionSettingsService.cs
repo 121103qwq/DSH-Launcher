@@ -25,7 +25,9 @@ public sealed class VersionSettingsService
     }
 
     public string GetSettingsPath(ManagerInstance instance) =>
-        Path.Combine(instance.DshHome, ".dsh-launcher", "version-settings.json");
+        instance.UsesExternalDshHome
+            ? Path.Combine(_paths.InstancesDirectory, instance.Id, "version-settings.json")
+            : Path.Combine(instance.DshHome, ".dsh-launcher", "version-settings.json");
 
     public string LauncherSettingsPath => Path.Combine(_paths.RootDirectory, "launcher-settings.json");
 
@@ -44,7 +46,7 @@ public sealed class VersionSettingsService
         var path = GetSettingsPath(instance);
         if (!File.Exists(path))
         {
-            return new VersionSettingsData();
+            return ApplyHomeOwnership(instance, new VersionSettingsData());
         }
 
         try
@@ -54,7 +56,7 @@ public sealed class VersionSettingsService
                 File.ReadAllText(path, Encoding.UTF8),
                 JsonOptions) ?? new VersionSettingsData();
             Normalize(settings);
-            return settings;
+            return ApplyHomeOwnership(instance, settings);
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or ArgumentException)
         {
@@ -72,6 +74,7 @@ public sealed class VersionSettingsService
 
         settings.SchemaVersion = LauncherConfigSchema.CurrentVersion;
         Normalize(settings);
+        ApplyHomeOwnership(instance, settings);
         WriteSettingsFile(path, JsonSerializer.Serialize(settings, JsonOptions));
     }
 
@@ -137,6 +140,7 @@ public sealed class VersionSettingsService
 
         settings.SchemaVersion = LauncherConfigSchema.CurrentVersion;
         NormalizeLauncherSettings(settings);
+        settings.VisualEffectsDefaultApplied = true;
         WriteSettingsFile(LauncherSettingsPath, JsonSerializer.Serialize(settings, JsonOptions));
     }
 
@@ -282,6 +286,11 @@ public sealed class VersionSettingsService
 
     public bool ShouldSyncConfiguration(ManagerInstance left, ManagerInstance right)
     {
+        if (left.UsesExternalDshHome || right.UsesExternalDshHome)
+        {
+            return false;
+        }
+
         var leftSettings = Read(left);
         var rightSettings = Read(right);
         return ReadLauncherSettings().SyncAllConfiguration
@@ -291,6 +300,11 @@ public sealed class VersionSettingsService
 
     public bool ShouldSyncConversations(ManagerInstance left, ManagerInstance right)
     {
+        if (left.UsesExternalDshHome || right.UsesExternalDshHome)
+        {
+            return false;
+        }
+
         var leftSettings = Read(left);
         var rightSettings = Read(right);
         if (ReadLauncherSettings().SyncAllConfiguration
@@ -321,10 +335,29 @@ public sealed class VersionSettingsService
 
     public bool ShouldSyncModelProviders(ManagerInstance left, ManagerInstance right)
     {
+        if (left.UsesExternalDshHome || right.UsesExternalDshHome)
+        {
+            return false;
+        }
+
         var leftSettings = Read(left);
         var rightSettings = Read(right);
         return leftSettings.SyncModelProviders
             && rightSettings.SyncModelProviders;
+    }
+
+    private static VersionSettingsData ApplyHomeOwnership(ManagerInstance instance, VersionSettingsData settings)
+    {
+        // Linked homes belong to another installation, not to a Launcher sync group.
+        if (instance.UsesExternalDshHome)
+        {
+            settings.SyncAllConfiguration = false;
+            settings.ConversationSyncMode = ConversationSyncMode.Independent;
+            settings.ConversationWorkspace = null;
+            settings.SyncModelProviders = false;
+        }
+
+        return settings;
     }
 
     private static void Normalize(VersionSettingsData settings)

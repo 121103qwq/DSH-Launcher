@@ -261,6 +261,7 @@ public partial class ProviderManagementWindow : UserControl
 
         var selection = option.Selection;
         var codingVersions = _instancesProvider()
+            .Where(instance => !instance.UsesExternalDshHome)
             .Select(instance =>
             {
                 try
@@ -333,7 +334,7 @@ public partial class ProviderManagementWindow : UserControl
         }
 
         StatusText.Text = errors.Count == 0
-            ? $"全局默认模型已保存并应用到 {applied} 个 Coding 版本：{selection.DisplayText}。"
+            ? $"全局默认模型已保存并应用到 {applied} 个 Coding 版本（不含外部关联）：{selection.DisplayText}。"
             : $"默认模型已保存，应用到 {applied} 个版本；{errors.Count} 个版本失败：{errors[0]}";
     }
 

@@ -15,10 +15,13 @@ public static class DeepSeekDesktopDetector
         @"(?im)^(?:DeepSeek|DSH) Desktop\s+v?(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static IReadOnlyList<DeepSeekDesktopInstallation> DetectInstallations()
+    public static IReadOnlyList<DeepSeekDesktopInstallation> DetectInstallations() =>
+        DetectInstallations(GetInstallRootCandidates());
+
+    internal static IReadOnlyList<DeepSeekDesktopInstallation> DetectInstallations(IEnumerable<string> roots)
     {
         var installations = new List<DeepSeekDesktopInstallation>();
-        foreach (var root in GetInstallRootCandidates())
+        foreach (var root in roots)
         {
             var installation = TryDetect(root);
             if (installation is not null

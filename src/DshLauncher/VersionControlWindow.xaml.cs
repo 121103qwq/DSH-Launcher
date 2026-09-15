@@ -25,6 +25,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private readonly ExtensionService _extensionService;
     private readonly Func<NodeRuntimeInfo> _nodeRuntimeProvider;
     private readonly Func<DshRuntimeInfo> _dshRuntimeProvider;
+    private readonly Func<IReadOnlyList<DshRuntimeInfo>>? _runtimesProvider;
     private readonly Func<string, bool> _isRunning;
     private readonly Func<ManagerInstance, ManagerInstance> _versionUpdated;
     private readonly Action _versionContentChanged;
@@ -54,7 +55,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Func<ManagerInstance, ManagerInstance> versionUpdated,
         Action versionContentChanged,
         CancellationToken cancellationToken = default,
-        string? initialDshVersion = null)
+        string? initialDshVersion = null,
+        Func<IReadOnlyList<DshRuntimeInfo>>? runtimesProvider = null)
     {
         _packageService = packageService;
         _templateProvider = templateProvider;
@@ -67,6 +69,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _extensionService = extensionService;
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _dshRuntimeProvider = dshRuntimeProvider;
+        _runtimesProvider = runtimesProvider;
         _isRunning = isRunning;
         _versionUpdated = versionUpdated;
         _versionContentChanged = versionContentChanged;
@@ -128,6 +131,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             OnPropertyChanged(nameof(CloneButtonToolTip));
             OnPropertyChanged(nameof(CanDelete));
             OnPropertyChanged(nameof(DeleteButtonToolTip));
+            OnPropertyChanged(nameof(DeleteButtonText));
             _healthReport = null;
             HealthItems.Clear();
             OnPropertyChanged(nameof(HealthSummary));
@@ -150,7 +154,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         ? _templateProvider() is null
             ? "没有检测到可用的 DSh 运行目录，请先在设置中完成运行环境检测。"
             : "可以直接新建干净版本；首次创建会使用当前检测到的 DSh 运行目录。"
-        : $"{SelectedVersion.DshVersionText}\n{SelectedVersion.KindText} · {SelectedVersion.RootPath}\nDSH_HOME：{SelectedVersion.DshHome}\n状态：{SelectedVersion.StatusText}";
+        : $"{SelectedVersion.DshVersionText}\n{(SelectedVersion.UsesExternalDshHome ? "外部关联 · 原目录" : $"{SelectedVersion.KindText} · {SelectedVersion.RootPath}")}\nDSH_HOME：{SelectedVersion.DshHome}\n状态：{SelectedVersion.StatusText}";
 
     public bool CanClone => !_isBusy
         && SelectedVersion is not null
@@ -173,9 +177,15 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         ? "请先在左侧选择一个版本。"
         : SelectedVersion.RuntimeStatus == InstanceRuntimeStatus.Running
             ? "运行中的版本不能删除，请先停止。"
-            : SelectedVersion.RuntimeOwnership == InstanceRuntimeOwnership.Attached
-                ? "Attached 版本不能删除，请先解除外部连接。"
+        : SelectedVersion.RuntimeOwnership == InstanceRuntimeOwnership.Attached
+            ? "Attached 版本不能删除，请先解除外部连接。"
+            : SelectedVersion.UsesExternalDshHome
+                ? "解除关联只会移除 Launcher 注册记录，保留原 DSH_HOME 与 Launcher 本地设置。"
                 : "删除注册记录、该版本的 DSH_HOME 和 Launcher 备份，且无法恢复。";
+
+    public string DeleteButtonText => SelectedVersion?.UsesExternalDshHome == true
+        ? "解除关联"
+        : "删除版本";
 
     public string PackageFormatText => $"当前格式：{_packageService.PackageExtension}";
 
@@ -212,6 +222,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(CloneButtonToolTip));
         OnPropertyChanged(nameof(CanDelete));
         OnPropertyChanged(nameof(DeleteButtonToolTip));
+        OnPropertyChanged(nameof(DeleteButtonText));
         OnPropertyChanged(nameof(PackageFormatText));
         OnPropertyChanged(nameof(CanCheck));
         OnPropertyChanged(nameof(CanRepair));
@@ -247,6 +258,124 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         menu.PlacementTarget = button;
         menu.Placement = PlacementMode.Bottom;
         menu.IsOpen = true;
+    }
+
+    private async void LinkExistingHome_Click(object sender, RoutedEventArgs e)
+    {
+        var runtimeOptions = GetRuntimeOptions();
+        var dialog = new LinkExistingHomeWindow(
+            Window.GetWindow(this),
+            runtimeOptions,
+            Versions.Select(static version => version.Name),
+            Versions.ToArray(),
+            _runtimesProvider);
+        if (dialog.ShowDialog() != true || dialog.SelectedRuntime is not { } runtime)
+        {
+            return;
+        }
+
+        // Dialog 属性背后是 WPF 控件；在切到后台线程前先复制为普通值。
+        var linkedName = dialog.InstanceName;
+        var linkedHome = dialog.DshHomePath;
+        var linkedProfile = dialog.SelectedProfileName;
+        var linkedConflict = dialog.HomeConflict;
+
+        SetBusy(true);
+        SetStatus("正在登记已有 DSH_HOME；不会复制或初始化原目录…");
+        ManagerInstance? linked = null;
+        try
+        {
+            ManagerInstance created;
+            try
+            {
+                created = await Task.Run(() => _packageService.LinkExistingHome(
+                    runtime,
+                    linkedName,
+                    linkedHome));
+                linked = created;
+
+                if (!string.IsNullOrWhiteSpace(linkedProfile))
+                {
+                    var settings = _versionSettingsService.Read(created);
+                    settings.ActiveProfileName = linkedProfile;
+                    _versionSettingsService.Save(created, settings);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (linked is not null)
+                {
+                    try
+                    {
+                        var registered = linked!;
+                        await Task.Run(() => _packageService.DeleteVersion(registered));
+                        SetStatus($"关联已有 DSH_HOME 失败：{ex.Message}；已保留原目录并回滚 Launcher 注册记录。 ");
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        // 注册已经成功但本地 Profile 元数据保存失败时，保留可见记录，
+                        // 让用户可以在版本设置中继续管理，而不是丢失这条关联。
+                        var registered = linked!;
+                        Versions.Add(registered);
+                        SelectedVersion = registered;
+                        _versionCreated(registered);
+                        SetStatus($"关联已登记，但 Profile 设置保存失败：{ex.Message}。原目录保留；回滚注册记录也失败：{rollbackException.Message}");
+                    }
+                }
+                else
+                {
+                    SetStatus($"关联已有 DSH_HOME 失败：{ex.Message}");
+                }
+                return;
+            }
+
+            Versions.Add(created);
+            SelectedVersion = created;
+            _versionCreated(created);
+            var profileStatus = string.IsNullOrWhiteSpace(linkedProfile)
+                ? "未检测到 Profile，启动前请先在原桌面端创建 Profile。"
+                : $"使用 Profile“{linkedProfile}”，原 DSH_HOME 保留不变。";
+            var conflictStatus = string.IsNullOrWhiteSpace(linkedConflict)
+                ? string.Empty
+                : $"占用检查：{linkedConflict}";
+            SetStatus($"已关联：{created.Name}。{profileStatus} {conflictStatus}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private IReadOnlyList<ManagerInstance> GetRuntimeOptions()
+    {
+        var options = new List<ManagerInstance>();
+        var seenRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in Versions.Append(_templateProvider()).Where(static item => item is not null))
+        {
+            var root = candidate!.RootPath;
+            if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            {
+                continue;
+            }
+
+            string normalized;
+            try
+            {
+                normalized = Path.GetFullPath(root)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            if (seenRoots.Add(normalized))
+            {
+                options.Add(candidate);
+            }
+        }
+
+        return options;
     }
 
     private async void ScanInstanceFolder_Click(object sender, RoutedEventArgs e)
@@ -353,10 +482,13 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             return;
         }
 
+        var isExternal = version.UsesExternalDshHome;
         var result = System.Windows.MessageBox.Show(
             Window.GetWindow(this),
-            $"确定删除版本“{version.Name}”？\n\n这会删除该版本的 DSH_HOME、Launcher 备份和注册记录，操作无法恢复。不会删除共享的 DSh 运行目录。\n\n如果要保留配置，请先导出整合包。",
-            "确认删除版本",
+            isExternal
+                ? $"确定解除“{version.Name}”与 Launcher 的关联？\n\n只会移除 Launcher 注册记录，原 DSH_HOME、原桌面端数据和 Launcher 本地设置/备份都会保留。不会删除或初始化原目录。"
+                : $"确定删除版本“{version.Name}”？\n\n这会删除该版本的 DSH_HOME、Launcher 备份和注册记录，操作无法恢复。不会删除共享的 DSh 运行目录。\n\n如果要保留配置，请先导出整合包。",
+            isExternal ? "确认解除关联" : "确认删除版本",
             System.Windows.MessageBoxButton.YesNo,
             System.Windows.MessageBoxImage.Warning);
         if (result != System.Windows.MessageBoxResult.Yes)
@@ -372,7 +504,9 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             _versionDeleted(version);
             SelectedVersion = Versions.FirstOrDefault();
             OnPropertyChanged(nameof(VersionCountText));
-            SetStatus($"版本已删除：{version.Name}。共享的 DSh 运行目录没有受到影响。 ");
+            SetStatus(isExternal
+                ? $"已解除关联：{version.Name}。原 DSH_HOME 和 Launcher 本地设置/备份均已保留。 "
+                : $"版本已删除：{version.Name}。共享的 DSh 运行目录没有受到影响。 ");
         }
         catch (Exception ex)
         {
@@ -962,6 +1096,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanClone));
         OnPropertyChanged(nameof(CloneButtonToolTip));
         OnPropertyChanged(nameof(CanDelete));
+        OnPropertyChanged(nameof(DeleteButtonText));
         OnPropertyChanged(nameof(CanCheck));
         OnPropertyChanged(nameof(CanRepair));
         OnPropertyChanged(nameof(CanSnapshot));

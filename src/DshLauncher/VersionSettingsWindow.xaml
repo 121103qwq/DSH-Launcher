@@ -177,6 +177,12 @@
                             CornerRadius="12"
                             Padding="20">
                         <StackPanel>
+                            <TextBlock x:Name="ExternalHomeSyncNotice"
+                                       Text="此版本直接关联外部 DSH_HOME，不参与 Launcher 的自动配置、模型和会话同步。手动编辑会修改原目录；请先退出原桌面端。"
+                                       Visibility="Collapsed"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       Margin="0,0,0,16" />
                             <CheckBox x:Name="SyncAllConfigurationCheckBox"
                                       Content="和所有版本配置同步"
                                       FontSize="15"

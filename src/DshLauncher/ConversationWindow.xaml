@@ -204,12 +204,13 @@
                             Padding="16">
                         <StackPanel>
                             <TextBlock Text="DSh 工作区默认模型" FontSize="15" FontWeight="SemiBold" />
-                            <TextBlock Text="这里的工作区来自 DeepSeek Harness 会话记录中的真实工作目录，不是 Launcher 的版本同步工作区。"
+                            <TextBlock x:Name="WorkspacePolicyDescription"
+                                       Text="这里的工作区来自 DeepSeek Harness 会话记录中的真实工作目录，不是 Launcher 的版本同步工作区。"
                                        Foreground="{StaticResource MutedBrush}"
                                        FontSize="11"
                                        TextWrapping="Wrap"
                                        Margin="0,5,0,12" />
-                            <Grid>
+                            <Grid x:Name="WorkspacePolicyControls">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="1.1*" />
                                     <ColumnDefinition Width="1.4*" />

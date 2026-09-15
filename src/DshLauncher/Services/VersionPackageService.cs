@@ -45,10 +45,13 @@ public sealed partial class VersionPackageService
     private readonly InstanceRegistry _registry;
     private readonly LauncherPaths _paths;
     private readonly VersionSettingsService _versionSettingsService;
+    private readonly ExternalDshHomeGuard _homeGuard;
 
-    public VersionPackageService(InstanceRegistry registry, LauncherPaths? paths = null)
+    public VersionPackageService(InstanceRegistry registry, LauncherPaths? paths = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
         _registry = registry;
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
         _paths = paths ?? new LauncherPaths();
         _versionSettingsService = new VersionSettingsService(_paths);
     }
@@ -80,12 +83,34 @@ public sealed partial class VersionPackageService
     public ManagerInstance CreateCleanVersion(ManagerInstance template, string name) =>
         RegisterLike(template, name);
 
+    /// <summary>
+    /// Links a user-selected existing DSH_HOME without copying it. Version
+    /// cloning and clean-version creation continue to use Launcher-owned homes.
+    /// </summary>
+    public ManagerInstance LinkExistingHome(
+        ManagerInstance template,
+        string name,
+        string dshHome)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return _registry.RegisterExistingHome(name, dshHome, template);
+    }
+
     public ManagerInstance CloneVersion(ManagerInstance template, string name)
     {
+        _homeGuard.EnsureAvailable(template);
+        var templateSettings = template.UsesExternalDshHome
+            ? _versionSettingsService.Read(template)
+            : null;
         var created = RegisterLike(template, name);
         try
         {
             CopyDirectoryWithoutReparsePoints(template.DshHome, created.DshHome);
+            if (templateSettings is not null)
+            {
+                _versionSettingsService.Save(created, templateSettings);
+            }
+
             return created;
         }
         catch
@@ -112,9 +137,24 @@ public sealed partial class VersionPackageService
             throw new InvalidOperationException("找不到要删除的版本注册记录。 ");
         }
 
-        var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(instance.Id));
         var registeredHome = Path.GetFullPath(registered.DshHome);
         var requestedHome = Path.GetFullPath(instance.DshHome);
+        if (registered.UsesExternalDshHome)
+        {
+            if (!string.Equals(requestedHome, registeredHome, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("版本 DSH_HOME 与注册记录不一致，已拒绝解除外部绑定。 ");
+            }
+
+            if (!_registry.Unregister(instance.Id))
+            {
+                throw new InvalidOperationException("外部版本绑定已解除，但注册记录没有成功更新。 ");
+            }
+
+            return;
+        }
+
+        var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(instance.Id));
         if (!string.Equals(registeredHome, expectedHome, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(requestedHome, expectedHome, StringComparison.OrdinalIgnoreCase))
         {

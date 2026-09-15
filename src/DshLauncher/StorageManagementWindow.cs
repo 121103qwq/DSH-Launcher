@@ -377,7 +377,11 @@ public sealed class StorageManagementView : System.Windows.Controls.UserControl
         try
         {
             var result = await Task.Run(
-                () => RecycleCandidates(preview, candidates, _cancellation.Token),
+                () =>
+                {
+                    new ExternalDshHomeGuard().EnsureAvailable(_instance);
+                    return RecycleCandidates(preview, candidates, _cancellation.Token);
+                },
                 _cancellation.Token);
 
             _statusText.Text = "清理完成，正在重新扫描…";

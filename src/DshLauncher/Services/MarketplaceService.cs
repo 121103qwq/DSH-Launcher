@@ -47,6 +47,7 @@ public sealed class MarketplaceService
     private readonly LauncherPaths _paths;
     private readonly IReadOnlyList<Uri> _customSources;
     private readonly Action<string>? _beforeSnapshotFileCommit;
+    private readonly ExternalDshHomeGuard _homeGuard;
     private readonly Dictionary<string, ThemeReadmePreview> _themePreviewCache = new(StringComparer.OrdinalIgnoreCase);
 
     public MarketplaceService(
@@ -54,8 +55,9 @@ public sealed class MarketplaceService
         HttpClient? httpClient = null,
         IEnumerable<Uri>? customSources = null,
         GitHubApiService? githubApi = null,
-        string? githubToken = null)
-        : this(paths, httpClient, customSources, null, githubApi, githubToken)
+        string? githubToken = null,
+        ExternalDshHomeGuard? homeGuard = null)
+        : this(paths, httpClient, customSources, null, githubApi, githubToken, homeGuard)
     {
     }
 
@@ -65,13 +67,15 @@ public sealed class MarketplaceService
         IEnumerable<Uri>? customSources,
         Action<string>? beforeSnapshotFileCommit,
         GitHubApiService? githubApi = null,
-        string? githubToken = null)
+        string? githubToken = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
         _paths = paths ?? new LauncherPaths();
         _httpClient = httpClient ?? CreateHttpClient();
         _githubApi = githubApi ?? new GitHubApiService(_httpClient, githubToken);
         _customSources = customSources?.Where(uri => uri.IsAbsoluteUri).ToArray() ?? Array.Empty<Uri>();
         _beforeSnapshotFileCommit = beforeSnapshotFileCommit;
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
     }
 
     public GitHubRateLimitInfo? LastGitHubRateLimit => _githubApi.LastRateLimit;
@@ -446,6 +450,7 @@ public sealed class MarketplaceService
 
     public string CreatePluginSnapshot(ManagerInstance instance, string profileName)
     {
+        _homeGuard.EnsureAvailable(instance);
         var profile = DshProfileService.NormalizeName(profileName);
         var profileDirectory = Path.Combine(instance.DshHome, "profiles", profile);
         var existing = PluginProfileFiles
@@ -478,6 +483,7 @@ public sealed class MarketplaceService
         string snapshotPath,
         string profileName)
     {
+        _homeGuard.EnsureAvailable(instance);
         if (string.IsNullOrWhiteSpace(snapshotPath))
         {
             return false;

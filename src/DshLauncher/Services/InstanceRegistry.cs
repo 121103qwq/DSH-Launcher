@@ -135,6 +135,66 @@ public sealed class InstanceRegistry
         return entry;
     }
 
+    /// <summary>
+    /// Registers an existing DSH_HOME in place. The HOME is only referenced in
+    /// the Launcher registry; no directory is created and no file contents are
+    /// copied or changed.
+    /// </summary>
+    public ManagerInstance RegisterExistingHome(
+        string name,
+        string dshHome,
+        ManagerInstance runtimeTemplate)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeTemplate);
+
+        var normalizedName = NormalizeName(name);
+        if (!Enum.IsDefined(typeof(InstanceKind), runtimeTemplate.Kind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(runtimeTemplate), "实例类型无效。");
+        }
+
+        var normalizedRoot = NormalizeDirectory(runtimeTemplate.RootPath, "运行时目录");
+        var normalizedHome = NormalizeExternalHome(dshHome);
+        var entries = Load().ToList();
+        EnsureExternalHomeAvailable(normalizedHome, entries);
+
+        var normalizedExecutable = NormalizeOptionalFile(runtimeTemplate.DshExecutablePath);
+        var normalizedLaunchSpec = NormalizeLaunchSpec(runtimeTemplate.DshLaunchSpec)
+            ?? (normalizedExecutable is null
+                ? null
+                : new DshRuntimeLaunchSpec(DshRuntimeLaunchMode.DirectCommand, normalizedExecutable));
+        var status = runtimeTemplate.Kind == InstanceKind.Installed
+            && DshRuntimeCommandFactory.IsUsable(normalizedLaunchSpec)
+            ? InstanceRuntimeStatus.Ready
+            : InstanceRuntimeStatus.Unknown;
+
+        var entry = runtimeTemplate with
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = normalizedName,
+            RootPath = normalizedRoot,
+            DshHome = normalizedHome,
+            DshExecutablePath = normalizedExecutable,
+            RuntimeStatus = status,
+            LastError = null,
+            RegisteredAt = DateTimeOffset.UtcNow,
+            ProcessId = null,
+            Port = null,
+            WebUrl = null,
+            DshLaunchSpec = normalizedLaunchSpec,
+            LastUsedAt = null,
+            ImportedFromDshHome = null,
+            ProcessStartedAt = null,
+            UsesExternalDshHome = true,
+            RuntimeOwnership = InstanceRuntimeOwnership.None,
+            RuntimeResourceText = null
+        };
+
+        entries.Add(entry);
+        Save(entries);
+        return entry;
+    }
+
     public bool Unregister(string id)
     {
         var entries = Load().ToList();
@@ -156,6 +216,17 @@ public sealed class InstanceRegistry
         if (index < 0)
         {
             throw new InvalidOperationException("找不到要更新的 DSh 实例。");
+        }
+
+        if (updated.UsesExternalDshHome)
+        {
+            var externalError = GetExternalHomeValidationError(updated.DshHome, allowMissing: true);
+            if (externalError is not null)
+            {
+                throw new InvalidDataException(externalError);
+            }
+
+            EnsureExternalHomeAvailable(updated.DshHome, entries, updated.Id);
         }
 
         entries[index] = updated;
@@ -210,8 +281,49 @@ public sealed class InstanceRegistry
         }
 
         var rootPath = Path.GetFullPath(entry.RootPath);
-        var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(entry.Id));
         var dshHome = Path.GetFullPath(entry.DshHome);
+        var executable = NormalizeOptionalFile(entry.DshExecutablePath);
+        var launchSpec = NormalizeLaunchSpec(entry.DshLaunchSpec)
+            ?? (executable is null
+                ? null
+                : new DshRuntimeLaunchSpec(DshRuntimeLaunchMode.DirectCommand, executable));
+        var status = entry.RuntimeStatus;
+        var error = entry.LastError;
+
+        if (entry.UsesExternalDshHome)
+        {
+            var homeMissing = !Directory.Exists(dshHome);
+            if (homeMissing)
+            {
+                status = InstanceRuntimeStatus.Missing;
+                error ??= "外部 DSH_HOME 不存在，仍保留记录以便解除绑定。";
+            }
+            else
+            {
+                var externalError = GetExternalHomeValidationError(dshHome, allowMissing: false);
+                if (externalError is not null)
+                {
+                    status = InstanceRuntimeStatus.Error;
+                    error ??= externalError;
+                }
+            }
+
+            return entry with
+            {
+                Name = NormalizeName(entry.Name),
+                RootPath = rootPath,
+                DshHome = dshHome,
+                DshExecutablePath = executable,
+                DshLaunchSpec = launchSpec,
+                RuntimeStatus = status,
+                LastError = error,
+                ProcessStartedAt = status == InstanceRuntimeStatus.Running ? entry.ProcessStartedAt : null,
+                ImportedFromDshHome = null,
+                UsesExternalDshHome = true
+            };
+        }
+
+        var expectedHome = Path.GetFullPath(_paths.GetInstanceDshHome(entry.Id));
         if (!string.Equals(dshHome, expectedHome, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException($"实例 {entry.Id} 的 DSH_HOME 不在 Launcher 隔离目录中。");
@@ -222,13 +334,6 @@ public sealed class InstanceRegistry
             throw new InvalidDataException($"实例 {entry.Id} 的 DSH_HOME 不能是符号链接或重解析点。");
         }
 
-        var executable = NormalizeOptionalFile(entry.DshExecutablePath);
-        var launchSpec = NormalizeLaunchSpec(entry.DshLaunchSpec)
-            ?? (executable is null
-                ? null
-                : new DshRuntimeLaunchSpec(DshRuntimeLaunchMode.DirectCommand, executable));
-        var status = entry.RuntimeStatus;
-        var error = entry.LastError;
         if (entry.Kind == InstanceKind.Installed
             && !DshRuntimeCommandFactory.IsUsable(launchSpec)
             && status == InstanceRuntimeStatus.Ready)
@@ -249,6 +354,121 @@ public sealed class InstanceRegistry
             ProcessStartedAt = status == InstanceRuntimeStatus.Running ? entry.ProcessStartedAt : null,
             ImportedFromDshHome = NormalizeOptionalPath(entry.ImportedFromDshHome)
         };
+    }
+
+    private string NormalizeExternalHome(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new ArgumentException("外部 DSH_HOME 不能为空。", nameof(path));
+        }
+
+        if (!Path.IsPathFullyQualified(path.Trim()))
+        {
+            throw new ArgumentException("外部 DSH_HOME 必须是绝对路径。", nameof(path));
+        }
+
+        var normalized = Path.GetFullPath(path.Trim())
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var error = GetExternalHomeValidationError(normalized, allowMissing: false);
+        if (error is not null)
+        {
+            throw new IOException(error);
+        }
+
+        return normalized;
+    }
+
+    private void EnsureExternalHomeAvailable(
+        string home,
+        IEnumerable<ManagerInstance> entries,
+        string? excludedId = null)
+    {
+        foreach (var existing in entries)
+        {
+            if (string.Equals(existing.Id, excludedId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var existingHome = NormalizeOptionalPath(existing.DshHome);
+            if (existingHome is not null && PathsOverlap(home, existingHome))
+            {
+                throw new InvalidOperationException("该 DSH_HOME 已被其它实例注册，或与其它实例目录重叠。");
+            }
+        }
+    }
+
+    private string? GetExternalHomeValidationError(string home, bool allowMissing)
+    {
+        var root = Path.GetPathRoot(home);
+        if (!string.IsNullOrWhiteSpace(root)
+            && string.Equals(
+                Path.TrimEndingDirectorySeparator(home),
+                Path.TrimEndingDirectorySeparator(root),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "外部 DSH_HOME 不能是文件系统根目录。";
+        }
+
+        if (PathsOverlap(home, _paths.RootDirectory))
+        {
+            return "外部 DSH_HOME 不能是 Launcher 目录或其父子目录。";
+        }
+
+        if (!Directory.Exists(home))
+        {
+            return allowMissing ? null : "外部 DSH_HOME 不存在。";
+        }
+
+        if (IsReparsePoint(home))
+        {
+            return "外部 DSH_HOME 不能是符号链接或重解析点。";
+        }
+
+        if (!HasDshHomeStructure(home))
+        {
+            return "所选目录不像有效的 DSH_HOME（缺少 settings.yaml、profiles、sessions、storages 或凭据等结构）。";
+        }
+
+        return null;
+    }
+
+    private static bool HasDshHomeStructure(string home) =>
+        IsRegularFile(Path.Combine(home, "settings.yaml"))
+        || IsRegularFile(Path.Combine(home, ".credentials.yaml"))
+        || IsRegularDirectory(Path.Combine(home, "profiles"))
+        || IsRegularDirectory(Path.Combine(home, "sessions"))
+        || IsRegularDirectory(Path.Combine(home, "storages"))
+        || IsRegularDirectory(Path.Combine(home, "skills"))
+        || IsRegularDirectory(Path.Combine(home, ".agents"));
+
+    private static bool IsRegularFile(string path) =>
+        File.Exists(path) && !IsReparsePoint(path);
+
+    private static bool IsRegularDirectory(string path) =>
+        Directory.Exists(path) && !IsReparsePoint(path);
+
+    private static bool PathsOverlap(string left, string right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+        || IsPathInside(left, right)
+        || IsPathInside(right, left);
+
+    private static bool IsPathInside(string path, string parent)
+    {
+        var normalizedPath = Path.TrimEndingDirectorySeparator(path);
+        var normalizedParent = Path.TrimEndingDirectorySeparator(parent);
+        if (string.Equals(normalizedPath, normalizedParent, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return normalizedPath.StartsWith(
+            normalizedParent + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith(
+                normalizedParent + Path.AltDirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsReparsePoint(string path)

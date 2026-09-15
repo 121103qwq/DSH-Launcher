@@ -283,7 +283,7 @@ public sealed class ModPackMarketViewTests
         }
     }
 
-    private static class WpfPageHost
+    internal static class WpfPageHost
     {
         private static readonly object Gate = new();
         private static readonly TaskCompletionSource<Dispatcher> Ready = new(

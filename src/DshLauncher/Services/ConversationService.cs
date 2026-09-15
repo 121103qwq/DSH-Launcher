@@ -20,11 +20,15 @@ public sealed class ConversationService
 
     public ConversationService(
         LauncherPaths? paths = null,
-        Func<string, bool>? isRunning = null)
+        Func<string, bool>? isRunning = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
         _paths = paths ?? new LauncherPaths();
         _isRunning = isRunning ?? (_ => false);
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
     }
+
+    private readonly ExternalDshHomeGuard _homeGuard;
 
     public IReadOnlyList<ConversationEntry> List(ManagerInstance instance)
     {
@@ -706,6 +710,7 @@ public sealed class ConversationService
 
     private void EnsureStopped(ManagerInstance instance)
     {
+        _homeGuard.EnsureAvailable(instance);
         if (_isRunning(instance.Id))
         {
             throw new InvalidOperationException("实例正在运行，不能导入、备份或删除会话文件。请先停止实例。");

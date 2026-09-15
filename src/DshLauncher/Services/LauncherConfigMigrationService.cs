@@ -91,19 +91,14 @@ public sealed class LauncherConfigMigrationService
         lock (gate)
         {
             var original = File.ReadAllText(normalized, Encoding.UTF8);
-            var root = JsonNode.Parse(original)
+            var root = JsonNode.Parse(original, new JsonNodeOptions
+                { PropertyNameCaseInsensitive = kind == LauncherConfigFileKind.LauncherSettings })
                 ?? throw new InvalidDataException($"配置文件为空：{normalized}");
             var version = ReadSchemaVersion(root, kind, normalized);
             if (version > LauncherConfigSchema.CurrentVersion)
             {
                 throw new InvalidDataException(
                     $"配置文件来自较新的 Launcher（schema {version}），当前仅支持 schema {LauncherConfigSchema.CurrentVersion}：{normalized}");
-            }
-
-            if (version == LauncherConfigSchema.CurrentVersion)
-            {
-                ValidateCurrentShape(root, kind, normalized);
-                return new LauncherConfigMigrationResult(normalized, kind, Migrated: false);
             }
 
             var migrated = root;
@@ -117,10 +112,39 @@ public sealed class LauncherConfigMigrationService
             }
 
             ValidateCurrentShape(migrated, kind, normalized);
+            var visualDefaultApplied = kind == LauncherConfigFileKind.LauncherSettings
+                && EnableVisualEffectsOnce((JsonObject)migrated);
+            if (version == LauncherConfigSchema.CurrentVersion && !visualDefaultApplied)
+            {
+                return new LauncherConfigMigrationResult(normalized, kind, Migrated: false);
+            }
+
             var backupPath = CreateBackup(normalized, version);
             WriteAtomic(normalized, migrated.ToJsonString(WriteOptions));
             return new LauncherConfigMigrationResult(normalized, kind, Migrated: true, backupPath);
         }
+    }
+
+    private static bool EnableVisualEffectsOnce(JsonObject settings)
+    {
+        if (settings["visualEffectsDefaultApplied"]?.GetValue<bool>() == true) return false;
+
+        // Patch only the requested switch and marker; keep unknown fields and
+        // all material/effect choices in the original JSON. EnsureCurrent's
+        // existing file gate, backup and atomic write also cover this upgrade.
+        var visualEffects = settings["visualEffects"] as JsonObject;
+        if (visualEffects is null)
+        {
+            if (settings["visualEffects"] is not null)
+                throw new JsonException("visualEffects must be an object or null.");
+            visualEffects = new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });
+            settings["visualEffects"] = visualEffects;
+        }
+        var enabledKey = visualEffects.Select(property => property.Key)
+            .FirstOrDefault(key => key.Equals("enabled", StringComparison.OrdinalIgnoreCase)) ?? "enabled";
+        visualEffects[enabledKey] = true;
+        settings["visualEffectsDefaultApplied"] = true;
+        return true;
     }
 
     private static int ReadSchemaVersion(JsonNode root, LauncherConfigFileKind kind, string path)

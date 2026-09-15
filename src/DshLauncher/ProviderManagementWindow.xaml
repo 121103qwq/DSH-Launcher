@@ -91,9 +91,11 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
                         <TextBlock Text="默认模型" FontSize="16" FontWeight="SemiBold" />
-                        <TextBlock Text="用于没有单独会话或 DSh 工作区规则的新对话。"
+                        <TextBlock Text="用于没有单独会话或 DSh 工作区规则的新对话。外部关联保留原默认模型。"
                                    Foreground="{StaticResource MutedBrush}"
                                    FontSize="11"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="280"
                                    Margin="0,4,0,0" />
                     </StackPanel>
                     <ComboBox Grid.Column="1"

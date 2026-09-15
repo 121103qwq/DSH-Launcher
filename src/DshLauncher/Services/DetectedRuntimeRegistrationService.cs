@@ -46,6 +46,13 @@ public sealed class DetectedRuntimeRegistrationService
             if (root is not null)
             {
                 registeredRoots.Add(root);
+                // A linked HOME is never a destination for legacy import or refresh.
+                // Still count its runtime as registered to avoid an automatic duplicate.
+                if (instance.UsesExternalDshHome)
+                {
+                    continue;
+                }
+
                 if (!existingByRoot.TryGetValue(root, out var instances))
                 {
                     instances = new List<ManagerInstance>();

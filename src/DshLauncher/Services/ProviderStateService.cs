@@ -11,6 +11,10 @@ namespace DshLauncher.Services;
 public sealed class ProviderStateService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private readonly ExternalDshHomeGuard _homeGuard;
+
+    public ProviderStateService(ExternalDshHomeGuard? homeGuard = null) =>
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
 
     public string GetStatePath(ManagerInstance instance) =>
         Path.Combine(instance.DshHome, ".dsh-launcher", "providers.json");
@@ -46,6 +50,7 @@ public sealed class ProviderStateService
 
     public void SetEnabled(ManagerInstance instance, string provider, bool enabled)
     {
+        _homeGuard.EnsureAvailable(instance);
         var normalized = NormalizeProvider(provider);
         var states = Read(instance).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
         if (enabled)
@@ -62,6 +67,7 @@ public sealed class ProviderStateService
 
     public void Replace(ManagerInstance instance, IReadOnlyDictionary<string, bool> states)
     {
+        _homeGuard.EnsureAvailable(instance);
         Write(instance, NormalizeStates(states));
     }
 

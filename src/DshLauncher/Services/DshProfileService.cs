@@ -11,10 +11,23 @@ public static class DshProfileService
 
     public static IReadOnlyList<string> ListProfiles(ManagerInstance instance)
     {
-        var root = Path.Combine(instance.DshHome, "profiles");
+        var profiles = ListExistingProfiles(instance.DshHome);
+        return profiles.Count == 0
+            ? new[] { DefaultProfileName }
+            : profiles;
+    }
+
+    /// <summary>
+    /// Lists only Profile directories that exist in the supplied DSH_HOME.
+    /// Unlike ListProfiles, this method deliberately does not supply the
+    /// legacy default "web" fallback for a missing or empty profiles root.
+    /// </summary>
+    public static IReadOnlyList<string> ListExistingProfiles(string dshHome)
+    {
+        var root = Path.Combine(dshHome, "profiles");
         if (!Directory.Exists(root))
         {
-            return new[] { DefaultProfileName };
+            return Array.Empty<string>();
         }
 
         RejectReparsePoint(root, "Profile 根目录");
@@ -39,11 +52,6 @@ public static class DshProfileService
             {
                 profiles.Add(normalized);
             }
-        }
-
-        if (profiles.Count == 0)
-        {
-            profiles.Add(DefaultProfileName);
         }
 
         return profiles

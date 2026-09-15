@@ -47,6 +47,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly InstanceRegistry _instanceRegistry = new();
     private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
     private readonly DshInstanceRunner _instanceRunner;
+    private readonly ExternalDshHomeGuard _externalHomeGuard = new();
     private readonly ExtensionService _extensionService;
     private readonly GitHubApiService _githubApiService;
     private readonly GitHubCredentialService _githubCredentialService;
@@ -1722,7 +1723,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ApplySelectedVersionSettings(SelectedInstance);
             },
             _windowCancellation.Token,
-            initialDshVersion));
+            initialDshVersion,
+            () => _detectedDshRuntimes));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -1868,6 +1870,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task ApplyGlobalDefaultToNewVersionAsync(ManagerInstance created)
     {
+        if (created.UsesExternalDshHome)
+        {
+            return;
+        }
+
         try
         {
             var selection = _codingModelPolicyService.Read().GlobalDefault;
@@ -4691,6 +4698,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             startInfo.Environment["DSH_HOME"] = instance.DshHome;
             startInfo.Environment["DSH_AGENTS_HOME"] = Path.Combine(instance.DshHome, ".agents");
             startInfo.Environment["PATH"] = RuntimeSearchPaths.BuildCurrentPath(runtime.HostPath);
+            _externalHomeGuard.EnsureAvailable(instance);
             if (Process.Start(startInfo) is null)
             {
                 ShowNotice("DSH Desktop 原生窗口启动失败。");
@@ -4787,6 +4795,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var startInfo = VersionOpenTargetService.CreateStartInfo(
                 instance,
                 settings.CustomOpenTargetPath ?? string.Empty);
+            _externalHomeGuard.EnsureAvailable(instance);
             if (Process.Start(startInfo) is null)
             {
                 ShowNotice("绑定的打开方式启动失败。");
@@ -6121,7 +6130,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     string.Equals(item.InstanceId, instance.Id, StringComparison.Ordinal)
                     && string.Equals(item.SessionId, entry.SessionId, StringComparison.Ordinal))
                 ?.Selection;
-            if (selection is null && !string.IsNullOrWhiteSpace(entry.WorkingDirectory))
+            if (selection is null && !instance.UsesExternalDshHome && !string.IsNullOrWhiteSpace(entry.WorkingDirectory))
             {
                 string normalizedWorkspace;
                 try
@@ -6141,7 +6150,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     ?.Selection;
             }
 
-            globalDefault = policy.GlobalDefault;
+            globalDefault = instance.UsesExternalDshHome ? null : policy.GlobalDefault;
         }
         catch (InvalidDataException ex)
         {
@@ -6165,11 +6174,18 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
             {
+                if (instance.UsesExternalDshHome)
+                {
+                    ShowNotice("无法读取外部 DSH_HOME 的原默认模型，已跳过自动模型规则以保留原配置。");
+                    return;
+                }
+
                 // The session override can still be applied; only default restoration is unavailable.
             }
         }
         try
         {
+            _externalHomeGuard.EnsureAvailable(instance);
             var appliedSelection = await _dshApiClient.SelectSessionModelAsync(
                 webUrl,
                 entry.SessionId,

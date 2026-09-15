@@ -13,7 +13,7 @@ public sealed class VisualEffectsSettingsTests
     {
         var settings = new VisualEffectsSettings();
 
-        Assert.False(settings.Enabled);
+        Assert.True(settings.Enabled);
         Assert.Equal(VisualMaterial.LiquidGlass, settings.Material);
         Assert.True(settings.AmbientMotion);
         Assert.True(settings.Particles);
@@ -92,11 +92,11 @@ public sealed class VisualEffectsSettingsTests
 
         Assert.True(settings.SyncAllConfiguration);
         Assert.NotNull(settings.VisualEffects);
-        Assert.False(settings.VisualEffects.Enabled);
+        Assert.True(settings.VisualEffects.Enabled);
     }
 
     [Fact]
-    public void MissingVisualEffectsFieldReadsAsDisabledDefaults()
+    public void MissingVisualEffectsFieldReadsAsEnabledDefaults()
     {
         using var temporary = new TestDirectory();
         var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
@@ -110,7 +110,7 @@ public sealed class VisualEffectsSettingsTests
         var settings = service.ReadLauncherSettings();
         var visualEffects = settings.VisualEffects;
 
-        Assert.False(visualEffects.Enabled);
+        Assert.True(visualEffects.Enabled);
         Assert.Equal(VisualMaterial.LiquidGlass, visualEffects.Material);
     }
 
@@ -157,6 +157,58 @@ public sealed class VisualEffectsSettingsTests
 
         using var document = JsonDocument.Parse(File.ReadAllText(service.LauncherSettingsPath, Encoding.UTF8));
         Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("visualEffects", "enabled")]
+    [InlineData("VisualEffects", "Enabled")]
+    public void ExistingDisabledSettingsEnableOnceWithoutResettingPreferences(string visualKey, string enabledKey)
+    {
+        using var temporary = new TestDirectory();
+        var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+        var service = new VersionSettingsService(paths);
+        Directory.CreateDirectory(paths.RootDirectory);
+        var original = $$$"""{"schemaVersion":1,"syncAllConfiguration":true,"workspaces":["keep"],"unknownSetting":{"keep":42},"{{{visualKey}}}":{"{{{enabledKey}}}":false,"material":"FrostedGlass","particles":false,"unknownEffect":7}}""";
+        File.WriteAllText(service.LauncherSettingsPath, original, new UTF8Encoding(false));
+
+        var upgraded = service.ReadLauncherSettings();
+        Assert.True(upgraded.VisualEffects.Enabled);
+        Assert.True(upgraded.VisualEffectsDefaultApplied);
+        Assert.Equal(VisualMaterial.FrostedGlass, upgraded.VisualEffects.Material);
+        Assert.False(upgraded.VisualEffects.Particles);
+        Assert.True(upgraded.SyncAllConfiguration);
+        Assert.Equal(new[] { "keep" }, upgraded.Workspaces);
+        var backup = Assert.Single(Directory.GetFiles(paths.RootDirectory, "*.bak"));
+        Assert.Equal(original, File.ReadAllText(backup));
+        using (var document = JsonDocument.Parse(File.ReadAllText(service.LauncherSettingsPath)))
+        {
+            Assert.Equal(42, document.RootElement.GetProperty("unknownSetting").GetProperty("keep").GetInt32());
+            Assert.Equal(7, document.RootElement.GetProperty(visualKey).GetProperty("unknownEffect").GetInt32());
+            Assert.True(document.RootElement.GetProperty(visualKey).GetProperty(enabledKey).GetBoolean());
+        }
+        var migratedJson = File.ReadAllText(service.LauncherSettingsPath);
+        service.ReadLauncherSettings();
+        Assert.Equal(migratedJson, File.ReadAllText(service.LauncherSettingsPath));
+        Assert.Single(Directory.GetFiles(paths.RootDirectory, "*.bak"));
+
+        upgraded.VisualEffects.Enabled = false;
+        service.SaveLauncherSettings(upgraded);
+        Assert.False(new VersionSettingsService(paths).ReadLauncherSettings().VisualEffects.Enabled);
+        Assert.Single(Directory.GetFiles(paths.RootDirectory, "*.bak"));
+    }
+
+    [Fact]
+    public void NewInstallCanTurnOffDefaultWithoutBeingReenabled()
+    {
+        using var temporary = new TestDirectory();
+        var service = new VersionSettingsService(new LauncherPaths(temporary.Path));
+        var settings = service.ReadLauncherSettings();
+        Assert.True(settings.VisualEffects.Enabled);
+        settings.VisualEffects.Enabled = false;
+        service.SaveLauncherSettings(settings);
+        Assert.True(service.ReadLauncherSettings().VisualEffectsDefaultApplied);
+        Assert.False(service.ReadLauncherSettings().VisualEffects.Enabled);
+        Assert.Empty(Directory.GetFiles(temporary.Path, "*.bak"));
     }
 
     [Fact]

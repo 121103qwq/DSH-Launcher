@@ -20,7 +20,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 ### 华丽视觉与流畅切页
 
-- 在“设置 → 华丽视觉”中开启，默认保留原有外观；切换后立即生效并自动保存。
+- 华丽视觉默认开启；升级至 v1.2.3 时，旧配置也会自动开启一次并保留原配置备份，材质和单项效果选择不变。可在“设置 → 华丽视觉”关闭，后续启动不会强制重开；切换后立即生效并自动保存。
 - 可选原始实体、毛玻璃、液态玻璃（轻量），并分别开关流体背景、漂浮粒子、鼠标光晕、拖尾、点击波纹与层次视差。
 - 玻璃只作用于 Launcher 内部的装饰背景，不是桌面透明或真实光学折射；正文和输入内容保持清晰。
 - 背景可以持续缓慢流动，窗口隐藏或最小化时暂停；关闭华丽视觉不会关闭页面的渐出、渐入动画。
@@ -29,7 +29,7 @@ DSH Launcher 使用 .NET 8 WPF 开发，负责管理多个 DSh 版本、运行�
 
 ### 多版本与多实例
 
-- 每个版本使用独立的 `DSH_HOME` 与 `DSH_AGENTS_HOME`。
+- 新建和复制的版本使用独立的 `DSH_HOME` 与 `DSH_AGENTS_HOME`；也可直接关联其他桌面端已有的 `DSH_HOME`。
 - 支持复制现有版本、新建干净版本、删除版本和修改版本名称。
 - 支持 Launcher `.dshpack` 与 DSH-PackForge ModPack v2 `.tgz` 的导入、导出和双向转换；目录式 Skill 的常见文本脚本会随包保留并脱敏，密钥、dotenv 和会话不会进入分享包，导入时创建新版本且不覆盖已有版本，并通过官方 DSh Plugin CLI 恢复 Profile 依赖。
 - 在“下载 → 整合包”中搜索 [DSH-PackForge 社区市场](https://dsh-packforge.github.io/dsh-pack-market/) 的整合包，按大小和 SHA-256 校验下载内容，预览后安装到新版本。缺少校验信息的条目不可安装；支持取消，依赖恢复失败时保留已导入的版本。第三方插件可能执行代码，请只安装可信内容。暂不提供一键上传。
@@ -121,6 +121,14 @@ Start-Process 'dsh-launcher://plugins?instanceId=<实例 ID>'
 
 Launcher 启动时不会静默下载或安装内容。Node.js 或 DSh 缺失时，只有在用户确认后才进入准备流程。
 
+## 关联已有桌面端数据
+
+打开 **版本控制 → 关联已有 DSH_HOME** 后，会自动查找当前 `DSH_HOME` 环境变量、默认 `~/.dsh`、已检测桌面端（含可确认的运行中 HOME）和已登记外部目录，也可以刷新或手动选择。选择候选后自动填写目录、Profile 和匹配的已有运行程序，已关联目录不会重复添加。这里选择的是包含 `settings.yaml`、`profiles` 或 `sessions` 等内容的数据目录，不是程序安装目录。没有运行程序时，先从“导入实例”添加已有桌面端或 DSh 程序；无需再下载一份。
+
+关联不会复制、迁移或自动覆盖原配置；插件、模型和对话管理直接使用该目录，手动修改也会影响原桌面端。外部关联不参加 Launcher 的跨版本自动同步或全局默认模型设置。移除时按钮为“解除关联”，保留原目录和备份。复制此版本则会生成独立副本。
+
+Launcher 会在启动或修改外部 HOME 前重新检查受支持的 DSH Desktop / DeepSeek Desktop 进程：发现同一 HOME 被占用时阻止操作；无法确认桌面端 HOME 时也会暂停该操作并说明原因。仍可浏览和解除关联，不会自动关闭桌面端或改用另一个 HOME。该检查不是共同互斥锁，不能覆盖未知第三方桌面端、脱离桌面端的残留子进程，或检查后才从外部启动的进程；使用期间仍请避免两边同时运行。已有非 Web Profile 可以管理，但不能由 Launcher 作为 Web 实例启动；SQLite-only 会话仍由 DSh 自己管理。
+
 ## 数据隔离
 
 Launcher 注册信息与各个 DSh 版本的数据分开保存。默认结构如下：
@@ -137,6 +145,8 @@ Documents\DeepSeek\launcher\
 ```
 
 Plugin、Skill、MCP、Provider、Agent、Settings 和 Conversation 策略都以版本自己的 `DSH_HOME` 为边界。复制版本会复制整套版本数据；新建干净版本只复用 DSh 运行程序，不复用原版本数据。
+
+关联已有 `DSH_HOME` 的版本不使用上图中的隔离 HOME：数据仍在原目录，Launcher 的版本设置单独保存于 `instances/<实例 ID>/version-settings.json`。
 
 版本设置提供两种配置快照：`.dshsnapshot` 使用 Windows DPAPI，适合同一电脑上的快速回滚；`.dshpsnapshot` 使用密码派生密钥和 AES-GCM，适合跨电脑迁移。两种快照都不包含对话或运行依赖，跨电脑导入前会先创建本机回滚点。
 
@@ -177,7 +187,7 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.2.2**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.2.3**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
 
 本次更新支持新版 `session.vN.jsonl` 对话文件、社区整合包市场和 `.dspack` Profile 导入，并补充 MIT 许可证。整合包一键上传、`dshhome` 整机包和 `files[]` 外部资源暂不支持。
 

@@ -11,15 +11,18 @@ public sealed class VersionHealthService
     private readonly VersionSettingsService _settingsService;
     private readonly ModelService _modelService;
     private readonly DshSettingsYamlValidator _yamlValidator;
+    private readonly ExternalDshHomeGuard _homeGuard;
 
     public VersionHealthService(
         VersionSettingsService? settingsService = null,
         ModelService? modelService = null,
-        DshSettingsYamlValidator? yamlValidator = null)
+        DshSettingsYamlValidator? yamlValidator = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
         _settingsService = settingsService ?? new VersionSettingsService();
         _modelService = modelService ?? new ModelService();
         _yamlValidator = yamlValidator ?? new DshSettingsYamlValidator();
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
     }
 
     public VersionHealthReport Inspect(
@@ -32,6 +35,15 @@ public sealed class VersionHealthService
         var items = new List<VersionHealthItem>();
 
         InspectHome(instance, items);
+        if (instance.UsesExternalDshHome)
+        {
+            var conflict = _homeGuard.GetConflict(instance);
+            items.Add(new VersionHealthItem(
+                "external-home-occupancy",
+                "桌面端占用",
+                conflict is null ? VersionHealthState.Healthy : VersionHealthState.Warning,
+                conflict ?? "本次检查未发现受支持桌面端的占用；启动或修改前仍会重新检查。"));
+        }
         InspectRuntime(instance, detectedDshRuntime, items);
         InspectNode(instance, nodeRuntime, detectedDshRuntime.NodeEngine, items);
         InspectConfiguration(instance, nodeRuntime, detectedDshRuntime, items);
@@ -53,7 +65,7 @@ public sealed class VersionHealthService
 
         var updated = instance;
         var actions = new List<string>();
-        if (!Directory.Exists(updated.DshHome))
+        if (!updated.UsesExternalDshHome && !Directory.Exists(updated.DshHome))
         {
             Directory.CreateDirectory(updated.DshHome);
             actions.Add("已重新创建缺失的 DSH_HOME。 ");
@@ -93,7 +105,7 @@ public sealed class VersionHealthService
                 "版本数据目录",
                 VersionHealthState.Error,
                 $"DSH_HOME 不存在：{instance.DshHome}",
-                Repairable: true));
+                Repairable: !instance.UsesExternalDshHome));
             return;
         }
 
@@ -111,7 +123,9 @@ public sealed class VersionHealthService
             "dsh-home",
             "版本数据目录",
             VersionHealthState.Healthy,
-            "独立 DSH_HOME 存在且可安全访问。"));
+            instance.UsesExternalDshHome
+                ? "外部关联 DSH_HOME 存在；手动修改会影响原桌面端，请先退出原桌面端。"
+                : "独立 DSH_HOME 存在且可安全访问。"));
     }
 
     private static void InspectRuntime(
