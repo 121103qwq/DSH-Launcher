@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http;
 using System.IO;
@@ -19,7 +20,12 @@ public sealed class MarketplaceService
     public const string CommunityCatalogUrl = "https://awesome-dsh-plugin.com/plugins.json";
     public const string GitHubTopicUrl = "https://api.github.com/search/repositories?q=topic%3Adsh-plugin&per_page=50";
 
-    private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// Per-source timeout. The community catalogue (<c>plugins.json</c>) is roughly 3.9 MB of
+    /// plain JSON (~1 MB over gzip); on slow links a plain download can take well over a minute,
+    /// so 10 s is far too short and makes "refresh catalogue" fail on a shaky connection.
+    /// </summary>
+    private static readonly TimeSpan SourceTimeout = TimeSpan.FromSeconds(60);
     private const int MaxThemePreviewBytes = 8 * 1024 * 1024;
     private static readonly Regex MarkdownImage = new(
         @"!\[[^\]]*\]\(\s*(?:<(?<url>[^>]+)>|(?<url>[^\s\)]+))(?:\s+[\""'][^\)]*)?\s*\)",
@@ -1485,7 +1491,7 @@ public sealed class MarketplaceService
 
     private static HttpClient CreateHttpClient()
     {
-        var client = new HttpClient
+        var client = new HttpClient(CreateHttpHandler())
         {
             Timeout = Timeout.InfiniteTimeSpan
         };
@@ -1493,6 +1499,18 @@ public sealed class MarketplaceService
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return client;
     }
+
+    /// <summary>
+    /// Handler used by the marketplace: automatic decompression (gzip / deflate / brotli).
+    /// The community catalogue is ~3.9 MB of plain JSON, which is slow enough to hit the source
+    /// timeout; gzip brings the same payload down to ~1 MB. The handler keeps the default system
+    /// proxy behaviour (<see cref="SocketsHttpHandler.UseProxy"/> is true by default).
+    /// </summary>
+    internal static SocketsHttpHandler CreateHttpHandler() =>
+        new()
+        {
+            AutomaticDecompression = DecompressionMethods.All
+        };
 
     private static MarketplaceItem? ParseCatalogEntry(
         JsonElement entry,

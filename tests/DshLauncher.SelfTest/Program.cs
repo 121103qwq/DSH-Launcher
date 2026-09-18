@@ -3907,6 +3907,14 @@ static async Task TestMarketplaceDiscoveryAndVerification()
         && sameNameMerged.Any(item => item.PackageName == "@changfenhuang/dsh-genui" && item.Version == "0.11.0")
         && !sameNameMerged.Any(item => item.PackageName == "dsh-genui" && item.Version == "0.11.0"),
         "同名但不同 npm 包的目录条目不能被合并成一张卡，否则包名与版本来自不同插件、安装前校验必然失败。 ");
+
+    using (var marketplaceHandler = MarketplaceService.CreateHttpHandler())
+    {
+        Assert(marketplaceHandler.AutomaticDecompression == System.Net.DecompressionMethods.All
+            && marketplaceHandler.AutomaticDecompression.HasFlag(System.Net.DecompressionMethods.GZip),
+            "市场 HTTP handler 必须开启自动解压，否则 3.9 MB 的社区目录在慢网络下必然超过源级超时。 ");
+        Assert(marketplaceHandler.UseProxy, "市场 handler 应保持默认系统代理（不改变既有代理行为）。 ");
+    }
 }
 
 static async Task TestSkillMarketplaceDiscoveryAndValidation()
