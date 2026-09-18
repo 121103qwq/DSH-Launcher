@@ -5065,12 +5065,38 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async void InstallDsh_Click(object sender, RoutedEventArgs e)
     {
+        // Remember the choice so later version downloads (versions\<version>) follow it too.
+        RememberDownloadSource(DshDownloadSource.Official);
         await InstallDshAsync(DshInstallService.OfficialRegistry, "npm 官方源");
     }
 
     private async void InstallDshMirror_Click(object sender, RoutedEventArgs e)
     {
+        RememberDownloadSource(DshDownloadSource.ChinaMirror);
         await InstallDshAsync(DshInstallService.ChinaRegistry, "npmmirror 国内镜像");
+    }
+
+    /// <summary>
+    /// Persists the download source picked through the "prepare runtime" buttons, so the
+    /// "download a specific DSh version" path (which has no picker of its own) honours it.
+    /// </summary>
+    private void RememberDownloadSource(DshDownloadSource source)
+    {
+        try
+        {
+            var settings = _versionSettingsService.ReadLauncherSettings();
+            if (settings.DownloadSource == source)
+            {
+                return;
+            }
+
+            settings.DownloadSource = source;
+            _versionSettingsService.SaveLauncherSettings(settings);
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"下载源设置保存失败：{ex.Message}");
+        }
     }
 
     private async Task InstallDshAsync(string registry, string sourceName)
@@ -5675,15 +5701,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _versionSettingsService.SaveLauncherSettings(launcherSettings);
             await RefreshDshAsync(forceRefresh: true);
 
-            var sourceName = choice.Source == FirstRunDownloadSource.ChinaMirror
+            var sourceName = choice.Source == DshDownloadSource.ChinaMirror
                 ? "npmmirror 国内镜像"
                 : "Node.js 官方源";
-            var nodeDistBase = choice.Source == FirstRunDownloadSource.ChinaMirror
+            var nodeDistBase = choice.Source == DshDownloadSource.ChinaMirror
                 ? NodeInstallService.MirrorDistBase
                 : NodeInstallService.OfficialDistBase;
-            var npmRegistry = choice.Source == FirstRunDownloadSource.ChinaMirror
-                ? DshInstallService.ChinaRegistry
-                : DshInstallService.OfficialRegistry;
+            var npmRegistry = DshInstallService.RegistryFor(choice.Source);
             if (!await PrepareRuntimeAsync(sourceName, nodeDistBase, npmRegistry, null))
             {
                 return;

@@ -5310,6 +5310,17 @@ static Task TestLauncherSettingsAndWorkspaces()
         "Launcher 设置应持久化 DSh 自定义安装位置。");
     Assert(settings.ReadLauncherSettings().PluginInstallMode == PluginInstallMode.Fast,
         "Launcher 设置应持久化 Plugin 快速安装模式。");
+    Assert(settings.ReadLauncherSettings().DownloadSource == DshDownloadSource.Official,
+        "旧设置文件没有 DownloadSource 字段时，下载源必须回落官方源。");
+    launcherSettings.DownloadSource = DshDownloadSource.ChinaMirror;
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(settings.ReadLauncherSettings().DownloadSource == DshDownloadSource.ChinaMirror
+        && DshInstallService.RegistryFor(DshDownloadSource.ChinaMirror) == DshInstallService.ChinaRegistry
+        && DshInstallService.RegistryFor(DshDownloadSource.Official) == DshInstallService.OfficialRegistry,
+        "下载源设置应持久化，并映射到对应的 npm registry。");
+    Assert(JsonSerializer.Deserialize<LauncherSettingsData>("{\"DownloadSource\":\"Whatever\"}")?.DownloadSource
+            == DshDownloadSource.Official,
+        "不认识的下载源写法必须回落官方源（防御式）。");
     Assert(settings.ShouldSyncConfiguration(first, second), "全局“和所有版本配置同步”开启后任意版本对应同步配置。");
     Assert(settings.ShouldSyncConversations(first, second), "全局开关应覆盖各版本自己的独立模式。");
     Assert(!settings.ShouldSyncModelProviders(first, second), "全局配置开关不能覆盖独立的模型 Provider 同步开关。");
