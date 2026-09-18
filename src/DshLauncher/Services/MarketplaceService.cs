@@ -1723,7 +1723,7 @@ public sealed class MarketplaceService
         foreach (var raw in items)
         {
             var item = NormalizeSourceKind(raw) with { Category = NormalizeCategory(raw.Category) };
-            var itemIdentities = new HashSet<string>(GetPluginIdentities(item), StringComparer.OrdinalIgnoreCase);
+            var itemIdentities = new HashSet<string>(GetMergeIdentities(item), StringComparer.OrdinalIgnoreCase);
             var matchingIndexes = itemIdentities
                 .Select(identity => identityIndex.TryGetValue(identity, out var index) ? index : -1)
                 .Where(index => index >= 0 && merged[index] is not null)
@@ -1759,7 +1759,7 @@ public sealed class MarketplaceService
             }
 
             var mergedItem = MergeTwoItems(combined, item);
-            combinedIdentities.UnionWith(GetPluginIdentities(mergedItem));
+            combinedIdentities.UnionWith(GetMergeIdentities(mergedItem));
             var mergedIndex = merged.Count;
             merged.Add(mergedItem);
             identitiesByIndex.Add(combinedIdentities);
@@ -1995,9 +1995,29 @@ public sealed class MarketplaceService
         return true;
     }
 
-    private static IReadOnlySet<string> GetPluginIdentities(
+    /// <summary>
+    /// Identities used for de-duplicating catalogue entries: only "strong" identities
+    /// (npm package name / install spec / GitHub repository). The display name is deliberately
+    /// excluded: community catalogues frequently contain different plugins that happen to share
+    /// a display name (e.g. two unrelated `dsh-genui` packages), and treating the name as an npm
+    /// identity merges them into a single card whose package name and version come from
+    /// different plugins — a combination that does not exist on npm, so verification always fails.
+    /// </summary>
+    private static IReadOnlySet<string> GetMergeIdentities(MarketplaceItem item)
+    {
+        var identities = GetStrongPluginIdentities(item.PackageName, item.InstallSpec, item.RepositoryUrl);
+
+        // Fall back to the display name only when there is no strong identity at all.
+        if (identities.Count == 0 && !string.IsNullOrWhiteSpace(item.Name))
+        {
+            identities.Add($"name:{item.Name.Trim().ToLowerInvariant()}");
+        }
+
+        return identities;
+    }
+
+    private static HashSet<string> GetStrongPluginIdentities(
         string? packageName,
-        string? name,
         string? installSpec,
         string? repositoryUrl)
     {
@@ -2007,9 +2027,22 @@ public sealed class MarketplaceService
             identities.UnionWith(EnumeratePluginIdentities(value));
         }
 
+        return identities;
+    }
+
+    private static IReadOnlySet<string> GetPluginIdentities(
+        string? packageName,
+        string? name,
+        string? installSpec,
+        string? repositoryUrl)
+    {
+        var identities = GetStrongPluginIdentities(packageName, installSpec, repositoryUrl);
+
         // GitHub install specs are saved by DSh under the package name declared
         // by the repository. Include a package-like display name as an alias so
         // an installed GitHub plugin is recognized immediately after refresh.
+        // NOTE: this alias only serves installed-plugin matching (FindInstalledPlugin);
+        // it must not participate in MergeItems de-duplication (see GetMergeIdentities).
         identities.UnionWith(EnumeratePluginIdentities(name));
 
         if (identities.Count == 0 && !string.IsNullOrWhiteSpace(name))

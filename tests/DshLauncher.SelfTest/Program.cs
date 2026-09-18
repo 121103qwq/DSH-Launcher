@@ -3891,6 +3891,22 @@ static async Task TestMarketplaceDiscoveryAndVerification()
             "旧缓存")
     });
     Assert(oldCachedOfficial[0].SourceKind != MarketplaceSourceKind.Official, "旧缓存中的本地依赖不能继续显示为官方来源。 ");
+
+    // 同名不同包不能被合并成一张卡（社区目录里 dsh-genui 这类重名很常见）：
+    // 合并后包名与版本会来自不同插件，形成 npm 上不存在的组合，安装前校验必然失败。
+    var sameNameCatalog = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[" +
+        "{\"name\":\"dsh-genui\",\"npm\":\"dsh-genui\",\"version\":\"0.2.1\",\"install\":\"dsh plugin --profile web add dsh-genui\",\"url\":\"https://github.com/lhuans/dsh-genui\"}," +
+        "{\"name\":\"dsh-genui\",\"npm\":\"@changfenhuang/dsh-genui\",\"version\":\"0.11.0\",\"install\":\"dsh plugin --profile web add @changfenhuang/dsh-genui\",\"url\":\"https://github.com/omdsh-dev/dsh-genui\"}" +
+        "]}",
+        MarketplaceSourceKind.CommunityCatalog,
+        "社区目录");
+    var sameNameMerged = MarketplaceService.MergeItems(sameNameCatalog);
+    Assert(sameNameMerged.Count == 2
+        && sameNameMerged.Any(item => item.PackageName == "dsh-genui" && item.Version == "0.2.1")
+        && sameNameMerged.Any(item => item.PackageName == "@changfenhuang/dsh-genui" && item.Version == "0.11.0")
+        && !sameNameMerged.Any(item => item.PackageName == "dsh-genui" && item.Version == "0.11.0"),
+        "同名但不同 npm 包的目录条目不能被合并成一张卡，否则包名与版本来自不同插件、安装前校验必然失败。 ");
 }
 
 static async Task TestSkillMarketplaceDiscoveryAndValidation()
