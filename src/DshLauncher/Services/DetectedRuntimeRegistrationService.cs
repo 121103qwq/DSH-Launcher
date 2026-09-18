@@ -23,10 +23,20 @@ public sealed class DetectedRuntimeRegistrationService
         _homeImporter = homeImporter ?? new DshHomeImportService();
     }
 
+    /// <summary>
+    /// Registers detected runtimes as instances.
+    /// </summary>
+    /// <param name="excludedRuntimeRoots">
+    /// Runtime package roots that must not be auto-registered — typically the configured install
+    /// directory itself, which is the installed DSh environment rather than an instance. When null
+    /// or empty the behaviour is exactly as before; the manual "scan and import" path should keep
+    /// passing nothing.
+    /// </param>
     public async Task<DetectedRuntimeRegistrationResult> ImportAsync(
         IReadOnlyCollection<ManagerInstance> existingInstances,
         IReadOnlyCollection<DshRuntimeInfo> detectedRuntimes,
         bool refreshRegisteredRuntimeRoots = false,
+        IReadOnlyCollection<string>? excludedRuntimeRoots = null,
         CancellationToken cancellationToken = default)
     {
         var added = new List<ManagerInstance>();
@@ -35,6 +45,16 @@ public sealed class DetectedRuntimeRegistrationService
         var backfilled = new List<ManagerInstance>();
         var errors = new List<string>();
         var registeredRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var excludedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in excludedRuntimeRoots ?? Array.Empty<string>())
+        {
+            var normalizedExclusion = TryNormalizeRuntimeRoot(candidate);
+            if (normalizedExclusion is not null)
+            {
+                excludedRoots.Add(normalizedExclusion);
+            }
+        }
+
         var existingByRoot = new Dictionary<string, List<ManagerInstance>>(StringComparer.OrdinalIgnoreCase);
         var usedNames = new HashSet<string>(
             existingInstances.Select(static instance => instance.Name),
@@ -67,6 +87,11 @@ public sealed class DetectedRuntimeRegistrationService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var packageRoot = TryNormalizeRuntimeRoot(runtime.PackageRoot);
+            if (packageRoot is not null && excludedRoots.Contains(packageRoot))
+            {
+                continue;
+            }
+
             if (packageRoot is null
                 || !DshRuntimeCommandFactory.IsUsable(runtime.EffectiveLaunchSpec))
             {

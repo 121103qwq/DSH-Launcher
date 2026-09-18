@@ -158,6 +158,35 @@ public sealed class VersionSettingsData
 /// <summary>
 /// Launcher 级设置：作用域是全部版本，而不是某一个版本的 DSH_HOME。
 /// </summary>
+/// <summary>
+/// npm registry used when the Launcher itself downloads a DSh runtime or a specific DSh version.
+/// </summary>
+public enum DshDownloadSource
+{
+    /// <summary>npm official registry (default; keeps the existing behaviour).</summary>
+    Official,
+
+    /// <summary>npmmirror China mirror.</summary>
+    ChinaMirror
+}
+
+/// <summary>
+/// Persisted as a readable string. A missing field or an unknown value falls back to
+/// <see cref="DshDownloadSource.Official"/> so older settings files stay readable.
+/// </summary>
+public sealed class DshDownloadSourceConverter : JsonConverter<DshDownloadSource>
+{
+    public override DshDownloadSource Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.GetString() switch
+        {
+            "ChinaMirror" => DshDownloadSource.ChinaMirror,
+            _ => DshDownloadSource.Official
+        };
+
+    public override void Write(Utf8JsonWriter writer, DshDownloadSource value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.ToString());
+}
+
 public sealed class LauncherSettingsData
 {
     [JsonPropertyName("schemaVersion")]
@@ -168,6 +197,13 @@ public sealed class LauncherSettingsData
     public List<string> Workspaces { get; set; } = new();
 
     public PluginInstallMode PluginInstallMode { get; set; } = PluginInstallMode.Fast;
+
+    /// <summary>
+    /// Registry used when the Launcher downloads a DSh runtime or version. Older settings files
+    /// without this field deserialize to <see cref="DshDownloadSource.Official"/>.
+    /// </summary>
+    [JsonConverter(typeof(DshDownloadSourceConverter))]
+    public DshDownloadSource DownloadSource { get; set; } = DshDownloadSource.Official;
 
     /// <summary>
     /// Optional npm global prefix used only for the Launcher-managed DSh runtime.

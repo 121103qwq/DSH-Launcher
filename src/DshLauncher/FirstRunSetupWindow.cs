@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using DshLauncher.Models;
 using DshLauncher.Services;
 using Forms = System.Windows.Forms;
 using Button = System.Windows.Controls.Button;
@@ -8,14 +9,8 @@ using TextBox = System.Windows.Controls.TextBox;
 
 namespace DshLauncher;
 
-internal enum FirstRunDownloadSource
-{
-    Official,
-    ChinaMirror
-}
-
 internal sealed record FirstRunSetupChoice(
-    FirstRunDownloadSource Source,
+    DshDownloadSource Source,
     string? DshInstallDirectory);
 
 internal sealed class FirstRunSetupWindow : Window
@@ -132,7 +127,7 @@ internal sealed class FirstRunSetupWindow : Window
                 Padding = new Thickness(13, 8, 13, 8),
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            mirror.Click += (_, _) => Complete(FirstRunDownloadSource.ChinaMirror);
+            mirror.Click += (_, _) => Complete(DshDownloadSource.ChinaMirror);
             buttons.Children.Add(mirror);
         }
 
@@ -143,7 +138,7 @@ internal sealed class FirstRunSetupWindow : Window
             Padding = new Thickness(13, 8, 13, 8),
             Style = (Style)System.Windows.Application.Current.FindResource("PrimaryButton")
         };
-        primary.Click += (_, _) => Complete(FirstRunDownloadSource.Official);
+        primary.Click += (_, _) => Complete(DshDownloadSource.Official);
         buttons.Children.Add(primary);
         panel.Children.Add(buttons);
 
@@ -191,7 +186,7 @@ internal sealed class FirstRunSetupWindow : Window
         }
     }
 
-    private void Complete(FirstRunDownloadSource source)
+    private void Complete(DshDownloadSource source)
     {
         try
         {

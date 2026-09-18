@@ -685,7 +685,10 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
                 throw new InvalidOperationException("缺少兼容的 Node.js，无法下载所选 DSh 版本。 ");
             }
 
-            SetStatus($"本机没有 DSh {normalizedVersion}，正在从官方 npm 包下载…");
+            // The version installer has no picker of its own, so it follows the download source the
+            // user last chose through the "prepare runtime" buttons (persisted launcher setting).
+            var downloadSource = _versionSettingsService.ReadLauncherSettings().DownloadSource;
+            SetStatus($"本机没有 DSh {normalizedVersion}，正在从{DshInstallService.DisplayNameFor(downloadSource)}下载…");
             var progress = new Progress<DshInstallProgress>(SetDshInstallProgress);
             DshInstallProgressPanel.Visibility = Visibility.Visible;
             DshInstallProgressBar.IsIndeterminate = true;
@@ -696,7 +699,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
                 install = await _dshInstallService.InstallVersionAsync(
                     nodeRuntime,
                     normalizedVersion,
-                    DshInstallService.OfficialRegistry,
+                    DshInstallService.RegistryFor(downloadSource),
                     versionDirectory,
                     progress,
                     _lifetimeCancellation.Token);

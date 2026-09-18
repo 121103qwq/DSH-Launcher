@@ -14,6 +14,14 @@ public sealed class DshInstallService
     public const string OfficialRegistry = "https://registry.npmjs.org";
     public const string ChinaRegistry = "https://registry.npmmirror.com";
 
+    /// <summary>npm registry for a configured download source.</summary>
+    public static string RegistryFor(DshDownloadSource source) =>
+        source == DshDownloadSource.ChinaMirror ? ChinaRegistry : OfficialRegistry;
+
+    /// <summary>Display name of a download source (shared by UI and progress text).</summary>
+    public static string DisplayNameFor(DshDownloadSource source) =>
+        source == DshDownloadSource.ChinaMirror ? "npmmirror 国内镜像" : "npm 官方源";
+
     private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
     private static readonly SemaphoreSlim VersionInstallGate = new(1, 1);
     private static readonly HttpClient SharedHttpClient = CreateHttpClient();

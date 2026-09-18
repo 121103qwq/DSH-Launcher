@@ -1058,7 +1058,7 @@ public partial class ExtensionWindow : UserControl
         _isMarketplaceLoading = true;
         UpdateMarketplaceUpdateAllButton();
         _marketplaceCancellation?.Cancel();
-        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         _marketplaceCancellation = cancellation;
         var profileGeneration = _themeIntegration.ProfileGeneration;
         MarketplaceStatusText.Text = _marketplaceSnapshot.Count == 0

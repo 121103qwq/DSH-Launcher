@@ -684,6 +684,23 @@ static async Task TestDetectedDshRuntimeAutoRegistration()
     var correctedAgain = await registration.ImportAsync(registry.Load(), new[] { correctedRuntime });
     Assert(correctedAgain.AddedInstances.Count == 0 && correctedAgain.UpdatedInstances.Count == 0,
         "正确 DSH_HOME 已导入后，再次扫描不能重复建立版本。 ");
+
+    // The configured install directory itself (typically run_time) is the installed DSh
+    // environment rather than an instance. Its runtime roots must be excludable, otherwise it is
+    // re-registered as a ghost instance on every launch. Uses an isolated launcher root so it does
+    // not disturb the registry state asserted above.
+    var exclusionRegistration = new DetectedRuntimeRegistrationService(
+        new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "exclusion-launcher"))));
+    var excludedRoot = runtimes[0].PackageRoot!;
+    var excludedRun = await exclusionRegistration.ImportAsync(
+        Array.Empty<ManagerInstance>(),
+        runtimes,
+        excludedRuntimeRoots: new[] { excludedRoot });
+    Assert(excludedRun.Errors.Count == 0
+        && excludedRun.AddedInstances.Count == runtimes.Count - 1
+        && excludedRun.AddedInstances.All(item =>
+            !string.Equals(item.RootPath, excludedRoot, StringComparison.OrdinalIgnoreCase)),
+        "排除安装目录级运行时根后，它不应再被自动登记为实例，其余运行时不受影响。 ");
 }
 
 static async Task TestImportedProfilePackageRestoration()
@@ -3891,6 +3908,30 @@ static async Task TestMarketplaceDiscoveryAndVerification()
             "旧缓存")
     });
     Assert(oldCachedOfficial[0].SourceKind != MarketplaceSourceKind.Official, "旧缓存中的本地依赖不能继续显示为官方来源。 ");
+
+    // 同名不同包不能被合并成一张卡（社区目录里 dsh-genui 这类重名很常见）：
+    // 合并后包名与版本会来自不同插件，形成 npm 上不存在的组合，安装前校验必然失败。
+    var sameNameCatalog = MarketplaceService.ParseCatalog(
+        "{\"plugins\":[" +
+        "{\"name\":\"dsh-genui\",\"npm\":\"dsh-genui\",\"version\":\"0.2.1\",\"install\":\"dsh plugin --profile web add dsh-genui\",\"url\":\"https://github.com/lhuans/dsh-genui\"}," +
+        "{\"name\":\"dsh-genui\",\"npm\":\"@changfenhuang/dsh-genui\",\"version\":\"0.11.0\",\"install\":\"dsh plugin --profile web add @changfenhuang/dsh-genui\",\"url\":\"https://github.com/omdsh-dev/dsh-genui\"}" +
+        "]}",
+        MarketplaceSourceKind.CommunityCatalog,
+        "社区目录");
+    var sameNameMerged = MarketplaceService.MergeItems(sameNameCatalog);
+    Assert(sameNameMerged.Count == 2
+        && sameNameMerged.Any(item => item.PackageName == "dsh-genui" && item.Version == "0.2.1")
+        && sameNameMerged.Any(item => item.PackageName == "@changfenhuang/dsh-genui" && item.Version == "0.11.0")
+        && !sameNameMerged.Any(item => item.PackageName == "dsh-genui" && item.Version == "0.11.0"),
+        "同名但不同 npm 包的目录条目不能被合并成一张卡，否则包名与版本来自不同插件、安装前校验必然失败。 ");
+
+    using (var marketplaceHandler = MarketplaceService.CreateHttpHandler())
+    {
+        Assert(marketplaceHandler.AutomaticDecompression == System.Net.DecompressionMethods.All
+            && marketplaceHandler.AutomaticDecompression.HasFlag(System.Net.DecompressionMethods.GZip),
+            "市场 HTTP handler 必须开启自动解压，否则 3.9 MB 的社区目录在慢网络下必然超过源级超时。 ");
+        Assert(marketplaceHandler.UseProxy, "市场 handler 应保持默认系统代理（不改变既有代理行为）。 ");
+    }
 }
 
 static async Task TestSkillMarketplaceDiscoveryAndValidation()
@@ -5269,6 +5310,17 @@ static Task TestLauncherSettingsAndWorkspaces()
         "Launcher 设置应持久化 DSh 自定义安装位置。");
     Assert(settings.ReadLauncherSettings().PluginInstallMode == PluginInstallMode.Fast,
         "Launcher 设置应持久化 Plugin 快速安装模式。");
+    Assert(settings.ReadLauncherSettings().DownloadSource == DshDownloadSource.Official,
+        "旧设置文件没有 DownloadSource 字段时，下载源必须回落官方源。");
+    launcherSettings.DownloadSource = DshDownloadSource.ChinaMirror;
+    settings.SaveLauncherSettings(launcherSettings);
+    Assert(settings.ReadLauncherSettings().DownloadSource == DshDownloadSource.ChinaMirror
+        && DshInstallService.RegistryFor(DshDownloadSource.ChinaMirror) == DshInstallService.ChinaRegistry
+        && DshInstallService.RegistryFor(DshDownloadSource.Official) == DshInstallService.OfficialRegistry,
+        "下载源设置应持久化，并映射到对应的 npm registry。");
+    Assert(JsonSerializer.Deserialize<LauncherSettingsData>("{\"DownloadSource\":\"Whatever\"}")?.DownloadSource
+            == DshDownloadSource.Official,
+        "不认识的下载源写法必须回落官方源（防御式）。");
     Assert(settings.ShouldSyncConfiguration(first, second), "全局“和所有版本配置同步”开启后任意版本对应同步配置。");
     Assert(settings.ShouldSyncConversations(first, second), "全局开关应覆盖各版本自己的独立模式。");
     Assert(!settings.ShouldSyncModelProviders(first, second), "全局配置开关不能覆盖独立的模型 Provider 同步开关。");

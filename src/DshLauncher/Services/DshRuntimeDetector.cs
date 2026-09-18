@@ -822,7 +822,11 @@ public sealed class DshRuntimeDetector
             new[] { "--version" },
             Path.GetDirectoryName(Path.GetFullPath(executablePath)) ?? Environment.CurrentDirectory);
 
-    private static IReadOnlyList<string> FindKnownPackageRoots(string root)
+    /// <summary>
+    /// Known package-root layouts below <paramref name="root"/>; the first candidate is the root
+    /// itself. Shared so callers can tell "the install directory itself" apart from real instances.
+    /// </summary>
+    internal static IReadOnlyList<string> FindKnownPackageRoots(string root)
     {
         var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var relative in new[]
