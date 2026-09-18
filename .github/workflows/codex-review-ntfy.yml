@@ -1,0 +1,109 @@
+name: Notify Codex Review via ntfy
+
+on:
+  pull_request_review:
+    types: [submitted]
+  check_run:
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Notification title for a manual test
+        required: false
+        default: DSH Launcher · ntfy test
+      message:
+        description: Notification body for a manual test
+        required: false
+        default: GitHub Actions can reach ntfy.
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    name: Notify Windows via ntfy
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.state == 'approved' &&
+       vars.CODEX_REVIEW_ACTOR != '' &&
+       github.event.review.user.login == vars.CODEX_REVIEW_ACTOR) ||
+      (github.event_name == 'check_run' &&
+       github.event.action == 'completed' &&
+       github.event.check_run.conclusion == 'success' &&
+       vars.CODEX_REVIEW_CHECK_NAME != '' &&
+       github.event.check_run.name == vars.CODEX_REVIEW_CHECK_NAME &&
+       github.event.check_run.pull_requests[0].number != '')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish ntfy notification
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_ACTOR: ${{ github.event.review.user.login }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.check_run.pull_requests[0].number }}
+          PR_URL: ${{ github.event.pull_request.html_url || github.event.check_run.pull_requests[0].html_url }}
+          CHECK_NAME: ${{ github.event.check_run.name }}
+          NTFY_SERVER: ${{ vars.NTFY_SERVER || 'https://ntfy.sh' }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          TEST_TITLE: ${{ inputs.title }}
+          TEST_MESSAGE: ${{ inputs.message }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$NTFY_TOPIC" ]]; then
+            echo "::error::Repository secret NTFY_TOPIC is not configured."
+            exit 1
+          fi
+
+          if [[ "$NTFY_TOPIC" == */* || "$NTFY_TOPIC" == *\?* || "$NTFY_TOPIC" == *#* ]]; then
+            echo "::error::NTFY_TOPIC must be a single topic name, not a URL or path."
+            exit 1
+          fi
+
+          if [[ "$NTFY_SERVER" != https://* ]]; then
+            echo "::error::NTFY_SERVER must use HTTPS."
+            exit 1
+          fi
+
+          ntfy_url="${NTFY_SERVER%/}/${NTFY_TOPIC}"
+          click_url="${PR_URL:-https://github.com/${REPOSITORY}/actions/runs/${RUN_ID}}"
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            title="${TEST_TITLE:-DSH Launcher · ntfy test}"
+            message="${TEST_MESSAGE:-GitHub Actions can reach ntfy.}"
+          elif [[ "$EVENT_NAME" == "pull_request_review" ]]; then
+            title="DSH Launcher · Codex Review passed"
+            printf -v message '%s (#%s)\nCodex Review by @%s was approved.' \
+              "$PR_TITLE" "$PR_NUMBER" "$REVIEW_ACTOR"
+          else
+            title="DSH Launcher · Codex check passed"
+            printf -v message 'Check "%s" passed for PR #%s.' \
+              "$CHECK_NAME" "$PR_NUMBER"
+          fi
+
+          headers=(
+            -H "Title: $title"
+            -H "Priority: high"
+            -H "Tags: github,codex,white_check_mark"
+            -H "Click: $click_url"
+          )
+
+          if [[ -n "$NTFY_TOKEN" ]]; then
+            headers+=(-H "Authorization: Bearer $NTFY_TOKEN")
+          fi
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --retry-delay 2 \
+            "${headers[@]}" \
+            --data-raw "$message" \
+            "$ntfy_url"
