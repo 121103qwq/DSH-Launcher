@@ -684,6 +684,23 @@ static async Task TestDetectedDshRuntimeAutoRegistration()
     var correctedAgain = await registration.ImportAsync(registry.Load(), new[] { correctedRuntime });
     Assert(correctedAgain.AddedInstances.Count == 0 && correctedAgain.UpdatedInstances.Count == 0,
         "正确 DSH_HOME 已导入后，再次扫描不能重复建立版本。 ");
+
+    // The configured install directory itself (typically run_time) is the installed DSh
+    // environment rather than an instance. Its runtime roots must be excludable, otherwise it is
+    // re-registered as a ghost instance on every launch. Uses an isolated launcher root so it does
+    // not disturb the registry state asserted above.
+    var exclusionRegistration = new DetectedRuntimeRegistrationService(
+        new InstanceRegistry(new LauncherPaths(Path.Combine(temporary.Path, "exclusion-launcher"))));
+    var excludedRoot = runtimes[0].PackageRoot!;
+    var excludedRun = await exclusionRegistration.ImportAsync(
+        Array.Empty<ManagerInstance>(),
+        runtimes,
+        excludedRuntimeRoots: new[] { excludedRoot });
+    Assert(excludedRun.Errors.Count == 0
+        && excludedRun.AddedInstances.Count == runtimes.Count - 1
+        && excludedRun.AddedInstances.All(item =>
+            !string.Equals(item.RootPath, excludedRoot, StringComparison.OrdinalIgnoreCase)),
+        "排除安装目录级运行时根后，它不应再被自动登记为实例，其余运行时不受影响。 ");
 }
 
 static async Task TestImportedProfilePackageRestoration()

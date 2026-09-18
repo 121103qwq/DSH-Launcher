@@ -610,7 +610,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             try
             {
-                await AutoImportDetectedDshRuntimesAsync();
+                // Startup/refresh path: exclude the configured install directory itself — its
+                // payload is the installed DSh environment, not an instance, and would otherwise be
+                // re-registered as a ghost instance on every launch.
+                await AutoImportDetectedDshRuntimesAsync(excludeInstallDirectoryRuntimeRoots: true);
             }
             catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
             {
@@ -640,6 +643,35 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private string GetConfiguredDshInstallDirectory() =>
         _versionSettingsService.ResolveDshInstallDirectory();
+
+    /// <summary>
+    /// Runtime package roots representing the configured install directory itself (the installed
+    /// DSh environment, not an instance). Auto-registration excludes them so the payload below
+    /// <c>run_time</c> is not re-registered as a ghost instance on every launch. Only
+    /// install-directory-level candidates are returned — <c>versions\&lt;version&gt;\</c> is where real
+    /// instances live and must not be excluded.
+    /// </summary>
+    private IReadOnlyCollection<string> ResolveInstallDirectoryRuntimeRoots()
+    {
+        var installDirectory = GetConfiguredDshInstallDirectory();
+        if (string.IsNullOrWhiteSpace(installDirectory))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            return DshRuntimeDetector.FindKnownPackageRoots(installDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or System.Security.SecurityException)
+        {
+            return Array.Empty<string>();
+        }
+    }
 
     private enum TestRuntimeKind
     {
@@ -773,9 +805,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanRestartInstance));
     }
 
+    /// <param name="excludeInstallDirectoryRuntimeRoots">
+    /// Whether to exclude the runtime package roots of the configured install directory itself.
+    /// The startup/refresh path passes true (that payload is the installed DSh environment, not an
+    /// instance); the manual "scan and import" path keeps false — there the user asked for it.
+    /// </param>
     private async Task<DetectedRuntimeRegistrationResult> AutoImportDetectedDshRuntimesAsync(
         IReadOnlyCollection<DshRuntimeInfo>? runtimes = null,
         bool refreshRegisteredRuntimeRoots = false,
+        bool excludeInstallDirectoryRuntimeRoots = false,
         CancellationToken cancellationToken = default)
     {
         var effectiveCancellation = cancellationToken.CanBeCanceled
@@ -785,6 +823,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Instances.ToArray(),
             runtimes ?? _detectedDshRuntimes,
             refreshRegisteredRuntimeRoots,
+            excludeInstallDirectoryRuntimeRoots ? ResolveInstallDirectoryRuntimeRoots() : null,
             effectiveCancellation);
         foreach (var instance in result.AddedInstances)
         {
