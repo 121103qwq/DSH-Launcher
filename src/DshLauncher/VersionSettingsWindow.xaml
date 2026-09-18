@@ -289,12 +289,18 @@
                             <ListBox x:Name="PluginList"
                                      BorderThickness="0"
                                      Background="Transparent"
-                                     Margin="0,12,0,0">
+                                     Margin="0,12,0,0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                 <ListBox.ItemContainerStyle>
                                     <Style TargetType="ListBoxItem" BasedOn="{StaticResource RoundedListItem}">
                                         <Setter Property="Padding" Value="0" />
                                         <Setter Property="Margin" Value="0,0,0,8" />
                                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <!-- With CanContentScroll=True the virtualizing panel measures items with an
+                                             infinite width, so a long description makes a card want to be far wider than
+                                             the viewport (horizontal scrollbar, action buttons pushed off-screen).
+                                             Binding the item width to the list keeps the text inside the card. -->
+                                        <Setter Property="Width" Value="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" />
                                     </Style>
                                 </ListBox.ItemContainerStyle>
                                 <ListBox.ItemTemplate>
@@ -306,15 +312,18 @@
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel>
-                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
                                                     <TextBlock Text="{Binding Version, TargetNullValue=版本未标记}"
                                                                Foreground="{StaticResource MutedBrush}"
                                                                FontSize="11"
                                                                Margin="0,3,0,0" />
+                                                    <!-- Single-line ellipsis instead of wrapping, so a long description cannot widen the card. -->
                                                     <TextBlock Text="{Binding Description, TargetNullValue=没有描述}"
                                                                Foreground="{StaticResource MutedBrush}"
                                                                FontSize="11"
-                                                               TextWrapping="Wrap"
+                                                               TextWrapping="NoWrap"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding Description}"
                                                                Margin="0,3,0,0" />
                                                 </StackPanel>
                                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
