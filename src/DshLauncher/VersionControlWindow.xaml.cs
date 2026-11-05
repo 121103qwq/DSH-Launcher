@@ -970,7 +970,12 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             var officialInUse = (installation is not null && new OfficialDesktopService().IsRunning(installation))
                 || Versions.Any(item => _isRunning(item.Id) && ExternalDshHomeGuard.SameHome(item.DshHome, officialHome));
             var versionInUse = _isRunning(version.Id);
+            // Any other owner (another Launcher, a standalone dsh, the official app) blocks the copy.
             if (!versionInUse) guard.EnsureAvailable(version);
+            if (!officialInUse)
+                guard.EnsureAvailable(new ManagerInstance(
+                    "official-desktop-home", "官方桌面端", installation?.InstallRoot ?? officialHome, InstanceKind.Installed,
+                    officialHome, null, null, InstanceRuntimeStatus.Ready, null, null, DateTimeOffset.UtcNow));
             var service = new HarnessCompatService();
             var result = await Task.Run(() => toOfficial
                 ? service.CopyProviderConfiguration(version.DshHome, officialHome, versionInUse, officialInUse)

@@ -24,7 +24,8 @@ public sealed class DshApiClient : IDisposable
         // token in the web URL; keep that cookie for later calls.
         _client = client ?? new HttpClient(new HttpClientHandler
         {
-            CookieContainer = new System.Net.CookieContainer(),
+            // dsh names its cookie per port; keep room for many instances.
+            CookieContainer = new System.Net.CookieContainer(1000, 300, 4096),
             UseCookies = true,
             UseProxy = false,
             AllowAutoRedirect = false
@@ -148,7 +149,16 @@ public sealed class DshApiClient : IDisposable
         };
         var endpoint = new Uri(baseUri, $"api/{method}");
         await EnsureAuthenticatedAsync(webUrl, cancellationToken);
-        using var response = await _client.PostAsJsonAsync(endpoint, envelope, cancellationToken);
+        var firstResponse = await _client.PostAsJsonAsync(endpoint, envelope, cancellationToken);
+        if (firstResponse.StatusCode == System.Net.HttpStatusCode.Unauthorized && HasLaunchToken(webUrl))
+        {
+            // The session cookie expired or was evicted: exchange the launch token again once.
+            firstResponse.Dispose();
+            ForgetAuthentication(webUrl);
+            await EnsureAuthenticatedAsync(webUrl, cancellationToken);
+            firstResponse = await _client.PostAsJsonAsync(endpoint, envelope, cancellationToken);
+        }
+        using var response = firstResponse;
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
@@ -216,6 +226,11 @@ public sealed class DshApiClient : IDisposable
     internal static bool HasLaunchToken(string webUrl) =>
         Uri.TryCreate(webUrl, UriKind.Absolute, out var uri)
         && !string.IsNullOrEmpty(System.Web.HttpUtility.ParseQueryString(uri.Query)["token"]);
+
+    private void ForgetAuthentication(string webUrl)
+    {
+        lock (_authenticatedUrls) _authenticatedUrls.Remove(webUrl);
+    }
 
     private async Task EnsureAuthenticatedAsync(string webUrl, CancellationToken cancellationToken)
     {

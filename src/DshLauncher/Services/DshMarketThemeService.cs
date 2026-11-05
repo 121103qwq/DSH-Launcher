@@ -23,7 +23,7 @@ public sealed class DshMarketThemeService : IDisposable
         // dsh >= 0.2.1 requires the cookie minted from the launch token.
         _client = client ?? new HttpClient(new HttpClientHandler
         {
-            CookieContainer = new CookieContainer(),
+            CookieContainer = new CookieContainer(1000, 300, 4096),
             UseCookies = true,
             UseProxy = false,
             AllowAutoRedirect = false
@@ -49,6 +49,7 @@ public sealed class DshMarketThemeService : IDisposable
                 new Uri(baseUri, "dsh-market/installed"),
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+            ForgetOnUnauthorized(instance.WebUrl, response);
             if (!response.IsSuccessStatusCode)
             {
                 return DshMarketThemeState.Unavailable(
@@ -115,6 +116,8 @@ public sealed class DshMarketThemeService : IDisposable
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+
+            ForgetOnUnauthorized(instance.WebUrl, response);
             var body = await response.Content.ReadAsStringAsync(timeout.Token);
             using var document = JsonDocument.Parse(body);
             var root = document.RootElement;
@@ -181,6 +184,8 @@ public sealed class DshMarketThemeService : IDisposable
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+
+            ForgetOnUnauthorized(instance.WebUrl, response);
             var body = await response.Content.ReadAsStringAsync(timeout.Token);
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
@@ -322,6 +327,13 @@ public sealed class DshMarketThemeService : IDisposable
 
     private readonly HashSet<string> _authenticatedUrls = new(StringComparer.Ordinal);
 
+    // A later call re-exchanges the launch token if the session cookie was lost.
+    private void ForgetOnUnauthorized(string? webUrl, HttpResponseMessage response)
+    {
+        if (response.StatusCode == HttpStatusCode.Unauthorized && webUrl is not null)
+            lock (_authenticatedUrls) _authenticatedUrls.Remove(webUrl);
+    }
+
     /// <summary>Exchange the dsh web launch token for the session cookie once per URL.</summary>
     internal async Task EnsureAuthenticatedAsync(string? webUrl, CancellationToken cancellationToken)
     {
@@ -384,6 +396,8 @@ public sealed class DshMarketThemeService : IDisposable
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+
+            ForgetOnUnauthorized(instance.WebUrl, response);
             var responseBody = await response.Content.ReadAsStringAsync(timeout.Token);
             using var document = JsonDocument.Parse(responseBody);
             var root = document.RootElement;
