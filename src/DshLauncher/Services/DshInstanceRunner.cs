@@ -12,7 +12,9 @@ namespace DshLauncher.Services;
 
 public sealed class DshInstanceRunner : IAsyncDisposable
 {
-    private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(30);
+    // First start on a cold machine (Defender scanning node_modules, slow disk) can
+    // exceed 30s; an exited process still fails immediately.
+    private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan HealthRequestTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CapabilityProbeTimeout = TimeSpan.FromSeconds(8);
@@ -394,11 +396,25 @@ public sealed class DshInstanceRunner : IAsyncDisposable
                         var health = await WaitForHealthAsync(running, cancellationToken);
                         if (health.IsSuccess)
                         {
+                            // dsh >= 0.2.1 guards the web UI and API with a launch token that
+                            // only appears in its "dsh web: <url>?token=..." line. Without it the
+                            // chat window shows "authentication required".
+                            var authenticatedUrl = await WaitForAuthenticatedUrlAsync(running, port, cancellationToken);
+                            // Hand lock ownership to the running record only once startup is complete,
+                            // so a cancelled token wait still releases it in the cleanup below.
                             instanceLock = null;
+                            if (authenticatedUrl is not null)
+                            {
+                                running = running with { WebUrl = authenticatedUrl };
+                                lock (_running)
+                                {
+                                    _running[instance.Id] = running;
+                                }
+                            }
                             return DshInstanceRunResult.Success(
                                 running.Process.Id,
                                 port,
-                                webUrl,
+                                running.WebUrl,
                                 TryGetProcessStartedAt(running.Process));
                         }
 
@@ -645,6 +661,49 @@ public sealed class DshInstanceRunner : IAsyncDisposable
         }
 
         return HealthResult.Failed($"DSh 健康检查超时（30 秒）。{lastError ?? string.Empty}{GetDiagnosticSuffix(running)}");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex AuthenticatedUrlPattern = new(
+        @"dsh web:\s*(?<url>https?://\S+)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>Extract the token-bearing URL dsh printed for this port, if any.</summary>
+    internal static string? TryParseAuthenticatedWebUrl(string output, int port)
+    {
+        foreach (System.Text.RegularExpressions.Match match in AuthenticatedUrlPattern.Matches(output))
+        {
+            if (!Uri.TryCreate(match.Groups["url"].Value, UriKind.Absolute, out var uri)
+                || !uri.IsLoopback || uri.Port != port) continue;
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            if (!string.IsNullOrEmpty(query["token"])) return uri.AbsoluteUri;
+        }
+        return null;
+    }
+
+    private static async Task<string?> WaitForAuthenticatedUrlAsync(
+        RunningDshProcess running, int port, CancellationToken cancellationToken)
+    {
+        // Older dsh builds never print a token: give them 3s. When the server demands a
+        // token (plain URL answers 401) the banner can come after plugin loading, so keep
+        // waiting up to the startup budget.
+        var started = DateTimeOffset.UtcNow;
+        var deadline = started + TimeSpan.FromSeconds(3);
+        var checkedRequirement = false;
+        while (true)
+        {
+            string text;
+            lock (running.Output) text = running.Output.ToString();
+            if (TryParseAuthenticatedWebUrl(text, port) is { } url) return url;
+            if (HasExited(running.Process)) return null;
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                if (checkedRequirement
+                    || !await DshApiClient.IsMissingRequiredLaunchTokenAsync(running.WebUrl, cancellationToken))
+                    return null;
+                checkedRequirement = true;
+                deadline = started + HealthTimeout;
+            }
+            await Task.Delay(100, cancellationToken);
+        }
     }
 
     private static async Task<bool> ProbeEndpointAsync(Uri endpoint, CancellationToken cancellationToken)

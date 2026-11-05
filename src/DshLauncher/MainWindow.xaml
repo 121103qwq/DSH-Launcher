@@ -337,6 +337,16 @@
                                                     Padding="18,9">
                                                 <TextBlock Text="准备首个版本" />
                                             </Button>
+                                            <Button Click="OpenDefaultOfficialDesktop_Click"
+                                                    Visibility="{Binding EmptyStateOfficialDesktopVisibility}"
+                                                    IsEnabled="{Binding CanOpenDefaultOfficialDesktop}"
+                                                    ToolTip="使用默认 DSH_HOME（DSH_HOME 环境变量或 %USERPROFILE%\.dsh）打开已安装的官方 DeepSeek Harness 桌面端"
+                                                    ToolTipService.ShowOnDisabled="True"
+                                                    HorizontalAlignment="Center"
+                                                    Margin="0,10,0,0"
+                                                    Padding="18,9">
+                                                <TextBlock Text="打开官方桌面端" />
+                                            </Button>
                                         </StackPanel>
                                         <StackPanel Visibility="{Binding InstancesVisibility}" VerticalAlignment="Top">
                                             <TextBlock Text="{Binding SelectedInstanceName}"

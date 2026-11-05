@@ -26,18 +26,19 @@ internal sealed class FirstRunSetupWindow : Window
         string nodeStatus,
         string dshStatus,
         string? initialInstallDirectory,
-        bool runtimeReady)
+        bool runtimeReady,
+        string? officialDesktopVersion)
     {
         Title = "首次运行";
         Width = 600;
-        Height = 430;
+        Height = Math.Min(480, SystemParameters.WorkArea.Height - 40);
         MinWidth = 540;
-        MinHeight = 400;
+        MinHeight = Math.Min(400, SystemParameters.WorkArea.Height - 40);
         ResizeMode = ResizeMode.CanResize;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        var panel = new StackPanel { Margin = new Thickness(24) };
+        var panel = new StackPanel { Margin = new Thickness(24, 24, 24, 0) };
         panel.Children.Add(new TextBlock
         {
             Text = "准备第一个 DSh 版本",
@@ -62,13 +63,23 @@ internal sealed class FirstRunSetupWindow : Window
             Padding = new Thickness(14)
         };
         var statusPanel = new StackPanel();
-        statusPanel.Children.Add(new TextBlock { Text = $"Node.js：{nodeStatus}", FontWeight = FontWeights.SemiBold });
+        statusPanel.Children.Add(new TextBlock { Text = $"Node.js：{nodeStatus}", FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         statusPanel.Children.Add(new TextBlock
         {
             Text = $"DeepSeek Harness：{dshStatus}",
             FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 7, 0, 0)
         });
+        if (officialDesktopVersion is not null)
+        {
+            statusPanel.Children.Add(new TextBlock
+            {
+                Text = $"官方桌面端：已安装（{officialDesktopVersion}）· 自带运行时，可直接打开；Launcher 管理的版本需另装 DSh",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 7, 0, 0)
+            });
+        }
         statusCard.Child = statusPanel;
         panel.Children.Add(statusCard);
 
@@ -112,7 +123,7 @@ internal sealed class FirstRunSetupWindow : Window
         {
             Orientation = System.Windows.Controls.Orientation.Horizontal,
             HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
-            Margin = new Thickness(0, 22, 0, 0)
+            Margin = new Thickness(24, 12, 24, 18)
         };
         var cancel = new Button
         {
@@ -123,6 +134,23 @@ internal sealed class FirstRunSetupWindow : Window
         };
         cancel.Click += (_, _) => DialogResult = false;
         buttons.Children.Add(cancel);
+
+        if (officialDesktopVersion is not null)
+        {
+            var official = new Button
+            {
+                Content = "打开官方桌面端",
+                Padding = new Thickness(13, 8, 13, 8),
+                Margin = new Thickness(0, 0, 8, 0),
+                ToolTip = "使用默认 DSH_HOME 打开已安装的官方 DeepSeek Harness 桌面端，不创建 Launcher 版本"
+            };
+            official.Click += (_, _) =>
+            {
+                OpenOfficialDesktopRequested = true;
+                DialogResult = false;
+            };
+            buttons.Children.Add(official);
+        }
 
         if (!runtimeReady)
         {
@@ -145,33 +173,49 @@ internal sealed class FirstRunSetupWindow : Window
         };
         primary.Click += (_, _) => Complete(FirstRunDownloadSource.Official);
         buttons.Children.Add(primary);
-        panel.Children.Add(buttons);
-
-        Content = new ScrollViewer
+        // Keep the action buttons outside the scroll area so they stay visible on
+        // small or high-DPI screens (e.g. 1024x768 at 150%).
+        var root = new DockPanel();
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        root.Children.Add(buttons);
+        root.Children.Add(new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = panel
-        };
+        });
+        Content = root;
     }
 
     public FirstRunSetupChoice? Choice { get; private set; }
+
+    public bool OpenOfficialDesktopRequested { get; private set; }
+
+    internal static string DescribeDshStatus(bool dshAvailable, string? availableText, string? error, bool officialDesktopDetected) =>
+        dshAvailable ? availableText ?? string.Empty
+        : officialDesktopDetected ? "尚未安装 Launcher 管理的 DSh 运行时（官方桌面端内置的运行时不能被 Launcher 使用）"
+        : error ?? "未安装";
 
     public static FirstRunSetupChoice? Show(
         Window owner,
         string nodeStatus,
         string dshStatus,
         string? initialInstallDirectory,
-        bool runtimeReady)
+        bool runtimeReady,
+        string? officialDesktopVersion,
+        out bool openOfficialDesktop)
     {
         var dialog = new FirstRunSetupWindow(
             nodeStatus,
             dshStatus,
             initialInstallDirectory,
-            runtimeReady)
+            runtimeReady,
+            officialDesktopVersion)
         {
             Owner = owner
         };
-        return dialog.ShowDialog() == true ? dialog.Choice : null;
+        var accepted = dialog.ShowDialog() == true;
+        openOfficialDesktop = dialog.OpenOfficialDesktopRequested;
+        return accepted ? dialog.Choice : null;
     }
 
     private void Browse_Click(object sender, RoutedEventArgs e)

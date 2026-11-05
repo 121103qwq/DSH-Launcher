@@ -187,7 +187,9 @@ dotnet run --project .\tests\DshLauncher.SelfTest\DshLauncher.SelfTest.csproj -c
 
 ## 当前版本
 
-当前源码版本为 **v1.2.4**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+当前源码版本为 **v1.3.0**。下载、变更说明和 SHA-256 信息请查看 [GitHub Releases](https://github.com/121103qwq/DSH-Launcher/releases)。
+
+与官方 DeepSeek Harness 桌面端共存的方案见 [docs/HARNESS_COMPAT.md](docs/HARNESS_COMPAT.md)（v1：更新通道检测、HOME 切换冲突保护、Provider 双向复制）。
 
 本次更新支持新版 `session.vN.jsonl` 对话文件、社区整合包市场和 `.dspack` Profile 导入，并补充 MIT 许可证。整合包一键上传、`dshhome` 整机包和 `files[]` 外部资源暂不支持。
 

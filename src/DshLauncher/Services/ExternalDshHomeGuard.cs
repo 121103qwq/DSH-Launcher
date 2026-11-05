@@ -36,6 +36,24 @@ public sealed class ExternalDshHomeGuard
 
     public string? GetConflict(ManagerInstance instance) => GetConflict(instance, allowOfficialDesktop: false);
 
+    /// <summary>DSH_HOME values of running official desktop main processes (readable ones only).</summary>
+    public IReadOnlyList<string> GetOfficialDesktopHomes(ManagerInstance probe) =>
+        _readOwners(probe with { UsesExternalDshHome = true })
+            .Where(owner => owner.ProductName == "DeepSeek Harness" && owner.DshHome is not null)
+            .Select(owner => owner.DshHome!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    /// <summary>
+    /// The official desktop is single-instance: a second launch only focuses the
+    /// running window and ignores the requested DSH_HOME. Explain that instead of
+    /// silently opening the wrong HOME.
+    /// </summary>
+    internal static string? DescribeHomeSwitchConflict(IReadOnlyList<string> runningHomes, string requestedHome) =>
+        runningHomes.Count == 0 || runningHomes.Any(home => SameHome(home, requestedHome))
+            ? null
+            : $"官方桌面端正在使用 {runningHomes[0]}。它是单实例应用，再次打开只会唤醒现有窗口，不会切换到 {requestedHome}。请先完全退出官方桌面端（包括托盘图标）后重试。";
+
     private string? GetConflict(ManagerInstance instance, bool allowOfficialDesktop)
     {
         try
@@ -64,6 +82,18 @@ public sealed class ExternalDshHomeGuard
         {
             return "无法完成桌面端占用检查，暂不启动或修改此 DSH_HOME。请确认桌面端已退出后重试。";
         }
+    }
+
+    internal static bool IsChildOfSameExecutable(ProcessTreeSnapshot snapshot, int processId, string executableName)
+    {
+        foreach (var (parentId, children) in snapshot.ChildrenByParent)
+        {
+            if (parentId != processId && children.Contains(processId)
+                && snapshot.Names.TryGetValue(parentId, out var parentName)
+                && string.Equals(parentName, executableName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     internal static bool SameHome(string left, string right) => string.Equals(
@@ -102,6 +132,11 @@ public sealed class ExternalDshHomeGuard
                 {
                     ignored ??= instance is null ? new HashSet<int>() : GetManagedProcessIds(instance, GetSnapshot);
                     if (ignored.Contains(process.Id) || !seen.Add(process.Id)) continue;
+                    // Chromium renderer/GPU/utility children inherit the main process
+                    // environment but are sandboxed: even MainModule can be denied, which
+                    // would report an "unknown HOME" owner that blocks every managed HOME.
+                    // Classify them from the snapshot before touching the process.
+                    if (IsChildOfSameExecutable(GetSnapshot(), process.Id, name + ".exe")) continue;
                     try
                     {
                         var executablePath = process.MainModule?.FileName;

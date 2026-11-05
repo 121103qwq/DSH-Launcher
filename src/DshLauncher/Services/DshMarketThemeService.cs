@@ -20,7 +20,14 @@ public sealed class DshMarketThemeService : IDisposable
 
     public DshMarketThemeService(HttpClient? client = null)
     {
-        _client = client ?? new HttpClient();
+        // dsh >= 0.2.1 requires the cookie minted from the launch token.
+        _client = client ?? new HttpClient(new HttpClientHandler
+        {
+            CookieContainer = new CookieContainer(1000, 300, 4096),
+            UseCookies = true,
+            UseProxy = false,
+            AllowAutoRedirect = false
+        });
         _ownsClient = client is null;
         _client.Timeout = Timeout.InfiniteTimeSpan;
     }
@@ -36,11 +43,13 @@ public sealed class DshMarketThemeService : IDisposable
 
         try
         {
+            await EnsureAuthenticatedAsync(instance.WebUrl, cancellationToken);
             using var timeout = CreateTimeout(cancellationToken, RequestTimeout);
             using var response = await _client.GetAsync(
                 new Uri(baseUri, "dsh-market/installed"),
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+            ForgetOnUnauthorized(instance.WebUrl, response);
             if (!response.IsSuccessStatusCode)
             {
                 return DshMarketThemeState.Unavailable(
@@ -90,6 +99,7 @@ public sealed class DshMarketThemeService : IDisposable
 
         try
         {
+            await EnsureAuthenticatedAsync(instance.WebUrl, cancellationToken);
             using var timeout = CreateTimeout(cancellationToken, RequestTimeout);
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
@@ -106,6 +116,8 @@ public sealed class DshMarketThemeService : IDisposable
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+
+            ForgetOnUnauthorized(instance.WebUrl, response);
             var body = await response.Content.ReadAsStringAsync(timeout.Token);
             using var document = JsonDocument.Parse(body);
             var root = document.RootElement;
@@ -152,6 +164,7 @@ public sealed class DshMarketThemeService : IDisposable
         var rpcId = Guid.NewGuid().ToString("D");
         try
         {
+            await EnsureAuthenticatedAsync(instance.WebUrl, cancellationToken);
             using var timeout = CreateTimeout(cancellationToken, RequestTimeout);
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
@@ -171,6 +184,8 @@ public sealed class DshMarketThemeService : IDisposable
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+
+            ForgetOnUnauthorized(instance.WebUrl, response);
             var body = await response.Content.ReadAsStringAsync(timeout.Token);
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
@@ -310,6 +325,31 @@ public sealed class DshMarketThemeService : IDisposable
         }
     }
 
+    private readonly HashSet<string> _authenticatedUrls = new(StringComparer.Ordinal);
+
+    // A later call re-exchanges the launch token if the session cookie was lost.
+    private void ForgetOnUnauthorized(string? webUrl, HttpResponseMessage response)
+    {
+        if (response.StatusCode == HttpStatusCode.Unauthorized && webUrl is not null)
+            lock (_authenticatedUrls) _authenticatedUrls.Remove(webUrl);
+    }
+
+    /// <summary>Exchange the dsh web launch token for the session cookie once per URL.</summary>
+    internal async Task EnsureAuthenticatedAsync(string? webUrl, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(webUrl) || !DshApiClient.HasLaunchToken(webUrl)) return;
+        lock (_authenticatedUrls)
+        {
+            if (_authenticatedUrls.Contains(webUrl)) return;
+        }
+        using var timeout = CreateTimeout(cancellationToken, RequestTimeout);
+        using var response = await _client.GetAsync(webUrl, timeout.Token);
+        if ((int)response.StatusCode < 400)
+        {
+            lock (_authenticatedUrls) _authenticatedUrls.Add(webUrl);
+        }
+    }
+
     private static bool TryGetBaseUri(ManagerInstance instance, out Uri baseUri, out string reason)
     {
         if (!Uri.TryCreate(instance.WebUrl, UriKind.Absolute, out var parsed)
@@ -341,6 +381,7 @@ public sealed class DshMarketThemeService : IDisposable
 
         try
         {
+            await EnsureAuthenticatedAsync(instance.WebUrl, cancellationToken);
             using var timeout = CreateTimeout(cancellationToken, MutationTimeout);
             using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, route));
             request.Headers.TryAddWithoutValidation(
@@ -355,6 +396,8 @@ public sealed class DshMarketThemeService : IDisposable
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 timeout.Token);
+
+            ForgetOnUnauthorized(instance.WebUrl, response);
             var responseBody = await response.Content.ReadAsStringAsync(timeout.Token);
             using var document = JsonDocument.Parse(responseBody);
             var root = document.RootElement;

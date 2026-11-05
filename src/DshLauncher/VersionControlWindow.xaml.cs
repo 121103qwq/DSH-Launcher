@@ -933,6 +933,77 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
     }
 
+    private async void ImportFromOfficial_Click(object sender, RoutedEventArgs e) =>
+        await CopyOfficialProvidersAsync(toOfficial: false);
+
+    private async void ExportToOfficial_Click(object sender, RoutedEventArgs e) =>
+        await CopyOfficialProvidersAsync(toOfficial: true);
+
+    private async Task CopyOfficialProvidersAsync(bool toOfficial)
+    {
+        var version = SelectedVersion;
+        if (version is null || !CanClone)
+        {
+            SetStatus(CloneButtonToolTip);
+            return;
+        }
+
+        var installation = _officialDesktopProvider is null ? null : await _officialDesktopProvider();
+        var officialHome = OfficialDesktopService.ResolveDefaultHome();
+        var feed = installation is null ? null : HarnessCompatService.ReadUpdateFeed(installation.InstallRoot);
+        var direction = toOfficial
+            ? $"把“{version.Name}”的 Provider 配置复制到官方桌面端 DSH_HOME：\n{officialHome}"
+            : $"把官方桌面端 DSH_HOME 的 Provider 配置复制到“{version.Name}”：\n{officialHome}";
+        var confirm = System.Windows.MessageBox.Show(
+            Window.GetWindow(this),
+            $"{direction}\n\n只复制 settings.yaml 和 .credentials.yaml，目标原文件会备份为 .bak-时间戳。\n官方桌面端：{installation?.DesktopVersionText ?? "未检测到安装"} · {HarnessCompatService.DescribeFeed(feed)}",
+            toOfficial ? "导出到官方桌面端" : "从官方桌面端导入",
+            System.Windows.MessageBoxButton.OKCancel,
+            System.Windows.MessageBoxImage.Question);
+        if (confirm != System.Windows.MessageBoxResult.OK) return;
+
+        SetBusy(true);
+        try
+        {
+            var guard = new ExternalDshHomeGuard();
+            // The official HOME is in use if the desktop runs or a linked Launcher version runs on it.
+            var officialInUse = (installation is not null && new OfficialDesktopService().IsRunning(installation))
+                || Versions.Any(item => _isRunning(item.Id) && ExternalDshHomeGuard.SameHome(item.DshHome, officialHome));
+            var versionInUse = _isRunning(version.Id);
+            // Any other owner (another Launcher, a standalone dsh, the official app) blocks the copy.
+            if (!versionInUse) guard.EnsureAvailable(version);
+            if (!officialInUse)
+                guard.EnsureAvailable(new ManagerInstance(
+                    "official-desktop-home", "官方桌面端", installation?.InstallRoot ?? officialHome, InstanceKind.Installed,
+                    officialHome, null, null, InstanceRuntimeStatus.Ready, null, null, DateTimeOffset.UtcNow));
+            var service = new HarnessCompatService();
+            var result = await Task.Run(() => toOfficial
+                ? service.CopyProviderConfiguration(version.DshHome, officialHome, versionInUse, officialInUse)
+                : service.CopyProviderConfiguration(officialHome, version.DshHome, officialInUse, versionInUse));
+            ReportCopy(result.CopiedAnything
+                ? $"已复制 {result.CopiedFiles.Count} 个 Provider 文件{(result.BackupFiles.Count > 0 ? $"，备份 {result.BackupFiles.Count} 个原文件" : string.Empty)}。 "
+                : "源 DSH_HOME 没有 Provider 配置（settings.yaml / .credentials.yaml），未做任何修改。 ",
+                System.Windows.MessageBoxImage.Information);
+            if (!toOfficial) _versionContentChanged();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidOperationException or InvalidDataException or ArgumentException)
+        {
+            ReportCopy(ex.Message, System.Windows.MessageBoxImage.Warning);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+        // The status line sits below the fold; also show the outcome where the user clicked.
+    private void ReportCopy(string message, System.Windows.MessageBoxImage icon)
+    {
+        SetStatus(message);
+        System.Windows.MessageBox.Show(Window.GetWindow(this), message.Trim(), "Provider 配置", System.Windows.MessageBoxButton.OK, icon);
+    }
+
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
     {
         if (SelectedVersion is null) return;

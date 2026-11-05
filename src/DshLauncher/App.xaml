@@ -47,7 +47,7 @@
                         <Border CornerRadius="8" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
                                 Padding="{TemplateBinding Padding}">
-                            <ContentPresenter RecognizesAccessKey="True" />
+                            <ContentPresenter RecognizesAccessKey="False" />
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>

@@ -15,11 +15,22 @@ public sealed class DshApiClient : IDisposable
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
+    private readonly HashSet<string> _authenticatedUrls = new(StringComparer.Ordinal);
 
     public DshApiClient(HttpClient? client = null)
     {
         _ownsClient = client is null;
-        _client = client ?? new HttpClient { Timeout = RequestTimeout };
+        // dsh >= 0.2.1 authenticates the API with a cookie minted from the launch
+        // token in the web URL; keep that cookie for later calls.
+        _client = client ?? new HttpClient(new HttpClientHandler
+        {
+            // dsh names its cookie per port; keep room for many instances.
+            CookieContainer = new System.Net.CookieContainer(1000, 300, 4096),
+            UseCookies = true,
+            UseProxy = false,
+            AllowAutoRedirect = false
+        })
+        { Timeout = RequestTimeout };
         if (!_client.DefaultRequestHeaders.UserAgent.Any())
         {
             _client.DefaultRequestHeaders.UserAgent.ParseAdd("DSH-Launcher/1.0");
@@ -137,7 +148,17 @@ public sealed class DshApiClient : IDisposable
             payload
         };
         var endpoint = new Uri(baseUri, $"api/{method}");
-        using var response = await _client.PostAsJsonAsync(endpoint, envelope, cancellationToken);
+        await EnsureAuthenticatedAsync(webUrl, cancellationToken);
+        var firstResponse = await _client.PostAsJsonAsync(endpoint, envelope, cancellationToken);
+        if (firstResponse.StatusCode == System.Net.HttpStatusCode.Unauthorized && HasLaunchToken(webUrl))
+        {
+            // The session cookie expired or was evicted: exchange the launch token again once.
+            firstResponse.Dispose();
+            ForgetAuthentication(webUrl);
+            await EnsureAuthenticatedAsync(webUrl, cancellationToken);
+            firstResponse = await _client.PostAsJsonAsync(endpoint, envelope, cancellationToken);
+        }
+        using var response = firstResponse;
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
@@ -178,6 +199,52 @@ public sealed class DshApiClient : IDisposable
         return result.TryGetProperty("value", out var value)
             ? value.Clone()
             : JsonDocument.Parse("{}").RootElement.Clone();
+    }
+
+    /// <summary>Hide the launch token when a web URL is shown to the user or logged.</summary>
+    public static string RedactLaunchToken(string? webUrl) =>
+        string.IsNullOrEmpty(webUrl) ? string.Empty
+            : System.Text.RegularExpressions.Regex.Replace(webUrl, @"([?&]token=)[^&#]+", "$1***");
+
+    /// <summary>True when the URL has no launch token and the server answers 401 (dsh >= 0.2.1).</summary>
+    public static async Task<bool> IsMissingRequiredLaunchTokenAsync(string webUrl, CancellationToken cancellationToken = default)
+    {
+        if (HasLaunchToken(webUrl)) return false;
+        try
+        {
+            using var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
+            { Timeout = TimeSpan.FromSeconds(3) };
+            using var response = await client.GetAsync(ValidateLoopbackUrl(webUrl), cancellationToken);
+            return response.StatusCode == System.Net.HttpStatusCode.Unauthorized;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool HasLaunchToken(string webUrl) =>
+        Uri.TryCreate(webUrl, UriKind.Absolute, out var uri)
+        && !string.IsNullOrEmpty(System.Web.HttpUtility.ParseQueryString(uri.Query)["token"]);
+
+    private void ForgetAuthentication(string webUrl)
+    {
+        lock (_authenticatedUrls) _authenticatedUrls.Remove(webUrl);
+    }
+
+    private async Task EnsureAuthenticatedAsync(string webUrl, CancellationToken cancellationToken)
+    {
+        if (!HasLaunchToken(webUrl)) return;
+        lock (_authenticatedUrls)
+        {
+            if (_authenticatedUrls.Contains(webUrl)) return;
+        }
+        // GET /?token=... answers 303 with Set-Cookie; the redirect itself is not needed.
+        using var response = await _client.GetAsync(webUrl, cancellationToken);
+        if ((int)response.StatusCode >= 400)
+            throw new HttpRequestException(
+                $"DSh Web 登录令牌无效：HTTP {(int)response.StatusCode}。请重启该实例。", null, response.StatusCode);
+        lock (_authenticatedUrls) _authenticatedUrls.Add(webUrl);
     }
 
     internal static Uri ValidateLoopbackUrl(string webUrl)

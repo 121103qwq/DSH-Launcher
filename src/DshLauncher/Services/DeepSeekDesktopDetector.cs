@@ -185,7 +185,7 @@ public static class DeepSeekDesktopDetector
 
             var version = TryReadFileVersion(executable)
                 ?? GetRegisteredInstallations().FirstOrDefault(item =>
-                    string.Equals(item.DisplayName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase)
+                    IsOfficialDisplayName(item.DisplayName)
                     && ExternalDshHomeGuard.SameHome(item.Root, root))?.Version;
             var (updateChannel, updateUrl) = TryReadAppUpdateMetadata(root);
             return new DeepSeekDesktopInstallation(
@@ -475,7 +475,15 @@ public static class DeepSeekDesktopDetector
     private static bool IsSupportedDisplayName(string? displayName) =>
         displayName?.StartsWith("DeepSeek Desktop", StringComparison.OrdinalIgnoreCase) == true
         || displayName?.StartsWith("DSH Desktop", StringComparison.OrdinalIgnoreCase) == true
-        || string.Equals(displayName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase);
+        || IsOfficialDisplayName(displayName);
+
+    // electron-builder NSIS writes "<productName> <version>", e.g. "DeepSeek Harness 0.2.1-rc.5".
+    internal static bool IsOfficialDisplayName(string? displayName) =>
+        string.Equals(displayName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase)
+        || (displayName is not null
+            && displayName.StartsWith("DeepSeek Harness ", StringComparison.OrdinalIgnoreCase)
+            && displayName.Length > "DeepSeek Harness ".Length
+            && char.IsDigit(displayName["DeepSeek Harness ".Length]));
 
     private static string? FindDshExecutable(string installRoot)
     {

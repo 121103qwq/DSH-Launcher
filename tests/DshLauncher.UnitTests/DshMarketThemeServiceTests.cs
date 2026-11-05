@@ -101,6 +101,31 @@ public sealed class DshMarketThemeServiceTests
         Assert.Contains("未暴露 ui-theme.preference", result.Reason);
     }
 
+    [Fact]
+    public async Task ExchangesLaunchTokenOnceBeforeMarketCalls()
+    {
+        var paths = new List<string>();
+        using var handler = new DelegateHandler(request =>
+        {
+            paths.Add(request.RequestUri!.PathAndQuery);
+            if (request.RequestUri.Query.Contains("token="))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.SeeOther));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"installed\":[],\"live\":[]}", Encoding.UTF8, "application/json")
+            });
+        });
+        using var client = new HttpClient(handler);
+        using var service = new DshMarketThemeService(client);
+        var instance = CreateRunningInstance() with { WebUrl = "http://127.0.0.1:34567/?token=abc" };
+
+        var first = await service.ReadAsync(instance);
+        await service.ReadAsync(instance);
+
+        Assert.True(first.IsAvailable);
+        Assert.Equal(new[] { "/?token=abc", "/dsh-market/installed", "/dsh-market/installed" }, paths);
+    }
+
     private static ManagerInstance CreateRunningInstance() => new(
         Id: "theme-test",
         Name: "Theme test",

@@ -348,10 +348,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool HasRunningInstanceForHome(string home) => Instances.Any(instance =>
         ExternalDshHomeGuard.SameHome(instance.DshHome, home) && _instanceRunner.IsRunning(instance.Id));
 
+    // With no managed version the official desktop still opens on its default HOME.
+    public Visibility EmptyStateOfficialDesktopVisibility => DetectedOfficialDesktop is not null
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public bool CanOpenDefaultOfficialDesktop => DetectedOfficialDesktop is not null
+        && !_isLifecycleInProgress
+        && !_isRuntimePrepareInProgress;
+
+    private async void OpenDefaultOfficialDesktop_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await OpenOfficialDesktopAsync(null);
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"打开官方桌面端失败：{ex.Message}");
+        }
+    }
+
     private void RefreshOfficialDesktopAction()
     {
         OnPropertyChanged(nameof(CanOpenOfficialDesktop));
         OnPropertyChanged(nameof(OpenOfficialDesktopToolTip));
+        OnPropertyChanged(nameof(EmptyStateOfficialDesktopVisibility));
+        OnPropertyChanged(nameof(CanOpenDefaultOfficialDesktop));
     }
 
     private async Task<DeepSeekDesktopInstallation?> DetectOfficialDesktopAsync(bool forceRefresh = false)
@@ -410,7 +433,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         && !runtimePrepareInProgress
         && isManaged;
 
-    public string InstanceEndpointText => SelectedInstance?.WebUrl
+    // The launch token is a login credential; never show it in the UI.
+    public string InstanceEndpointText => (SelectedInstance?.WebUrl is { } url ? DshApiClient.RedactLaunchToken(url) : null)
         ?? (SelectedInstance?.RuntimeStatus == InstanceRuntimeStatus.Running ? "正在检查运行地址…" : "尚未启动");
 
     public string SelectedInstanceRuntimeResourceText => SelectedInstance?.RuntimeResourceText ?? string.Empty;
@@ -1500,6 +1524,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 "official-desktop", "官方桌面端", installation.InstallRoot, InstanceKind.Installed,
                 desktopHome, null, null, InstanceRuntimeStatus.Ready, null, null, DateTimeOffset.UtcNow);
             _externalHomeGuard.EnsureOfficialDesktopAvailable(requestedInstance);
+            if (ExternalDshHomeGuard.DescribeHomeSwitchConflict(
+                    _externalHomeGuard.GetOfficialDesktopHomes(requestedInstance), desktopHome) is { } switchConflict)
+                throw new InvalidOperationException(switchConflict);
             _officialDesktopService.Launch(installation, desktopHome);
             ShowNotice("已请求打开官方 DeepSeek Harness 桌面端；若已在运行，将唤醒现有窗口，继续使用原 DSH_HOME。");
         }
@@ -4126,18 +4153,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
-        var prepareNodeEngine = GetNodeEngineRequirement(target);
+        // Before dsh is installed its package cannot be read; current npm builds
+        // need import.meta.main, so check that floor instead of failing silently later.
+        var preflightInstallDirectory = GetConfiguredDshInstallDirectory();
+        var willInstallNpmDsh = packagedRuntime is null
+            && (!_dshRuntime.IsAvailable
+                || DshInstallService.ShouldInstallGlobalDSh(_dshRuntime.IsAvailable, target?.Kind)
+                || (target?.Kind is null or InstanceKind.Installed
+                    && !string.IsNullOrWhiteSpace(preflightInstallDirectory)
+                    && !DshRuntimeDetector.IsExecutableInInstallDirectory(_dshRuntime.ExecutablePath, preflightInstallDirectory)));
+        var prepareNodeEngine = GetNodeEngineRequirement(target)
+            ?? (willInstallNpmDsh ? DshRuntimeDetector.ImportMetaMainNodeEngine : null);
+        var upgradeNode = false;
         if (packagedRuntime is null
             && _nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
             && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
         {
-            System.Windows.MessageBox.Show(this,
-                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本后重试。",
+            // An old Node on PATH used to be a dead end. The official MSI installs a
+            // compatible Node next to it (never uninstalling anything); detection
+            // prefers the highest compatible version afterwards.
+            var answer = System.Windows.MessageBox.Show(this,
+                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\n是否从 {sourceName} 下载并安装兼容的 Node.js？\nLauncher 不会卸载现有 Node.js。",
                 "运行环境不兼容",
-                MessageBoxButton.OK,
+                MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
-            return false;
+            if (answer != MessageBoxResult.Yes) return false;
+            upgradeNode = true;
         }
 
         _isRuntimePrepareInProgress = true;
@@ -4152,7 +4194,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var progress = new Progress<NodeDownloadProgress>(progressWindow.SetDownloadProgress);
             var nodeWasInstalled = false;
 
-            if (packagedRuntime is null && !_nodeRuntime.IsAvailable)
+            if (packagedRuntime is null && (!_nodeRuntime.IsAvailable || upgradeNode))
             {
                 progressWindow.SetIndeterminate(false);
                 progressWindow.SetStatus($"正在通过 {sourceName} 解析 Node.js 版本并下载安装程序…");
@@ -4177,18 +4219,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 RevealRuntimeAfterBootstrap(TestRuntimeKind.Node);
                 progressWindow.SetStatus("Node.js 安装完成，正在重新检测…");
-                for (var attempt = 0; attempt < 5 && !_nodeRuntime.IsAvailable; attempt++)
+                bool NodeReady() => _nodeRuntime.IsAvailable && (!upgradeNode
+                    || _nodeRuntime.GetCompatibility(prepareNodeEngine) == NodeRuntimeCompatibility.Compatible);
+                for (var attempt = 0; attempt < 5 && !NodeReady(); attempt++)
                 {
                     await RefreshNodeAsync();
-                    if (!_nodeRuntime.IsAvailable)
+                    if (!NodeReady())
                     {
                         await Task.Delay(1000, cancellation.Token);
                     }
                 }
 
-                if (!_nodeRuntime.IsAvailable)
+                if (!NodeReady())
                 {
-                    const string message = "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。";
+                    var message = upgradeNode
+                        ? $"已安装新版 Node.js，但检测到的仍是 {_nodeRuntime.VersionText}。请在设置中改用兼容的 node.exe，或调整 PATH 后重新检测。"
+                        : "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。";
                     progressWindow.SetStatus(message);
                     progressWindow.FailTask(message);
                     System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -4259,7 +4305,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 if (!_dshRuntime.IsAvailable)
                 {
-                    const string message = "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。";
+                    var message = DescribeMissingDshAfterInstall(_nodeRuntime, dshInstallDirectory);
                     progressWindow.SetStatus(message);
                     progressWindow.FailTask(message);
                     System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -4384,6 +4430,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return nodeRuntime.IsAvailable
             && nodeRuntime.GetCompatibility(nodeEngineRequirement) == NodeRuntimeCompatibility.Compatible;
+    }
+
+    internal static string DescribeMissingDshAfterInstall(NodeRuntimeInfo nodeRuntime, string? installDirectory)
+    {
+        var engine = string.IsNullOrWhiteSpace(installDirectory) ? null
+            : DshRuntimeDetector.TryReadNodeEngine(Path.Combine(installDirectory, "node_modules", "@deepseek-ai", "dsh"));
+        return engine is not null && nodeRuntime.GetCompatibility(engine) == NodeRuntimeCompatibility.Incompatible
+            ? $"DSh 已安装，但当前 Node.js {nodeRuntime.VersionText} 过旧（需要 {engine}），dsh 命令无法运行且不会输出任何内容。请安装兼容的 Node.js（例如 v{NodeInstallService.DefaultVersion.TrimStart('v')}）后重新检测。"
+            : "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。";
     }
 
     internal static bool IsGlobalRuntimeReady(NodeRuntimeInfo nodeRuntime, string? dshNodeEngine) =>
@@ -4712,6 +4767,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (!string.IsNullOrWhiteSpace(selected.WebUrl))
             {
+                if (await DshApiClient.IsMissingRequiredLaunchTokenAsync(selected.WebUrl))
+                {
+                    // Started by an older Launcher build: dsh printed its token to a pipe
+                    // that no longer exists, so only a restart can obtain one.
+                    ShowNotice($"实例 {selected.Name} 由旧版 Launcher 启动，缺少 dsh web 登录令牌，无法打开对话。请点“重启”后再试。");
+                    return;
+                }
+
                 if (!TryFocusChatWindow(selected.Id))
                 {
                     OpenChatWindow(selected.Id, selected.WebUrl);
@@ -5077,7 +5140,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 LastUsedAt = DateTimeOffset.UtcNow
             });
             OpenChatWindow(selected.Id, result.WebUrl);
-            ShowNotice($"实例已重启：{selected.Name}，运行地址 {result.WebUrl}。");
+            ShowNotice($"实例已重启：{selected.Name}，运行地址 {DshApiClient.RedactLaunchToken(result.WebUrl)}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -5712,14 +5775,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var configuredDirectory = GetConfiguredDshInstallDirectory();
         var runtimeReady = IsPreferredDshRuntimeReady(_dshRuntime, configuredDirectory)
             && IsDetectedRuntimeReady(_nodeRuntime, _dshRuntime);
+        var officialDesktop = await DetectOfficialDesktopAsync();
         var choice = FirstRunSetupWindow.Show(
             this,
-            _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
-            _dshRuntime.IsAvailable
-                ? $"{_dshRuntime.DisplayVersionText} · 已找到启动文件"
-                : _dshRuntime.Error ?? "未安装",
+            !_nodeRuntime.IsAvailable
+                ? "未安装"
+                : !_dshRuntime.IsAvailable
+                    && _nodeRuntime.GetCompatibility(DshRuntimeDetector.ImportMetaMainNodeEngine) != NodeRuntimeCompatibility.Compatible
+                    ? $"{_nodeRuntime.VersionText} · 过旧（npm 版 DSh 需要 {DshRuntimeDetector.ImportMetaMainNodeEngine}；创建版本时 Launcher 可安装兼容版本）"
+                    : $"{_nodeRuntime.VersionText} · {NodeStatusText}",
+            FirstRunSetupWindow.DescribeDshStatus(
+                _dshRuntime.IsAvailable,
+                $"{_dshRuntime.DisplayVersionText} · 已找到启动文件",
+                _dshRuntime.Error,
+                officialDesktop is not null),
             configuredDirectory,
-            runtimeReady);
+            runtimeReady,
+            officialDesktop is null ? null : officialDesktop.DesktopVersionText,
+            out var openOfficialDesktop);
+        if (openOfficialDesktop)
+        {
+            try
+            {
+                await OpenOfficialDesktopAsync(null);
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"打开官方桌面端失败：{ex.Message}");
+            }
+            return;
+        }
+
         if (choice is null)
         {
             ShowNotice("已暂缓首次运行配置；可点击“准备首个版本”重新打开引导。");
@@ -5806,7 +5892,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         OpenChatWindow(selected.Id, result.WebUrl);
-        ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
+        ShowNotice($"实例已启动：{selected.Name}，运行地址 {DshApiClient.RedactLaunchToken(result.WebUrl)}。健康检查已通过。");
         return true;
     }
 

@@ -22,5 +22,5 @@ public sealed record DeepSeekDesktopInstallation(
     public string Description => $"{KindText} · 只读\n{DesktopVersionText}\n{InstallRoot}"
         + (string.IsNullOrWhiteSpace(UpdateChannel) ? string.Empty : $"\n更新通道：{UpdateChannel}")
         + (string.IsNullOrWhiteSpace(UpdateUrl) ? string.Empty : $"\n更新地址：{UpdateUrl}")
-        + "\n请从启动页选择实例后打开；此安装不能用作 Launcher 管理的运行时。";
+        + "\n打开方式：启动页选中版本后点“在官方桌面端打开”（使用该版本的 DSH_HOME）；尚无版本时点启动页的“打开官方桌面端”（使用默认 DSH_HOME）。此安装不能用作 Launcher 管理的运行时。";
 }
