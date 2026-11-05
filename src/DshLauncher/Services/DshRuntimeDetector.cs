@@ -593,7 +593,32 @@ public sealed class DshRuntimeDetector
                 ? version.GetString()
                 : null);
 
+    // dsh 0.2.x gates its CLI entry on `import.meta.main` without declaring
+    // engines.node. Older Node leaves it undefined, so `dsh --version` exits 0
+    // with no output. import.meta.main exists from Node 22.18.0 and 24.2.0.
+    internal const string ImportMetaMainNodeEngine = "^22.18.0 || >=24.2.0";
+
     public static string? TryReadNodeEngine(string packageRoot) =>
+        TryReadDeclaredNodeEngine(packageRoot) ?? TryInferNodeEngine(packageRoot);
+
+    internal static string? TryInferNodeEngine(string packageRoot)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(packageRoot) || !IsDshPackageRoot(Path.GetFullPath(packageRoot.Trim())))
+                return null;
+            var entry = Path.Combine(Path.GetFullPath(packageRoot.Trim()), "lib", "bin.js");
+            return File.Exists(entry) && File.ReadAllText(entry, Encoding.UTF8).Contains("import.meta.main", StringComparison.Ordinal)
+                ? ImportMetaMainNodeEngine
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryReadDeclaredNodeEngine(string packageRoot) =>
         TryReadPackageString(packageRoot, static root =>
             root.TryGetProperty("engines", out var engines)
             && engines.ValueKind == JsonValueKind.Object

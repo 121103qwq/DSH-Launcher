@@ -4126,7 +4126,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
-        var prepareNodeEngine = GetNodeEngineRequirement(target);
+        // Before dsh is installed its package cannot be read; current npm builds
+        // need import.meta.main, so check that floor instead of failing silently later.
+        var prepareNodeEngine = GetNodeEngineRequirement(target)
+            ?? (packagedRuntime is null && !_dshRuntime.IsAvailable ? DshRuntimeDetector.ImportMetaMainNodeEngine : null);
         if (packagedRuntime is null
             && _nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
@@ -4259,7 +4262,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 if (!_dshRuntime.IsAvailable)
                 {
-                    const string message = "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。";
+                    var message = DescribeMissingDshAfterInstall(_nodeRuntime, dshInstallDirectory);
                     progressWindow.SetStatus(message);
                     progressWindow.FailTask(message);
                     System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -4384,6 +4387,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return nodeRuntime.IsAvailable
             && nodeRuntime.GetCompatibility(nodeEngineRequirement) == NodeRuntimeCompatibility.Compatible;
+    }
+
+    internal static string DescribeMissingDshAfterInstall(NodeRuntimeInfo nodeRuntime, string? installDirectory)
+    {
+        var engine = string.IsNullOrWhiteSpace(installDirectory) ? null
+            : DshRuntimeDetector.TryReadNodeEngine(Path.Combine(installDirectory, "node_modules", "@deepseek-ai", "dsh"));
+        return engine is not null && nodeRuntime.GetCompatibility(engine) == NodeRuntimeCompatibility.Incompatible
+            ? $"DSh 已安装，但当前 Node.js {nodeRuntime.VersionText} 过旧（需要 {engine}），dsh 命令无法运行且不会输出任何内容。请安装兼容的 Node.js（例如 v{NodeInstallService.DefaultVersion.TrimStart('v')}）后重新检测。"
+            : "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。";
     }
 
     internal static bool IsGlobalRuntimeReady(NodeRuntimeInfo nodeRuntime, string? dshNodeEngine) =>
