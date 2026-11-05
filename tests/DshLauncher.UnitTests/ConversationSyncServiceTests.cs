@@ -43,6 +43,43 @@ public sealed class ConversationSyncServiceTests
         Assert.False(File.Exists(SessionPath(second, relativePath)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OccupiedHomeIsExcludedFromCopiesAndDeletionState(bool unknownHome)
+    {
+        using var temporary = new TestDirectory();
+        var settings = new VersionSettingsService(new LauncherPaths(Path.Combine(temporary.Path, "launcher")));
+        var first = CreateTestInstance("first", temporary.Path, Path.Combine(temporary.Path, "first"));
+        var second = CreateTestInstance("second", temporary.Path, Path.Combine(temporary.Path, "second"));
+        var busy = CreateTestInstance("busy", temporary.Path, Path.Combine(temporary.Path, "busy"));
+        ConfigureWorkspace(settings, first, second, busy);
+        const string shared = "work/shared/session.jsonl";
+        const string privateSession = "work/private/session.jsonl";
+        WriteSession(first, shared, "available");
+        WriteSession(busy, privateSession, "busy only");
+        var unguarded = new ConversationSyncService(settings);
+        unguarded.PropagateDeletion(first, shared, new[] { first, second });
+        WriteSession(busy, shared, "must survive tombstone");
+        SetSessionTimestamp(busy, shared, DateTime.UtcNow.AddMinutes(-1));
+        var busyBefore = ReadSession(busy, shared);
+        var guard = new ExternalDshHomeGuard(_ => new[]
+        {
+            new ExternalHomeOwner(9999, "DeepSeek Harness", unknownHome ? null : busy.DshHome)
+        });
+        var service = new ConversationSyncService(settings, homeGuard: guard);
+
+        var sync = service.SynchronizeAll(new[] { first, second, busy });
+        Assert.NotEmpty(sync.Errors);
+        Assert.Equal(busyBefore, ReadSession(busy, shared));
+        Assert.False(File.Exists(SessionPath(first, privateSession)));
+        Assert.False(File.Exists(SessionPath(second, privateSession)));
+        var deletion = service.PropagateDeletion(first, privateSession, new[] { first, second, busy });
+        Assert.NotEmpty(deletion.Errors);
+        Assert.True(File.Exists(SessionPath(busy, privateSession)));
+        Assert.False(File.Exists(Path.Combine(busy.DshHome, ".dsh-launcher", "conversation-sync.json")));
+    }
+
     [Fact]
     public void RunningVersionIsNotWrittenOrDeleted()
     {

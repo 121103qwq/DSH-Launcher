@@ -20,11 +20,14 @@ public sealed class ConversationSyncService
     };
     private readonly VersionSettingsService _settingsService;
     private readonly Func<string, bool> _isManagedRunning;
+    private readonly ExternalDshHomeGuard _homeGuard;
 
     public ConversationSyncService(
         VersionSettingsService settingsService,
-        Func<string, bool>? isManagedRunning = null)
+        Func<string, bool>? isManagedRunning = null,
+        ExternalDshHomeGuard? homeGuard = null)
     {
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
         _settingsService = settingsService;
         _isManagedRunning = isManagedRunning ?? (_ => false);
     }
@@ -93,8 +96,8 @@ public sealed class ConversationSyncService
                 new[] { "会话路径不是 canonical Session 文件，不能同步删除。" });
         }
 
-        var stopped = component.Where(version => !IsRunning(version)).ToArray();
         var errors = new List<string>();
+        var stopped = GetAvailableStoppedVersions(component, errors);
         var deletedAt = DateTime.UtcNow;
         foreach (var version in stopped)
         {
@@ -116,7 +119,7 @@ public sealed class ConversationSyncService
             }
         }
 
-        return new ConversationSyncResult(0, component.Count - stopped.Length, errors);
+        return new ConversationSyncResult(0, component.Count(IsRunning), errors);
     }
 
     private IReadOnlyList<ManagerInstance> FindComponent(
@@ -177,15 +180,15 @@ public sealed class ConversationSyncService
 
     private ConversationSyncResult SynchronizeComponent(IReadOnlyList<ManagerInstance> component)
     {
-        var stopped = component.Where(version => !IsRunning(version)).ToArray();
-        var skippedRunning = component.Count - stopped.Length;
+        var errors = new List<string>();
+        var stopped = GetAvailableStoppedVersions(component, errors);
+        var skippedRunning = component.Count(IsRunning);
         if (stopped.Length < 2)
         {
-            return new ConversationSyncResult(0, skippedRunning, Array.Empty<string>());
+            return new ConversationSyncResult(0, skippedRunning, errors);
         }
 
         var files = new Dictionary<string, List<SessionFile>>(StringComparer.OrdinalIgnoreCase);
-        var errors = new List<string>();
         var tombstones = ReadTombstones(stopped, errors);
         foreach (var version in stopped)
         {
@@ -289,6 +292,21 @@ public sealed class ConversationSyncService
         }
 
         return new ConversationSyncResult(copied, skippedRunning, errors);
+    }
+
+    private ManagerInstance[] GetAvailableStoppedVersions(
+        IReadOnlyList<ManagerInstance> component, ICollection<string> errors)
+    {
+        var available = new List<ManagerInstance>();
+        foreach (var version in component.Where(version => !IsRunning(version)))
+        {
+            var conflict = _homeGuard.GetConflict(version);
+            if (conflict is not null)
+                errors.Add($"{version.Name}：{conflict}");
+            else
+                available.Add(version);
+        }
+        return available.ToArray();
     }
 
     private bool IsRunning(ManagerInstance instance) =>
