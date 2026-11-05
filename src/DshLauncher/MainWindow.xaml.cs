@@ -4766,6 +4766,14 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         {
             if (!string.IsNullOrWhiteSpace(selected.WebUrl))
             {
+                if (await DshApiClient.IsMissingRequiredLaunchTokenAsync(selected.WebUrl))
+                {
+                    // Started by an older Launcher build: dsh printed its token to a pipe
+                    // that no longer exists, so only a restart can obtain one.
+                    ShowNotice($"实例 {selected.Name} 由旧版 Launcher 启动，缺少 dsh web 登录令牌，无法打开对话。请点“重启”后再试。");
+                    return;
+                }
+
                 if (!TryFocusChatWindow(selected.Id))
                 {
                     OpenChatWindow(selected.Id, selected.WebUrl);

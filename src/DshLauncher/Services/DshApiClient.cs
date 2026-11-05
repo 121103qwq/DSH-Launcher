@@ -196,6 +196,23 @@ public sealed class DshApiClient : IDisposable
         string.IsNullOrEmpty(webUrl) ? string.Empty
             : System.Text.RegularExpressions.Regex.Replace(webUrl, @"([?&]token=)[^&#]+", "$1***");
 
+    /// <summary>True when the URL has no launch token and the server answers 401 (dsh >= 0.2.1).</summary>
+    public static async Task<bool> IsMissingRequiredLaunchTokenAsync(string webUrl, CancellationToken cancellationToken = default)
+    {
+        if (HasLaunchToken(webUrl)) return false;
+        try
+        {
+            using var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
+            { Timeout = TimeSpan.FromSeconds(3) };
+            using var response = await client.GetAsync(ValidateLoopbackUrl(webUrl), cancellationToken);
+            return response.StatusCode == System.Net.HttpStatusCode.Unauthorized;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
     internal static bool HasLaunchToken(string webUrl) =>
         Uri.TryCreate(webUrl, UriKind.Absolute, out var uri)
         && !string.IsNullOrEmpty(System.Web.HttpUtility.ParseQueryString(uri.Query)["token"]);
