@@ -980,20 +980,28 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             var result = await Task.Run(() => toOfficial
                 ? service.CopyProviderConfiguration(version.DshHome, officialHome, versionInUse, officialInUse)
                 : service.CopyProviderConfiguration(officialHome, version.DshHome, officialInUse, versionInUse));
-            SetStatus(result.CopiedAnything
+            ReportCopy(result.CopiedAnything
                 ? $"已复制 {result.CopiedFiles.Count} 个 Provider 文件{(result.BackupFiles.Count > 0 ? $"，备份 {result.BackupFiles.Count} 个原文件" : string.Empty)}。 "
-                : "源 DSH_HOME 没有 Provider 配置（settings.yaml / .credentials.yaml），未做任何修改。 ");
+                : "源 DSH_HOME 没有 Provider 配置（settings.yaml / .credentials.yaml），未做任何修改。 ",
+                System.Windows.MessageBoxImage.Information);
             if (!toOfficial) _versionContentChanged();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
             or InvalidOperationException or InvalidDataException or ArgumentException)
         {
-            SetStatus(ex.Message);
+            ReportCopy(ex.Message, System.Windows.MessageBoxImage.Warning);
         }
         finally
         {
             SetBusy(false);
         }
+    }
+
+        // The status line sits below the fold; also show the outcome where the user clicked.
+    private void ReportCopy(string message, System.Windows.MessageBoxImage icon)
+    {
+        SetStatus(message);
+        System.Windows.MessageBox.Show(Window.GetWindow(this), message.Trim(), "Provider 配置", System.Windows.MessageBoxButton.OK, icon);
     }
 
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
