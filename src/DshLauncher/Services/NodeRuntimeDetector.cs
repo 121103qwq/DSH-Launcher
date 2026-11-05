@@ -157,7 +157,8 @@ public sealed class NodeRuntimeDetector
             }
         }
 
-        foreach (var installation in desktopInstallations ?? DeepSeekDesktopDetector.DetectInstallations())
+        foreach (var installation in (desktopInstallations ?? DeepSeekDesktopDetector.DetectInstallations())
+                     .Where(item => !item.IsOfficial))
         {
             if (seen.Add(installation.NodeExecutablePath))
             {

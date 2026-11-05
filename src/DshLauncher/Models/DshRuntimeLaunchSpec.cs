@@ -4,7 +4,8 @@ public enum DshRuntimeLaunchMode
 {
     DirectCommand,
     NodeScript,
-    ElectronBootstrap
+    ElectronBootstrap,
+    OfficialDesktopApp
 }
 
 /// <summary>

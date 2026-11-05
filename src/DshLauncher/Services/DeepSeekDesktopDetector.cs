@@ -55,7 +55,8 @@ public static class DeepSeekDesktopDetector
             return null;
         }
 
-        return TryDetectDshDesktopV2(normalizedRoot)
+        return TryDetectOfficialHarnessDesktop(normalizedRoot)
+            ?? TryDetectDshDesktopV2(normalizedRoot)
             ?? TryDetectLegacyDesktop(normalizedRoot);
     }
 
@@ -63,6 +64,11 @@ public static class DeepSeekDesktopDetector
         DeepSeekDesktopInstallation installation,
         string? localApplicationData = null)
     {
+        if (installation.IsOfficial)
+        {
+            return OfficialDesktopService.ResolveDefaultHome();
+        }
+
         var modulesFile = Path.Combine(
             Path.GetDirectoryName(Path.GetDirectoryName(installation.DshPackageRoot)) ?? string.Empty,
             ".modules.yaml");
@@ -150,6 +156,69 @@ public static class DeepSeekDesktopDetector
             or NotSupportedException)
         {
             return null;
+        }
+    }
+
+    internal static DeepSeekDesktopInstallation? TryDetectOfficialHarnessDesktop(string installRoot)
+    {
+        try
+        {
+            var root = Path.GetFullPath(installRoot);
+            if (!File.Exists(Path.Combine(root, "resources", "app.asar")))
+            {
+                return null;
+            }
+
+            // electron-builder normally derives this name from productName.
+            // Renamed executables must identify the official product in PE metadata.
+            var executable = Path.Combine(root, "DeepSeek Harness.exe");
+            if (!File.Exists(executable))
+            {
+                executable = Directory.EnumerateFiles(root, "*.exe", SearchOption.TopDirectoryOnly)
+                    .FirstOrDefault(IsOfficialHarnessExecutable);
+            }
+
+            if (executable is null)
+            {
+                return null;
+            }
+
+            var version = GetRegisteredInstallations().FirstOrDefault(item =>
+                string.Equals(item.DisplayName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase)
+                && ExternalDshHomeGuard.SameHome(item.Root, root))?.Version
+                ?? TryReadFileVersion(executable);
+            return new DeepSeekDesktopInstallation(
+                root, version,
+                NodeExecutablePath: string.Empty,
+                DshExecutablePath: string.Empty,
+                DshPackageRoot: string.Empty,
+                DshVersion: string.Empty,
+                LaunchSpec: new DshRuntimeLaunchSpec(
+                    DshRuntimeLaunchMode.OfficialDesktopApp,
+                    executable,
+                    ProductName: "DeepSeek Harness",
+                    ProductVersion: version),
+                ProductName: "DeepSeek Harness",
+                IsOfficial: true);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException
+            or UnauthorizedAccessException or NotSupportedException or Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsOfficialHarnessExecutable(string path)
+    {
+        try
+        {
+            var info = FileVersionInfo.GetVersionInfo(path);
+            return string.Equals(info.ProductName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(info.FileDescription, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 
@@ -270,7 +339,9 @@ public static class DeepSeekDesktopDetector
                 Path.Combine("Programs", "DeepSeek Desktop"),
                 "DeepSeek Desktop",
                 Path.Combine("Programs", "DSH Desktop"),
-                "DSH Desktop"
+                "DSH Desktop",
+                Path.Combine("Programs", "DeepSeek Harness"),
+                "DeepSeek Harness"
             })
             {
                 var candidate = Path.Combine(baseDirectory, relative);
@@ -281,18 +352,21 @@ public static class DeepSeekDesktopDetector
             }
         }
 
-        foreach (var registeredRoot in GetRegisteredInstallRoots())
+        foreach (var registered in GetRegisteredInstallations())
         {
-            if (seen.Add(registeredRoot))
+            if (seen.Add(registered.Root))
             {
-                yield return registeredRoot;
+                yield return registered.Root;
             }
         }
     }
 
-    private static IReadOnlyList<string> GetRegisteredInstallRoots()
+    private sealed record RegisteredInstallation(string Root, string? DisplayName, string? Version);
+
+    private static IReadOnlyList<RegisteredInstallation> GetRegisteredInstallations()
     {
-        var results = new List<string>();
+        var results = new List<RegisteredInstallation>();
+        if (!OperatingSystem.IsWindows()) return results;
         foreach (var (root, path) in new[]
         {
             (Registry.CurrentUser, @"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
@@ -325,7 +399,9 @@ public static class DeepSeekDesktopDetector
                     var installLocation = application.GetValue("InstallLocation") as string;
                     if (!string.IsNullOrWhiteSpace(installLocation))
                     {
-                        results.Add(installLocation.Trim().Trim('"'));
+                        results.Add(new RegisteredInstallation(
+                            installLocation.Trim().Trim('"'), displayName,
+                            FirstNonEmpty(application.GetValue("DisplayVersion") as string)));
                     }
                 }
             }
@@ -341,7 +417,8 @@ public static class DeepSeekDesktopDetector
 
     private static bool IsSupportedDisplayName(string? displayName) =>
         displayName?.StartsWith("DeepSeek Desktop", StringComparison.OrdinalIgnoreCase) == true
-        || displayName?.StartsWith("DSH Desktop", StringComparison.OrdinalIgnoreCase) == true;
+        || displayName?.StartsWith("DSH Desktop", StringComparison.OrdinalIgnoreCase) == true
+        || string.Equals(displayName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase);
 
     private static string? FindDshExecutable(string installRoot)
     {

@@ -1361,6 +1361,31 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task HandleLauncherCommandAsync(LauncherCommand command)
     {
+        if (command.Action == LauncherCommandAction.OpenOfficialDesktop)
+        {
+            try
+            {
+                var service = new OfficialDesktopService();
+                var installation = service.Detect()
+                    ?? throw new InvalidOperationException("未检测到官方 DeepSeek Harness 桌面端，请先安装后重试。");
+                var instance = string.IsNullOrWhiteSpace(command.InstanceId) ? null
+                    : Instances.FirstOrDefault(item => item.Id == command.InstanceId)
+                        ?? throw new InvalidOperationException($"命令指定的实例不存在：{command.InstanceId}");
+                var desktopHome = instance?.DshHome ?? OfficialDesktopService.ResolveDefaultHome();
+                if (Instances.Any(item =>
+                        ExternalDshHomeGuard.SameHome(item.DshHome, desktopHome)
+                        && _instanceRunner.IsRunning(item.Id)))
+                    throw new InvalidOperationException("此 DSH_HOME 的实例正在运行，请先停止实例再在官方桌面端打开。");
+                service.Launch(installation, instance?.DshHome);
+                ShowNotice("已请求打开官方 DeepSeek Harness 桌面端；若已在运行，将唤醒现有窗口，继续使用原 DSH_HOME。");
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"打开官方桌面端失败：{ex.Message}");
+            }
+            return;
+        }
+
         var target = string.IsNullOrWhiteSpace(command.InstanceId)
             ? SelectedInstance
             : Instances.FirstOrDefault(instance =>

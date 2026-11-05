@@ -9,7 +9,8 @@ public enum LauncherCommandAction
     Chat,
     VersionSettings,
     Plugins,
-    Conversations
+    Conversations,
+    OpenOfficialDesktop
 }
 
 public sealed record LauncherCommand(

@@ -347,6 +347,7 @@ public static class LauncherCommandParser
             "version-settings" => LauncherCommandAction.VersionSettings,
             "plugins" => LauncherCommandAction.Plugins,
             "conversations" => LauncherCommandAction.Conversations,
+            "open-official-desktop" => LauncherCommandAction.OpenOfficialDesktop,
             _ => default
         };
 
@@ -357,7 +358,8 @@ public static class LauncherCommandParser
             || value.Equals("chat", StringComparison.OrdinalIgnoreCase)
             || value.Equals("version-settings", StringComparison.OrdinalIgnoreCase)
             || value.Equals("plugins", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("conversations", StringComparison.OrdinalIgnoreCase);
+            || value.Equals("conversations", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("open-official-desktop", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryCreateCommand(

@@ -29,14 +29,11 @@ public sealed class ExternalDshHomeGuard
 
     public string? GetConflict(ManagerInstance instance)
     {
-        if (!instance.UsesExternalDshHome)
-        {
-            return null;
-        }
-
         try
         {
-            var owners = _readOwners(instance);
+            var owners = _readOwners(instance)
+                .Where(owner => instance.UsesExternalDshHome || owner.ProductName == "DeepSeek Harness")
+                .ToArray();
             var matched = owners.FirstOrDefault(owner => owner.DshHome is not null
                 && SameHome(owner.DshHome, instance.DshHome));
             if (matched is not null)
@@ -71,7 +68,18 @@ public sealed class ExternalDshHomeGuard
         var installations = new Dictionary<string, DeepSeekDesktopInstallation?>(StringComparer.OrdinalIgnoreCase);
         // Keep the cheap no-desktop path. Only a detected desktop requires a
         // process-tree snapshot, shared by every owner within this one check.
-        foreach (var name in new[] { "DSH Desktop", "DeepSeek Desktop" })
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "DeepSeek Harness" };
+        foreach (var installation in DeepSeekDesktopDetector.DetectInstallations().Where(item => item.IsOfficial))
+        {
+            if (installation.LaunchSpec is { } spec)
+                names.Add(Path.GetFileNameWithoutExtension(spec.HostPath));
+        }
+        if (instance is null || instance.UsesExternalDshHome)
+        {
+            names.Add("DSH Desktop");
+            names.Add("DeepSeek Desktop");
+        }
+        foreach (var name in names)
         {
             foreach (var process in Process.GetProcessesByName(name))
             {
@@ -89,6 +97,15 @@ public sealed class ExternalDshHomeGuard
                             installations[installRoot] = installation;
                         }
                         if (installation is null || process.HasExited) continue;
+                        if (installation.IsOfficial)
+                        {
+                            if (installation.LaunchSpec is null || !SameHome(
+                                    process.MainModule!.FileName!, installation.LaunchSpec.HostPath)) continue;
+                            var environment = ProcessDshHomeReader.Read(process);
+                            if (!process.HasExited)
+                                owners.Add(new ExternalHomeOwner(process.Id, installation.ProductName, ResolveHome(environment)));
+                            continue;
+                        }
 
                         var isLegacy = installation.ProductName == "DeepSeek Desktop";
                         if (!isLegacy)

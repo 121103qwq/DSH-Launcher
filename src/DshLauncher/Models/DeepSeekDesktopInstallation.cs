@@ -8,4 +8,5 @@ public sealed record DeepSeekDesktopInstallation(
     string DshPackageRoot,
     string DshVersion,
     DshRuntimeLaunchSpec? LaunchSpec = null,
-    string ProductName = "DeepSeek Desktop");
+    string ProductName = "DeepSeek Desktop",
+    bool IsOfficial = false);

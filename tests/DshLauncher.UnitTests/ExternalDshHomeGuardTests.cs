@@ -165,11 +165,47 @@ public sealed class ExternalDshHomeGuardTests
         {
             UsesExternalDshHome = false
         };
-        var guard = new ExternalDshHomeGuard(_ =>
-            throw new IOException("the reader must not be called for Launcher-owned data"));
+        var guard = ConflictingGuard(instance.DshHome);
 
         Assert.Null(guard.GetConflict(instance));
         guard.EnsureAvailable(instance);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OfficialDesktopBlocksStartupForAnyMatchingHome(bool externalHome)
+    {
+        using var temporary = new TestDirectory();
+        var instance = CreateExternalInstance(temporary.Path) with { UsesExternalDshHome = externalHome };
+        var guard = new ExternalDshHomeGuard(_ => new[]
+        {
+            new ExternalHomeOwner(4567, "DeepSeek Harness",
+                Path.Combine(instance.DshHome, "..", Path.GetFileName(instance.DshHome)).ToUpperInvariant()
+                    + Path.DirectorySeparatorChar)
+        });
+        var allocatorCalls = 0;
+        await using var runner = new DshInstanceRunner(
+            portAllocator: () => ++allocatorCalls, homeGuard: guard);
+
+        var result = await runner.StartAsync(instance);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("DeepSeek Harness", result.Error, StringComparison.Ordinal);
+        Assert.Contains("正在使用此 DSH_HOME", result.Error, StringComparison.Ordinal);
+        Assert.Equal(0, allocatorCalls);
+    }
+
+    [Fact]
+    public void OfficialDesktopWithDifferentHomeDoesNotBlockManagedInstance()
+    {
+        using var temporary = new TestDirectory();
+        var instance = CreateExternalInstance(temporary.Path) with { UsesExternalDshHome = false };
+        var guard = new ExternalDshHomeGuard(_ => new[]
+        {
+            new ExternalHomeOwner(4567, "DeepSeek Harness", Path.Combine(temporary.Path, "other"))
+        });
+        Assert.Null(guard.GetConflict(instance));
     }
 
     [Fact]
