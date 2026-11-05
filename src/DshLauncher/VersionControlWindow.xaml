@@ -179,6 +179,18 @@
                                         Padding="16,9"
                                         Margin="0,0,8,8" />
                                 <Button Content="版本设置" Click="OpenSettings_Click" IsEnabled="{Binding CanCheck}" Padding="16,9" Margin="0,0,8,8" />
+                                <Button Content="从官方桌面端导入 Provider"
+                                        Click="ImportFromOfficial_Click"
+                                        IsEnabled="{Binding CanClone}"
+                                        ToolTip="把官方桌面端 DSH_HOME 的 settings.yaml 和 .credentials.yaml 复制到这个版本（会先备份）；双方都需停止。"
+                                        Padding="16,9"
+                                        Margin="0,0,8,8" />
+                                <Button Content="导出 Provider 到官方桌面端"
+                                        Click="ExportToOfficial_Click"
+                                        IsEnabled="{Binding CanClone}"
+                                        ToolTip="把这个版本的 Provider 配置复制到官方桌面端的 DSH_HOME（会先备份）；双方都需停止。"
+                                        Padding="16,9"
+                                        Margin="0,0,8,8" />
                             </WrapPanel>
                         </StackPanel>
                     </Border>
