@@ -5131,7 +5131,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 LastUsedAt = DateTimeOffset.UtcNow
             });
             OpenChatWindow(selected.Id, result.WebUrl);
-            ShowNotice($"实例已重启：{selected.Name}，运行地址 {result.WebUrl}。");
+            ShowNotice($"实例已重启：{selected.Name}，运行地址 {DshApiClient.RedactLaunchToken(result.WebUrl)}。");
         }
         catch (OperationCanceledException) when (_windowCancellation.IsCancellationRequested)
         {
@@ -5883,7 +5883,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         OpenChatWindow(selected.Id, result.WebUrl);
-        ShowNotice($"实例已启动：{selected.Name}，运行地址 {result.WebUrl}。健康检查已通过。");
+        ShowNotice($"实例已启动：{selected.Name}，运行地址 {DshApiClient.RedactLaunchToken(result.WebUrl)}。健康检查已通过。");
         return true;
     }
 
