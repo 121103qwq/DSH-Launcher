@@ -114,6 +114,11 @@ public sealed class ExternalDshHomeGuard
                 {
                     ignored ??= instance is null ? new HashSet<int>() : GetManagedProcessIds(instance, GetSnapshot);
                     if (ignored.Contains(process.Id) || !seen.Add(process.Id)) continue;
+                    // Chromium renderer/GPU/utility children inherit the main process
+                    // environment but are sandboxed: even MainModule can be denied, which
+                    // would report an "unknown HOME" owner that blocks every managed HOME.
+                    // Classify them from the snapshot before touching the process.
+                    if (IsChildOfSameExecutable(GetSnapshot(), process.Id, name + ".exe")) continue;
                     try
                     {
                         var executablePath = process.MainModule?.FileName;
@@ -129,10 +134,6 @@ public sealed class ExternalDshHomeGuard
                         {
                             if (installation.LaunchSpec is null || !SameHome(
                                     executablePath!, installation.LaunchSpec.HostPath)) continue;
-                            // Chromium renderer/GPU/utility children inherit the main process
-                            // environment but are sandboxed, so reading them fails and would
-                            // report an "unknown HOME" owner that blocks every managed HOME.
-                            if (IsChildOfSameExecutable(GetSnapshot(), process.Id, Path.GetFileName(executablePath!))) continue;
                             var environment = ProcessDshHomeReader.Read(process);
                             if (!process.HasExited)
                                 owners.Add(new ExternalHomeOwner(process.Id, installation.ProductName, ResolveHome(environment)));
