@@ -4151,8 +4151,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         // Before dsh is installed its package cannot be read; current npm builds
         // need import.meta.main, so check that floor instead of failing silently later.
+        var preflightInstallDirectory = GetConfiguredDshInstallDirectory();
+        var willInstallNpmDsh = packagedRuntime is null
+            && (!_dshRuntime.IsAvailable
+                || DshInstallService.ShouldInstallGlobalDSh(_dshRuntime.IsAvailable, target?.Kind)
+                || (target?.Kind is null or InstanceKind.Installed
+                    && !string.IsNullOrWhiteSpace(preflightInstallDirectory)
+                    && !DshRuntimeDetector.IsExecutableInInstallDirectory(_dshRuntime.ExecutablePath, preflightInstallDirectory)));
         var prepareNodeEngine = GetNodeEngineRequirement(target)
-            ?? (packagedRuntime is null && !_dshRuntime.IsAvailable ? DshRuntimeDetector.ImportMetaMainNodeEngine : null);
+            ?? (willInstallNpmDsh ? DshRuntimeDetector.ImportMetaMainNodeEngine : null);
         if (packagedRuntime is null
             && _nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
