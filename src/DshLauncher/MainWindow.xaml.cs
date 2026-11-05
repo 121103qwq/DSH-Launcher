@@ -348,10 +348,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool HasRunningInstanceForHome(string home) => Instances.Any(instance =>
         ExternalDshHomeGuard.SameHome(instance.DshHome, home) && _instanceRunner.IsRunning(instance.Id));
 
+    // With no managed version the official desktop still opens on its default HOME.
+    public Visibility EmptyStateOfficialDesktopVisibility => DetectedOfficialDesktop is not null
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public bool CanOpenDefaultOfficialDesktop => DetectedOfficialDesktop is not null
+        && !_isLifecycleInProgress
+        && !_isRuntimePrepareInProgress;
+
+    private async void OpenDefaultOfficialDesktop_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await OpenOfficialDesktopAsync(null);
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"打开官方桌面端失败：{ex.Message}");
+        }
+    }
+
     private void RefreshOfficialDesktopAction()
     {
         OnPropertyChanged(nameof(CanOpenOfficialDesktop));
         OnPropertyChanged(nameof(OpenOfficialDesktopToolTip));
+        OnPropertyChanged(nameof(EmptyStateOfficialDesktopVisibility));
+        OnPropertyChanged(nameof(CanOpenDefaultOfficialDesktop));
     }
 
     private async Task<DeepSeekDesktopInstallation?> DetectOfficialDesktopAsync(bool forceRefresh = false)
@@ -4126,7 +4149,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             return false;
         }
 
-        var prepareNodeEngine = GetNodeEngineRequirement(target);
+        // Before dsh is installed its package cannot be read; current npm builds
+        // need import.meta.main, so check that floor instead of failing silently later.
+        var preflightInstallDirectory = GetConfiguredDshInstallDirectory();
+        var willInstallNpmDsh = packagedRuntime is null
+            && (!_dshRuntime.IsAvailable
+                || DshInstallService.ShouldInstallGlobalDSh(_dshRuntime.IsAvailable, target?.Kind)
+                || (target?.Kind is null or InstanceKind.Installed
+                    && !string.IsNullOrWhiteSpace(preflightInstallDirectory)
+                    && !DshRuntimeDetector.IsExecutableInInstallDirectory(_dshRuntime.ExecutablePath, preflightInstallDirectory)));
+        var prepareNodeEngine = GetNodeEngineRequirement(target)
+            ?? (willInstallNpmDsh ? DshRuntimeDetector.ImportMetaMainNodeEngine : null);
         if (packagedRuntime is null
             && _nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
@@ -4259,7 +4292,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 if (!_dshRuntime.IsAvailable)
                 {
-                    const string message = "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。";
+                    var message = DescribeMissingDshAfterInstall(_nodeRuntime, dshInstallDirectory);
                     progressWindow.SetStatus(message);
                     progressWindow.FailTask(message);
                     System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -4384,6 +4417,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
         return nodeRuntime.IsAvailable
             && nodeRuntime.GetCompatibility(nodeEngineRequirement) == NodeRuntimeCompatibility.Compatible;
+    }
+
+    internal static string DescribeMissingDshAfterInstall(NodeRuntimeInfo nodeRuntime, string? installDirectory)
+    {
+        var engine = string.IsNullOrWhiteSpace(installDirectory) ? null
+            : DshRuntimeDetector.TryReadNodeEngine(Path.Combine(installDirectory, "node_modules", "@deepseek-ai", "dsh"));
+        return engine is not null && nodeRuntime.GetCompatibility(engine) == NodeRuntimeCompatibility.Incompatible
+            ? $"DSh 已安装，但当前 Node.js {nodeRuntime.VersionText} 过旧（需要 {engine}），dsh 命令无法运行且不会输出任何内容。请安装兼容的 Node.js（例如 v{NodeInstallService.DefaultVersion.TrimStart('v')}）后重新检测。"
+            : "DSh 安装完成但未检测到可用的 dsh 命令，请重新检测或检查 npm 安装结果。";
     }
 
     internal static bool IsGlobalRuntimeReady(NodeRuntimeInfo nodeRuntime, string? dshNodeEngine) =>
@@ -5712,14 +5754,37 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var configuredDirectory = GetConfiguredDshInstallDirectory();
         var runtimeReady = IsPreferredDshRuntimeReady(_dshRuntime, configuredDirectory)
             && IsDetectedRuntimeReady(_nodeRuntime, _dshRuntime);
+        var officialDesktop = await DetectOfficialDesktopAsync();
         var choice = FirstRunSetupWindow.Show(
             this,
-            _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
-            _dshRuntime.IsAvailable
-                ? $"{_dshRuntime.DisplayVersionText} · 已找到启动文件"
-                : _dshRuntime.Error ?? "未安装",
+            !_nodeRuntime.IsAvailable
+                ? "未安装"
+                : !_dshRuntime.IsAvailable
+                    && _nodeRuntime.GetCompatibility(DshRuntimeDetector.ImportMetaMainNodeEngine) != NodeRuntimeCompatibility.Compatible
+                    ? $"{_nodeRuntime.VersionText} · 过旧（npm 版 DSh 需要 {DshRuntimeDetector.ImportMetaMainNodeEngine}，请先升级 Node.js）"
+                    : $"{_nodeRuntime.VersionText} · {NodeStatusText}",
+            FirstRunSetupWindow.DescribeDshStatus(
+                _dshRuntime.IsAvailable,
+                $"{_dshRuntime.DisplayVersionText} · 已找到启动文件",
+                _dshRuntime.Error,
+                officialDesktop is not null),
             configuredDirectory,
-            runtimeReady);
+            runtimeReady,
+            officialDesktop is null ? null : officialDesktop.DesktopVersionText,
+            out var openOfficialDesktop);
+        if (openOfficialDesktop)
+        {
+            try
+            {
+                await OpenOfficialDesktopAsync(null);
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"打开官方桌面端失败：{ex.Message}");
+            }
+            return;
+        }
+
         if (choice is null)
         {
             ShowNotice("已暂缓首次运行配置；可点击“准备首个版本”重新打开引导。");

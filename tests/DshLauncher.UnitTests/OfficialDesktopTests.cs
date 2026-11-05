@@ -34,7 +34,30 @@ public sealed class OfficialDesktopTests
     }
 
     [Fact]
-    public void WindowsUninstallEntrySuppliesCustomLocationAndDisplayVersion()
+    public void ChromiumChildProcessesOfOfficialDesktopAreNotSeparateOwners()
+    {
+        var snapshot = new ProcessTreeSnapshot(
+            new Dictionary<int, string> { [1] = "DSH Launcher.exe", [10] = "DeepSeek Harness.exe", [11] = "DeepSeek Harness.exe", [12] = "node.exe" },
+            new Dictionary<int, List<int>> { [1] = new() { 10 }, [10] = new() { 11, 12 } });
+        Assert.False(ExternalDshHomeGuard.IsChildOfSameExecutable(snapshot, 10, "DeepSeek Harness.exe"));
+        Assert.True(ExternalDshHomeGuard.IsChildOfSameExecutable(snapshot, 11, "DeepSeek Harness.exe"));
+        Assert.False(ExternalDshHomeGuard.IsChildOfSameExecutable(snapshot, 12, "node.exe"));
+    }
+
+    [Theory]
+    [InlineData("DeepSeek Harness", true)]
+    [InlineData("DeepSeek Harness 0.2.1-rc.5", true)]
+    [InlineData("deepseek harness 1.0.0", true)]
+    [InlineData("DeepSeek Harness Helper", false)]
+    [InlineData("DeepSeek Harnessx", false)]
+    [InlineData(null, false)]
+    public void OfficialUninstallDisplayNameMatchesNsisFormat(string? displayName, bool expected) =>
+        Assert.Equal(expected, DeepSeekDesktopDetector.IsOfficialDisplayName(displayName));
+
+    [Theory]
+    [InlineData("DeepSeek Harness")]
+    [InlineData("DeepSeek Harness 0.2.1-rc.5")]
+    public void WindowsUninstallEntrySuppliesCustomLocationAndDisplayVersion(string displayName)
     {
         if (!OperatingSystem.IsWindows()) return;
         using var temporary = new TestDirectory();
@@ -45,7 +68,7 @@ public sealed class OfficialDesktopTests
         {
             using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(keyPath))
             {
-                key.SetValue("DisplayName", "DeepSeek Harness");
+                key.SetValue("DisplayName", displayName);
                 key.SetValue("InstallLocation", root);
                 key.SetValue("DisplayVersion", "1.2.3");
             }
@@ -193,4 +216,23 @@ public sealed class OfficialDesktopTests
         File.WriteAllText(Path.Combine(root, "resources", "app.asar"), string.Empty);
         return root;
     }
+}
+
+public sealed class FirstRunOfficialDesktopStatusTests
+{
+    [Fact]
+    public void MissingDshWithOfficialDesktopIsNotReportedAsNotFound()
+    {
+        var text = FirstRunSetupWindow.DescribeDshStatus(false, null, "常见安装位置中没有找到可运行的 DeepSeek Harness", officialDesktopDetected: true);
+        Assert.DoesNotContain("没有找到可运行的 DeepSeek Harness", text);
+        Assert.Contains("官方桌面端", text);
+    }
+
+    [Fact]
+    public void WithoutOfficialDesktopTheDetectorErrorIsKept() =>
+        Assert.Equal("err", FirstRunSetupWindow.DescribeDshStatus(false, null, "err", officialDesktopDetected: false));
+
+    [Fact]
+    public void AvailableDshKeepsItsStatus() =>
+        Assert.Equal("v1 · ok", FirstRunSetupWindow.DescribeDshStatus(true, "v1 · ok", null, officialDesktopDetected: true));
 }

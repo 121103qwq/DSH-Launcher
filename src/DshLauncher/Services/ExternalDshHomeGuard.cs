@@ -66,6 +66,18 @@ public sealed class ExternalDshHomeGuard
         }
     }
 
+    internal static bool IsChildOfSameExecutable(ProcessTreeSnapshot snapshot, int processId, string executableName)
+    {
+        foreach (var (parentId, children) in snapshot.ChildrenByParent)
+        {
+            if (parentId != processId && children.Contains(processId)
+                && snapshot.Names.TryGetValue(parentId, out var parentName)
+                && string.Equals(parentName, executableName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
     internal static bool SameHome(string left, string right) => string.Equals(
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
@@ -102,6 +114,11 @@ public sealed class ExternalDshHomeGuard
                 {
                     ignored ??= instance is null ? new HashSet<int>() : GetManagedProcessIds(instance, GetSnapshot);
                     if (ignored.Contains(process.Id) || !seen.Add(process.Id)) continue;
+                    // Chromium renderer/GPU/utility children inherit the main process
+                    // environment but are sandboxed: even MainModule can be denied, which
+                    // would report an "unknown HOME" owner that blocks every managed HOME.
+                    // Classify them from the snapshot before touching the process.
+                    if (IsChildOfSameExecutable(GetSnapshot(), process.Id, name + ".exe")) continue;
                     try
                     {
                         var executablePath = process.MainModule?.FileName;
