@@ -44,8 +44,20 @@ public sealed class OfficialDesktopTests
         Assert.False(ExternalDshHomeGuard.IsChildOfSameExecutable(snapshot, 12, "node.exe"));
     }
 
-    [Fact]
-    public void WindowsUninstallEntrySuppliesCustomLocationAndDisplayVersion()
+    [Theory]
+    [InlineData("DeepSeek Harness", true)]
+    [InlineData("DeepSeek Harness 0.2.1-rc.5", true)]
+    [InlineData("deepseek harness 1.0.0", true)]
+    [InlineData("DeepSeek Harness Helper", false)]
+    [InlineData("DeepSeek Harnessx", false)]
+    [InlineData(null, false)]
+    public void OfficialUninstallDisplayNameMatchesNsisFormat(string? displayName, bool expected) =>
+        Assert.Equal(expected, DeepSeekDesktopDetector.IsOfficialDisplayName(displayName));
+
+    [Theory]
+    [InlineData("DeepSeek Harness")]
+    [InlineData("DeepSeek Harness 0.2.1-rc.5")]
+    public void WindowsUninstallEntrySuppliesCustomLocationAndDisplayVersion(string displayName)
     {
         if (!OperatingSystem.IsWindows()) return;
         using var temporary = new TestDirectory();
@@ -56,7 +68,7 @@ public sealed class OfficialDesktopTests
         {
             using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(keyPath))
             {
-                key.SetValue("DisplayName", "DeepSeek Harness");
+                key.SetValue("DisplayName", displayName);
                 key.SetValue("InstallLocation", root);
                 key.SetValue("DisplayVersion", "1.2.3");
             }
