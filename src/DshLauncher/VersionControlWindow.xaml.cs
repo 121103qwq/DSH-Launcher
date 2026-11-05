@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using UserControl = System.Windows.Controls.UserControl;
 using DshLauncher.Models;
 using DshLauncher.Services;
@@ -36,6 +37,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
     private VersionHealthReport? _healthReport;
     private bool _isBusy;
     private string? _initialDshVersion;
+    private readonly Func<Task<DeepSeekDesktopInstallation?>>? _officialDesktopProvider;
 
     public VersionControlWindow(
         IEnumerable<ManagerInstance> versions,
@@ -56,7 +58,8 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         Action versionContentChanged,
         CancellationToken cancellationToken = default,
         string? initialDshVersion = null,
-        Func<IReadOnlyList<DshRuntimeInfo>>? runtimesProvider = null)
+        Func<IReadOnlyList<DshRuntimeInfo>>? runtimesProvider = null,
+        Func<Task<DeepSeekDesktopInstallation?>>? officialDesktopProvider = null)
     {
         _packageService = packageService;
         _templateProvider = templateProvider;
@@ -70,6 +73,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         _nodeRuntimeProvider = nodeRuntimeProvider;
         _dshRuntimeProvider = dshRuntimeProvider;
         _runtimesProvider = runtimesProvider;
+        _officialDesktopProvider = officialDesktopProvider;
         _isRunning = isRunning;
         _versionUpdated = versionUpdated;
         _versionContentChanged = versionContentChanged;
@@ -80,12 +84,37 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             Versions.Add(version);
         }
 
+        VersionEntries.Add(new CollectionContainer { Collection = Versions });
+        VersionEntries.Add(new CollectionContainer { Collection = OfficialDesktops });
         _selectedVersion = selectedVersion;
+        _selectedEntry = selectedVersion;
         InitializeComponent();
         DataContext = this;
     }
 
     public ObservableCollection<ManagerInstance> Versions { get; } = new();
+
+    public ObservableCollection<DeepSeekDesktopInstallation> OfficialDesktops { get; } = new();
+
+    public CompositeCollection VersionEntries { get; } = new();
+
+    private object? _selectedEntry;
+
+    public object? SelectedEntry
+    {
+        get => _selectedEntry;
+        set
+        {
+            if (ReferenceEquals(_selectedEntry, value)) return;
+            _selectedEntry = value;
+            SelectedVersion = value as ManagerInstance;
+            OnPropertyChanged(nameof(SelectedEntry));
+            OnPropertyChanged(nameof(SelectedVersionName));
+            OnPropertyChanged(nameof(SelectedVersionDetails));
+        }
+    }
+
+    private DeepSeekDesktopInstallation? SelectedOfficialDesktop => SelectedEntry as DeepSeekDesktopInstallation;
 
     public ObservableCollection<VersionHealthItem> HealthItems { get; } = new();
 
@@ -123,6 +152,11 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             }
 
             _selectedVersion = value;
+            if (value is not null || SelectedOfficialDesktop is null)
+            {
+                _selectedEntry = value;
+                OnPropertyChanged(nameof(SelectedEntry));
+            }
             _selectionRevision++;
             OnPropertyChanged(nameof(SelectedVersion));
             OnPropertyChanged(nameof(SelectedVersionName));
@@ -146,15 +180,16 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
         }
     }
 
-    public string VersionCountText => $"{Versions.Count} 个";
+    public string VersionCountText => $"{Versions.Count + OfficialDesktops.Count} 个";
 
-    public string SelectedVersionName => SelectedVersion?.Name ?? "尚未创建版本";
+    public string SelectedVersionName => SelectedOfficialDesktop?.ProductName
+        ?? SelectedVersion?.Name ?? "尚未创建版本";
 
-    public string SelectedVersionDetails => SelectedVersion is null
+    public string SelectedVersionDetails => SelectedOfficialDesktop?.Description ?? (SelectedVersion is null
         ? _templateProvider() is null
             ? "没有检测到可用的 DSh 运行目录，请先在设置中完成运行环境检测。"
             : "可以直接新建干净版本；首次创建会使用当前检测到的 DSh 运行目录。"
-        : $"{SelectedVersion.DshVersionText}\n{(SelectedVersion.UsesExternalDshHome ? "外部关联 · 原目录" : $"{SelectedVersion.KindText} · {SelectedVersion.RootPath}")}\nDSH_HOME：{SelectedVersion.DshHome}\n状态：{SelectedVersion.StatusText}";
+        : $"{SelectedVersion.DshVersionText}\n{(SelectedVersion.UsesExternalDshHome ? "外部关联 · 原目录" : $"{SelectedVersion.KindText} · {SelectedVersion.RootPath}")}\nDSH_HOME：{SelectedVersion.DshHome}\n状态：{SelectedVersion.StatusText}");
 
     public bool CanClone => !_isBusy
         && SelectedVersion is not null
@@ -207,9 +242,9 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
 
     public bool CanRollback => CanSnapshot && SelectedSnapshot is not null;
 
-    private void Window_OnLoaded(object sender, RoutedEventArgs e)
+    private async void Window_OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (SelectedVersion is null && Versions.Count > 0)
+        if (SelectedEntry is null && Versions.Count > 0)
         {
             SelectedVersion = Versions[0];
         }
@@ -235,6 +270,22 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
             var requestedVersion = _initialDshVersion;
             _initialDshVersion = null;
             _ = Dispatcher.BeginInvoke(new Action(() => _ = CreateCleanVersionAsync(requestedVersion)));
+        }
+
+        if (_officialDesktopProvider is null) return;
+        try
+        {
+            var desktop = await _officialDesktopProvider();
+            if (_lifetimeCancellation.IsCancellationRequested || desktop is not { IsOfficial: true }) return;
+            OfficialDesktops.Clear();
+            OfficialDesktops.Add(desktop);
+            OnPropertyChanged(nameof(VersionCountText));
+            if (SelectedEntry is null) SelectedEntry = desktop;
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            SetStatus($"读取官方桌面端失败：{ex.Message}");
         }
     }
 
@@ -884,6 +935,7 @@ public partial class VersionControlWindow : UserControl, INotifyPropertyChanged
 
     private void OpenSettings_Click(object sender, RoutedEventArgs e)
     {
+        if (SelectedVersion is null) return;
         if (Window.GetWindow(this) is MainWindow mainWindow)
         {
             mainWindow.ShowVersionSettings();

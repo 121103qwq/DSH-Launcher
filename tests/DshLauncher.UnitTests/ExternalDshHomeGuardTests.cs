@@ -197,6 +197,19 @@ public sealed class ExternalDshHomeGuardTests
     }
 
     [Fact]
+    public void OfficialDesktopWithUnknownHomeBlocksManagedInstance()
+    {
+        using var temporary = new TestDirectory();
+        var instance = CreateExternalInstance(temporary.Path) with { UsesExternalDshHome = false };
+        var guard = new ExternalDshHomeGuard(_ => new[]
+        {
+            new ExternalHomeOwner(4567, "DeepSeek Harness", null)
+        });
+        var error = Assert.Throws<InvalidOperationException>(() => guard.EnsureAvailable(instance));
+        Assert.Contains("无法确认它使用的 DSH_HOME", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OfficialDesktopWithDifferentHomeDoesNotBlockManagedInstance()
     {
         using var temporary = new TestDirectory();

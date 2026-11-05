@@ -33,6 +33,31 @@ public sealed class OfficialDesktopTests
         Assert.Single(DeepSeekDesktopDetector.DetectInstallations(new[] { root, root }));
     }
 
+    [Fact]
+    public void WindowsUninstallEntrySuppliesCustomLocationAndDisplayVersion()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var temporary = new TestDirectory();
+        var root = CreateInstallation(temporary.Path);
+        var keyPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DSH-Launcher-Test-"
+            + Guid.NewGuid().ToString("N");
+        try
+        {
+            using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(keyPath))
+            {
+                key.SetValue("DisplayName", "DeepSeek Harness");
+                key.SetValue("InstallLocation", root);
+                key.SetValue("DisplayVersion", "1.2.3");
+            }
+            Assert.Contains(root, DeepSeekDesktopDetector.GetInstallRootCandidates());
+            Assert.Equal("1.2.3", DeepSeekDesktopDetector.TryDetect(root)?.DesktopVersion);
+        }
+        finally
+        {
+            Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(keyPath, throwOnMissingSubKey: false);
+        }
+    }
+
     [Theory]
     [InlineData("DeepSeek Harness.exe", false)]
     [InlineData("DeepSeek Harness Desktop.exe", true)]
@@ -94,6 +119,71 @@ public sealed class OfficialDesktopTests
     {
         var command = LauncherCommandParser.Parse(new[] { "open-official-desktop", "--instance-id", "test" });
         Assert.Equal(new LauncherCommand(LauncherCommandAction.OpenOfficialDesktop, "test"), command);
+    }
+
+    [Theory]
+    [InlineData("channel: latest\nurl: https://updates.example.com:8443/desktop", "latest", "https://updates.example.com:8443/desktop")]
+    [InlineData("# comment\nprovider: generic\nchannel: 'beta' # comment\nurl: \"https://example.com/feed#anchor\"", "beta", "https://example.com/feed#anchor")]
+    [InlineData("\uFEFFchannel: preview\r\nurl: https://example.com/feed # comment", "preview", "https://example.com/feed")]
+    [InlineData("channel: 'it''s beta'\nurl: \"https://example.com/a\\u002Fb\"", "it's beta", "https://example.com/a/b")]
+    [InlineData("channel: latest\nchannel: beta\nurl: https://example.com/a#b", "beta", "https://example.com/a#b")]
+    [InlineData("", null, null)]
+    [InlineData("provider: generic\nupdaterCacheDirName: app", null, null)]
+    [InlineData("other:\n  channel: nested\n  url: https://example.com", null, null)]
+    [InlineData("channel: # empty\nurl: null", null, null)]
+    [InlineData("channel: 'unclosed\nurl: \"bad\\q\"", null, null)]
+    [InlineData("channel: |\n  beta\nurl: [not, scalar]", null, null)]
+    public void ParsesOnlySimpleTopLevelUpdateMetadata(string yaml, string? channel, string? url)
+    {
+        Assert.Equal((channel, url), DeepSeekDesktopDetector.ParseAppUpdateMetadata(yaml));
+    }
+
+    [Fact]
+    public void OptionalUpdateMetadataIsReadOnlyAndAppearsInDesktopDescription()
+    {
+        using var temporary = new TestDirectory();
+        var root = CreateInstallation(temporary.Path);
+        var metadataPath = Path.Combine(root, "resources", "app-update.yml");
+        const string metadata = "provider: generic\nchannel: beta\nurl: https://example.com/updates\n";
+        File.WriteAllText(metadataPath, metadata);
+
+        var installation = DeepSeekDesktopDetector.TryDetect(root)!;
+
+        Assert.Equal("beta", installation.UpdateChannel);
+        Assert.Equal("https://example.com/updates", installation.UpdateUrl);
+        Assert.Equal("官方桌面端", installation.KindText);
+        Assert.Contains("更新通道：beta", installation.Description);
+        Assert.Contains("更新地址：https://example.com/updates", installation.Description);
+        Assert.Equal(metadata, File.ReadAllText(metadataPath));
+        Assert.False(DshRuntimeCommandFactory.IsUsable(installation.LaunchSpec));
+    }
+
+    [Fact]
+    public void DesktopVersionComesFromExecutableMetadataWhenAvailable()
+    {
+        using var temporary = new TestDirectory();
+        var root = CreateInstallation(temporary.Path);
+        var executable = Path.Combine(root, "DeepSeek Harness.exe");
+        File.Copy(typeof(OfficialDesktopService).Assembly.Location, executable, overwrite: true);
+        var versionInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(executable);
+
+        var installation = DeepSeekDesktopDetector.TryDetect(root)!;
+
+        Assert.False(string.IsNullOrWhiteSpace(versionInfo.FileVersion));
+        Assert.Equal(versionInfo.FileVersion, installation.DesktopVersion);
+        Assert.Equal(versionInfo.FileVersion, installation.LaunchSpec?.ProductVersion);
+    }
+
+    [Fact]
+    public void MissingUpdateMetadataDoesNotInventAnUpdateChannel()
+    {
+        using var temporary = new TestDirectory();
+        var installation = DeepSeekDesktopDetector.TryDetect(CreateInstallation(temporary.Path))!;
+
+        Assert.Null(installation.UpdateChannel);
+        Assert.Null(installation.UpdateUrl);
+        Assert.DoesNotContain("更新通道", installation.Description);
+        Assert.DoesNotContain("更新地址", installation.Description);
     }
 
     private static string CreateInstallation(string root)

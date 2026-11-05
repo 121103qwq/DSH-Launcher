@@ -183,10 +183,11 @@ public static class DeepSeekDesktopDetector
                 return null;
             }
 
-            var version = GetRegisteredInstallations().FirstOrDefault(item =>
-                string.Equals(item.DisplayName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase)
-                && ExternalDshHomeGuard.SameHome(item.Root, root))?.Version
-                ?? TryReadFileVersion(executable);
+            var version = TryReadFileVersion(executable)
+                ?? GetRegisteredInstallations().FirstOrDefault(item =>
+                    string.Equals(item.DisplayName, "DeepSeek Harness", StringComparison.OrdinalIgnoreCase)
+                    && ExternalDshHomeGuard.SameHome(item.Root, root))?.Version;
+            var (updateChannel, updateUrl) = TryReadAppUpdateMetadata(root);
             return new DeepSeekDesktopInstallation(
                 root, version,
                 NodeExecutablePath: string.Empty,
@@ -199,13 +200,69 @@ public static class DeepSeekDesktopDetector
                     ProductName: "DeepSeek Harness",
                     ProductVersion: version),
                 ProductName: "DeepSeek Harness",
-                IsOfficial: true);
+                IsOfficial: true,
+                UpdateChannel: updateChannel,
+                UpdateUrl: updateUrl);
         }
         catch (Exception ex) when (ex is ArgumentException or IOException
             or UnauthorizedAccessException or NotSupportedException or Win32Exception)
         {
             return null;
         }
+    }
+
+    private static (string? Channel, string? Url) TryReadAppUpdateMetadata(string installRoot)
+    {
+        try
+        {
+            var path = Path.Combine(installRoot, "resources", "app-update.yml");
+            return File.Exists(path) ? ParseAppUpdateMetadata(File.ReadAllText(path, Encoding.UTF8)) : default;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Optional display metadata must not prevent detection of the application.
+            return default;
+        }
+    }
+
+    internal static (string? Channel, string? Url) ParseAppUpdateMetadata(string yaml)
+    {
+        string? channel = null;
+        string? url = null;
+        using var reader = new StringReader(yaml);
+        while (reader.ReadLine() is { } line)
+        {
+            // Only simple top-level scalars from electron-builder's update file.
+            line = line.TrimStart('\uFEFF');
+            if (line.Length == 0 || char.IsWhiteSpace(line[0]) || line[0] == '#') continue;
+            var separator = line.IndexOf(':');
+            if (separator < 0) continue;
+            var key = line[..separator].TrimEnd();
+            if (key is not ("channel" or "url")) continue;
+            var value = ReadUpdateScalar(line[(separator + 1)..].Trim());
+            if (key == "channel") channel = value;
+            else url = value;
+        }
+        return (channel, url);
+    }
+
+    private static string? ReadUpdateScalar(string value)
+    {
+        if (value.StartsWith('"'))
+        {
+            var quoted = Regex.Match(value, "^\\\"(?:\\\\.|[^\\\"\\\\])*\\\"(?=\\s*(?:#.*)?$)");
+            if (!quoted.Success) return null;
+            try { return FirstNonEmpty(JsonSerializer.Deserialize<string>(quoted.Value)); }
+            catch (JsonException) { return null; }
+        }
+        if (value.StartsWith('\''))
+        {
+            var quoted = Regex.Match(value, "^'(?<value>(?:''|[^'])*)'\\s*(?:#.*)?$");
+            return quoted.Success ? FirstNonEmpty(quoted.Groups["value"].Value.Replace("''", "'")) : null;
+        }
+        var plain = Regex.Replace(value, @"(?:^|\s)#.*$", string.Empty).Trim();
+        return plain is "" or "null" or "~" || plain[0] is '|' or '>' or '[' or '{' or '&' or '*'
+            ? null : plain;
     }
 
     private static bool IsOfficialHarnessExecutable(string path)
