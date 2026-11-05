@@ -4163,17 +4163,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                     && !DshRuntimeDetector.IsExecutableInInstallDirectory(_dshRuntime.ExecutablePath, preflightInstallDirectory)));
         var prepareNodeEngine = GetNodeEngineRequirement(target)
             ?? (willInstallNpmDsh ? DshRuntimeDetector.ImportMetaMainNodeEngine : null);
+        var upgradeNode = false;
         if (packagedRuntime is null
             && _nodeRuntime.IsAvailable
             && !string.IsNullOrWhiteSpace(prepareNodeEngine)
             && _nodeRuntime.GetCompatibility(prepareNodeEngine) != NodeRuntimeCompatibility.Compatible)
         {
-            System.Windows.MessageBox.Show(this,
-                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\nLauncher 不会自动卸载现有 Node.js。请安装兼容版本后重试。",
+            // An old Node on PATH used to be a dead end. The official MSI installs a
+            // compatible Node next to it (never uninstalling anything); detection
+            // prefers the highest compatible version afterwards.
+            var answer = System.Windows.MessageBox.Show(this,
+                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\n是否通过 {sourceName} 下载 Node.js 官方安装包并安装兼容版本？\nLauncher 不会卸载现有 Node.js。",
                 "运行环境不兼容",
-                MessageBoxButton.OK,
+                MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
-            return false;
+            if (answer != MessageBoxResult.Yes) return false;
+            upgradeNode = true;
         }
 
         _isRuntimePrepareInProgress = true;
@@ -4188,7 +4193,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             var progress = new Progress<NodeDownloadProgress>(progressWindow.SetDownloadProgress);
             var nodeWasInstalled = false;
 
-            if (packagedRuntime is null && !_nodeRuntime.IsAvailable)
+            if (packagedRuntime is null && (!_nodeRuntime.IsAvailable || upgradeNode))
             {
                 progressWindow.SetIndeterminate(false);
                 progressWindow.SetStatus($"正在通过 {sourceName} 解析 Node.js 版本并下载安装程序…");
@@ -4213,18 +4218,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
                 RevealRuntimeAfterBootstrap(TestRuntimeKind.Node);
                 progressWindow.SetStatus("Node.js 安装完成，正在重新检测…");
-                for (var attempt = 0; attempt < 5 && !_nodeRuntime.IsAvailable; attempt++)
+                bool NodeReady() => _nodeRuntime.IsAvailable && (!upgradeNode
+                    || _nodeRuntime.GetCompatibility(prepareNodeEngine) == NodeRuntimeCompatibility.Compatible);
+                for (var attempt = 0; attempt < 5 && !NodeReady(); attempt++)
                 {
                     await RefreshNodeAsync();
-                    if (!_nodeRuntime.IsAvailable)
+                    if (!NodeReady())
                     {
                         await Task.Delay(1000, cancellation.Token);
                     }
                 }
 
-                if (!_nodeRuntime.IsAvailable)
+                if (!NodeReady())
                 {
-                    const string message = "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。";
+                    var message = upgradeNode
+                        ? $"已安装新版 Node.js，但检测到的仍是 {_nodeRuntime.VersionText}。请在设置中改用兼容的 node.exe，或调整 PATH 后重新检测。"
+                        : "Node.js 安装后仍未被检测到，请确认安装路径后重新检测。";
                     progressWindow.SetStatus(message);
                     progressWindow.FailTask(message);
                     System.Windows.MessageBox.Show(this, message, "准备运行环境", MessageBoxButton.OK, MessageBoxImage.Warning);
