@@ -1496,6 +1496,10 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             throw new InvalidOperationException("实例操作进行中，请稍候。");
         try
         {
+            var requestedInstance = instance ?? new ManagerInstance(
+                "official-desktop", "官方桌面端", installation.InstallRoot, InstanceKind.Installed,
+                desktopHome, null, null, InstanceRuntimeStatus.Ready, null, null, DateTimeOffset.UtcNow);
+            _externalHomeGuard.EnsureOfficialDesktopAvailable(requestedInstance);
             _officialDesktopService.Launch(installation, desktopHome);
             ShowNotice("已请求打开官方 DeepSeek Harness 桌面端；若已在运行，将唤醒现有窗口，继续使用原 DSH_HOME。");
         }

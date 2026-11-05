@@ -27,12 +27,26 @@ public sealed class ExternalDshHomeGuard
         }
     }
 
-    public string? GetConflict(ManagerInstance instance)
+    public void EnsureOfficialDesktopAvailable(ManagerInstance instance)
+    {
+        var conflict = GetConflict(instance, allowOfficialDesktop: true);
+        if (conflict is not null)
+            throw new InvalidOperationException(conflict);
+    }
+
+    public string? GetConflict(ManagerInstance instance) => GetConflict(instance, allowOfficialDesktop: false);
+
+    private string? GetConflict(ManagerInstance instance, bool allowOfficialDesktop)
     {
         try
         {
-            var owners = _readOwners(instance)
-                .Where(owner => instance.UsesExternalDshHome || owner.ProductName == "DeepSeek Harness")
+            // Official launch checks every desktop, even for a managed HOME.
+            // A known official process can be focused; an unreadable HOME still blocks.
+            var checkedInstance = allowOfficialDesktop ? instance with { UsesExternalDshHome = true } : instance;
+            var owners = _readOwners(checkedInstance)
+                .Where(owner => checkedInstance.UsesExternalDshHome || owner.ProductName == "DeepSeek Harness")
+                .Where(owner => !allowOfficialDesktop || owner.ProductName != "DeepSeek Harness"
+                    || owner.DshHome is null)
                 .ToArray();
             var matched = owners.FirstOrDefault(owner => owner.DshHome is not null
                 && SameHome(owner.DshHome, instance.DshHome));

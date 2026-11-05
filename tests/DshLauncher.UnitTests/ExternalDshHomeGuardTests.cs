@@ -345,7 +345,7 @@ public sealed class ExternalDshHomeGuardTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ProviderSynchronizationSkipsOccupiedTargetBeforeStaging(bool unknownHome)
+    public async Task ProviderSynchronizationSkipsOccupiedTargetBeforeStaging(bool unknownHome)
     {
         using var temporary = new TestDirectory();
         var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
@@ -356,8 +356,7 @@ public sealed class ExternalDshHomeGuardTests
         settings.Save(source, new VersionSettingsData { SyncModelProviders = true });
         settings.Save(target, new VersionSettingsData { SyncModelProviders = true });
         var models = new ModelService();
-        models.SaveDeepSeekAsync(source, "SOURCE_KEY", "https://source.example/v1", new[] { "model" })
-            .GetAwaiter().GetResult();
+        await models.SaveDeepSeekAsync(source, "SOURCE_KEY", "https://source.example/v1", new[] { "model" });
         File.WriteAllText(Path.Combine(source.DshHome, ".credentials.yaml"), "SOURCE_KEY: secret\n");
         new ProviderStateService().SetEnabled(source, "deepseek", false);
         var before = Directory.GetFiles(target.DshHome, "*", SearchOption.AllDirectories)
@@ -423,6 +422,30 @@ public sealed class ExternalDshHomeGuardTests
 
         Assert.Empty(registry.Load());
         Assert.True(File.Exists(Path.Combine(home, "settings.yaml")));
+    }
+
+    [Theory]
+    [InlineData("DeepSeek Harness", false, false, true)]
+    [InlineData("DeepSeek Harness", false, true, true)]
+    [InlineData("DeepSeek Harness", true, false, false)]
+    [InlineData("DSH Desktop", false, false, false)]
+    [InlineData("DeepSeek Desktop", false, false, false)]
+    [InlineData("DSH Desktop", true, false, false)]
+    [InlineData("DSH Desktop", false, true, true)]
+    public void OfficialLaunchChecksAllDesktopOwners(string product, bool unknownHome, bool differentHome, bool allowed)
+    {
+        using var temporary = new TestDirectory();
+        var instance = CreateRuntime(temporary.Path, "runtime");
+        var guard = new ExternalDshHomeGuard(checkedInstance =>
+        {
+            Assert.True(checkedInstance.UsesExternalDshHome);
+            return new[] { new ExternalHomeOwner(9999, product,
+                unknownHome ? null : differentHome ? Path.Combine(temporary.Path, "other") : instance.DshHome) };
+        });
+        if (allowed)
+            guard.EnsureOfficialDesktopAvailable(instance);
+        else
+            Assert.Throws<InvalidOperationException>(() => guard.EnsureOfficialDesktopAvailable(instance));
     }
 
     private static ExternalDshHomeGuard ConflictingGuard(string home) =>
