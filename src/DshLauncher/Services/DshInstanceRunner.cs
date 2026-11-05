@@ -12,7 +12,9 @@ namespace DshLauncher.Services;
 
 public sealed class DshInstanceRunner : IAsyncDisposable
 {
-    private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(30);
+    // First start on a cold machine (Defender scanning node_modules, slow disk) can
+    // exceed 30s; an exited process still fails immediately.
+    private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan HealthRequestTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan CapabilityProbeTimeout = TimeSpan.FromSeconds(8);
