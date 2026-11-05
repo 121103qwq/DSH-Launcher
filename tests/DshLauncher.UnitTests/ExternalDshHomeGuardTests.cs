@@ -343,6 +343,45 @@ public sealed class ExternalDshHomeGuardTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProviderSynchronizationSkipsOccupiedTargetBeforeStaging(bool unknownHome)
+    {
+        using var temporary = new TestDirectory();
+        var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+        var registry = new InstanceRegistry(paths);
+        var source = registry.Register("source", temporary.Path, InstanceKind.Installed);
+        var target = registry.Register("target", temporary.Path, InstanceKind.Installed);
+        var settings = new VersionSettingsService(paths);
+        settings.Save(source, new VersionSettingsData { SyncModelProviders = true });
+        settings.Save(target, new VersionSettingsData { SyncModelProviders = true });
+        var models = new ModelService();
+        models.SaveDeepSeekAsync(source, "SOURCE_KEY", "https://source.example/v1", new[] { "model" })
+            .GetAwaiter().GetResult();
+        File.WriteAllText(Path.Combine(source.DshHome, ".credentials.yaml"), "SOURCE_KEY: secret\n");
+        new ProviderStateService().SetEnabled(source, "deepseek", false);
+        var before = Directory.GetFiles(target.DshHome, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => path, File.ReadAllText);
+        var staged = false;
+        var guard = new ExternalDshHomeGuard(_ => new[]
+        {
+            new ExternalHomeOwner(9999, "DeepSeek Harness", unknownHome ? null : target.DshHome)
+        });
+        var service = new ModelProviderSyncService(settings, models, new ProviderStateService(),
+            null, _ => staged = true, guard);
+
+        var result = service.Synchronize(source, new[] { source, target });
+
+        Assert.Equal(0, result.CopiedVersions);
+        Assert.Contains(result.Errors, error => error.Contains("target") && error.Contains("DeepSeek Harness"));
+        Assert.False(staged);
+        var after = Directory.GetFiles(target.DshHome, "*", SearchOption.AllDirectories);
+        Assert.Equal(before.Keys.OrderBy(path => path), after.OrderBy(path => path));
+        foreach (var file in before)
+            Assert.Equal(file.Value, File.ReadAllText(file.Key));
+    }
+
+    [Theory]
     [InlineData("DeepSeek Harness", false)]
     [InlineData("DSH Desktop", false)]
     [InlineData("DeepSeek Desktop", true)]
