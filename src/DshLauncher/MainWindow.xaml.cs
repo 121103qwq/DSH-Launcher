@@ -348,10 +348,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool HasRunningInstanceForHome(string home) => Instances.Any(instance =>
         ExternalDshHomeGuard.SameHome(instance.DshHome, home) && _instanceRunner.IsRunning(instance.Id));
 
+    // With no managed version the official desktop still opens on its default HOME.
+    public Visibility EmptyStateOfficialDesktopVisibility => DetectedOfficialDesktop is not null
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public bool CanOpenDefaultOfficialDesktop => DetectedOfficialDesktop is not null
+        && !_isLifecycleInProgress
+        && !_isRuntimePrepareInProgress;
+
+    private async void OpenDefaultOfficialDesktop_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await OpenOfficialDesktopAsync(null);
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"打开官方桌面端失败：{ex.Message}");
+        }
+    }
+
     private void RefreshOfficialDesktopAction()
     {
         OnPropertyChanged(nameof(CanOpenOfficialDesktop));
         OnPropertyChanged(nameof(OpenOfficialDesktopToolTip));
+        OnPropertyChanged(nameof(EmptyStateOfficialDesktopVisibility));
+        OnPropertyChanged(nameof(CanOpenDefaultOfficialDesktop));
     }
 
     private async Task<DeepSeekDesktopInstallation?> DetectOfficialDesktopAsync(bool forceRefresh = false)
