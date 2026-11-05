@@ -34,6 +34,17 @@ public sealed class OfficialDesktopTests
     }
 
     [Fact]
+    public void ChromiumChildProcessesOfOfficialDesktopAreNotSeparateOwners()
+    {
+        var snapshot = new ProcessTreeSnapshot(
+            new Dictionary<int, string> { [1] = "DSH Launcher.exe", [10] = "DeepSeek Harness.exe", [11] = "DeepSeek Harness.exe", [12] = "node.exe" },
+            new Dictionary<int, List<int>> { [1] = new() { 10 }, [10] = new() { 11, 12 } });
+        Assert.False(ExternalDshHomeGuard.IsChildOfSameExecutable(snapshot, 10, "DeepSeek Harness.exe"));
+        Assert.True(ExternalDshHomeGuard.IsChildOfSameExecutable(snapshot, 11, "DeepSeek Harness.exe"));
+        Assert.False(ExternalDshHomeGuard.IsChildOfSameExecutable(snapshot, 12, "node.exe"));
+    }
+
+    [Fact]
     public void WindowsUninstallEntrySuppliesCustomLocationAndDisplayVersion()
     {
         if (!OperatingSystem.IsWindows()) return;
