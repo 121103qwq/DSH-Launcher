@@ -31,14 +31,14 @@ internal sealed class FirstRunSetupWindow : Window
     {
         Title = "首次运行";
         Width = 600;
-        Height = 430;
+        Height = Math.Min(480, SystemParameters.WorkArea.Height - 40);
         MinWidth = 540;
-        MinHeight = 400;
+        MinHeight = Math.Min(400, SystemParameters.WorkArea.Height - 40);
         ResizeMode = ResizeMode.CanResize;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
-        var panel = new StackPanel { Margin = new Thickness(24) };
+        var panel = new StackPanel { Margin = new Thickness(24, 24, 24, 0) };
         panel.Children.Add(new TextBlock
         {
             Text = "准备第一个 DSh 版本",
@@ -123,7 +123,7 @@ internal sealed class FirstRunSetupWindow : Window
         {
             Orientation = System.Windows.Controls.Orientation.Horizontal,
             HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
-            Margin = new Thickness(0, 22, 0, 0)
+            Margin = new Thickness(24, 12, 24, 18)
         };
         var cancel = new Button
         {
@@ -173,13 +173,17 @@ internal sealed class FirstRunSetupWindow : Window
         };
         primary.Click += (_, _) => Complete(FirstRunDownloadSource.Official);
         buttons.Children.Add(primary);
-        panel.Children.Add(buttons);
-
-        Content = new ScrollViewer
+        // Keep the action buttons outside the scroll area so they stay visible on
+        // small or high-DPI screens (e.g. 1024x768 at 150%).
+        var root = new DockPanel();
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        root.Children.Add(buttons);
+        root.Children.Add(new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = panel
-        };
+        });
+        Content = root;
     }
 
     public FirstRunSetupChoice? Choice { get; private set; }

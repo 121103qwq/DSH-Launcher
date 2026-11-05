@@ -4173,7 +4173,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             // compatible Node next to it (never uninstalling anything); detection
             // prefers the highest compatible version afterwards.
             var answer = System.Windows.MessageBox.Show(this,
-                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\n是否通过 {sourceName} 下载 Node.js 官方安装包并安装兼容版本？\nLauncher 不会卸载现有 Node.js。",
+                $"当前 Node.js {_nodeRuntime.VersionText} 与 DeepSeek Harness 要求（{prepareNodeEngine}）不兼容。\n\n是否从 {sourceName} 下载并安装兼容的 Node.js？\nLauncher 不会卸载现有 Node.js。",
                 "运行环境不兼容",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
@@ -5781,7 +5781,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ? "未安装"
                 : !_dshRuntime.IsAvailable
                     && _nodeRuntime.GetCompatibility(DshRuntimeDetector.ImportMetaMainNodeEngine) != NodeRuntimeCompatibility.Compatible
-                    ? $"{_nodeRuntime.VersionText} · 过旧（npm 版 DSh 需要 {DshRuntimeDetector.ImportMetaMainNodeEngine}，请先升级 Node.js）"
+                    ? $"{_nodeRuntime.VersionText} · 过旧（npm 版 DSh 需要 {DshRuntimeDetector.ImportMetaMainNodeEngine}；创建版本时 Launcher 可安装兼容版本）"
                     : $"{_nodeRuntime.VersionText} · {NodeStatusText}",
             FirstRunSetupWindow.DescribeDshStatus(
                 _dshRuntime.IsAvailable,
