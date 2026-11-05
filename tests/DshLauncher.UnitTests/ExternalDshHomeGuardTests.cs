@@ -342,6 +342,30 @@ public sealed class ExternalDshHomeGuardTests
         Assert.Equal(changed, File.ReadAllText(settingsPath, Encoding.UTF8));
     }
 
+    [Theory]
+    [InlineData("DeepSeek Harness", false)]
+    [InlineData("DSH Desktop", false)]
+    [InlineData("DeepSeek Desktop", true)]
+    public void ManagedHomeDeletionRefusesDesktopOwners(string product, bool unknownHome)
+    {
+        using var temporary = new TestDirectory();
+        var paths = new LauncherPaths(Path.Combine(temporary.Path, "launcher"));
+        var registry = new InstanceRegistry(paths);
+        var instance = registry.Register("managed", temporary.Path, InstanceKind.Installed);
+        var marker = Path.Combine(instance.DshHome, "keep.txt");
+        File.WriteAllText(marker, "keep");
+        var guard = new ExternalDshHomeGuard(_ => new[]
+        {
+            new ExternalHomeOwner(9999, product, unknownHome ? null : instance.DshHome)
+        });
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new VersionPackageService(registry, paths, guard).DeleteVersion(instance));
+
+        Assert.Equal("keep", File.ReadAllText(marker));
+        Assert.Single(registry.Load());
+    }
+
     [Fact]
     public void UnlinkRemainsAllowedWhenAnExternalHomeIsBusy()
     {
