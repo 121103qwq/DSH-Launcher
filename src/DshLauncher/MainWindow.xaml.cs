@@ -5747,14 +5747,32 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var configuredDirectory = GetConfiguredDshInstallDirectory();
         var runtimeReady = IsPreferredDshRuntimeReady(_dshRuntime, configuredDirectory)
             && IsDetectedRuntimeReady(_nodeRuntime, _dshRuntime);
+        var officialDesktop = await DetectOfficialDesktopAsync();
         var choice = FirstRunSetupWindow.Show(
             this,
             _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
-            _dshRuntime.IsAvailable
-                ? $"{_dshRuntime.DisplayVersionText} · 已找到启动文件"
-                : _dshRuntime.Error ?? "未安装",
+            FirstRunSetupWindow.DescribeDshStatus(
+                _dshRuntime.IsAvailable,
+                $"{_dshRuntime.DisplayVersionText} · 已找到启动文件",
+                _dshRuntime.Error,
+                officialDesktop is not null),
             configuredDirectory,
-            runtimeReady);
+            runtimeReady,
+            officialDesktop is null ? null : officialDesktop.DesktopVersionText,
+            out var openOfficialDesktop);
+        if (openOfficialDesktop)
+        {
+            try
+            {
+                await OpenOfficialDesktopAsync(null);
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"打开官方桌面端失败：{ex.Message}");
+            }
+            return;
+        }
+
         if (choice is null)
         {
             ShowNotice("已暂缓首次运行配置；可点击“准备首个版本”重新打开引导。");

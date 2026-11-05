@@ -26,7 +26,8 @@ internal sealed class FirstRunSetupWindow : Window
         string nodeStatus,
         string dshStatus,
         string? initialInstallDirectory,
-        bool runtimeReady)
+        bool runtimeReady,
+        string? officialDesktopVersion)
     {
         Title = "首次运行";
         Width = 600;
@@ -69,6 +70,15 @@ internal sealed class FirstRunSetupWindow : Window
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 7, 0, 0)
         });
+        if (officialDesktopVersion is not null)
+        {
+            statusPanel.Children.Add(new TextBlock
+            {
+                Text = $"官方桌面端：已安装（{officialDesktopVersion}）· 自带运行时，可直接打开；Launcher 管理的版本需另装 DSh",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 7, 0, 0)
+            });
+        }
         statusCard.Child = statusPanel;
         panel.Children.Add(statusCard);
 
@@ -124,6 +134,23 @@ internal sealed class FirstRunSetupWindow : Window
         cancel.Click += (_, _) => DialogResult = false;
         buttons.Children.Add(cancel);
 
+        if (officialDesktopVersion is not null)
+        {
+            var official = new Button
+            {
+                Content = "打开官方桌面端",
+                Padding = new Thickness(13, 8, 13, 8),
+                Margin = new Thickness(0, 0, 8, 0),
+                ToolTip = "使用默认 DSH_HOME 打开已安装的官方 DeepSeek Harness 桌面端，不创建 Launcher 版本"
+            };
+            official.Click += (_, _) =>
+            {
+                OpenOfficialDesktopRequested = true;
+                DialogResult = false;
+            };
+            buttons.Children.Add(official);
+        }
+
         if (!runtimeReady)
         {
             var mirror = new Button
@@ -156,22 +183,34 @@ internal sealed class FirstRunSetupWindow : Window
 
     public FirstRunSetupChoice? Choice { get; private set; }
 
+    public bool OpenOfficialDesktopRequested { get; private set; }
+
+    internal static string DescribeDshStatus(bool dshAvailable, string? availableText, string? error, bool officialDesktopDetected) =>
+        dshAvailable ? availableText ?? string.Empty
+        : officialDesktopDetected ? "尚未安装 Launcher 管理的 DSh 运行时（官方桌面端内置的运行时不能被 Launcher 使用）"
+        : error ?? "未安装";
+
     public static FirstRunSetupChoice? Show(
         Window owner,
         string nodeStatus,
         string dshStatus,
         string? initialInstallDirectory,
-        bool runtimeReady)
+        bool runtimeReady,
+        string? officialDesktopVersion,
+        out bool openOfficialDesktop)
     {
         var dialog = new FirstRunSetupWindow(
             nodeStatus,
             dshStatus,
             initialInstallDirectory,
-            runtimeReady)
+            runtimeReady,
+            officialDesktopVersion)
         {
             Owner = owner
         };
-        return dialog.ShowDialog() == true ? dialog.Choice : null;
+        var accepted = dialog.ShowDialog() == true;
+        openOfficialDesktop = dialog.OpenOfficialDesktopRequested;
+        return accepted ? dialog.Choice : null;
     }
 
     private void Browse_Click(object sender, RoutedEventArgs e)

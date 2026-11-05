@@ -217,3 +217,22 @@ public sealed class OfficialDesktopTests
         return root;
     }
 }
+
+public sealed class FirstRunOfficialDesktopStatusTests
+{
+    [Fact]
+    public void MissingDshWithOfficialDesktopIsNotReportedAsNotFound()
+    {
+        var text = FirstRunSetupWindow.DescribeDshStatus(false, null, "常见安装位置中没有找到可运行的 DeepSeek Harness", officialDesktopDetected: true);
+        Assert.DoesNotContain("没有找到可运行的 DeepSeek Harness", text);
+        Assert.Contains("官方桌面端", text);
+    }
+
+    [Fact]
+    public void WithoutOfficialDesktopTheDetectorErrorIsKept() =>
+        Assert.Equal("err", FirstRunSetupWindow.DescribeDshStatus(false, null, "err", officialDesktopDetected: false));
+
+    [Fact]
+    public void AvailableDshKeepsItsStatus() =>
+        Assert.Equal("v1 · ok", FirstRunSetupWindow.DescribeDshStatus(true, "v1 · ok", null, officialDesktopDetected: true));
+}
