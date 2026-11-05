@@ -81,6 +81,13 @@ internal sealed class VisualEffectsController : IDisposable
     private TimeSpan? _lastRenderingTime;
     private string _capabilityNotice = string.Empty;
     private LinearGradientBrush? _liquidHighlight;
+    private System.Windows.Threading.DispatcherTimer? _cpuMonitor;
+    private TimeSpan _lastCpuTime;
+    private DateTime _lastCpuSample;
+    private int _highCpuSamples;
+    private bool _motionThrottled;
+    internal const double ThrottleCoreThreshold = 0.75;
+    internal const int ThrottleConsecutiveSamples = 2;
 
     public VisualEffectsController(Window window, Canvas backgroundLayer, Canvas interactionLayer)
     {
@@ -755,11 +762,11 @@ internal sealed class VisualEffectsController : IDisposable
 
     private void UpdateRenderingSubscription()
     {
-        // Tiers 0/1 are software or partial rendering (VMs, RDP, basic display
-        // drivers): a per-frame ambient loop there costs about two CPU cores while
-        // idle (measured in a Windows Server VM). Keep the
-        // decorations static and animate only short pointer feedback.
-        var continuousMotion = AllowsContinuousMotion(_qualityTier);
+        // Tiers 0/1 are software or partial rendering. WARP (VMs, RDP, basic
+        // display drivers) still reports tier 2, where the ambient loop cost about
+        // two CPU cores while idle in a Windows Server VM, so a CPU monitor also
+        // throttles it. Decorations then stay static; pointer feedback still runs.
+        var continuousMotion = AllowsContinuousMotion(_qualityTier) && !_motionThrottled;
         var needsRendering = continuousMotion && _blobs.Count > 0 && _settings.AmbientMotion
             || continuousMotion && _particles.Count > 0
             || _trailNodes.Any(node => node.Element.Visibility == Visibility.Visible)
@@ -779,6 +786,56 @@ internal sealed class VisualEffectsController : IDisposable
 
     internal static bool AllowsContinuousMotion(int qualityTier) => qualityTier >= 2;
 
+    internal bool IsMotionThrottled => _motionThrottled;
+
+    /// <summary>Next consecutive-high counter; throttle once it reaches the limit.</summary>
+    internal static int NextHighCpuSamples(int current, bool animating, double coresUsed) =>
+        animating && coresUsed > ThrottleCoreThreshold ? current + 1 : 0;
+
+    private void StartCpuMonitor()
+    {
+        if (_cpuMonitor is not null || _motionThrottled) return;
+        using (var process = System.Diagnostics.Process.GetCurrentProcess())
+            _lastCpuTime = process.TotalProcessorTime;
+        _lastCpuSample = DateTime.UtcNow;
+        _cpuMonitor = new System.Windows.Threading.DispatcherTimer(
+            System.Windows.Threading.DispatcherPriority.Background, _window.Dispatcher)
+        { Interval = TimeSpan.FromSeconds(5) };
+        _cpuMonitor.Tick += OnCpuSample;
+        _cpuMonitor.Start();
+    }
+
+    private void StopCpuMonitor()
+    {
+        if (_cpuMonitor is null) return;
+        _cpuMonitor.Stop();
+        _cpuMonitor.Tick -= OnCpuSample;
+        _cpuMonitor = null;
+        _highCpuSamples = 0;
+    }
+
+    private void OnCpuSample(object? sender, EventArgs e)
+    {
+        if (_disposed) return;
+        TimeSpan cpu;
+        using (var process = System.Diagnostics.Process.GetCurrentProcess())
+            cpu = process.TotalProcessorTime;
+        var now = DateTime.UtcNow;
+        var wall = (now - _lastCpuSample).TotalSeconds;
+        var cores = wall > 0 ? (cpu - _lastCpuTime).TotalSeconds / wall : 0;
+        _lastCpuTime = cpu;
+        _lastCpuSample = now;
+        var animating = _renderingSubscribed && AllowsContinuousMotion(_qualityTier)
+            && (_blobs.Count > 0 && _settings.AmbientMotion || _particles.Count > 0);
+        _highCpuSamples = NextHighCpuSamples(_highCpuSamples, animating, cores);
+        if (_highCpuSamples < ThrottleConsecutiveSamples) return;
+        _motionThrottled = true;
+        _capabilityNotice = "检测到渲染开销过高（可能为软件渲染/虚拟机）：背景已保持静态以节省 CPU。";
+        StopCpuMonitor();
+        UpdateRenderingSubscription();
+    }
+
+
     private void StartRendering()
     {
         if (_renderingSubscribed)
@@ -789,10 +846,12 @@ internal sealed class VisualEffectsController : IDisposable
         _lastRenderingTime = null;
         CompositionTarget.Rendering += OnRendering;
         _renderingSubscribed = true;
+        StartCpuMonitor();
     }
 
     private void StopRendering()
     {
+        StopCpuMonitor();
         if (!_renderingSubscribed)
         {
             return;
