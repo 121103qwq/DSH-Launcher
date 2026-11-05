@@ -399,6 +399,14 @@
                                                         Height="40"
                                                         Padding="15,0"
                                                         Margin="0,0,8,8" />
+                                                <Button Content="在官方桌面端打开"
+                                                        Click="OpenOfficialDesktop_Click"
+                                                        IsEnabled="{Binding CanOpenOfficialDesktop}"
+                                                        ToolTip="{Binding OpenOfficialDesktopToolTip}"
+                                                        ToolTipService.ShowOnDisabled="True"
+                                                        Height="40"
+                                                        Padding="15,0"
+                                                        Margin="0,0,8,8" />
                                                 <Button Content="打开窗口"
                                                         Click="OpenDesktopShell_Click"
                                                         Visibility="{Binding DesktopShellVisibility}"

@@ -144,16 +144,35 @@ public partial class ChatWindow : Window
         _conversationSelectionApplied = true;
         try
         {
-            var sessionId = JsonSerializer.Serialize(_conversationId);
-            var script = $"localStorage.setItem('dsh.sessions.current', JSON.stringify({{sessionId:{sessionId}}})); location.reload();";
-            await Browser.CoreWebView2.ExecuteScriptAsync(script);
+            var result = await Browser.CoreWebView2.ExecuteScriptAsync(
+                BuildConversationSelectionScript(_conversationId));
+            if (result == "true")
+                Browser.CoreWebView2.Reload();
+            else
+                ConversationSelectionNotice.Visibility = Visibility.Visible;
         }
         catch
         {
-            // A session preselection is best-effort; the running Chat remains usable.
+            ConversationSelectionNotice.Visibility = Visibility.Visible;
         }
 
         _navigationReady.TrySetResult(true);
+    }
+
+    internal static string BuildConversationSelectionScript(string conversationId)
+    {
+        var sessionId = JsonSerializer.Serialize(conversationId);
+        return $$"""
+            (() => {
+              try {
+                const selection = JSON.stringify({sessionId:{{sessionId}}});
+                localStorage.setItem('dsh.sessions.current', selection);
+                return localStorage.getItem('dsh.sessions.current') === selection;
+              } catch {
+                return false;
+              }
+            })()
+            """;
     }
 
     public async Task<bool> SendMessageAsync(string message, CancellationToken cancellationToken = default)

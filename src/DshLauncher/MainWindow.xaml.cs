@@ -48,6 +48,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private readonly DetectedRuntimeRegistrationService _detectedRuntimeRegistrationService;
     private readonly DshInstanceRunner _instanceRunner;
     private readonly ExternalDshHomeGuard _externalHomeGuard = new();
+    private readonly OfficialDesktopService _officialDesktopService = new();
+    private Task<DeepSeekDesktopInstallation?>? _officialDesktopDetection;
     private readonly ExtensionService _extensionService;
     private readonly GitHubApiService _githubApiService;
     private readonly GitHubCredentialService _githubCredentialService;
@@ -230,6 +232,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             OnPropertyChanged(nameof(StartInstanceButtonText));
             OnPropertyChanged(nameof(CanStopInstance));
             OnPropertyChanged(nameof(CanRestartInstance));
+            RefreshOfficialDesktopAction();
             OnPropertyChanged(nameof(DesktopShellVisibility));
             OnPropertyChanged(nameof(LauncherStartVisibility));
             OnPropertyChanged(nameof(NodeStatusText));
@@ -324,6 +327,42 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             && _instanceRunner.IsManaged(SelectedInstance.Id));
 
     public bool CanRestartInstance => CanStopInstance;
+
+    private DeepSeekDesktopInstallation? DetectedOfficialDesktop =>
+        _officialDesktopDetection is { IsCompletedSuccessfully: true } detection ? detection.Result : null;
+
+    public bool CanOpenOfficialDesktop => SelectedInstance is not null
+        && DetectedOfficialDesktop is not null
+        && !_isLifecycleInProgress
+        && !_isRuntimePrepareInProgress
+        && !HasRunningInstanceForHome(SelectedInstance.DshHome);
+
+    public string OpenOfficialDesktopToolTip => DetectedOfficialDesktop is null
+        ? "未检测到官方 DeepSeek Harness 桌面端"
+        : SelectedInstance is null ? "请先选择实例"
+        : HasRunningInstanceForHome(SelectedInstance.DshHome)
+            ? "此 DSH_HOME 的 Launcher 实例正在运行，请先停止"
+        : _isLifecycleInProgress || _isRuntimePrepareInProgress ? "实例操作进行中，请稍候"
+        : "使用当前实例的 DSH_HOME 打开官方 DeepSeek Harness 桌面端";
+
+    private bool HasRunningInstanceForHome(string home) => Instances.Any(instance =>
+        ExternalDshHomeGuard.SameHome(instance.DshHome, home) && _instanceRunner.IsRunning(instance.Id));
+
+    private void RefreshOfficialDesktopAction()
+    {
+        OnPropertyChanged(nameof(CanOpenOfficialDesktop));
+        OnPropertyChanged(nameof(OpenOfficialDesktopToolTip));
+    }
+
+    private async Task<DeepSeekDesktopInstallation?> DetectOfficialDesktopAsync(bool forceRefresh = false)
+    {
+        // Cache both successful and missing detection; action refreshes never scan the disk.
+        if (_officialDesktopDetection is null || forceRefresh && _officialDesktopDetection.IsCompleted)
+            _officialDesktopDetection = Task.Run(_officialDesktopService.Detect, _windowCancellation.Token);
+        var installation = await _officialDesktopDetection;
+        RefreshOfficialDesktopAction();
+        return installation;
+    }
 
     public bool IsDesktopOpenBound => SelectedInstance?.CanOpenDesktopShell == true
         && GetSelectedOpenMode() == VersionOpenMode.Desktop;
@@ -580,6 +619,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _lastDshScanWasFromCache = false;
         try
         {
+            await DetectOfficialDesktopAsync(forceRefresh);
             if (IsRuntimeHiddenForBootstrapTest(TestRuntimeKind.Dsh))
             {
                 _detectedDshRuntimes = Array.Empty<DshRuntimeInfo>();
@@ -869,6 +909,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             RunningInstances.Add(instance);
         }
 
+        RefreshOfficialDesktopAction();
         OnPropertyChanged(nameof(RunningInstanceCountText));
         OnPropertyChanged(nameof(NoRunningInstancesVisibility));
         OnPropertyChanged(nameof(RunningInstancesVisibility));
@@ -1361,6 +1402,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private async Task HandleLauncherCommandAsync(LauncherCommand command)
     {
+        if (command.Action == LauncherCommandAction.OpenOfficialDesktop)
+        {
+            try
+            {
+                var instance = string.IsNullOrWhiteSpace(command.InstanceId) ? null
+                    : Instances.FirstOrDefault(item => item.Id == command.InstanceId)
+                        ?? throw new InvalidOperationException($"命令指定的实例不存在：{command.InstanceId}");
+                await OpenOfficialDesktopAsync(instance);
+            }
+            catch (Exception ex)
+            {
+                ShowNotice($"打开官方桌面端失败：{ex.Message}");
+            }
+            return;
+        }
+
         var target = string.IsNullOrWhiteSpace(command.InstanceId)
             ? SelectedInstance
             : Instances.FirstOrDefault(instance =>
@@ -1408,6 +1465,47 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             case LauncherCommandAction.Conversations:
                 SwitchSection("对话");
                 break;
+        }
+    }
+
+    private async void OpenOfficialDesktop_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedInstance is not { } instance) return;
+        try
+        {
+            await OpenOfficialDesktopAsync(instance);
+        }
+        catch (Exception ex)
+        {
+            ShowNotice($"打开官方桌面端失败：{ex.Message}");
+        }
+    }
+
+    private async Task OpenOfficialDesktopAsync(ManagerInstance? instance)
+    {
+        var installation = await DetectOfficialDesktopAsync()
+            ?? throw new InvalidOperationException("未检测到官方 DeepSeek Harness 桌面端，请先安装后重试。");
+        // Detection may yield; re-resolve the requested instance before using its HOME.
+        if (instance is not null)
+            instance = ResolveInstanceById(Instances, instance.Id)
+                ?? throw new InvalidOperationException("所选实例已不存在。");
+        var desktopHome = instance?.DshHome ?? OfficialDesktopService.ResolveDefaultHome();
+        if (HasRunningInstanceForHome(desktopHome))
+            throw new InvalidOperationException("此 DSH_HOME 的 Launcher 实例正在运行，请先停止");
+        if (!TryBeginLifecycleOperation())
+            throw new InvalidOperationException("实例操作进行中，请稍候。");
+        try
+        {
+            var requestedInstance = instance ?? new ManagerInstance(
+                "official-desktop", "官方桌面端", installation.InstallRoot, InstanceKind.Installed,
+                desktopHome, null, null, InstanceRuntimeStatus.Ready, null, null, DateTimeOffset.UtcNow);
+            _externalHomeGuard.EnsureOfficialDesktopAvailable(requestedInstance);
+            _officialDesktopService.Launch(installation, desktopHome);
+            ShowNotice("已请求打开官方 DeepSeek Harness 桌面端；若已在运行，将唤醒现有窗口，继续使用原 DSH_HOME。");
+        }
+        finally
+        {
+            EndLifecycleOperation();
         }
     }
 
@@ -1724,7 +1822,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             },
             _windowCancellation.Token,
             initialDshVersion,
-            () => _detectedDshRuntimes));
+            () => _detectedDshRuntimes,
+            () => DetectOfficialDesktopAsync()));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
     }
@@ -4042,6 +4141,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
 
         _isRuntimePrepareInProgress = true;
+        RefreshOfficialDesktopAction();
         OnPropertyChanged(nameof(CanStartInstance));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_windowCancellation.Token);
         var progressWindow = new RuntimeProgressWindow(this, cancellation);
@@ -4230,6 +4330,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
             progressWindow.Close();
             _isRuntimePrepareInProgress = false;
+            RefreshOfficialDesktopAction();
             OnPropertyChanged(nameof(CanStartInstance));
             OnPropertyChanged(nameof(CanInstallDsh));
             OnPropertyChanged(nameof(DshInstallButtonText));
@@ -5248,6 +5349,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(CanStopInstance));
         OnPropertyChanged(nameof(CanRestartInstance));
+        RefreshOfficialDesktopAction();
         OnPropertyChanged(nameof(InstanceEndpointText));
         return true;
     }
@@ -5258,6 +5360,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         OnPropertyChanged(nameof(CanStartInstance));
         OnPropertyChanged(nameof(CanStopInstance));
         OnPropertyChanged(nameof(CanRestartInstance));
+        RefreshOfficialDesktopAction();
         OnPropertyChanged(nameof(InstanceEndpointText));
     }
 

@@ -27,13 +27,15 @@ public sealed class ModelProviderSyncService
     private readonly ProviderStateService _providerStateService;
     private readonly Func<string, bool> _isRunning;
     private readonly Action<string>? _beforeProviderFileCommit;
+    private readonly ExternalDshHomeGuard _homeGuard;
 
     public ModelProviderSyncService(
         VersionSettingsService settingsService,
         ModelService modelService,
         ProviderStateService providerStateService,
-        Func<string, bool>? isRunning = null)
-        : this(settingsService, modelService, providerStateService, isRunning, null)
+        Func<string, bool>? isRunning = null,
+        ExternalDshHomeGuard? homeGuard = null)
+        : this(settingsService, modelService, providerStateService, isRunning, null, homeGuard)
     {
     }
 
@@ -42,8 +44,10 @@ public sealed class ModelProviderSyncService
         ModelService modelService,
         ProviderStateService providerStateService,
         Func<string, bool>? isRunning,
-        Action<string>? beforeProviderFileCommit)
+        Action<string>? beforeProviderFileCommit,
+        ExternalDshHomeGuard? homeGuard = null)
     {
+        _homeGuard = homeGuard ?? new ExternalDshHomeGuard();
         _settingsService = settingsService;
         _modelService = modelService;
         _providerStateService = providerStateService;
@@ -107,6 +111,7 @@ public sealed class ModelProviderSyncService
                     continue;
                 }
 
+                _homeGuard.EnsureAvailable(target);
                 var settingsText = copyConfiguration
                     ? _modelService.BuildProviderConfigurationText(configurationSource!, target)
                     : null;

@@ -27,16 +27,27 @@ public sealed class ExternalDshHomeGuard
         }
     }
 
-    public string? GetConflict(ManagerInstance instance)
+    public void EnsureOfficialDesktopAvailable(ManagerInstance instance)
     {
-        if (!instance.UsesExternalDshHome)
-        {
-            return null;
-        }
+        var conflict = GetConflict(instance, allowOfficialDesktop: true);
+        if (conflict is not null)
+            throw new InvalidOperationException(conflict);
+    }
 
+    public string? GetConflict(ManagerInstance instance) => GetConflict(instance, allowOfficialDesktop: false);
+
+    private string? GetConflict(ManagerInstance instance, bool allowOfficialDesktop)
+    {
         try
         {
-            var owners = _readOwners(instance);
+            // Official launch checks every desktop, even for a managed HOME.
+            // A known official process can be focused; an unreadable HOME still blocks.
+            var checkedInstance = allowOfficialDesktop ? instance with { UsesExternalDshHome = true } : instance;
+            var owners = _readOwners(checkedInstance)
+                .Where(owner => checkedInstance.UsesExternalDshHome || owner.ProductName == "DeepSeek Harness")
+                .Where(owner => !allowOfficialDesktop || owner.ProductName != "DeepSeek Harness"
+                    || owner.DshHome is null)
+                .ToArray();
             var matched = owners.FirstOrDefault(owner => owner.DshHome is not null
                 && SameHome(owner.DshHome, instance.DshHome));
             if (matched is not null)
@@ -46,12 +57,12 @@ public sealed class ExternalDshHomeGuard
 
             var unknown = owners.FirstOrDefault(owner => owner.DshHome is null);
             return unknown is null ? null
-                : $"检测到 {unknown.ProductName}（PID {unknown.ProcessId}），但无法确认它使用的 DSH_HOME，暂不启动或修改外部目录。请先退出该桌面端后重试。";
+                : $"检测到 {unknown.ProductName}（PID {unknown.ProcessId}），但无法确认它使用的 DSH_HOME，暂不启动或修改此目录。请先退出该桌面端后重试。";
         }
         catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException
             or InvalidOperationException or ArgumentException or NotSupportedException)
         {
-            return "无法完成桌面端占用检查，暂不启动或修改外部 DSH_HOME。请确认桌面端已退出后重试。";
+            return "无法完成桌面端占用检查，暂不启动或修改此 DSH_HOME。请确认桌面端已退出后重试。";
         }
     }
 
@@ -71,7 +82,19 @@ public sealed class ExternalDshHomeGuard
         var installations = new Dictionary<string, DeepSeekDesktopInstallation?>(StringComparer.OrdinalIgnoreCase);
         // Keep the cheap no-desktop path. Only a detected desktop requires a
         // process-tree snapshot, shared by every owner within this one check.
-        foreach (var name in new[] { "DSH Desktop", "DeepSeek Desktop" })
+        var officialNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "DeepSeek Harness" };
+        foreach (var installation in DeepSeekDesktopDetector.DetectInstallations().Where(item => item.IsOfficial))
+        {
+            if (installation.LaunchSpec is { } spec)
+                officialNames.Add(Path.GetFileNameWithoutExtension(spec.HostPath));
+        }
+        var names = new HashSet<string>(officialNames, StringComparer.OrdinalIgnoreCase);
+        if (instance is null || instance.UsesExternalDshHome)
+        {
+            names.Add("DSH Desktop");
+            names.Add("DeepSeek Desktop");
+        }
+        foreach (var name in names)
         {
             foreach (var process in Process.GetProcessesByName(name))
             {
@@ -81,7 +104,8 @@ public sealed class ExternalDshHomeGuard
                     if (ignored.Contains(process.Id) || !seen.Add(process.Id)) continue;
                     try
                     {
-                        var installRoot = Path.GetDirectoryName(process.MainModule?.FileName);
+                        var executablePath = process.MainModule?.FileName;
+                        var installRoot = Path.GetDirectoryName(executablePath);
                         if (installRoot is null) continue;
                         if (!installations.TryGetValue(installRoot, out var installation))
                         {
@@ -89,6 +113,15 @@ public sealed class ExternalDshHomeGuard
                             installations[installRoot] = installation;
                         }
                         if (installation is null || process.HasExited) continue;
+                        if (installation.IsOfficial)
+                        {
+                            if (installation.LaunchSpec is null || !SameHome(
+                                    executablePath!, installation.LaunchSpec.HostPath)) continue;
+                            var environment = ProcessDshHomeReader.Read(process);
+                            if (!process.HasExited)
+                                owners.Add(new ExternalHomeOwner(process.Id, installation.ProductName, ResolveHome(environment)));
+                            continue;
+                        }
 
                         var isLegacy = installation.ProductName == "DeepSeek Desktop";
                         if (!isLegacy)
@@ -133,7 +166,8 @@ public sealed class ExternalDshHomeGuard
                     catch (InvalidOperationException) { /* Desktop exited during enumeration. */ }
                     catch (Win32Exception)
                     {
-                        owners.Add(new ExternalHomeOwner(process.Id, name, null));
+                        owners.Add(new ExternalHomeOwner(process.Id,
+                            officialNames.Contains(name) ? "DeepSeek Harness" : name, null));
                     }
                 }
             }

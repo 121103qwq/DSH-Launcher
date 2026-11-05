@@ -200,7 +200,7 @@ public sealed class DshRuntimeDetector
     {
         var candidates = new List<DshRuntimeCandidate>();
         var seenCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var installation in desktopInstallations)
+        foreach (var installation in desktopInstallations.Where(item => !item.IsOfficial))
         {
             var spec = installation.LaunchSpec
                 ?? new DshRuntimeLaunchSpec(
@@ -583,7 +583,8 @@ public sealed class DshRuntimeDetector
             return candidate;
         }
 
-        return DeepSeekDesktopDetector.TryDetect(normalized)?.DshPackageRoot;
+        var desktop = DeepSeekDesktopDetector.TryDetect(normalized);
+        return desktop is { IsOfficial: false } ? desktop.DshPackageRoot : null;
     }
 
     public static string? TryReadPackageVersion(string packageRoot) =>
@@ -794,7 +795,7 @@ public sealed class DshRuntimeDetector
             }
         }
 
-        foreach (var installation in desktopInstallations)
+        foreach (var installation in desktopInstallations.Where(item => !item.IsOfficial))
         {
             if (seen.Add(installation.DshExecutablePath))
             {

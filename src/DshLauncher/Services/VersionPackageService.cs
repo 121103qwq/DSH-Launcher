@@ -161,6 +161,7 @@ public sealed partial class VersionPackageService
             throw new InvalidOperationException("版本 DSH_HOME 不在 Launcher 的隔离目录中，已拒绝删除。 ");
         }
 
+        _homeGuard.EnsureAvailable(registered with { UsesExternalDshHome = true });
         DeleteGeneratedDirectory(expectedHome, "版本 DSH_HOME");
         DeleteGeneratedDirectory(_paths.GetInstanceBackupDirectory(instance.Id), "版本备份目录");
         if (!_registry.Unregister(instance.Id))

@@ -15,6 +15,13 @@
         Loaded="Window_OnLoaded"
         ContentRendered="Window_OnContentRendered">
     <Grid>
-        <wv2:WebView2 x:Name="Browser" />
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Border x:Name="ConversationSelectionNotice" Visibility="Collapsed" Background="#FFF9EA" Padding="12,8">
+            <TextBlock Text="无法自动定位此会话，已仅打开 Chat。请在 Chat 中手动选择对话。" TextWrapping="Wrap" Foreground="#8A5700" />
+        </Border>
+        <wv2:WebView2 x:Name="Browser" Grid.Row="1" />
     </Grid>
 </Window>

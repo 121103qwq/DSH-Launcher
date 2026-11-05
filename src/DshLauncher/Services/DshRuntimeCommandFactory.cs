@@ -70,7 +70,7 @@ internal static class DshRuntimeCommandFactory
 
     public static bool IsUsable(DshRuntimeLaunchSpec? spec)
     {
-        if (spec is null || !File.Exists(spec.HostPath))
+        if (spec is null || spec.Mode == DshRuntimeLaunchMode.OfficialDesktopApp || !File.Exists(spec.HostPath))
         {
             return false;
         }
