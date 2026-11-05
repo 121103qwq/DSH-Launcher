@@ -755,8 +755,12 @@ internal sealed class VisualEffectsController : IDisposable
 
     private void UpdateRenderingSubscription()
     {
-        var needsRendering = _blobs.Count > 0 && _settings.AmbientMotion
-            || _particles.Count > 0
+        // Tier 0 is WPF software rendering (VMs, RDP, no GPU driver): a per-frame
+        // ambient loop there costs about two CPU cores while idle. Keep the
+        // decorations static and animate only short pointer feedback.
+        var continuousMotion = AllowsContinuousMotion(_qualityTier);
+        var needsRendering = continuousMotion && _blobs.Count > 0 && _settings.AmbientMotion
+            || continuousMotion && _particles.Count > 0
             || _trailNodes.Any(node => node.Element.Visibility == Visibility.Visible)
             || _ripples.Any(ripple => ripple.Element.Visibility == Visibility.Visible)
             || (_hasPointer && (_settings.PointerHalo || _settings.Parallax)
@@ -771,6 +775,8 @@ internal sealed class VisualEffectsController : IDisposable
             StopRendering();
         }
     }
+
+    internal static bool AllowsContinuousMotion(int qualityTier) => qualityTier > 0;
 
     private void StartRendering()
     {
@@ -838,6 +844,11 @@ internal sealed class VisualEffectsController : IDisposable
         if (_highContrast)
         {
             return "Windows 高对比度模式：已启用不透明表面保护，跳过低对比度装饰。";
+        }
+
+        if (_qualityTier == 0)
+        {
+            return "当前为软件渲染（无 GPU 加速）：背景保持静态，已停用持续动画以节省 CPU。";
         }
 
         if (_qualityTier < 2)
