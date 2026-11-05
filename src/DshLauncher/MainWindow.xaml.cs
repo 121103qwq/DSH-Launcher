@@ -5757,7 +5757,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var officialDesktop = await DetectOfficialDesktopAsync();
         var choice = FirstRunSetupWindow.Show(
             this,
-            _nodeRuntime.IsAvailable ? $"{_nodeRuntime.VersionText} · {NodeStatusText}" : "未安装",
+            !_nodeRuntime.IsAvailable
+                ? "未安装"
+                : !_dshRuntime.IsAvailable
+                    && _nodeRuntime.GetCompatibility(DshRuntimeDetector.ImportMetaMainNodeEngine) != NodeRuntimeCompatibility.Compatible
+                    ? $"{_nodeRuntime.VersionText} · 过旧（npm 版 DSh 需要 {DshRuntimeDetector.ImportMetaMainNodeEngine}，请先升级 Node.js）"
+                    : $"{_nodeRuntime.VersionText} · {NodeStatusText}",
             FirstRunSetupWindow.DescribeDshStatus(
                 _dshRuntime.IsAvailable,
                 $"{_dshRuntime.DisplayVersionText} · 已找到启动文件",

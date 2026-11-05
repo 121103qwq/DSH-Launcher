@@ -63,11 +63,12 @@ internal sealed class FirstRunSetupWindow : Window
             Padding = new Thickness(14)
         };
         var statusPanel = new StackPanel();
-        statusPanel.Children.Add(new TextBlock { Text = $"Node.js：{nodeStatus}", FontWeight = FontWeights.SemiBold });
+        statusPanel.Children.Add(new TextBlock { Text = $"Node.js：{nodeStatus}", FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         statusPanel.Children.Add(new TextBlock
         {
             Text = $"DeepSeek Harness：{dshStatus}",
             FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 7, 0, 0)
         });
         if (officialDesktopVersion is not null)
