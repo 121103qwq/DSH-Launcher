@@ -433,7 +433,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         && !runtimePrepareInProgress
         && isManaged;
 
-    public string InstanceEndpointText => SelectedInstance?.WebUrl
+    // The launch token is a login credential; never show it in the UI.
+    public string InstanceEndpointText => (SelectedInstance?.WebUrl is { } url ? DshApiClient.RedactLaunchToken(url) : null)
         ?? (SelectedInstance?.RuntimeStatus == InstanceRuntimeStatus.Running ? "正在检查运行地址…" : "尚未启动");
 
     public string SelectedInstanceRuntimeResourceText => SelectedInstance?.RuntimeResourceText ?? string.Empty;
