@@ -755,8 +755,9 @@ internal sealed class VisualEffectsController : IDisposable
 
     private void UpdateRenderingSubscription()
     {
-        // Tier 0 is WPF software rendering (VMs, RDP, no GPU driver): a per-frame
-        // ambient loop there costs about two CPU cores while idle. Keep the
+        // Tiers 0/1 are software or partial rendering (VMs, RDP, basic display
+        // drivers): a per-frame ambient loop there costs about two CPU cores while
+        // idle (measured in a Windows Server VM). Keep the
         // decorations static and animate only short pointer feedback.
         var continuousMotion = AllowsContinuousMotion(_qualityTier);
         var needsRendering = continuousMotion && _blobs.Count > 0 && _settings.AmbientMotion
@@ -776,7 +777,7 @@ internal sealed class VisualEffectsController : IDisposable
         }
     }
 
-    internal static bool AllowsContinuousMotion(int qualityTier) => qualityTier > 0;
+    internal static bool AllowsContinuousMotion(int qualityTier) => qualityTier >= 2;
 
     private void StartRendering()
     {
@@ -846,14 +847,9 @@ internal sealed class VisualEffectsController : IDisposable
             return "Windows 高对比度模式：已启用不透明表面保护，跳过低对比度装饰。";
         }
 
-        if (_qualityTier == 0)
-        {
-            return "当前为软件渲染（无 GPU 加速）：背景保持静态，已停用持续动画以节省 CPU。";
-        }
-
         if (_qualityTier < 2)
         {
-            return $"图形能力等级 {_qualityTier}：已简化背景模糊与粒子效果。";
+            return $"图形能力等级 {_qualityTier}（无完整 GPU 加速）：已简化背景模糊与粒子，背景保持静态以节省 CPU。";
         }
 
         return "视觉效果可用：背景动效与表面材质按当前设置运行。";
